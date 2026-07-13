@@ -1290,6 +1290,58 @@ fn outer_html_rejects_document_parent_without_mutating_tree() {
     assert_eq!(result, r#"["NoModificationAllowedError",7,true,true,true]"#);
 }
 #[test]
+fn markup_setters_apply_legacy_null_to_empty_string_conversion() {
+    let mut vm = new_storage_test_vm("https://markup-null-string-conversion.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const inner = document.createElement('div');
+  inner.innerHTML = '<span>old</span>';
+  inner.innerHTML = null;
+
+  const outerParent = document.createElement('div');
+  const outer = outerParent.appendChild(document.createElement('span'));
+  outer.outerHTML = null;
+
+  const undefinedValue = document.createElement('div');
+  undefinedValue.innerHTML = undefined;
+
+  const objectValue = document.createElement('div');
+  objectValue.innerHTML = { toString() { return 'converted'; } };
+
+  const shadow = document.createElement('div').attachShadow({ mode: 'open' });
+  shadow.innerHTML = '<span>old</span>';
+  shadow.innerHTML = null;
+
+  let symbolError = 'missing';
+  try {
+    inner.innerHTML = Symbol('markup');
+  } catch (error) {
+    symbolError = error.name;
+  }
+
+  return JSON.stringify([
+    inner.innerHTML,
+    inner.textContent,
+    outerParent.innerHTML,
+    undefinedValue.innerHTML,
+    objectValue.innerHTML,
+    shadow.innerHTML,
+    symbolError
+  ]);
+})()
+"#,
+        )
+        .expect("markup WebIDL string conversion should evaluate");
+
+    assert_eq!(
+        result,
+        r#"["","","","undefined","converted","","TypeError"]"#
+    );
+}
+#[test]
 fn mutation_observer_reports_local_name_and_namespace_for_attribute_ns() {
     let mut vm = new_storage_test_vm("https://mutation-observer-attribute-name.test/");
 
