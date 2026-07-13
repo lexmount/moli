@@ -719,7 +719,7 @@ pub(in crate::native_bridge) fn node_dir_getter_function<'s>(
     canonical_attribute_getter_from_object(scope, args.this(), "dir", canonical_dir_value, rv);
 }
 
-fn canonical_dir_value(raw: &str) -> &'static str {
+pub(in crate::native_bridge) fn canonical_dir_value(raw: &str) -> &'static str {
     if raw.eq_ignore_ascii_case("ltr") {
         "ltr"
     } else if raw.eq_ignore_ascii_case("rtl") {
@@ -1094,7 +1094,7 @@ pub(in crate::native_bridge) fn null_to_empty_dom_string_reflection_getter_funct
     else {
         return;
     };
-    if let Some(local_name) = descriptor.local_name
+    if let Some(local_name) = descriptor.html_local_name
         && html_element_getter_receiver(
             scope,
             args.this(),
@@ -1117,7 +1117,7 @@ pub(in crate::native_bridge) fn null_to_empty_dom_string_reflection_setter_funct
     if let Some(descriptor) =
         NullToEmptyDomStringReflection::descriptor_from_callback_data(scope, args.data())
     {
-        if let Some(local_name) = descriptor.local_name
+        if let Some(local_name) = descriptor.html_local_name
             && html_element_setter_receiver(
                 scope,
                 args.this(),

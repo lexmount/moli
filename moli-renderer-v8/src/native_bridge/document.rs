@@ -3,6 +3,7 @@ use crate::{
     custom_elements,
     dom::native::{DocumentTitleSetterTarget, Node},
     native_bridge::abort::dom_exception_value,
+    webidl,
 };
 
 use super::super::{
@@ -12,6 +13,7 @@ use super::super::{
         global_bridge_object, set_private_value, throw_type_error, v8_string, v8str,
     },
 };
+use super::element::{canonical_dir_value, element_attribute, set_reflected_attribute};
 use super::node::{
     node_is_document, node_runtime_and_handle_from_object,
     node_runtime_and_handle_from_object_or_detached,
@@ -301,6 +303,182 @@ pub(in crate::native_bridge::document) use structure::set_document_body_for_nati
 pub(crate) const XHTML_NS: &str = "http://www.w3.org/1999/xhtml";
 pub(crate) const SVG_NS: &str = "http://www.w3.org/2000/svg";
 
+#[derive(Clone, Copy)]
+#[repr(u32)]
+enum DocumentForwardedReflection {
+    Dir,
+    FgColor,
+    LinkColor,
+    VlinkColor,
+    AlinkColor,
+    BgColor,
+    Count,
+}
+
+#[derive(Clone, Copy)]
+enum DocumentForwardedTarget {
+    DocumentElement,
+    Body,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DocumentForwardedValueKind {
+    Dir,
+    LegacyNullToEmptyDomString,
+}
+
+struct DocumentForwardedReflectionDescriptor {
+    target: DocumentForwardedTarget,
+    attribute: &'static str,
+    member: &'static str,
+    value_kind: DocumentForwardedValueKind,
+}
+
+const DOCUMENT_FORWARDED_REFLECTION_DESCRIPTORS: &[(
+    DocumentForwardedReflection,
+    DocumentForwardedReflectionDescriptor,
+)] = &[
+    (
+        DocumentForwardedReflection::Dir,
+        DocumentForwardedReflectionDescriptor {
+            target: DocumentForwardedTarget::DocumentElement,
+            attribute: "dir",
+            member: "dir",
+            value_kind: DocumentForwardedValueKind::Dir,
+        },
+    ),
+    (
+        DocumentForwardedReflection::FgColor,
+        DocumentForwardedReflectionDescriptor {
+            target: DocumentForwardedTarget::Body,
+            attribute: "text",
+            member: "fgColor",
+            value_kind: DocumentForwardedValueKind::LegacyNullToEmptyDomString,
+        },
+    ),
+    (
+        DocumentForwardedReflection::LinkColor,
+        DocumentForwardedReflectionDescriptor {
+            target: DocumentForwardedTarget::Body,
+            attribute: "link",
+            member: "linkColor",
+            value_kind: DocumentForwardedValueKind::LegacyNullToEmptyDomString,
+        },
+    ),
+    (
+        DocumentForwardedReflection::VlinkColor,
+        DocumentForwardedReflectionDescriptor {
+            target: DocumentForwardedTarget::Body,
+            attribute: "vlink",
+            member: "vlinkColor",
+            value_kind: DocumentForwardedValueKind::LegacyNullToEmptyDomString,
+        },
+    ),
+    (
+        DocumentForwardedReflection::AlinkColor,
+        DocumentForwardedReflectionDescriptor {
+            target: DocumentForwardedTarget::Body,
+            attribute: "alink",
+            member: "alinkColor",
+            value_kind: DocumentForwardedValueKind::LegacyNullToEmptyDomString,
+        },
+    ),
+    (
+        DocumentForwardedReflection::BgColor,
+        DocumentForwardedReflectionDescriptor {
+            target: DocumentForwardedTarget::Body,
+            attribute: "bgcolor",
+            member: "bgColor",
+            value_kind: DocumentForwardedValueKind::LegacyNullToEmptyDomString,
+        },
+    ),
+];
+
+const _: () = {
+    assert!(
+        DOCUMENT_FORWARDED_REFLECTION_DESCRIPTORS.len()
+            == DocumentForwardedReflection::Count as usize
+    );
+    let mut index = 0;
+    while index < DOCUMENT_FORWARDED_REFLECTION_DESCRIPTORS.len() {
+        assert!(DOCUMENT_FORWARDED_REFLECTION_DESCRIPTORS[index].0 as usize == index);
+        index += 1;
+    }
+};
+
+impl DocumentForwardedReflection {
+    fn descriptor_from_callback_data(
+        scope: &mut v8::PinScope<'_, '_>,
+        data: v8::Local<'_, v8::Value>,
+    ) -> Option<&'static DocumentForwardedReflectionDescriptor> {
+        DOCUMENT_FORWARDED_REFLECTION_DESCRIPTORS
+            .get(data.uint32_value(scope)? as usize)
+            .map(|(_, descriptor)| descriptor)
+    }
+}
+
+impl<'s> moli_webapi_declare::WebApiValue<'s> for DocumentForwardedReflection {
+    fn to_v8_value(&self, scope: &mut v8::PinScope<'s, '_>) -> Option<v8::Local<'s, v8::Value>> {
+        Some(v8::Integer::new_from_unsigned(scope, *self as u32).into())
+    }
+}
+
+impl<'s> moli_webapi_declare::WebApiTemplateValue<'s> for DocumentForwardedReflection {
+    fn to_v8_template_value(
+        &self,
+        scope: &mut v8::PinScope<'s, '_, ()>,
+    ) -> Option<v8::Local<'s, v8::Value>> {
+        Some(v8::Integer::new_from_unsigned(scope, *self as u32).into())
+    }
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(name = "Document", enumerable)]
+struct DocumentForwardedReflectionPrototypeDeclaration {
+    #[webapi(
+        accessor_property,
+        getter = document_forwarded_reflection_getter_function,
+        setter = document_forwarded_reflection_setter_function,
+        data = DocumentForwardedReflection::Dir
+    )]
+    dir: (),
+    #[webapi(
+        accessor_property = "fgColor",
+        getter = document_forwarded_reflection_getter_function,
+        setter = document_forwarded_reflection_setter_function,
+        data = DocumentForwardedReflection::FgColor
+    )]
+    fg_color: (),
+    #[webapi(
+        accessor_property = "linkColor",
+        getter = document_forwarded_reflection_getter_function,
+        setter = document_forwarded_reflection_setter_function,
+        data = DocumentForwardedReflection::LinkColor
+    )]
+    link_color: (),
+    #[webapi(
+        accessor_property = "vlinkColor",
+        getter = document_forwarded_reflection_getter_function,
+        setter = document_forwarded_reflection_setter_function,
+        data = DocumentForwardedReflection::VlinkColor
+    )]
+    vlink_color: (),
+    #[webapi(
+        accessor_property = "alinkColor",
+        getter = document_forwarded_reflection_getter_function,
+        setter = document_forwarded_reflection_setter_function,
+        data = DocumentForwardedReflection::AlinkColor
+    )]
+    alink_color: (),
+    #[webapi(
+        accessor_property = "bgColor",
+        getter = document_forwarded_reflection_getter_function,
+        setter = document_forwarded_reflection_setter_function,
+        data = DocumentForwardedReflection::BgColor
+    )]
+    bg_color: (),
+}
+
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::Document, enumerable)]
 struct DocumentMetadataPrototypeDeclaration {
@@ -517,6 +695,125 @@ fn document_receiver_runtime_and_handle<'s>(
         return None;
     }
     Some((runtime_ptr, handle))
+}
+
+fn document_forwarded_target_handle(
+    runtime: &JsContextHost,
+    document_handle: DomHandle,
+    target: DocumentForwardedTarget,
+    for_setter: bool,
+) -> Option<DomHandle> {
+    let dom = runtime.dom_host().dom();
+    let document = dom.node(document_handle).and_then(Node::as_document)?;
+    let handle = match target {
+        DocumentForwardedTarget::DocumentElement => {
+            document.document_element_handle(dom, document_handle)?
+        }
+        DocumentForwardedTarget::Body => match document.body_handle(dom, document_handle) {
+            Some(body) => body,
+            None if !for_setter => {
+                let document_element = document.document_element_handle(dom, document_handle)?;
+                dom.find_child(document_element, |handle| {
+                    dom.node(handle)
+                        .is_some_and(|node| node.is_html_element_named("frameset"))
+                })?
+            }
+            None => return None,
+        },
+    };
+    let node = runtime.dom_host().node(handle)?;
+    let matches = match target {
+        DocumentForwardedTarget::DocumentElement => node.is_html_element_named("html"),
+        DocumentForwardedTarget::Body => {
+            node.is_html_element_named("body")
+                || (!for_setter && node.is_html_element_named("frameset"))
+        }
+    };
+    matches.then_some(handle)
+}
+
+fn document_forwarded_reflection_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some(descriptor) =
+        DocumentForwardedReflection::descriptor_from_callback_data(scope, args.data())
+    else {
+        return;
+    };
+    let Some((runtime_ptr, document_handle)) =
+        document_receiver_runtime_and_handle(scope, args.this())
+    else {
+        throw_type_error(
+            scope,
+            "Failed to get a reflected property on 'Document': Illegal invocation.",
+        );
+        return;
+    };
+    let runtime = unsafe { &*runtime_ptr };
+    let Some(target_handle) =
+        document_forwarded_target_handle(runtime, document_handle, descriptor.target, false)
+    else {
+        rv.set_empty_string();
+        return;
+    };
+    let raw = element_attribute(runtime, target_handle, descriptor.attribute).unwrap_or_default();
+    let value = match descriptor.value_kind {
+        DocumentForwardedValueKind::Dir => canonical_dir_value(&raw),
+        DocumentForwardedValueKind::LegacyNullToEmptyDomString => raw.as_str(),
+    };
+    set_document_string_return_value(scope, &mut rv, value);
+}
+
+fn document_forwarded_reflection_setter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some(descriptor) =
+        DocumentForwardedReflection::descriptor_from_callback_data(scope, args.data())
+    else {
+        return;
+    };
+    let Some((runtime_ptr, document_handle)) =
+        document_receiver_runtime_and_handle(scope, args.this())
+    else {
+        throw_type_error(
+            scope,
+            "Failed to set a reflected property on 'Document': Illegal invocation.",
+        );
+        return;
+    };
+    let options = webidl::StringOptions {
+        treat_null_as_empty_string: descriptor.value_kind
+            == DocumentForwardedValueKind::LegacyNullToEmptyDomString,
+    };
+    let value = match webidl::convert_with_options::<webidl::DomString>(
+        scope,
+        args.get(0),
+        webidl::Context::member("Document", descriptor.member),
+        &options,
+    ) {
+        Ok(value) => value.0,
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            return;
+        }
+    };
+    let runtime = unsafe { &*runtime_ptr };
+    if let Some(target_handle) =
+        document_forwarded_target_handle(runtime, document_handle, descriptor.target, true)
+    {
+        set_reflected_attribute(
+            scope,
+            runtime_ptr,
+            target_handle,
+            descriptor.attribute,
+            &value,
+        );
+    }
+    rv.set_undefined();
 }
 
 fn document_obsolete_noop_callback<'s>(
@@ -1379,6 +1676,9 @@ pub(crate) fn install_document_template_bindings<'s>(
     if interface_name == "Document" {
         DocumentMetadataPrototypeDeclaration::initialize_prototype_template(scope, prototype);
         DocumentStructurePrototypeDeclaration::initialize_prototype_template(scope, prototype);
+        DocumentForwardedReflectionPrototypeDeclaration::initialize_prototype_template(
+            scope, prototype,
+        );
         DocumentFocusPrototypeDeclaration::initialize_prototype_template(scope, prototype);
         DocumentViewPrototypeDeclaration::initialize_prototype_template(scope, prototype);
         DocumentStatePrototypeDeclaration::initialize_prototype_template(scope, prototype);

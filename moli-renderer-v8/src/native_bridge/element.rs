@@ -412,8 +412,8 @@ pub(super) use geometry::{
 pub(super) use global_attributes::{
     anchor_target_getter_function, anchor_target_setter_function, area_no_href_setter_function,
     area_target_getter_function, area_target_setter_function, base_target_getter_function,
-    base_target_setter_function, canonical_cross_origin_value, canonical_loading_value,
-    canonical_preload_value, canonical_referrer_policy_value,
+    base_target_setter_function, canonical_cross_origin_value, canonical_dir_value,
+    canonical_loading_value, canonical_preload_value, canonical_referrer_policy_value,
     dom_string_reflection_getter_function, dom_string_reflection_setter_function,
     html_align_getter_function, html_align_setter_function, html_alt_getter_function,
     html_as_getter_function, html_bg_color_getter_function, html_border_getter_function,
@@ -477,30 +477,28 @@ pub(in crate::native_bridge) const BODY_LEGACY_PROTOTYPE_ACCESSORS: &[&str] = &[
 ];
 
 use html_elements::{
-    body_a_link_getter_function, body_a_link_setter_function, body_background_getter_function,
-    body_background_setter_function, body_link_getter_function, body_link_setter_function,
-    body_text_getter_function, body_text_setter_function, body_v_link_getter_function,
-    body_v_link_setter_function, li_value_getter_function, li_value_setter_function,
-    meta_content_getter_function, meta_content_setter_function, meta_http_equiv_getter_function,
-    meta_http_equiv_setter_function, ol_reversed_getter_function, ol_reversed_setter_function,
-    ol_start_getter_function, ol_start_setter_function, ol_type_getter_function,
-    ol_type_setter_function, optgroup_disabled_getter_function, optgroup_disabled_setter_function,
-    table_caption_getter_function, table_caption_setter_function,
-    table_cell_col_span_getter_function, table_cell_col_span_setter_function,
-    table_cell_index_getter_function, table_cell_row_span_getter_function,
-    table_cell_row_span_setter_function, table_col_span_getter_function,
-    table_col_span_setter_function, table_create_caption_callback, table_create_t_body_callback,
-    table_create_t_foot_callback, table_create_t_head_callback, table_delete_caption_callback,
-    table_delete_row_callback, table_delete_t_foot_callback, table_delete_t_head_callback,
-    table_insert_row_callback, table_row_cells_getter_function, table_row_delete_cell_callback,
-    table_row_index_getter_function, table_row_insert_cell_callback, table_rows_getter_function,
-    table_section_delete_row_callback, table_section_insert_row_callback,
-    table_section_row_index_getter_function, table_section_rows_getter_function,
-    table_t_bodies_getter_function, table_t_foot_getter_function, table_t_foot_setter_function,
-    table_t_head_getter_function, table_t_head_setter_function, track_default_getter_function,
-    track_default_setter_function, track_kind_getter_function, track_kind_setter_function,
-    track_ready_state_getter_function, track_src_getter_function, track_src_setter_function,
-    track_srclang_getter_function, track_srclang_setter_function,
+    body_background_getter_function, body_background_setter_function, li_value_getter_function,
+    li_value_setter_function, meta_content_getter_function, meta_content_setter_function,
+    meta_http_equiv_getter_function, meta_http_equiv_setter_function, ol_reversed_getter_function,
+    ol_reversed_setter_function, ol_start_getter_function, ol_start_setter_function,
+    ol_type_getter_function, ol_type_setter_function, optgroup_disabled_getter_function,
+    optgroup_disabled_setter_function, table_caption_getter_function,
+    table_caption_setter_function, table_cell_col_span_getter_function,
+    table_cell_col_span_setter_function, table_cell_index_getter_function,
+    table_cell_row_span_getter_function, table_cell_row_span_setter_function,
+    table_col_span_getter_function, table_col_span_setter_function, table_create_caption_callback,
+    table_create_t_body_callback, table_create_t_foot_callback, table_create_t_head_callback,
+    table_delete_caption_callback, table_delete_row_callback, table_delete_t_foot_callback,
+    table_delete_t_head_callback, table_insert_row_callback, table_row_cells_getter_function,
+    table_row_delete_cell_callback, table_row_index_getter_function,
+    table_row_insert_cell_callback, table_rows_getter_function, table_section_delete_row_callback,
+    table_section_insert_row_callback, table_section_row_index_getter_function,
+    table_section_rows_getter_function, table_t_bodies_getter_function,
+    table_t_foot_getter_function, table_t_foot_setter_function, table_t_head_getter_function,
+    table_t_head_setter_function, track_default_getter_function, track_default_setter_function,
+    track_kind_getter_function, track_kind_setter_function, track_ready_state_getter_function,
+    track_src_getter_function, track_src_setter_function, track_srclang_getter_function,
+    track_srclang_setter_function,
 };
 use html_elements::{
     marquee_loop_getter_function, marquee_loop_setter_function,
@@ -570,6 +568,7 @@ pub(super) use query::{
     node_get_elements_by_tag_name_ns_callback, node_matches_callback,
     node_query_selector_all_callback, node_query_selector_callback,
 };
+pub(super) use reflection::set_reflected_attribute;
 use reflection::{
     CrossOriginReflection, DomStringReflection, ElementReflectionInterface,
     NullToEmptyDomStringReflection, UnsignedLongReflection, UsvStringReflection,
@@ -580,8 +579,8 @@ use reflection::{
     remove_reflected_attribute, set_attribute_property_on_object_or_detached,
     set_boolean_attribute_property_on_object_or_detached,
     set_dom_string_attribute_property_on_object,
-    set_nullable_dom_string_attribute_property_on_object, set_reflected_attribute,
-    set_reflected_boolean_attribute, set_reflected_style_attribute_with_inline_base_url,
+    set_nullable_dom_string_attribute_property_on_object, set_reflected_boolean_attribute,
+    set_reflected_style_attribute_with_inline_base_url,
     set_usv_string_attribute_property_on_object,
 };
 pub(crate) use shadow_dom::install_element_internals_template_bindings;
@@ -612,7 +611,8 @@ use shadow_dom::{
     template_shadow_root_slot_assignment_getter_function,
     template_shadow_root_slot_assignment_setter_function,
 };
-use shared::{element_attribute, element_attribute_names, element_has_attribute, style_string};
+pub(super) use shared::element_attribute;
+use shared::{element_attribute_names, element_has_attribute, style_string};
 pub(super) use state_callbacks::{
     bridge_set_checked_state_callback, bridge_set_indeterminate_state_callback,
     bridge_set_input_value_callback, bridge_set_selected_state_callback,
@@ -1768,26 +1768,30 @@ struct HtmlBodyOrFrameSetEventHandlersPrototypeDeclaration {
 struct HtmlBodyElementLegacyPrototypeDeclaration {
     #[webapi(
         accessor_property,
-        getter = body_text_getter_function,
-        setter = body_text_setter_function
+        getter = null_to_empty_dom_string_reflection_getter_function,
+        setter = null_to_empty_dom_string_reflection_setter_function,
+        data = NullToEmptyDomStringReflection::BodyText
     )]
     text: (),
     #[webapi(
         accessor_property,
-        getter = body_link_getter_function,
-        setter = body_link_setter_function
+        getter = null_to_empty_dom_string_reflection_getter_function,
+        setter = null_to_empty_dom_string_reflection_setter_function,
+        data = NullToEmptyDomStringReflection::BodyLink
     )]
     link: (),
     #[webapi(
         accessor_property = "vLink",
-        getter = body_v_link_getter_function,
-        setter = body_v_link_setter_function
+        getter = null_to_empty_dom_string_reflection_getter_function,
+        setter = null_to_empty_dom_string_reflection_setter_function,
+        data = NullToEmptyDomStringReflection::BodyVLink
     )]
     v_link: (),
     #[webapi(
         accessor_property = "aLink",
-        getter = body_a_link_getter_function,
-        setter = body_a_link_setter_function
+        getter = null_to_empty_dom_string_reflection_getter_function,
+        setter = null_to_empty_dom_string_reflection_setter_function,
+        data = NullToEmptyDomStringReflection::BodyALink
     )]
     a_link: (),
     #[webapi(
