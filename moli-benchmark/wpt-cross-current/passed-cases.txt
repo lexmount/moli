@@ -3804,6 +3804,7 @@ dom/window-extends-event-target.html
 dom/xpath-result-single-node-value-nullable.html
 domparsing/DOMParser-parseFromString-encoding.html
 domparsing/DOMParser-parseFromString-stylesheets.html
+domparsing/DOMParser-parseFromString-xml-doctype.html
 domparsing/DOMParser-parseFromString-xml-parsererror.html
 domparsing/createContextualFragment.html
 domparsing/domparser-spurious-attributes.html
@@ -5377,6 +5378,7 @@ html/dom/elements/global-attributes/dataset-set.html
 html/dom/elements/global-attributes/dataset.html
 html/dom/elements/global-attributes/dir-auto-div-append-child.html
 html/dom/elements/global-attributes/dir-bdi-script.html
+html/dom/elements/global-attributes/document-dir.html
 html/dom/elements/global-attributes/id-attribute.html
 html/dom/elements/global-attributes/id-name-specialcase.html
 html/dom/elements/global-attributes/id-name.html
@@ -5415,7 +5417,10 @@ html/dom/partial-updates/tentative/template-for-superseded-by-shadowrootmode.htm
 html/dom/reflection-forms-weekmonth.html
 html/dom/reflection-forms.html
 html/dom/reflection-grouping.html
+html/dom/reflection-metadata.html
 html/dom/reflection-misc.html
+html/dom/reflection-sections.html
+html/dom/reflection-tabular.html
 html/dom/reflection-text.html
 html/editing/activation/click.html
 html/editing/dnd/datastore/datatransfer-constructor-001.html
@@ -5485,6 +5490,9 @@ html/links/stylesheet/quirk-origin-check.html
 html/meta/refresh-time.html
 html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/document-all.html
 html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/document-applets.html
+html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/document-color-02.html
+html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/document-color-03.html
+html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/document-color-04.html
 html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/heading-obsolete-attributes-01.html
 html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/nothing.html
 html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/script-IDL-event-htmlfor.html
@@ -8528,3 +8536,4 @@ xhr/xmlhttprequest-timeout-worker-synconworker.html?timeout hit before load
 xhr/xmlhttprequest-timeout-worker-twice.html?load fires normally with no timeout set, twice
 xhr/xmlhttprequest-timeout-worker-twice.html?load fires normally with same timeout set twice
 xhr/xmlhttprequest-timeout-worker-twice.html?timeout fires normally with same timeout set twice
+xml/xml-prolog-accepted-versions.html

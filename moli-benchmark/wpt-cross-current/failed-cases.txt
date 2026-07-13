@@ -2579,7 +2579,6 @@ domparsing/DOMParser-parseFromString-url-base.html
 domparsing/DOMParser-parseFromString-url-moretests.html
 domparsing/DOMParser-parseFromString-url-pushstate.html
 domparsing/DOMParser-parseFromString-url.html
-domparsing/DOMParser-parseFromString-xml-doctype.html
 domparsing/DOMParser-parseFromString-xml-internal-subset.html
 domparsing/DOMParser-parseFromString-xml.html
 domparsing/XMLSerializer-serializeToString.html
@@ -2916,7 +2915,6 @@ html/dom/documents/dom-tree-accessors/nameditem-07.html
 html/dom/documents/dom-tree-accessors/nameditem-08.html
 html/dom/documents/dom-tree-accessors/nameditem-names.html
 html/dom/elements/global-attributes/dir-slots-directionality.html
-html/dom/elements/global-attributes/document-dir.html
 html/dom/elements/the-innertext-and-outertext-properties/dynamic-getter.html
 html/dom/elements/the-innertext-and-outertext-properties/getter.html
 html/dom/elements/the-innertext-and-outertext-properties/innertext-setter.html
@@ -2973,10 +2971,8 @@ html/dom/partial-updates/tentative/template-for-style.html
 html/dom/partial-updates/tentative/template-for-supersedes-invalid-shadowrootmode.html
 html/dom/partial-updates/tentative/template-for-title.html
 html/dom/reflection-embedded.html
-html/dom/reflection-metadata.html
 html/dom/reflection-obsolete.html
-html/dom/reflection-sections.html
-html/dom/reflection-tabular.html
+html/editing/dnd/datastore/datatransfer-types.html
 html/editing/dnd/target-origin/202.html
 html/editing/dnd/the-dropzone-attribute/dropzone_attribute.html
 html/editing/the-hidden-attribute/beforematch-element-fragment-navigation.html
@@ -3010,9 +3006,7 @@ html/interaction/focus/the-autofocus-attribute/supported-elements.html
 html/interaction/focus/the-autofocus-attribute/update-the-rendering.html
 html/links/stylesheet/quirk-origin-check-positive.html
 html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/document-color-01.html
-html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/document-color-02.html
-html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/document-color-03.html
-html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/document-color-04.html
+html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/nothing.html
 html/obsolete/requirements-for-implementations/the-marquee-element-0/marquee-overflow.html
 html/semantics/document-metadata/the-base-element/base_about_blank.html
 html/semantics/document-metadata/the-base-element/base_multiple.html
@@ -3780,4 +3774,3 @@ worklets/audio-worklet-service-worker-interception.https.html
 worklets/layout-worklet-service-worker-interception.https.html
 worklets/paint-worklet-service-worker-interception.https.html
 xhr/xmlhttprequest-timeout-worker-overridesexpires.html?timeout set to non-expiring value after timeout fires
-xml/xml-prolog-accepted-versions.html
