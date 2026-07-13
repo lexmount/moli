@@ -1728,3 +1728,111 @@ fn detached_input_element_accessors_use_owner_prototype() {
 
     assert_eq!(result, "ok");
 }
+
+#[test]
+fn document_forwarded_reflections_use_html_targets() {
+    let mut vm = new_storage_test_vm("https://document-forwarded-reflections.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const assert = (condition, message) => {
+    if (!condition) throw new Error(message);
+  };
+  const own = (object, name) => Object.prototype.hasOwnProperty.call(object, name);
+  const throwsTypeError = callback => {
+    try {
+      callback();
+      return false;
+    } catch (error) {
+      return error instanceof TypeError;
+    }
+  };
+  const names = ["dir", "fgColor", "linkColor", "vlinkColor", "alinkColor", "bgColor"];
+  const colorAttributes = {
+    fgColor: "text",
+    linkColor: "link",
+    vlinkColor: "vlink",
+    alinkColor: "alink",
+    bgColor: "bgcolor"
+  };
+  const descriptors = new Map();
+  for (const name of names) {
+    const descriptor = Object.getOwnPropertyDescriptor(Document.prototype, name);
+    assert(!!descriptor, `${name} descriptor missing`);
+    assert(typeof descriptor.get === "function", `${name} getter`);
+    assert(typeof descriptor.set === "function", `${name} setter`);
+    assert(descriptor.enumerable === true, `${name} enumerable`);
+    assert(descriptor.configurable === true, `${name} configurable`);
+    descriptors.set(name, descriptor);
+  }
+
+  if (!document.documentElement) {
+    const html = document.createElement("html");
+    html.append(document.createElement("head"), document.createElement("body"));
+    document.append(html);
+  }
+  const detachedDocument = document.implementation.createHTMLDocument("");
+  for (const [doc, label] of [[document, "live"], [detachedDocument, "detached"]]) {
+    for (const name of names) {
+      assert(!own(doc, name), `${label}.${name} should not be own before set`);
+      assert(doc[name] === "", `${label}.${name} missing-value default`);
+    }
+
+    doc.documentElement.setAttribute("dir", "RTL");
+    assert(doc.dir === "rtl", `${label}.dir canonical getter`);
+    doc.dir = { toString: () => "AUTO" };
+    assert(doc.documentElement.getAttribute("dir") === "AUTO", `${label}.dir target attribute`);
+    assert(doc.dir === "auto", `${label}.dir setter canonical getter`);
+    doc.dir = null;
+    assert(doc.documentElement.getAttribute("dir") === "null", `${label}.dir null attribute`);
+    assert(doc.dir === "", `${label}.dir null canonical getter`);
+
+    for (const [name, attribute] of Object.entries(colorAttributes)) {
+      doc[name] = { toString: () => `${label}-${name}` };
+      assert(doc[name] === `${label}-${name}`, `${label}.${name} getter`);
+      assert(doc.body.getAttribute(attribute) === `${label}-${name}`, `${label}.${name} target attribute`);
+      doc[name] = null;
+      assert(doc[name] === "", `${label}.${name} null getter`);
+      assert(doc.body.getAttribute(attribute) === "", `${label}.${name} null attribute`);
+    }
+
+    for (const name of names) {
+      assert(!own(doc, name), `${label}.${name} should stay inherited after set`);
+      assert(delete doc[name], `${label}.${name} delete`);
+      assert(!own(doc, name), `${label}.${name} should stay inherited after delete`);
+    }
+  }
+
+  const xmlDocument = document.implementation.createDocument("urn:test", "root", null);
+  let converted = false;
+  xmlDocument.dir = { toString() { converted = true; return "rtl"; } };
+  assert(converted, "XML document setter should still convert the value");
+  assert(xmlDocument.dir === "", "XML document dir getter");
+  assert(!xmlDocument.documentElement.hasAttribute("dir"), "XML document should not forward dir");
+  xmlDocument.fgColor = "red";
+  assert(xmlDocument.fgColor === "", "XML document color getter");
+
+  const framesetDocument = document.implementation.createHTMLDocument("");
+  const frameset = framesetDocument.createElement("frameset");
+  frameset.setAttribute("text", "seed");
+  framesetDocument.body = frameset;
+  assert(framesetDocument.fgColor === "seed", "frameset color getter target");
+  framesetDocument.fgColor = "changed";
+  assert(frameset.getAttribute("text") === "seed", "frameset color setter should be a no-op");
+
+  for (const [name, descriptor] of descriptors) {
+    for (const receiver of [document.documentElement, {}]) {
+      assert(throwsTypeError(() => descriptor.get.call(receiver)), `${name} getter receiver`);
+      assert(throwsTypeError(() => descriptor.set.call(receiver, "wrong")), `${name} setter receiver`);
+    }
+  }
+  return "ok";
+})()
+"#,
+        )
+        .expect("document forwarded reflections should evaluate");
+
+    assert_eq!(result, "ok");
+}
