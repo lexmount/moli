@@ -774,7 +774,7 @@ pub(in crate::native_bridge) fn node_dir_getter_function<'s>(
     canonical_attribute_getter_from_object(scope, args.this(), "dir", canonical_dir_value, rv);
 }
 
-fn canonical_dir_value(raw: &str) -> &'static str {
+pub(in crate::native_bridge) fn canonical_dir_value(raw: &str) -> &'static str {
     if raw.eq_ignore_ascii_case("ltr") {
         "ltr"
     } else if raw.eq_ignore_ascii_case("rtl") {
