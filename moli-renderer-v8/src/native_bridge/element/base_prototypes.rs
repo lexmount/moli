@@ -1350,6 +1350,46 @@ pub(super) struct HtmlTableElementPrototypeDeclaration {
     #[webapi(
         accessor_property,
         enumerable,
+        getter = dom_string_reflection_getter_function,
+        setter = dom_string_reflection_setter_function,
+        data = DomStringReflection::TableFrame
+    )]
+    frame: (),
+    #[webapi(
+        accessor_property,
+        enumerable,
+        getter = dom_string_reflection_getter_function,
+        setter = dom_string_reflection_setter_function,
+        data = DomStringReflection::TableRules
+    )]
+    rules: (),
+    #[webapi(
+        accessor_property,
+        enumerable,
+        getter = dom_string_reflection_getter_function,
+        setter = dom_string_reflection_setter_function,
+        data = DomStringReflection::TableSummary
+    )]
+    summary: (),
+    #[webapi(
+        accessor_property = "cellPadding",
+        enumerable,
+        getter = null_to_empty_dom_string_reflection_getter_function,
+        setter = null_to_empty_dom_string_reflection_setter_function,
+        data = NullToEmptyDomStringReflection::TableCellPadding
+    )]
+    cell_padding: (),
+    #[webapi(
+        accessor_property = "cellSpacing",
+        enumerable,
+        getter = null_to_empty_dom_string_reflection_getter_function,
+        setter = null_to_empty_dom_string_reflection_setter_function,
+        data = NullToEmptyDomStringReflection::TableCellSpacing
+    )]
+    cell_spacing: (),
+    #[webapi(
+        accessor_property,
+        enumerable,
         getter = table_caption_getter_function,
         setter = table_caption_setter_function
     )]
