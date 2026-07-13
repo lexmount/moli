@@ -1142,26 +1142,30 @@ pub(super) struct HtmlBodyOrFrameSetEventHandlersPrototypeDeclaration {
 pub(super) struct HtmlBodyElementLegacyPrototypeDeclaration {
     #[webapi(
         accessor_property,
-        getter = body_text_getter_function,
-        setter = body_text_setter_function
+        getter = null_to_empty_dom_string_reflection_getter_function,
+        setter = null_to_empty_dom_string_reflection_setter_function,
+        data = NullToEmptyDomStringReflection::BodyText
     )]
     text: (),
     #[webapi(
         accessor_property,
-        getter = body_link_getter_function,
-        setter = body_link_setter_function
+        getter = null_to_empty_dom_string_reflection_getter_function,
+        setter = null_to_empty_dom_string_reflection_setter_function,
+        data = NullToEmptyDomStringReflection::BodyLink
     )]
     link: (),
     #[webapi(
         accessor_property = "vLink",
-        getter = body_v_link_getter_function,
-        setter = body_v_link_setter_function
+        getter = null_to_empty_dom_string_reflection_getter_function,
+        setter = null_to_empty_dom_string_reflection_setter_function,
+        data = NullToEmptyDomStringReflection::BodyVLink
     )]
     v_link: (),
     #[webapi(
         accessor_property = "aLink",
-        getter = body_a_link_getter_function,
-        setter = body_a_link_setter_function
+        getter = null_to_empty_dom_string_reflection_getter_function,
+        setter = null_to_empty_dom_string_reflection_setter_function,
+        data = NullToEmptyDomStringReflection::BodyALink
     )]
     a_link: (),
     #[webapi(
