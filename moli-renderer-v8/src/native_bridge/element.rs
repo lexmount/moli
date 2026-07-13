@@ -282,22 +282,19 @@ pub(crate) use details_dialog::{
     queue_details_toggle_event_for_attribute_change, queue_parser_details_toggle_event,
     queue_parser_details_toggle_events_in_subtree,
 };
-pub(crate) use event_handlers::compile_window_body_onmessageerror_attribute;
 use event_handlers::install_global_event_handler_template_bindings as install_global_event_handler_templates_for_owner;
 pub(crate) use event_handlers::{
-    EventAttributeHandlerScope, GlobalEventHandlerOwner, compile_event_attribute_handler_for_owner,
-    compile_node_content_attribute_for_dispatch, compile_window_body_event_attribute,
-    event_handler_content_attribute_name, initialize_parser_inserted_body_window_event_handlers,
-    invalidate_event_handler_content_attribute, is_body_window_event_handler_attribute,
-    is_global_event_handler_attribute, node_event_handler_getter_function,
-    node_event_handler_setter_function, node_event_handler_value_from_wrapper,
+    GlobalEventHandlerOwner, ParserAddedEventHandlers, body_or_frameset_reflects_window_event_type,
+    canonical_event_handler_event_type, compile_body_window_event_attribute,
+    compile_node_content_attribute_for_dispatch, compile_window_event_attribute_handler,
+    element_event_handler_content_attribute_applies, event_handler_content_attribute_name,
+    initialize_parser_inserted_body_window_event_handlers, legacy_lenient_this_event_handler,
+    node_event_handler_getter_function, node_event_handler_setter_function,
+    resolve_window_event_handler_content_attribute,
 };
 use event_handlers::{
-    body_onerror_getter_function, body_onerror_setter_function, body_onload_getter_function,
-    body_onload_setter_function, body_onmessageerror_getter_function,
-    body_onmessageerror_setter_function,
+    HtmlBodyWindowEventHandlersDeclaration, HtmlFrameSetWindowEventHandlersDeclaration,
 };
-pub(crate) use events::construct_focus_event;
 #[cfg(any(test, feature = "devtools"))]
 pub(crate) use events::construct_keyboard_event;
 use events::{ClickEventSource, construct_click_event};
@@ -532,6 +529,7 @@ pub(super) use global_attributes::{
     node_tab_index_setter_function, node_title_getter_function, node_title_setter_function,
     node_translate_getter_function, node_translate_setter_function,
     node_writing_suggestions_getter_function, node_writing_suggestions_setter_function,
+    null_to_empty_dom_string_reflection_getter_function,
     null_to_empty_dom_string_reflection_setter_function, object_archive_getter_function,
     object_code_base_getter_function, object_code_getter_function,
     object_code_type_getter_function, object_data_getter_function, object_declare_getter_function,
@@ -541,8 +539,8 @@ pub(super) use global_attributes::{
     table_cell_axis_getter_function, table_cell_headers_getter_function,
     table_cell_no_wrap_getter_function, table_cell_no_wrap_setter_function,
     table_cell_scope_getter_function, table_ch_getter_function, table_ch_off_getter_function,
-    table_col_span_getter_function, table_col_span_setter_function, table_v_align_getter_function,
-    unsigned_long_reflection_setter_function, usv_string_reflection_setter_function,
+    table_v_align_getter_function, unsigned_long_reflection_setter_function,
+    usv_string_reflection_setter_function,
 };
 use html_elements::{
     body_a_link_getter_function, body_a_link_setter_function, body_background_getter_function,
@@ -556,19 +554,19 @@ use html_elements::{
     table_caption_getter_function, table_caption_setter_function,
     table_cell_col_span_getter_function, table_cell_col_span_setter_function,
     table_cell_index_getter_function, table_cell_row_span_getter_function,
-    table_cell_row_span_setter_function, table_create_caption_callback,
-    table_create_t_body_callback, table_create_t_foot_callback, table_create_t_head_callback,
-    table_delete_caption_callback, table_delete_row_callback, table_delete_t_foot_callback,
-    table_delete_t_head_callback, table_insert_row_callback, table_row_cells_getter_function,
-    table_row_delete_cell_callback, table_row_index_getter_function,
-    table_row_insert_cell_callback, table_rows_getter_function, table_section_delete_row_callback,
-    table_section_insert_row_callback, table_section_row_index_getter_function,
-    table_section_rows_getter_function, table_t_bodies_getter_function,
-    table_t_foot_getter_function, table_t_foot_setter_function, table_t_head_getter_function,
-    table_t_head_setter_function, track_default_getter_function, track_default_setter_function,
-    track_kind_getter_function, track_kind_setter_function, track_ready_state_getter_function,
-    track_src_getter_function, track_src_setter_function, track_srclang_getter_function,
-    track_srclang_setter_function,
+    table_cell_row_span_setter_function, table_col_span_getter_function,
+    table_col_span_setter_function, table_create_caption_callback, table_create_t_body_callback,
+    table_create_t_foot_callback, table_create_t_head_callback, table_delete_caption_callback,
+    table_delete_row_callback, table_delete_t_foot_callback, table_delete_t_head_callback,
+    table_insert_row_callback, table_row_cells_getter_function, table_row_delete_cell_callback,
+    table_row_index_getter_function, table_row_insert_cell_callback, table_rows_getter_function,
+    table_section_delete_row_callback, table_section_insert_row_callback,
+    table_section_row_index_getter_function, table_section_rows_getter_function,
+    table_t_bodies_getter_function, table_t_foot_getter_function, table_t_foot_setter_function,
+    table_t_head_getter_function, table_t_head_setter_function, track_default_getter_function,
+    track_default_setter_function, track_kind_getter_function, track_kind_setter_function,
+    track_ready_state_getter_function, track_src_getter_function, track_src_setter_function,
+    track_srclang_getter_function, track_srclang_setter_function,
 };
 use html_elements::{
     marquee_loop_getter_function, marquee_loop_setter_function,
@@ -1491,12 +1489,12 @@ pub(crate) fn install_element_template_bindings<'s>(
         "HTMLOListElement" => install!(HtmlOListElementPrototypeDeclaration),
         "HTMLUListElement" => install!(HtmlUListElementPrototypeDeclaration),
         "HTMLBodyElement" => install!(
-            HtmlBodyOrFrameSetEventHandlersPrototypeDeclaration,
+            HtmlBodyWindowEventHandlersDeclaration,
             HtmlBodyElementLegacyPrototypeDeclaration,
         ),
         "HTMLFrameSetElement" => {
             install!(
-                HtmlBodyOrFrameSetEventHandlersPrototypeDeclaration,
+                HtmlFrameSetWindowEventHandlersDeclaration,
                 HtmlFrameSetElementLegacyPrototypeDeclaration,
             );
         }
