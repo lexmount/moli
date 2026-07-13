@@ -15,7 +15,7 @@ fn with_element<T>(
         .map(map)
 }
 
-pub(super) fn element_attribute(
+pub(in crate::native_bridge) fn element_attribute(
     runtime: &JsContextHost,
     handle: DomHandle,
     name: &str,
