@@ -687,32 +687,6 @@ fn set_html_unsigned_long_attribute_for_receiver<'s>(
     set_reflected_attribute(scope, runtime_ptr, handle, content_attr, &value.to_string());
 }
 
-pub(in crate::native_bridge) fn table_col_span_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    html_unsigned_long_attribute_getter_for_receiver(scope, args.this(), rv, "span", 1, |value| {
-        if value == 0 { 1 } else { value.min(1000) }
-    });
-}
-
-pub(in crate::native_bridge) fn table_col_span_setter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    set_html_unsigned_long_attribute_for_receiver(
-        scope,
-        args.this(),
-        "span",
-        args.get(0),
-        "HTMLTableColElement",
-        "span",
-    );
-    rv.set_undefined();
-}
-
 pub(in crate::native_bridge) fn html_download_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -1110,6 +1084,31 @@ fn set_dom_string_treat_null_as_empty_on_object<'s>(
     set_reflected_attribute(scope, runtime_ptr, handle, attribute, &value);
 }
 
+pub(in crate::native_bridge) fn null_to_empty_dom_string_reflection_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some(descriptor) =
+        NullToEmptyDomStringReflection::descriptor_from_callback_data(scope, args.data())
+    else {
+        return;
+    };
+    if let Some(local_name) = descriptor.local_name
+        && html_element_getter_receiver(
+            scope,
+            args.this(),
+            descriptor.interface,
+            descriptor.member,
+            local_name,
+        )
+        .is_none()
+    {
+        return;
+    }
+    attribute_property_getter_from_object_or_detached(scope, args.this(), descriptor.attribute, rv);
+}
+
 pub(in crate::native_bridge) fn null_to_empty_dom_string_reflection_setter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -1118,6 +1117,18 @@ pub(in crate::native_bridge) fn null_to_empty_dom_string_reflection_setter_funct
     if let Some(descriptor) =
         NullToEmptyDomStringReflection::descriptor_from_callback_data(scope, args.data())
     {
+        if let Some(local_name) = descriptor.local_name
+            && html_element_setter_receiver(
+                scope,
+                args.this(),
+                descriptor.interface,
+                descriptor.member,
+                local_name,
+            )
+            .is_none()
+        {
+            return;
+        }
         set_dom_string_treat_null_as_empty_on_object(
             scope,
             args.this(),
@@ -1521,20 +1532,27 @@ fn canonical_scope_value(raw: &str) -> &'static str {
 // ---------- Unsigned-long content attribute reflections ----------
 //
 // Each parses the content attribute via the HTML "non-negative integer
-// parsing rules" (leading whitespace skipped, leading digits consumed) and
-// returns the parsed value (clamped to [0, u32::MAX] then narrowed to i32 for
-// the IDL `unsigned long`). When the attribute is missing or unparseable the
-// attribute-specific default applies.
+// parsing rules" (leading whitespace skipped, leading digits consumed).
+// Attribute-specific reflection code decides whether to apply the signed
+// 31-bit boundary or a narrower getter clamp.
 
-fn parse_non_negative_integer(value: &str) -> Option<u32> {
+pub(in crate::native_bridge::element) fn parse_non_negative_integer(value: &str) -> Option<u32> {
     // Per HTML "rules for parsing non-negative integers": skip leading ASCII
     // whitespace, then consume leading ASCII digits. Out-of-range results
     // saturate at u32::MAX rather than falling back to the attribute default
     // — the spec's reflection algorithm clamps to the unsigned-long range.
     let mut chars = value.chars().skip_while(|ch| ch.is_ascii_whitespace());
-    if matches!(chars.clone().next(), Some('+')) {
-        chars.next();
-    }
+    let negative = match chars.clone().next() {
+        Some('+') => {
+            chars.next();
+            false
+        }
+        Some('-') => {
+            chars.next();
+            true
+        }
+        _ => false,
+    };
     let mut acc: u64 = 0;
     let mut had_digit = false;
     for ch in chars.by_ref() {
@@ -1548,7 +1566,11 @@ fn parse_non_negative_integer(value: &str) -> Option<u32> {
             break;
         }
     }
-    if had_digit { Some(acc as u32) } else { None }
+    if !had_digit || (negative && acc != 0) {
+        None
+    } else {
+        Some(acc as u32)
+    }
 }
 
 fn unsigned_long_attribute_getter_from_object_or_detached<'s, F>(
@@ -2563,7 +2585,18 @@ fn parse_tab_index_attribute(value: &str) -> Option<i32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{canonical_dir_value, parse_tab_index_attribute};
+    use super::{canonical_dir_value, parse_non_negative_integer, parse_tab_index_attribute};
+
+    #[test]
+    fn parses_html_non_negative_integer_including_minus_zero() {
+        assert_eq!(parse_non_negative_integer(""), None);
+        assert_eq!(parse_non_negative_integer("\u{b}7"), None);
+        assert_eq!(parse_non_negative_integer(" +7tail"), Some(7));
+        assert_eq!(parse_non_negative_integer("-0"), Some(0));
+        assert_eq!(parse_non_negative_integer("-00tail"), Some(0));
+        assert_eq!(parse_non_negative_integer("-1"), None);
+        assert_eq!(parse_non_negative_integer("4294967296"), Some(u32::MAX));
+    }
 
     #[test]
     fn parses_tab_index_attribute_like_html_signed_integer() {

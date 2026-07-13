@@ -1786,6 +1786,75 @@ fn table_cell_legacy_accessors_use_owner_prototype() {
 }
 
 #[test]
+fn table_legacy_dom_string_reflectors_use_owner_prototype() {
+    let mut vm = new_storage_test_vm("https://table-legacy-dom-string-reflectors.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const assert = (condition, message) => {
+    if (!condition) throw new Error(message);
+  };
+  const own = (object, name) => Object.prototype.hasOwnProperty.call(object, name);
+  const throwsTypeError = callback => {
+    try {
+      callback();
+      return false;
+    } catch (error) {
+      return error instanceof TypeError;
+    }
+  };
+  const cases = [
+    ["frame", "frame", false],
+    ["rules", "rules", false],
+    ["summary", "summary", false],
+    ["cellPadding", "cellpadding", true],
+    ["cellSpacing", "cellspacing", true]
+  ];
+  const detachedDocument = document.implementation.createHTMLDocument("");
+
+  for (const [name, attribute, nullAsEmpty] of cases) {
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLTableElement.prototype, name);
+    assert(!!descriptor, `${name} descriptor missing`);
+    assert(typeof descriptor.get === "function", `${name} getter`);
+    assert(typeof descriptor.set === "function", `${name} setter`);
+    assert(descriptor.enumerable === true, `${name} enumerable`);
+    assert(descriptor.configurable === true, `${name} configurable`);
+    assert(!own(HTMLElement.prototype, name), `${name} should not be on HTMLElement.prototype`);
+
+    for (const [doc, label] of [[document, "live"], [detachedDocument, "detached"]]) {
+      const table = doc.createElement("table");
+      assert(!own(table, name), `${label}.${name} should not be own before set`);
+      assert(table[name] === "", `${label}.${name} missing-value default`);
+      table[name] = { toString: () => `${name}-value` };
+      assert(table[name] === `${name}-value`, `${label}.${name} getter`);
+      assert(table.getAttribute(attribute) === `${name}-value`, `${label}.${name} attribute`);
+      table[name] = null;
+      const expectedNull = nullAsEmpty ? "" : "null";
+      assert(table[name] === expectedNull, `${label}.${name} null getter`);
+      assert(table.getAttribute(attribute) === expectedNull, `${label}.${name} null attribute`);
+      assert(!own(table, name), `${label}.${name} should stay inherited after set`);
+      assert(delete table[name], `${label}.${name} delete`);
+      assert(!own(table, name), `${label}.${name} should stay inherited after delete`);
+      assert(table[name] === expectedNull, `${label}.${name} after delete`);
+    }
+
+    for (const receiver of [document.createElement("div"), {}]) {
+      assert(throwsTypeError(() => descriptor.get.call(receiver)), `${name} getter receiver`);
+      assert(throwsTypeError(() => descriptor.set.call(receiver, "wrong")), `${name} setter receiver`);
+    }
+  }
+  return "ok";
+})()
+"#,
+        )
+        .expect("table legacy DOMString reflectors should evaluate");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn detached_table_structural_accessors_use_owner_prototypes() {
     let mut vm = new_storage_test_vm("https://detached-table-structural-prototypes.test/");
 
@@ -1860,8 +1929,27 @@ fn detached_table_structural_accessors_use_owner_prototypes() {
     secondCell.rowSpan = -5;
     assert(firstCell.colSpan === 7 && firstCell.getAttribute("colspan") === "7", `${label}.colSpan`);
     assert(firstCell.rowSpan === 0 && firstCell.getAttribute("rowspan") === "0", `${label}.rowSpan zero`);
-    assert(secondCell.colSpan === 1000 && secondCell.getAttribute("colspan") === "1000", `${label}.colSpan clamp`);
+    assert(secondCell.colSpan === 1000 && secondCell.getAttribute("colspan") === "2000", `${label}.colSpan clamp`);
     assert(secondCell.rowSpan === 1 && secondCell.getAttribute("rowspan") === "1", `${label}.rowSpan clamp`);
+
+    firstCell.setAttribute("colspan", "4294967296");
+    firstCell.setAttribute("rowspan", "2147483648");
+    assert(firstCell.colSpan === 1000, `${label}.colSpan large content clamp`);
+    assert(firstCell.rowSpan === 65534, `${label}.rowSpan large content clamp`);
+    firstCell.setAttribute("rowspan", "-0");
+    assert(firstCell.rowSpan === 0, `${label}.rowSpan minus-zero content`);
+    firstCell.colSpan = "-0";
+    assert(firstCell.getAttribute("colspan") === "0" && firstCell.colSpan === 1, `${label}.colSpan zero setter`);
+    firstCell.colSpan = 1001;
+    assert(firstCell.getAttribute("colspan") === "1001" && firstCell.colSpan === 1000, `${label}.colSpan setter clamp`);
+    firstCell.rowSpan = 65535;
+    assert(firstCell.getAttribute("rowspan") === "65535" && firstCell.rowSpan === 65534, `${label}.rowSpan setter clamp`);
+    firstCell.colSpan = 2147483648;
+    firstCell.rowSpan = 4294967295;
+    assert(firstCell.getAttribute("colspan") === "1" && firstCell.colSpan === 1, `${label}.colSpan setter default`);
+    assert(firstCell.getAttribute("rowspan") === "1" && firstCell.rowSpan === 1, `${label}.rowSpan setter default`);
+    firstCell.colSpan = 7;
+    firstCell.rowSpan = 0;
 
     for (const [element, names, elementLabel] of [
       [tbody, ["rows"], "tbody"],
@@ -2031,6 +2119,14 @@ fn table_legacy_alignment_accessors_use_owner_prototypes() {
     if (!condition) throw new Error(message);
   };
   const own = (object, name) => Object.prototype.hasOwnProperty.call(object, name);
+  const throwsTypeError = callback => {
+    try {
+      callback();
+      return false;
+    } catch (error) {
+      return error instanceof TypeError;
+    }
+  };
   const accessor = (prototype, name) => {
     const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
     assert(!!descriptor, `${name} descriptor missing`);
@@ -2126,10 +2222,21 @@ fn table_legacy_alignment_accessors_use_owner_prototypes() {
     element.span = 1002;
     assert(element.getAttribute("span") === "1002", `${label}.span large attr`);
     assert(element.span === 1000, `${label}.span large canonical`);
+    element.setAttribute("span", "4294967296");
+    assert(element.span === 1000, `${label}.span large content clamp`);
+    element.span = 2147483648;
+    assert(element.getAttribute("span") === "1", `${label}.span setter default attr`);
+    assert(element.span === 1, `${label}.span setter default`);
     element.setAttribute("span", "invalid");
     assert(element.span === 1, `${label}.span invalid canonical`);
     assert(delete element.span, `${label}.span delete`);
     assert(!own(element, "span"), `${label}.span should stay inherited`);
+  }
+
+  const spanDescriptor = Object.getOwnPropertyDescriptor(HTMLTableColElement.prototype, "span");
+  for (const receiver of [document.createElement("div"), document.createElement("td"), {}]) {
+    assert(throwsTypeError(() => spanDescriptor.get.call(receiver)), "span getter receiver");
+    assert(throwsTypeError(() => spanDescriptor.set.call(receiver, 2)), "span setter receiver");
   }
   return "ok";
 })()

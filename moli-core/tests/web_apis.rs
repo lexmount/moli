@@ -350,7 +350,7 @@ async fn html_element_reflected_accessors_cover_simple_tag_specific_surface() ->
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-table-cell=\"1:1:1000:1000:0:0:65534:65534\"")
+            .contains("data-table-cell=\"1:1:1000:2000:0:0:65534:70000\"")
     );
     assert!(
         page.serialize_html_async()
