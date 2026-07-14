@@ -7,6 +7,8 @@ use crate::{
     util::v8_string,
     webidl,
 };
+use dom::ElementState as StyloElementState;
+use moli_selector::stylo_flat_tree_heading_descendants;
 
 use super::super::{
     JsContextHost, node::node_runtime_and_handle_from_object_or_detached, throw_dom_exception,
@@ -234,10 +236,29 @@ fn dialog_set_open_state_for_handle(
     modal: bool,
 ) {
     set_reflected_boolean_attribute(scope, runtime_ptr, handle, "open", open);
+    let _ = set_dialog_modal_state(runtime_ptr, handle, open && modal);
+}
+
+fn set_dialog_modal_state(runtime_ptr: *mut JsContextHost, handle: DomHandle, modal: bool) -> bool {
+    let old_heading_states = {
+        let runtime = unsafe { &*runtime_ptr };
+        stylo_flat_tree_heading_descendants(runtime.dom_host(), handle)
+            .into_iter()
+            .map(|heading| (heading, runtime.retained_current_element_state(heading)))
+            .collect::<Vec<_>>()
+    };
     let runtime = unsafe { &mut *runtime_ptr };
-    let _ = runtime
-        .dom_host_mut()
-        .set_dialog_modal(handle, open && modal);
+    if !runtime.dom_host_mut().set_dialog_modal(handle, modal) {
+        return false;
+    }
+    for (heading, old_state) in old_heading_states {
+        runtime.note_element_state_style_activity_with_old_state(
+            heading,
+            StyloElementState::HEADING_LEVEL_BITS,
+            old_state,
+        );
+    }
+    true
 }
 
 fn dialog_is_modal(runtime: &JsContextHost, handle: DomHandle) -> bool {
@@ -434,8 +455,8 @@ pub(in crate::native_bridge::element) fn close_dialog_element(
     }
 
     set_reflected_boolean_attribute(scope, runtime_ptr, handle, "open", false);
+    let _ = set_dialog_modal_state(runtime_ptr, handle, false);
     let runtime = unsafe { &mut *runtime_ptr };
-    let _ = runtime.dom_host_mut().set_dialog_modal(handle, false);
     if let Some(return_value) = return_value {
         let _ = runtime
             .dom_host_mut()
