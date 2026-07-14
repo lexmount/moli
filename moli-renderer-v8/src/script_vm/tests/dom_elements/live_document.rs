@@ -5420,6 +5420,76 @@ fn live_document_all_obeys_legacy_named_and_indexed_semantics() {
 }
 
 #[test]
+fn live_document_named_properties_follow_html_candidate_and_liveness_rules() {
+    let mut vm = new_parsed_test_vm(
+        "https://example.com/",
+        r#"<!doctype html><html><body>
+          <img id="imageId" name="imageName">
+          <img id="duplicate" name="duplicate">
+          <img name="duplicate">
+          <img id="idOnly">
+          <img name="42">
+          <form id="formId" name="formName"></form>
+          <object id="objectId"></object>
+        </body></html>"#,
+    );
+
+    let result = vm
+        .eval(
+            r##"
+            (() => {
+              const image = document.getElementById("imageId");
+              const duplicate = document.duplicate;
+              const duplicateImages = document.querySelectorAll("#duplicate, [name=duplicate]");
+              const initial = [
+                document.imageId === image,
+                document.imageName === image,
+                "imageId" in document,
+                document.idOnly === undefined,
+                !("idOnly" in document),
+                document[42] === document.querySelector("[name='42']"),
+                document.formName === document.querySelector("form"),
+                document.formId === undefined,
+                document.objectId === document.querySelector("object"),
+                duplicate instanceof HTMLCollection,
+                duplicate.length,
+                duplicate[0] === duplicateImages[0],
+                duplicate[1] === duplicateImages[1],
+              ];
+
+              image.removeAttribute("name");
+              const removedName = [
+                document.imageId === undefined,
+                document.imageName === undefined,
+              ];
+
+              duplicateImages[1].name = "other";
+              const narrowed = [
+                duplicate.length,
+                duplicate[0] === duplicateImages[0],
+                document.duplicate === duplicateImages[0],
+                document.other === duplicateImages[1],
+              ];
+
+              duplicateImages[0].remove();
+              const removed = [
+                duplicate.length,
+                document.duplicate === undefined,
+                !("duplicate" in document),
+              ];
+              return JSON.stringify({ initial, removedName, narrowed, removed });
+            })()
+            "##,
+        )
+        .expect("document named-property probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"initial":[true,true,true,true,true,true,true,true,true,true,2,true,true],"removedName":[true,true],"narrowed":[1,true,true,true],"removed":[0,true,true]}"#
+    );
+}
+
+#[test]
 fn legacy_named_access_filters_name_candidates_by_consumer() {
     let mut vm = new_parsed_test_vm(
         "https://example.com/",
