@@ -5221,6 +5221,8 @@ html/editing/editing-0/contenteditable/user-interaction-editing-contenteditable.
 html/editing/editing-0/making-entire-documents-editable-the-designmode-idl-attribute/user-interaction-editing-designMode.html
 html/editing/editing-0/spelling-and-grammar-checking/spellcheck-enumerated-ascii-case-insensitive.html
 html/editing/editing-0/spelling-and-grammar-checking/user-interaction-editing-spellcheck.html
+html/editing/the-hidden-attribute/hidden-idl.html
+html/editing/the-hidden-attribute/hidden-until-found-idl.html
 html/embedded-content/the-img-element/attr-img-fetchpriority.html
 html/infrastructure/common-dom-interfaces/collections/domstringlist.html
 html/infrastructure/common-dom-interfaces/collections/htmlformcontrolscollection.html

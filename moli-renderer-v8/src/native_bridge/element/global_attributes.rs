@@ -2164,9 +2164,27 @@ pub(in crate::native_bridge) fn node_autofocus_setter_function<'s>(
 pub(in crate::native_bridge) fn node_hidden_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    boolean_attribute_property_getter_from_object_or_detached(scope, args.this(), "hidden", rv);
+    let Ok((runtime_ptr, handle)) =
+        node_runtime_and_handle_from_object_or_detached(scope, args.this())
+    else {
+        rv.set_undefined();
+        return;
+    };
+    if !node_is_element(unsafe { &*runtime_ptr }, handle) {
+        rv.set_undefined();
+        return;
+    }
+    match element_attribute(unsafe { &*runtime_ptr }, handle, "hidden") {
+        Some(value) if value.eq_ignore_ascii_case("until-found") => {
+            if let Some(value) = v8_string(scope, "until-found") {
+                rv.set(value.into());
+            }
+        }
+        Some(_) => rv.set_bool(true),
+        None => rv.set_bool(false),
+    }
 }
 
 pub(in crate::native_bridge) fn node_hidden_setter_function<'s>(
@@ -2174,7 +2192,39 @@ pub(in crate::native_bridge) fn node_hidden_setter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    set_boolean_attribute_property_on_object_or_detached(scope, args.this(), "hidden", args.get(0));
+    let Ok((runtime_ptr, handle)) =
+        node_runtime_and_handle_from_object_or_detached(scope, args.this())
+    else {
+        rv.set_undefined();
+        return;
+    };
+    if !node_is_element(unsafe { &*runtime_ptr }, handle) {
+        rv.set_undefined();
+        return;
+    }
+    let value = args.get(0);
+    if value.is_null_or_undefined() || value.is_boolean() || value.is_number() {
+        set_reflected_boolean_attribute(
+            scope,
+            runtime_ptr,
+            handle,
+            "hidden",
+            !value.is_null_or_undefined() && value.boolean_value(scope),
+        );
+    } else if let Some(value) = value.to_string(scope) {
+        let value = value.to_rust_string_lossy(scope);
+        if value.eq_ignore_ascii_case("until-found") {
+            set_reflected_attribute(scope, runtime_ptr, handle, "hidden", "until-found");
+        } else {
+            set_reflected_boolean_attribute(
+                scope,
+                runtime_ptr,
+                handle,
+                "hidden",
+                !value.is_empty(),
+            );
+        }
+    }
     rv.set_undefined();
 }
 

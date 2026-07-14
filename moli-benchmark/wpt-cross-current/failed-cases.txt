@@ -3161,10 +3161,8 @@ html/editing/the-hidden-attribute/beforematch-element-fragment-navigation.html
 html/editing/the-hidden-attribute/beforematch-element-removal-001.html
 html/editing/the-hidden-attribute/beforematch-element-removal-002.html
 html/editing/the-hidden-attribute/beforematch-infinite-loop.html
-html/editing/the-hidden-attribute/hidden-idl.html
 html/editing/the-hidden-attribute/hidden-ua-stylesheet.html
 html/editing/the-hidden-attribute/hidden-until-found-and-details.html
-html/editing/the-hidden-attribute/hidden-until-found-idl.html
 html/infrastructure/common-dom-interfaces/collections/historical.html
 html/infrastructure/common-dom-interfaces/collections/htmlallcollection.html
 html/infrastructure/safe-passing-of-structured-data/shared-array-buffers/window-serviceworker-failure.https.html

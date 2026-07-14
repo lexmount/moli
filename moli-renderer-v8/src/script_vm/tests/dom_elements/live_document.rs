@@ -25,6 +25,51 @@ fn document_compat_mode_reflects_parser_quirks_mode() {
 }
 
 #[test]
+fn html_element_hidden_reflects_nullable_boolean_number_and_string_union() {
+    let mut vm = new_parsed_test_vm(
+        "https://hidden-reflection.test/",
+        "<!doctype html><div id=target></div>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const target = document.getElementById("target");
+              const assignments = [
+                [false, false, null],
+                [true, true, ""],
+                ["foo", true, ""],
+                ["", false, null],
+                ["UnTiL-FoUnD", "until-found", "until-found"],
+                [null, false, null],
+                [undefined, false, null],
+                [1, true, ""],
+                [0, false, null],
+                [NaN, false, null],
+                [{ toString() { return "UNTIL-FOUND"; } }, "until-found", "until-found"]
+              ];
+              const assignmentResults = assignments.map(([value, expected, attribute]) => {
+                target.hidden = value;
+                return target.hidden === expected && target.getAttribute("hidden") === attribute;
+              });
+              target.setAttribute("hidden", "uNtIl-FoUnD");
+              return JSON.stringify({
+                assignmentResults,
+                canonicalGetter: target.hidden
+              });
+            })()
+            "#,
+        )
+        .expect("HTMLElement.hidden union reflection should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"assignmentResults":[true,true,true,true,true,true,true,true,true,true,true],"canonicalGetter":"until-found"}"#
+    );
+}
+
+#[test]
 fn zhihu_probe_live_document_shape_matches_chromium_branding() {
     let mut vm = new_storage_test_vm("https://example.com/");
 
