@@ -63,6 +63,12 @@ fn integer_prefix_parsers_follow_html_attribute_rules() {
     assert_eq!(parse_positive_integer_prefix("-1"), None);
     assert_eq!(parse_positive_integer_prefix("abc"), None);
     assert_eq!(parse_positive_integer_prefix("999999999999"), None);
+
+    assert_eq!(parse_non_negative_length_attribute("  +12px"), Some(12));
+    assert_eq!(parse_non_negative_length_attribute("-0tail"), Some(0));
+    assert_eq!(parse_non_negative_length_attribute("-1"), None);
+    assert_eq!(parse_non_negative_length_attribute("abc"), None);
+    assert_eq!(parse_non_negative_length_attribute("2147483648"), None);
 }
 
 #[test]

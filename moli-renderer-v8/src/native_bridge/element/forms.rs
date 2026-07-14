@@ -233,7 +233,7 @@ pub(crate) use self::submission::{
     align_event_constructor_function_realm_with_target,
 };
 pub(crate) use self::text_control::{
-    char_offset_to_byte_index, dispatch_text_control_event, is_text_control,
+    dispatch_text_control_event, is_text_control,
     queue_text_control_document_selection_change_event, replace_text_control_selection,
     text_control_set_selection_range_internal,
     text_control_set_selection_range_with_direction_internal, text_control_value,
