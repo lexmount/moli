@@ -26,7 +26,9 @@ use style_traits::{ParsingMode, ToCss};
 
 use crate::dom::native::Element;
 
-use super::query::QueryElement;
+use super::{
+    presentational_hints::synthesize_hidden_until_found_presentational_hint, query::QueryElement,
+};
 
 const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
 const SVG_NAMESPACE: &str = "http://www.w3.org/2000/svg";
@@ -159,8 +161,6 @@ impl QueryElement<'_> {
             }
         } else if element.namespace() == HTML_NAMESPACE {
             append_html_table_presentation_declarations(*self, &mut block);
-        } else {
-            return;
         }
 
         if !block.is_empty() {
@@ -170,6 +170,12 @@ impl QueryElement<'_> {
                 LayerOrder::root(),
             ));
         }
+        synthesize_hidden_until_found_presentational_hint(
+            self.host(),
+            self.handle(),
+            self.shared_lock(),
+            hints,
+        );
     }
 }
 

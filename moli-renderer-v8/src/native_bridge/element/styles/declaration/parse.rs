@@ -1802,6 +1802,12 @@ fn style_entries_affecting_property(entries: &[StyleEntry], property: &str) -> V
 
 fn cssom_style_property_write_uses_pdb(name: &str, value: &str) -> bool {
     let name = canonical_style_property_name(name);
+    // This Stylo build parses `content-visibility` but does not expose it
+    // through the declaration-block mutation/query surface. Keep the value in
+    // the validated side-entry path so CSSOM writes remain observable.
+    if name == "content-visibility" {
+        return false;
+    }
     if moli_css_parse::is_cssom_custom_property_name(&name) {
         return !value.is_empty() && stylo_pdb_entries_for_property(&name, value, false).is_some();
     }
@@ -2662,6 +2668,21 @@ pub(crate) fn parse_style_property_entries_with_base(
         if value.is_empty() {
             return None;
         }
+        return Some(ParsedStylePropertyEntries {
+            entries: vec![StyleEntry {
+                name: name.clone(),
+                value,
+                priority,
+            }],
+            affected_names: vec![name],
+        });
+    }
+
+    if name == "content-visibility" {
+        let value = css_wide_keyword(value).or_else(|| {
+            let value = value.trim().to_ascii_lowercase();
+            matches!(value.as_str(), "visible" | "auto" | "hidden").then_some(value)
+        })?;
         return Some(ParsedStylePropertyEntries {
             entries: vec![StyleEntry {
                 name: name.clone(),
