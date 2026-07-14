@@ -1195,6 +1195,14 @@ impl Element {
         attribute_name: &str,
         attribute_value: Option<&str>,
     ) {
+        let input_value_attribute = if self.namespace() == "http://www.w3.org/1999/xhtml"
+            && self.local_name() == "input"
+            && attribute_name == "type"
+        {
+            self.attribute("value").map(str::to_owned)
+        } else {
+            None
+        };
         let input_type = if self.namespace() == "http://www.w3.org/1999/xhtml"
             && self.local_name() == "input"
             && attribute_name == "type"
@@ -1222,7 +1230,7 @@ impl Element {
                 min: input_min.as_deref(),
                 max: input_max.as_deref(),
                 step: input_step.as_deref(),
-                value_attribute: input_value.as_deref(),
+                value_attribute: input_value_attribute.as_deref().or(input_value.as_deref()),
             },
             attribute_name,
             attribute_value,
