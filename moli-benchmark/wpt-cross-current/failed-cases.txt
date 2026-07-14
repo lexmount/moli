@@ -3117,8 +3117,6 @@ html/semantics/forms/form-submission-target/rel-form-target.html
 html/semantics/forms/form-submission-target/rel-input-target.html
 html/semantics/forms/textfieldselection/selection.html
 html/semantics/forms/the-button-element/button-click-submits-with-commandfor.html
-html/semantics/forms/the-input-element/email-value-idn.html
-html/semantics/forms/the-input-element/email.html
 html/semantics/forms/the-input-element/input-type-button.html
 html/semantics/forms/the-input-element/range-2.html
 html/semantics/forms/the-input-element/range.html

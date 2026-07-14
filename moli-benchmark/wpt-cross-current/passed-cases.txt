@@ -5802,6 +5802,8 @@ html/semantics/forms/the-input-element/datetime-local-valueasdate.html
 html/semantics/forms/the-input-element/datetime-local.html
 html/semantics/forms/the-input-element/datetime-weekmonth.html
 html/semantics/forms/the-input-element/datetime.html
+html/semantics/forms/the-input-element/email-value-idn.html
+html/semantics/forms/the-input-element/email.html
 html/semantics/forms/the-input-element/files.html
 html/semantics/forms/the-input-element/focus-dynamic-type-change-on-blur.html
 html/semantics/forms/the-input-element/focus-dynamic-type-change.html

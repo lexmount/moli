@@ -206,6 +206,7 @@ impl ElementRareData {
         local_name: &str,
         input_type: InputType,
         input_value_attribute: Option<&str>,
+        input_multiple: bool,
         attribute_name: &str,
         attribute_value: Option<&str>,
     ) {
@@ -219,6 +220,7 @@ impl ElementRareData {
                 local_name,
                 input_type,
                 input_value_attribute,
+                input_multiple,
                 attribute_name,
                 attribute_value,
             );
@@ -239,6 +241,7 @@ impl ElementRareData {
             local_name,
             input_type,
             input_value_attribute,
+            input_multiple,
             attribute_name,
             attribute_value,
         );
