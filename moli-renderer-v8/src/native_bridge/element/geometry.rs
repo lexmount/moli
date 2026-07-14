@@ -25,6 +25,7 @@ pub(in crate::native_bridge) use metrics::{
     node_scroll_top_getter_function, node_scroll_top_setter_function,
     node_scroll_width_getter_function,
 };
+pub(super) use mock::element_has_hidden_attribute;
 pub(crate) use mock::{
     compute_mock_client_rect, compute_mock_intersection_client_rect,
     compute_mock_intersection_scrollport_client_rect,
