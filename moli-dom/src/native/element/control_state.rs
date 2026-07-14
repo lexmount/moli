@@ -1,8 +1,5 @@
 use super::Attribute;
-use crate::forms::{
-    InputValueSanitizationContext, input_type_has_value_sanitization,
-    sanitize_input_value_for_type_with_context,
-};
+use crate::forms::{InputValueSanitizationContext, sanitize_input_value_for_type_with_context};
 use crate::native::NativeNodeId;
 use indexmap::IndexSet;
 use moli_html_input_type::InputType;
@@ -921,15 +918,30 @@ impl ElementControlState {
                 }
             }
             ("input", "type") => {
-                if input_type_has_value_sanitization(input_type)
-                    || matches!(input_type, InputType::Range | InputType::Email)
+                // A non-dirty input value continues to follow the `value`
+                // content attribute across type changes. Sanitization can
+                // make that default observable (for example, color exposes
+                // `#000000`), but it must not turn the sanitized result into
+                // the source for a later type change.
+                let source = if self.input_value_dirty {
+                    self.input_value.as_deref().unwrap_or_default()
+                } else {
+                    input_context.value_attribute.unwrap_or_default()
+                };
+                let value =
+                    sanitize_input_value_for_type_with_context(input_type, source, input_context);
+                self.input_value = Some(value);
+                self.input_bad_input = false;
+
+                // The default/on mode exposes "on" when an empty dirty value
+                // changes into a checkable state. The filename mode likewise
+                // starts with an empty, non-dirty value.
+                if (input_type.is_checkable()
+                    && self.input_value.as_deref().is_none_or(str::is_empty))
+                    || input_type == InputType::File
                 {
-                    let current = self.input_value.as_deref().unwrap_or_default();
-                    self.input_value = Some(sanitize_input_value_for_type_with_context(
-                        input_type,
-                        current,
-                        input_context,
-                    ));
+                    self.input_value_dirty = false;
+                    self.input_value_user_edited = false;
                 }
             }
             ("input", "multiple") if input_type == InputType::Email => {
