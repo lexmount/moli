@@ -276,6 +276,51 @@ impl DocumentRuntime {
         self.timeouts.run_next_body(scope, selection)
     }
 
+    /// Starts the exact timer sequence range owned by one classic defer task.
+    ///
+    /// Parser-time scripts still execute inside the parser's task and module
+    /// evaluation has its own pending-completion semantics. Neither category
+    /// should make all of its older timers precede DOMContentLoaded. A classic
+    /// defer task, however, can queue a timer before the subsequent DCL task is
+    /// queued; record only that task-local interval.
+    pub(crate) fn begin_classic_defer_timer_schedule_range(&mut self) {
+        debug_assert!(
+            self.classic_defer_timer_schedule_start.is_none(),
+            "classic defer timer range must not overlap another script task"
+        );
+        self.classic_defer_timer_schedule_start = Some(self.timeouts.schedule_snapshot());
+    }
+
+    pub(crate) fn finish_classic_defer_timer_schedule_range(&mut self) {
+        let Some(start) = self.classic_defer_timer_schedule_start.take() else {
+            // A defer script may replace the document and clear the old
+            // lifecycle state while it is executing.
+            return;
+        };
+        let range = self.timeouts.schedule_range_since(start);
+        if !range.is_empty() {
+            self.classic_defer_timer_schedule_ranges.push(range);
+        }
+    }
+
+    pub(crate) fn clear_classic_defer_timer_schedule_ranges(&mut self) {
+        self.classic_defer_timer_schedule_start = None;
+        self.classic_defer_timer_schedule_ranges.clear();
+    }
+
+    pub(crate) fn run_next_timeout_queued_by_classic_defer_script(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+    ) -> HostTimeoutRunResult {
+        self.timeouts
+            .run_next_from_schedule_ranges(scope, &self.classic_defer_timer_schedule_ranges)
+    }
+
+    pub(crate) fn has_ready_timeout_queued_by_classic_defer_script(&self) -> bool {
+        self.timeouts
+            .has_ready_from_schedule_ranges(&self.classic_defer_timer_schedule_ranges)
+    }
+
     #[cfg(test)]
     pub(crate) fn has_ready_timeout(&self) -> bool {
         self.timeouts.has_ready_timer()
