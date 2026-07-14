@@ -17,8 +17,7 @@ use super::node::{
     throw_incompatible_getter_receiver, throw_incompatible_method_receiver,
     throw_incompatible_setter_receiver,
 };
-use crate::document_runtime::DomHandle;
-use crate::web_api_interfaces;
+use crate::{document_runtime::DomHandle, web_api_interfaces, webidl};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiTemplateValue};
 
 mod activation;
@@ -690,6 +689,20 @@ struct ElementPrototypeReflectionDeclaration {
     namespace_uri: (),
     #[webapi(accessor_property, enumerable, getter = element_prefix_getter_function)]
     prefix: (),
+    #[webapi(
+        accessor_property = "headingOffset",
+        enumerable,
+        getter = element_heading_offset_getter_function,
+        setter = element_heading_offset_setter_function
+    )]
+    heading_offset: (),
+    #[webapi(
+        accessor_property = "headingReset",
+        enumerable,
+        getter = element_heading_reset_getter_function,
+        setter = element_heading_reset_setter_function
+    )]
+    heading_reset: (),
     #[webapi(
         accessor_property = "innerHTML",
         enumerable,
@@ -6673,6 +6686,91 @@ fn element_id_getter_function<'s>(
     };
     let value = element_attribute(unsafe { &*runtime_ptr }, handle, "id").unwrap_or_default();
     set_element_string_return_value(scope, &mut rv, &value);
+}
+
+fn element_heading_offset_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some((runtime_ptr, handle)) = element_getter_receiver(scope, args.this(), "headingOffset")
+    else {
+        return;
+    };
+    let value = unsafe { &*runtime_ptr }
+        .dom_host()
+        .node(handle)
+        .and_then(|node| node.as_element())
+        .map(|element| element.heading_offset())
+        .unwrap_or(0);
+    rv.set_uint32(value);
+}
+
+fn element_heading_offset_setter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some((runtime_ptr, handle)) = element_setter_receiver(scope, args.this(), "headingOffset")
+    else {
+        return;
+    };
+    let value = match webidl::convert::<webidl::UnsignedLong>(
+        scope,
+        args.get(0),
+        webidl::Context::member("Element", "headingOffset"),
+    ) {
+        Ok(value) => value.0,
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            return;
+        }
+    };
+    let value = if value <= i32::MAX as u32 { value } else { 0 };
+    set_reflected_attribute(
+        scope,
+        runtime_ptr,
+        handle,
+        "headingoffset",
+        &value.to_string(),
+    );
+    rv.set_undefined();
+}
+
+fn element_heading_reset_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some((runtime_ptr, handle)) = element_getter_receiver(scope, args.this(), "headingReset")
+    else {
+        return;
+    };
+    let value = unsafe { &*runtime_ptr }
+        .dom_host()
+        .node(handle)
+        .and_then(|node| node.as_element())
+        .is_some_and(|element| element.heading_reset());
+    rv.set_bool(value);
+}
+
+fn element_heading_reset_setter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some((runtime_ptr, handle)) = element_setter_receiver(scope, args.this(), "headingReset")
+    else {
+        return;
+    };
+    set_reflected_boolean_attribute(
+        scope,
+        runtime_ptr,
+        handle,
+        "headingreset",
+        args.get(0).boolean_value(scope),
+    );
+    rv.set_undefined();
 }
 
 fn element_id_setter_function<'s>(
