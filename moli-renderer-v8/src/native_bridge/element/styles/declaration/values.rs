@@ -1383,10 +1383,7 @@ pub(super) fn computed_style_default_value(
         "line-height" => "normal".to_owned(),
         "link-parameters" => "none".to_owned(),
         "content" => "normal".to_owned(),
-        "content-visibility" => match element_hidden_attribute_state(runtime, handle) {
-            HiddenAttributeState::UntilFound => "hidden".to_owned(),
-            HiddenAttributeState::Missing | HiddenAttributeState::Hidden => "visible".to_owned(),
-        },
+        "content-visibility" => "visible".to_owned(),
         "background-color" => "rgba(0, 0, 0, 0)".to_owned(),
         "background-attachment" => "scroll".to_owned(),
         "background-blend-mode" | "mix-blend-mode" => "normal".to_owned(),
@@ -2568,13 +2565,6 @@ fn computed_style_property_value_from_moli(
         "link-parameters" => Some(computed_non_inherited_css_keyword_property_value(
             runtime, handle, property, "none",
         )),
-        "content-visibility" => {
-            inline_style_entry_for_inline_style(runtime, handle, property).map(|_| {
-                computed_non_inherited_css_keyword_property_value(
-                    runtime, handle, property, "visible",
-                )
-            })
-        }
         "text-size-adjust" => Some(computed_text_size_adjust_value(runtime, handle)),
         "transition-property" | "transition-behavior" => {
             inline_style_entry_for_inline_style(runtime, handle, property).map(|entry| entry.value)

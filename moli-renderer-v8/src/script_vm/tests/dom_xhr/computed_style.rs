@@ -6798,6 +6798,11 @@ fn computed_style_distinguishes_hidden_and_until_found_states() {
     target.setAttribute('hidden', value);
     values.push(read());
   }
+  target.setAttribute('hidden', 'until-found');
+  target.style.contentVisibility = 'visible';
+  values.push(`${target.style.contentVisibility}/${read()}`);
+  target.style.removeProperty('content-visibility');
+  values.push(read());
   target.removeAttribute('hidden');
   target.style.contentVisibility = 'hidden';
   values.push(`${target.style.contentVisibility}/${read()}`);
@@ -6811,7 +6816,7 @@ fn computed_style_distinguishes_hidden_and_until_found_states() {
 
     assert_eq!(
         result,
-        "block:visible|none:visible|none:visible|block:hidden|block:hidden|block:hidden|none:visible|hidden/block:hidden|hidden/block:hidden"
+        "block:visible|none:visible|none:visible|block:hidden|block:hidden|block:hidden|none:visible|visible/block:visible|block:hidden|hidden/block:hidden|hidden/block:hidden"
     );
 }
 
