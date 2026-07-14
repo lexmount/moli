@@ -151,6 +151,89 @@ fn dom_api_known_pseudo_element_selectors_with_after_part_pseudo_classes_return_
 }
 
 #[test]
+fn element_heading_reflections_drive_flat_tree_heading_matching() {
+    let mut vm = new_storage_test_vm("https://heading-offset.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const descriptor = name => Object.getOwnPropertyDescriptor(Element.prototype, name);
+              const outcome = callback => {
+                try {
+                  return `ok:${String(callback())}`;
+                } catch (error) {
+                  return `throw:${error && error.name}`;
+                }
+              };
+
+              const parent = document.createElement("div");
+              const heading = document.createElement("h1");
+              parent.append(heading);
+              const mount = document.body || document.documentElement ||
+                document.appendChild(document.createElement("html"));
+              mount.append(parent);
+              const initial = [heading.headingOffset, heading.headingReset, heading.matches(":heading(1)")];
+              parent.headingOffset = 3;
+              const parentOffset = [parent.getAttribute("headingoffset"), heading.matches(":heading(4)")];
+              heading.headingReset = true;
+              const reset = [heading.hasAttribute("headingreset"), heading.matches(":heading(1)")];
+              heading.headingReset = false;
+              heading.headingOffset = 20;
+              const clamped = [heading.getAttribute("headingoffset"), heading.headingOffset, heading.matches(":heading(9)")];
+
+              const host = document.createElement("section");
+              host.headingOffset = 1;
+              const root = host.attachShadow({ mode: "open" });
+              const container = document.createElement("div");
+              container.headingOffset = 1;
+              const slot = document.createElement("slot");
+              container.append(slot);
+              root.append(container);
+              const slotted = document.createElement("h2");
+              host.append(slotted);
+              mount.append(host);
+
+              const modalParent = document.createElement("div");
+              modalParent.headingOffset = 8;
+              const modal = document.createElement("dialog");
+              const modalHeading = document.createElement("h1");
+              modal.append(modalHeading);
+              modalParent.append(modal);
+              mount.append(modalParent);
+              const modalBefore = modal.headingReset;
+              modal.showModal();
+              const modalState = [modalBefore, modal.headingReset, modalHeading.matches(":heading(1)")];
+              modal.close();
+
+              return JSON.stringify({
+                owner: [
+                  Object.prototype.hasOwnProperty.call(Element.prototype, "headingOffset"),
+                  Object.prototype.hasOwnProperty.call(HTMLElement.prototype, "headingOffset"),
+                  descriptor("headingOffset").enumerable,
+                  descriptor("headingReset").enumerable
+                ],
+                initial,
+                parentOffset,
+                reset,
+                clamped,
+                slotted: slotted.matches(":heading(4)"),
+                modalState,
+                badGetter: outcome(() => descriptor("headingOffset").get.call({})),
+                badSetter: outcome(() => descriptor("headingReset").set.call({}, true))
+              });
+            })()
+            "#,
+        )
+        .expect("heading reflection and selector probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"owner":[true,false,true,true],"initial":[0,false,true],"parentOffset":["3",true],"reset":[true,true],"clamped":["20",8,true],"slotted":true,"modalState":[false,true,true],"badGetter":"throw:TypeError","badSetter":"throw:TypeError"}"#
+    );
+}
+
+#[test]
 fn element_scroll_into_view_surface_is_available() {
     let mut vm = new_storage_test_vm("https://example.com/");
 
