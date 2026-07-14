@@ -819,6 +819,30 @@ impl ScriptVm {
         Ok(result)
     }
 
+    /// Execute one ready timer selected from the closed schedule ranges
+    /// recorded around classic defer script execution.
+    ///
+    /// Like the ordinary timer body, this does not checkpoint or reconcile
+    /// callback effects. The PageVm lifecycle owner commits the exact selected
+    /// callback completion after this method returns.
+    pub(super) fn run_next_timeout_queued_by_classic_defer_script_body(
+        &mut self,
+    ) -> Result<HostTimeoutRunResult> {
+        #[cfg(test)]
+        if let Some(message) = self.test_next_timeout_failure.take() {
+            return Err(anyhow!("{message}"));
+        }
+
+        let document_runtime: *mut DocumentRuntime = &mut *self.document_runtime;
+        self.with_default_context_scope(|scope, _host_ptr| {
+            // SAFETY: this is the same synchronous, non-escaping
+            // document-runtime borrow used by `run_next_timeout_body`; the
+            // schedule ranges only narrow which timer may be selected.
+            Ok(unsafe { &mut *document_runtime }
+                .run_next_timeout_queued_by_classic_defer_script(scope))
+        })
+    }
+
     #[cfg(test)]
     pub(super) fn fail_next_timeout_for_testing(&mut self, message: impl Into<String>) {
         self.test_next_timeout_failure = Some(message.into());
