@@ -1258,6 +1258,50 @@ fn input_file_value_setter_rejects_non_empty_values() {
         "ok::null|ok::null|throw:InvalidStateError::null|throw:InvalidStateError::null|throw:InvalidStateError::null|ok::bar"
     );
 }
+
+#[test]
+fn input_type_change_preserves_clean_default_value_source() {
+    let mut vm = new_storage_test_vm("https://forms-input-type-clean-value.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              if (!document.documentElement) {
+                document.appendChild(document.createElement('html'));
+              }
+              if (!document.body) {
+                document.documentElement.appendChild(document.createElement('body'));
+              }
+              function run(focus) {
+                const input = document.createElement('input');
+                input.type = 'color';
+                document.body.appendChild(input);
+                if (focus) {
+                  input.focus();
+                }
+                const colorDefault = input.value;
+                input.type = 'text';
+                const cleanTextValue = input.value;
+                input.type = 'color';
+                input.value = '#ffffff';
+                input.type = 'text';
+                return [
+                  colorDefault,
+                  cleanTextValue,
+                  input.value,
+                  !focus || document.activeElement === input
+                ].join(':');
+              }
+              return [run(false), run(true)].join('|');
+            })()
+            "#,
+        )
+        .expect("input type clean-value transition should evaluate");
+
+    assert_eq!(result, "#000000::#ffffff:true|#000000::#ffffff:true");
+}
+
 #[test]
 fn input_color_value_parses_css_colors_across_value_sources() {
     let mut vm = new_storage_test_vm("https://forms-input-color-css.test/");
