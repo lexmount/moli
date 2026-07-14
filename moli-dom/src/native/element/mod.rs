@@ -1195,23 +1195,20 @@ impl Element {
         attribute_name: &str,
         attribute_value: Option<&str>,
     ) {
-        let input_value_attribute = if self.namespace() == "http://www.w3.org/1999/xhtml"
-            && self.local_name() == "input"
-            && attribute_name == "type"
-        {
-            self.attribute("value").map(str::to_owned)
-        } else {
-            None
-        };
-        let input_type = if self.namespace() == "http://www.w3.org/1999/xhtml"
-            && self.local_name() == "input"
-            && attribute_name == "type"
-        {
+        let is_html_input =
+            self.namespace() == "http://www.w3.org/1999/xhtml" && self.local_name() == "input";
+        let input_value_attribute =
+            if is_html_input && matches!(attribute_name, "type" | "multiple") {
+                self.attribute("value").map(str::to_owned)
+            } else {
+                None
+            };
+        let input_type = if is_html_input && attribute_name == "type" {
             InputType::from_attribute_value(attribute_value)
         } else {
             self.input_type()
         };
-        let input_multiple = self.is_html_input() && self.has_attribute("multiple");
+        let input_multiple = is_html_input && self.has_attribute("multiple");
         let range_attribute = |name| {
             (input_type == InputType::Range)
                 .then(|| self.attribute(name).map(str::to_owned))

@@ -366,6 +366,7 @@ fn input_type_change_sanitizes_without_dirtying_default_value() {
     assert!(input.input_value_dirty());
 }
 
+
 #[test]
 fn script_element_state_distinguishes_dynamic_and_parser_created_scripts() {
     let dynamic = Element::new_html("script");

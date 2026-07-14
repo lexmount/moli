@@ -929,10 +929,14 @@ impl ElementControlState {
                 }
             }
             ("input", "multiple") if input_type == InputType::Email => {
-                let current = self.input_value.as_deref().unwrap_or_default();
+                let source = if self.input_value_dirty {
+                    self.input_value.as_deref().unwrap_or_default()
+                } else {
+                    input_context.value_attribute.unwrap_or_default()
+                };
                 self.input_value = Some(sanitize_input_value_for_type_with_context(
                     input_type,
-                    current,
+                    source,
                     input_context,
                 ));
                 self.input_bad_input = false;
