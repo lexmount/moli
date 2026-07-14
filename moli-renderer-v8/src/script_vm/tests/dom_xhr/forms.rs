@@ -59,6 +59,45 @@ fn input_type_enumerated_attribute_preserves_raw_value_and_exposes_canonical_sta
 }
 
 #[test]
+fn email_multiple_value_sanitization_tracks_attribute_state() {
+    let mut vm = new_storage_test_vm("https://email-multiple-sanitization.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const input = document.createElement('input');
+  input.type = 'email';
+  input.multiple = true;
+  input.value = '  first@example.com  , second@example.test  ';
+  const multipleValue = input.value;
+
+  input.multiple = false;
+  input.value = 'first@example.com , second@example.test';
+  const singleValue = input.value;
+
+  input.multiple = true;
+  const multipleAfterToggle = input.value;
+
+  const idn = document.createElement('input');
+  idn.setAttribute('value', 'test@exämle.com');
+  idn.type = 'email';
+  const idnSingle = idn.value;
+  idn.multiple = true;
+  idn.value = 'test@exämle.com, user@お.com';
+  return [multipleValue, singleValue, multipleAfterToggle, idnSingle, idn.value].join('|');
+})()
+"#,
+        )
+        .expect("email multiple sanitizer probe should evaluate");
+
+    assert_eq!(
+        result,
+        "first@example.com,second@example.test|first@example.com , second@example.test|first@example.com,second@example.test|test@xn--exmle-hra.com|test@xn--exmle-hra.com,user@xn--t8j.com"
+    );
+}
+
+#[test]
 fn readonly_controls_match_validity_pseudo_without_will_validate() {
     let mut vm = new_storage_test_vm("https://readonly-validity-pseudo.test/");
 
