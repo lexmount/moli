@@ -6780,6 +6780,42 @@ fn computed_display_treats_hidden_attribute_as_none() {
 }
 
 #[test]
+fn computed_style_distinguishes_hidden_and_until_found_states() {
+    let mut vm = new_storage_test_vm("https://hidden-until-found-computed-style.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const target = document.createElement('div');
+  (document.body || document.documentElement || document).appendChild(target);
+  const read = () => [
+    getComputedStyle(target).display,
+    getComputedStyle(target).contentVisibility
+  ].join(':');
+  const values = [read()];
+  for (const value of ['', 'asdf', 'until-found', 'UNTIL-FOUND', 'UnTiL-FoUnD', '0']) {
+    target.setAttribute('hidden', value);
+    values.push(read());
+  }
+  target.removeAttribute('hidden');
+  target.style.contentVisibility = 'hidden';
+  values.push(`${target.style.contentVisibility}/${read()}`);
+  target.style.contentVisibility = 'bogus';
+  values.push(`${target.style.contentVisibility}/${read()}`);
+  return values.join('|');
+})()
+"#,
+        )
+        .expect("hidden presentation states should affect computed style");
+
+    assert_eq!(
+        result,
+        "block:visible|none:visible|none:visible|block:hidden|block:hidden|block:hidden|none:visible|hidden/block:hidden|hidden/block:hidden"
+    );
+}
+
+#[test]
 fn detached_nested_iframe_window_get_computed_style_uses_iframe_width() {
     let mut vm = new_storage_test_vm("https://nested-computed-width.test/");
 
