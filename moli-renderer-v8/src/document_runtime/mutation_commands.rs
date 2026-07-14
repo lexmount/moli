@@ -8,6 +8,7 @@ use crate::{
     util::{utf16_split_units_lossy, utf16_units},
 };
 use moli_dom::native::{Element, Node, NodeType};
+use moli_selector::stylo_flat_tree_heading_descendants;
 
 use super::dom_facade::sync_style_sources_from_dom_mutation_effects;
 use super::*;
@@ -1470,6 +1471,17 @@ impl DocumentRuntime {
                 self.push_validity_container_impacts(descendant, &mut impacts);
             }
         }
+        if matches!(attribute_name, "headingoffset" | "headingreset")
+            && state.intersects(StyloElementState::HEADING_LEVEL_BITS)
+        {
+            for descendant in stylo_flat_tree_heading_descendants(&self.dom_host, handle) {
+                push_state_impact(
+                    &mut impacts,
+                    descendant,
+                    StyloElementState::HEADING_LEVEL_BITS,
+                );
+            }
+        }
         impacts
     }
 
@@ -2216,6 +2228,9 @@ fn style_state_impact_for_attribute(name: &str) -> StyloElementState {
             | StyloElementState::HAS_DIR_ATTR_LTR
             | StyloElementState::HAS_DIR_ATTR_RTL
             | StyloElementState::HAS_DIR_ATTR_LIKE_AUTO;
+    }
+    if name == "headingoffset" || name == "headingreset" {
+        return StyloElementState::HEADING_LEVEL_BITS;
     }
     StyloElementState::empty()
 }
