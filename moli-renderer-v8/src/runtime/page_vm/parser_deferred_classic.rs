@@ -304,6 +304,11 @@ impl ParserClassicDocumentScriptExecutionHooks
         Box::pin(async move {
             owner.record_network_result(&action.script, action.source_network_result.as_ref());
             let expected_owner = action.owner;
+            owner
+                .page_vm
+                .vm_mut()
+                .document_runtime
+                .begin_classic_defer_timer_schedule_range();
             let execution = owner
                 .page_vm
                 .execute_main_parser_deferred_classic_script_body_on_current_lane(
@@ -311,6 +316,11 @@ impl ParserClassicDocumentScriptExecutionHooks
                     action.script,
                 )
                 .await;
+            owner
+                .page_vm
+                .vm_mut()
+                .document_runtime
+                .finish_classic_defer_timer_schedule_range();
             let (run, navigation_triggered, completion, prepared_activity) = execution.into_parts();
             let owner_replaced = !owner.owner_is_current(expected_owner);
             Ok(ParserClassicDocumentScriptExecutionResult::new(
