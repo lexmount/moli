@@ -59,8 +59,9 @@ pub use stylo::{
     StyloStylesheetSourceScopeFallbackInput, is_svg_presentation_attribute_name,
     stylo_attribute_change_can_skip_fallback_without_dependency,
     stylo_attribute_change_can_use_retained_invalidator, stylo_element_dependency_snapshot,
-    stylo_fallback_roots_plan, stylo_focus_change_invalidation_roots,
-    stylo_focus_state_matches_handle, stylo_focus_within_state_matches_handle,
+    stylo_fallback_roots_plan, stylo_flat_tree_heading_descendants,
+    stylo_focus_change_invalidation_roots, stylo_focus_state_matches_handle,
+    stylo_focus_within_state_matches_handle,
     stylo_merge_retained_source_invalidation_fallback_kind,
     stylo_merge_retained_source_invalidation_kind,
     stylo_merge_source_dependency_request_requirement, stylo_removed_element_dependency_snapshots,
@@ -773,10 +774,33 @@ mod tests {
         let ancestor = host.create_element("section");
         let nested_h1 = host.create_element("h1");
         let subject = host.create_element("div");
+        let offset_parent = host.create_element("section");
+        let offset_h1 = host.create_element("h1");
+        let reset_boundary = host.create_element("section");
+        let nested_offset = host.create_element("div");
+        let reset_h1 = host.create_element("h1");
+        let shadow_host = host.create_element("section");
+        let shadow_h1 = host.create_element("h1");
+        let slot_container = host.create_element("div");
+        let slot = host.create_element("slot");
+        let slotted_h2 = host.create_element("h2");
+        let modal_parent = host.create_element("div");
+        let modal = host.create_element("dialog");
+        let modal_h1 = host.create_element("h1");
+        let aria_h1 = host.create_element("h1");
         assert!(host.set_attribute(role_heading, "role", "heading"));
         assert!(host.set_attribute(role_heading, "aria-level", "1"));
         assert!(host.set_attribute(ancestor, "id", "ancestor"));
         assert!(host.set_attribute(subject, "id", "subject"));
+        assert!(host.set_attribute(offset_parent, "headingoffset", "3"));
+        assert!(host.set_attribute(reset_boundary, "headingoffset", "2"));
+        assert!(host.set_attribute(reset_boundary, "headingreset", ""));
+        assert!(host.set_attribute(nested_offset, "headingoffset", "2"));
+        assert!(host.set_attribute(shadow_host, "headingoffset", "1"));
+        assert!(host.set_attribute(slot_container, "headingoffset", "1"));
+        assert!(host.set_attribute(modal_parent, "headingoffset", "8"));
+        assert!(host.set_attribute(aria_h1, "headingoffset", "8"));
+        assert!(host.set_attribute(aria_h1, "aria-level", "3"));
         assert!(host.append_child(body, h1));
         assert!(host.append_child(body, h2));
         assert!(host.append_child(body, h7));
@@ -784,6 +808,22 @@ mod tests {
         assert!(host.append_child(body, ancestor));
         assert!(host.append_child(ancestor, nested_h1));
         assert!(host.append_child(body, subject));
+        assert!(host.append_child(body, offset_parent));
+        assert!(host.append_child(offset_parent, offset_h1));
+        assert!(host.append_child(body, reset_boundary));
+        assert!(host.append_child(reset_boundary, nested_offset));
+        assert!(host.append_child(nested_offset, reset_h1));
+        assert!(host.append_child(body, shadow_host));
+        let shadow_root = host.attach_shadow_root(shadow_host, "open").unwrap();
+        assert!(host.append_child(shadow_root, shadow_h1));
+        assert!(host.append_child(shadow_root, slot_container));
+        assert!(host.append_child(slot_container, slot));
+        assert!(host.append_child(shadow_host, slotted_h2));
+        assert!(host.append_child(body, modal_parent));
+        assert!(host.append_child(modal_parent, modal));
+        assert!(host.append_child(modal, modal_h1));
+        assert!(host.set_dialog_modal(modal, true));
+        assert!(host.append_child(body, aria_h1));
 
         let engine = QueryEngine;
         assert!(engine.matches_host(&host, h1, ":heading").unwrap());
@@ -809,6 +849,30 @@ mod tests {
                 .matches_host(&host, subject, "#ancestor:has(:heading(1)) ~ #subject")
                 .unwrap()
         );
+        assert!(
+            engine
+                .matches_host(&host, offset_h1, ":heading(4)")
+                .unwrap()
+        );
+        assert!(host.set_attribute(offset_parent, "headingoffset", "5"));
+        assert!(
+            engine
+                .matches_host(&host, offset_h1, ":heading(6)")
+                .unwrap()
+        );
+        assert!(engine.matches_host(&host, reset_h1, ":heading(5)").unwrap());
+        assert!(
+            engine
+                .matches_host(&host, shadow_h1, ":heading(2)")
+                .unwrap()
+        );
+        assert!(
+            engine
+                .matches_host(&host, slotted_h2, ":heading(4)")
+                .unwrap()
+        );
+        assert!(engine.matches_host(&host, modal_h1, ":heading(1)").unwrap());
+        assert!(engine.matches_host(&host, aria_h1, ":heading(9)").unwrap());
         assert!(engine.query_selector_host(&host, ":heading()").is_err());
         assert!(engine.query_selector_host(&host, ":heading(2n)").is_err());
     }
