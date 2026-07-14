@@ -6904,6 +6904,7 @@ html/semantics/scripting-1/the-template-element/template-element/template-descen
 html/semantics/scripting-1/the-template-element/template-element/template-element-clone-into-inactive-document-crash.html
 html/semantics/scripting-1/the-template-element/template-element/template-set-inner-html-in-inactive-document-crash.html
 html/semantics/scripting-1/the-template-element/template-table-crash.html
+html/semantics/sections/headingoffset-and-headingreset.html
 html/semantics/selectors/pseudo-classes/checked-type-change.html
 html/semantics/selectors/pseudo-classes/checked.html
 html/semantics/selectors/pseudo-classes/default.html
