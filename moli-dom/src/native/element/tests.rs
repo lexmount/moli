@@ -305,6 +305,28 @@ fn set_attribute_preserves_existing_prefix_on_update() {
 }
 
 #[test]
+fn input_type_change_sanitizes_without_dirtying_default_value() {
+    let mut input = Element::new_html("input");
+    assert_eq!(input.input_value(), "");
+    assert!(!input.input_value_dirty());
+
+    assert!(input.set_attribute("type".to_owned(), String::new(), None, "color".to_owned()));
+    assert_eq!(input.input_value(), "#000000");
+    assert!(!input.input_value_dirty());
+
+    assert!(input.set_attribute("type".to_owned(), String::new(), None, "text".to_owned()));
+    assert_eq!(input.input_value(), "");
+    assert!(!input.input_value_dirty());
+
+    assert!(input.set_attribute("type".to_owned(), String::new(), None, "color".to_owned()));
+    assert!(input.set_input_value("#ffffff"));
+    assert!(input.input_value_dirty());
+    assert!(input.set_attribute("type".to_owned(), String::new(), None, "text".to_owned()));
+    assert_eq!(input.input_value(), "#ffffff");
+    assert!(input.input_value_dirty());
+}
+
+#[test]
 fn script_element_state_distinguishes_dynamic_and_parser_created_scripts() {
     let dynamic = Element::new_html("script");
     assert!(dynamic.script_async());
