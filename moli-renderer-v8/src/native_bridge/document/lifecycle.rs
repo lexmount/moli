@@ -7,7 +7,8 @@ use super::{
     JsContextHost, detached_native_handle_for_runtime, is_html_document, throw_dom_exception,
 };
 use crate::native_bridge::element::{
-    TextEditInputType, contenteditable_editing_host, dispatch_text_control_event, is_text_control,
+    TextEditInputType, contenteditable_editing_host, dispatch_text_control_event,
+    form_control_is_effectively_disabled, is_text_control,
     queue_text_control_document_selection_change_event, replace_contenteditable_selection,
     replace_text_control_selection, text_control_value,
 };
@@ -15,6 +16,8 @@ use crate::{
     context_bootstrap::WINDOW_EVENT_HANDLER_PROPERTIES,
     custom_elements,
     document_runtime::DomHandle,
+    dom::native::{NativeDom, NodeData},
+    parser::HtmlParser,
     util::{
         call_object_method, node_wrapper_from_handle, utf16_next_scalar_boundary,
         utf16_previous_scalar_boundary, utf16_replace_units_range_lossy,
@@ -368,36 +371,15 @@ fn normalized_editing_command<'s>(
         .unwrap_or_default()
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, strum::EnumString, strum::IntoStaticStr)]
+#[strum(serialize_all = "lowercase")]
 enum EditingCommand {
     Copy,
     Delete,
     ForwardDelete,
+    InsertHtml,
     InsertText,
     SelectAll,
-}
-
-impl EditingCommand {
-    fn parse(command: &str) -> Option<Self> {
-        match command {
-            "copy" => Some(Self::Copy),
-            "delete" => Some(Self::Delete),
-            "forwarddelete" => Some(Self::ForwardDelete),
-            "inserttext" => Some(Self::InsertText),
-            "selectall" => Some(Self::SelectAll),
-            _ => None,
-        }
-    }
-
-    fn name(self) -> &'static str {
-        match self {
-            Self::Copy => "copy",
-            Self::Delete => "delete",
-            Self::ForwardDelete => "forwarddelete",
-            Self::InsertText => "inserttext",
-            Self::SelectAll => "selectall",
-        }
-    }
 }
 
 fn editing_command_document<'s>(
@@ -443,7 +425,7 @@ pub(in crate::native_bridge) fn node_document_exec_command_callback<'s>(
     ) else {
         return;
     };
-    let Some(command) = EditingCommand::parse(&command) else {
+    let Ok(command) = command.parse::<EditingCommand>() else {
         rv.set(v8::Boolean::new(scope, false).into());
         return;
     };
@@ -460,21 +442,25 @@ pub(in crate::native_bridge) fn node_document_exec_command_callback<'s>(
             return;
         }
         EditingCommand::InsertText => {
-            let replacement = if args.length() > 2 {
-                let Some(value) = args.get(2).to_string(scope) else {
-                    return;
-                };
-                value.to_rust_string_lossy(scope)
-            } else {
-                String::new()
+            let Some(value) = editing_command_value(scope, &args) else {
+                return;
             };
-            let inserted = exec_command_insert_text(scope, runtime_ptr, &replacement);
+            let inserted = exec_command_insert_text(scope, runtime_ptr, &value);
+            rv.set(v8::Boolean::new(scope, inserted).into());
+            return;
+        }
+        EditingCommand::InsertHtml => {
+            let Some(value) = editing_command_value(scope, &args) else {
+                return;
+            };
+            let inserted = exec_command_insert_html(scope, runtime_ptr, &value);
             rv.set(v8::Boolean::new(scope, inserted).into());
             return;
         }
         EditingCommand::Delete | EditingCommand::ForwardDelete => {}
     }
-    let removed = exec_command_delete_selection(scope, runtime_ptr, args.this(), command.name());
+    let command_name: &'static str = command.into();
+    let removed = exec_command_delete_selection(scope, runtime_ptr, args.this(), command_name);
     rv.set(v8::Boolean::new(scope, removed).into());
 }
 
@@ -521,7 +507,7 @@ pub(in crate::native_bridge) fn node_document_query_command_supported_callback<'
     ) else {
         return;
     };
-    rv.set(v8::Boolean::new(scope, EditingCommand::parse(&command).is_some()).into());
+    rv.set(v8::Boolean::new(scope, command.parse::<EditingCommand>().is_ok()).into());
 }
 
 pub(in crate::native_bridge) fn node_document_query_command_enabled_callback<'s>(
@@ -539,21 +525,20 @@ pub(in crate::native_bridge) fn node_document_query_command_enabled_callback<'s>
         return;
     };
     let runtime = unsafe { &*runtime_ptr };
-    let enabled = match EditingCommand::parse(&command) {
-        Some(
-            EditingCommand::Delete | EditingCommand::ForwardDelete | EditingCommand::InsertText,
-        ) => {
+    let enabled = match command.parse::<EditingCommand>() {
+        Ok(EditingCommand::Delete | EditingCommand::ForwardDelete | EditingCommand::InsertText) => {
             runtime.document_design_mode_enabled(document_handle)
                 || runtime.active_element_handle().is_some_and(|active| {
                     is_text_control(runtime, active)
                         || contenteditable_editing_host(runtime, active).is_some()
                 })
         }
-        Some(EditingCommand::SelectAll) => {
+        Ok(EditingCommand::InsertHtml) => exec_command_insert_html_target(runtime).is_some(),
+        Ok(EditingCommand::SelectAll) => {
             exec_command_select_all_target(runtime, document_handle).is_some()
         }
-        Some(EditingCommand::Copy) => current_protocol_user_gesture_activation(scope),
-        None => false,
+        Ok(EditingCommand::Copy) => current_protocol_user_gesture_activation(scope),
+        Err(_) => false,
     };
     rv.set(v8::Boolean::new(scope, enabled).into());
 }
@@ -685,6 +670,83 @@ fn current_modal_dialog(runtime: &JsContextHost, document: DomHandle) -> Option<
 fn current_protocol_user_gesture_activation(scope: &mut v8::PinScope<'_, '_>) -> bool {
     crate::util::context_host_ptr_from_global_bridge(scope)
         .is_some_and(|host_ptr| unsafe { (&*host_ptr).protocol_user_gesture_activation() })
+}
+
+fn editing_command_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+) -> Option<String> {
+    if args.length() < 3 {
+        return Some(String::new());
+    }
+    args.get(2)
+        .to_string(scope)
+        .map(|value| value.to_rust_string_lossy(scope))
+}
+
+fn exec_command_insert_html(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    value: &str,
+) -> bool {
+    let runtime = unsafe { &*runtime_ptr };
+    let Some(target) = exec_command_insert_html_target(runtime) else {
+        return false;
+    };
+    let insertion_text = input_text_from_html_fragment(runtime, value);
+    replace_text_control_selection(scope, runtime_ptr, target, &insertion_text)
+}
+
+fn exec_command_insert_html_target(runtime: &JsContextHost) -> Option<DomHandle> {
+    let handle = runtime.active_element_handle()?;
+    let element = runtime.dom_host().node(handle)?.as_element()?;
+    let accepts_plain_text = element.is_html_textarea()
+        || (element.is_html_input() && element.input_type().supports_text_length_validation());
+    if !accepts_plain_text
+        || element.has_attribute("readonly")
+        || form_control_is_effectively_disabled(runtime, handle)
+    {
+        return None;
+    }
+    Some(handle)
+}
+
+fn input_text_from_html_fragment(runtime: &JsContextHost, value: &str) -> String {
+    let parsed = HtmlParser.parse_fragment_without_declarative_shadow_roots_with_scripting(
+        runtime.host_document().url().clone(),
+        "http://www.w3.org/1999/xhtml",
+        "body",
+        value.to_owned(),
+        true,
+    );
+    let root = parsed
+        .body_node_id()
+        .unwrap_or_else(|| parsed.document_node_id());
+    let mut text = String::new();
+    for child in parsed.child_ids(root) {
+        append_input_fragment_text(&parsed, child, &mut text);
+    }
+    text
+}
+
+fn append_input_fragment_text(dom: &NativeDom, handle: DomHandle, text: &mut String) {
+    let Some(node) = dom.node(handle) else {
+        return;
+    };
+    if node.is_html_element_named("br") {
+        text.push('\n');
+        return;
+    }
+    match node.data() {
+        NodeData::Text(value) => text.push_str(value.data()),
+        NodeData::CDataSection(value) => text.push_str(value.data()),
+        NodeData::Document(_) | NodeData::Element(_) | NodeData::DocumentFragment(_) => {
+            for child in dom.child_ids(handle) {
+                append_input_fragment_text(dom, child, text);
+            }
+        }
+        NodeData::DocumentType(_) | NodeData::Comment(_) | NodeData::ProcessingInstruction(_) => {}
+    }
 }
 
 fn exec_command_delete_selection<'s>(
