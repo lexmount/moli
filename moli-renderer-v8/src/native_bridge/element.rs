@@ -331,7 +331,7 @@ pub(crate) use forms::{
     cache_input_files_from_selected_files, form_control_is_effectively_disabled,
 };
 pub(crate) use forms::{
-    char_offset_to_byte_index, dispatch_text_control_event, is_text_control,
+    dispatch_text_control_event, is_text_control,
     queue_text_control_document_selection_change_event, replace_text_control_selection,
     text_control_set_selection_range_internal,
     text_control_set_selection_range_with_direction_internal, text_control_value,

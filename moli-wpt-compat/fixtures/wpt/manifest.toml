@@ -2007,7 +2007,7 @@ wait_until = "load"
 timeout_ms = 5000
 suite = "smoke"
 tags = ["forms", "html", "validation", "input", "textarea", "length", "actions"]
-notes = "Manual compat port for user-edit provenance in input/textarea minLength/maxLength validity: script-set values remain exempt, manifest-driven insert-text actions make tooShort/tooLong participate in ValidityState.valid, and UTF-16 code unit length is checked for non-BMP input."
+notes = "Manual compat port for user-edit provenance and editing limits in input/textarea minLength/maxLength validity: script-set values remain exempt, short manifest-driven insert-text actions make tooShort participate in ValidityState.valid, and maxlength truncation counts UTF-16 code units without leaving a split surrogate."
 
 [[test.actions]]
 type = "evaluate"
@@ -2039,9 +2039,9 @@ text = "abcde"
 [[test.actions]]
 type = "evaluate"
 expression = '''
-__lmAssertLengthState(field.value === "abcde", "second input action should replace selected value");
-__lmAssertLengthState(field.validity.tooLong === true, "user-edited long input should trip tooLong");
-__lmAssertLengthState(field.validity.valid === false, "tooLong input should be invalid");
+__lmAssertLengthState(field.value === "abcd", "input action should truncate to maxlength");
+__lmAssertLengthState(field.validity.tooLong === false, "maxlength should prevent a tooLong input value");
+__lmAssertLengthState(field.validity.valid === true, "truncated input should remain valid");
 field.value = "abcdef";
 __lmAssertLengthState(field.validity.tooLong === false, "script-set value after user edit should clear tooLong provenance");
 __lmAssertLengthState(field.validity.valid === true, "script-set long input should be valid without user-edit provenance");
@@ -2064,9 +2064,9 @@ text = "abcd"
 [[test.actions]]
 type = "evaluate"
 expression = '''
-__lmAssertLengthState(bio.value === "abcd", "textarea action should replace selected value");
-__lmAssertLengthState(bio.validity.tooLong === true, "user-edited long textarea should trip tooLong");
-__lmAssertLengthState(bio.validity.valid === false, "tooLong textarea should be invalid");
+__lmAssertLengthState(bio.value === "abc", "textarea action should truncate to maxlength");
+__lmAssertLengthState(bio.validity.tooLong === false, "maxlength should prevent a tooLong textarea value");
+__lmAssertLengthState(bio.validity.valid === true, "truncated textarea should remain valid");
 const emoji = document.getElementById("emoji");
 emoji.focus();
 "ready";
@@ -2079,9 +2079,9 @@ text = "😀"
 [[test.actions]]
 type = "evaluate"
 expression = '''
-__lmAssertLengthState(emoji.value === "😀", "emoji input should receive the inserted scalar");
-__lmAssertLengthState(emoji.validity.tooLong === true, "maxlength should count UTF-16 code units for user-edited non-BMP input");
-__lmAssertLengthState(emoji.validity.valid === false, "non-BMP value over maxLength should be invalid");
+__lmAssertLengthState(emoji.value === "", "maxlength should not leave half of a surrogate pair");
+__lmAssertLengthState(emoji.validity.tooLong === false, "rejected non-BMP input should not be tooLong");
+__lmAssertLengthState(emoji.validity.valid === true, "rejected non-BMP input should remain valid");
 "done";
 '''
 

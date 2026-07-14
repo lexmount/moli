@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::util::utf16_len;
 use crate::webidl;
 use moli_dom::forms::{
     InputStepDirection, InputStepError, InputStepOutcome, InputStepState, date_input_milliseconds,
@@ -218,7 +219,7 @@ fn reset_input_selection_to_end(runtime: &mut JsContextHost, handle: DomHandle) 
         .node(handle)
         .and_then(Node::as_element)
         .filter(|element| element.input_type().supports_variable_length_selection())
-        .map(|element| element.input_value().chars().count() as u32)
+        .map(|element| utf16_len(&element.input_value()) as u32)
     else {
         return;
     };

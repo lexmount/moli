@@ -5699,6 +5699,7 @@ html/semantics/forms/constraints/form-validation-validity-valueMissing-weekmonth
 html/semantics/forms/constraints/form-validation-validity-valueMissing.html
 html/semantics/forms/constraints/form-validation-willValidate-datalist.html
 html/semantics/forms/constraints/form-validation-willValidate.html
+html/semantics/forms/constraints/input-maxlength-emoji.html
 html/semantics/forms/constraints/input-number-validity-dynamic-value-no-change.html
 html/semantics/forms/constraints/input-pattern-dynamic-value.html
 html/semantics/forms/constraints/inputwillvalidate.html
