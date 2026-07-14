@@ -36,6 +36,10 @@ pub(crate) trait PageOwnedDocumentScriptHooks {
 
     fn perform_pre_script_checkpoint(&mut self, script_url: &Url) -> Result<()>;
 
+    fn begin_classic_defer_timer_schedule_range(&mut self) {}
+
+    fn finish_classic_defer_timer_schedule_range(&mut self) {}
+
     fn execute_prepared_script<'a>(
         &'a mut self,
         script: PreparedScript,
