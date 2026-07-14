@@ -26,6 +26,10 @@ impl DocumentRuntime {
             .iter()
             .position(PostParsePageOwnedWork::starts_after_domcontentloaded_boundary)
             .unwrap_or(work.len());
+        // This is an owner-queue boundary marker, not yet the HTML event-loop
+        // queue point for DOMContentLoaded. When it reaches the front after all
+        // defer-like and parser-owned pre-DCL work has drained, the driver first
+        // runs ready timer tasks recorded during classic defer execution.
         work.insert(
             domcontentloaded_index,
             PostParsePageOwnedWork::main_document_domcontentloaded(owner),
