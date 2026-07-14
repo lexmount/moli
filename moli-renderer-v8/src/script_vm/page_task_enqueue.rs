@@ -21,12 +21,12 @@ use crate::v8_execution_watchdog::{
 const LIFECYCLE_EVENT_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(8);
 
 impl ScriptVm {
-    pub(super) fn prepare_main_document_event<'event>(
+    pub(super) fn prepare_main_document_event(
         &self,
         target: EventTargetHandle,
         original_target: EventTargetHandle,
-        event_type: &'event str,
-    ) -> Option<NativeEventDispatch<'event>> {
+        event_type: &str,
+    ) -> Option<NativeEventDispatch> {
         let event = self.document_runtime.prepare_native_event_dispatch(
             target,
             original_target,
@@ -40,7 +40,7 @@ impl ScriptVm {
         .then_some(event)
     }
 
-    fn dispatch_native_event_body(&mut self, event: NativeEventDispatch<'_>) -> Result<()> {
+    fn dispatch_native_event_body(&mut self, event: NativeEventDispatch) -> Result<()> {
         self.with_main_world_document_scope(|scope, host_ptr, document| {
             document
                 .dispatch_native_event_in_scope(scope, host_ptr, event)
@@ -731,6 +731,30 @@ impl ScriptVm {
             self.sync_child_browsing_context_records();
         }
         Ok(result)
+    }
+
+    /// Execute one ready timer selected from the closed schedule ranges
+    /// recorded around classic defer script execution.
+    ///
+    /// Like the ordinary timer body, this does not checkpoint or reconcile
+    /// callback effects. The PageVm lifecycle owner commits the exact selected
+    /// callback completion after this method returns.
+    pub(super) fn run_next_timeout_queued_by_classic_defer_script_body(
+        &mut self,
+    ) -> Result<HostTimeoutRunResult> {
+        #[cfg(test)]
+        if let Some(message) = self.test_next_timeout_failure.take() {
+            return Err(anyhow!("{message}"));
+        }
+
+        let document_runtime: *mut DocumentRuntime = &mut *self.document_runtime;
+        self.with_default_context_scope(|scope, _host_ptr| {
+            // SAFETY: this is the same synchronous, non-escaping
+            // document-runtime borrow used by `run_next_timeout_body`; the
+            // schedule ranges only narrow which timer may be selected.
+            Ok(unsafe { &mut *document_runtime }
+                .run_next_timeout_queued_by_classic_defer_script(scope))
+        })
     }
 
     #[cfg(test)]

@@ -117,19 +117,6 @@ impl ContentSecurityPolicyViolationEventTask {
         }
     }
 
-    pub(crate) fn for_window(
-        owner: crate::frame_owner_model::FrameDocumentTaskOwner,
-        window_target: crate::native_bridge::WindowDocumentTaskTarget,
-        violation: ContentSecurityPolicyUrlViolation,
-    ) -> Self {
-        Self {
-            owner,
-            window_target: Some(window_target),
-            target: None,
-            violation,
-        }
-    }
-
     pub(crate) fn window_target(&self) -> Option<crate::native_bridge::WindowDocumentTaskTarget> {
         self.window_target
     }
@@ -144,6 +131,20 @@ impl ContentSecurityPolicyViolationEventTask {
 
     pub(crate) fn target(&self) -> Option<DomHandle> {
         self.target
+    }
+
+    pub(crate) fn for_window(
+        owner: crate::frame_owner_model::FrameDocumentTaskOwner,
+        window_target: crate::native_bridge::WindowDocumentTaskTarget,
+        violation: ContentSecurityPolicyUrlViolation,
+    ) -> Self {
+        Self {
+            owner,
+            window_target: Some(window_target),
+            event_document_owner: None,
+            target: None,
+            violation,
+        }
     }
 }
 
@@ -174,6 +175,9 @@ pub(crate) enum PageTask {
     //   into "script loop followed by immediate host callback".
     // - Keeping it in the queue means the owner lane sees one explicit task:
     //   pre-task checkpoint -> dispatch DOMContentLoaded -> post-task effects.
+    // - Its initial placement is a lifecycle sentinel. Reaching the queue
+    //   front after defer-like work establishes the actual DCL task queue
+    //   point; ready timers recorded during classic defer tasks run first.
     //
     DispatchDomContentLoaded,
     DispatchConnectedStyleLoad(ReadyConnectedStyleLoad),

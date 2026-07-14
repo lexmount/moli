@@ -24,6 +24,21 @@ pub(in crate::runtime) enum PageTimerTurnAction {
 }
 
 impl PageVm {
+    /// Run the exact ready timer selected by the post-parse lifecycle's
+    /// classic-defer schedule ranges, then commit the ordinary callback task
+    /// completion once.
+    pub(in crate::runtime) async fn run_classic_defer_timer_before_domcontentloaded(
+        &mut self,
+        loader: &crate::network::ResourceRequestClient,
+    ) -> Result<()> {
+        let body = self.vm_mut().run_next_classic_defer_timer_callback_body()?;
+        ensure!(
+            body.consumed_heap_head(),
+            "a ready classic-defer timer selected before DOMContentLoaded must consume its heap entry"
+        );
+        self.finish_selected_page_callback_task(loader).await
+    }
+
     /// Execute one already-selected timer body without committing its
     /// task-end checkpoint.
     ///
