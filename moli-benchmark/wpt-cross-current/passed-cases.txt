@@ -5821,6 +5821,7 @@ html/semantics/forms/the-input-element/input-stepup.html
 html/semantics/forms/the-input-element/input-submit-remove-jssubmit.html
 html/semantics/forms/the-input-element/input-type-button.html
 html/semantics/forms/the-input-element/input-type-change-submit.html
+html/semantics/forms/the-input-element/input-type-change-value.html
 html/semantics/forms/the-input-element/input-type-checkbox.html
 html/semantics/forms/the-input-element/input-untrusted-key-event.html
 html/semantics/forms/the-input-element/input-validationmessage.html

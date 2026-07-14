@@ -4,8 +4,8 @@ use crate::webidl;
 use moli_dom::forms::{
     InputStepDirection, InputStepError, InputStepOutcome, InputStepState, date_input_milliseconds,
     date_input_value_from_milliseconds, month_input_milliseconds,
-    month_input_value_from_milliseconds, sanitize_input_value_for_type, step_input_value,
-    time_input_milliseconds, time_input_value_from_milliseconds, week_input_milliseconds,
+    month_input_value_from_milliseconds, step_input_value, time_input_milliseconds,
+    time_input_value_from_milliseconds, week_input_milliseconds,
     week_input_value_from_milliseconds,
 };
 
@@ -78,41 +78,32 @@ fn input_type_setter_on_object<'s>(
     else {
         return;
     };
-    // HTML spec: when an input's type changes, the value sanitization
-    // algorithm runs against the current value. Snapshot the current value
-    // (either the dirty IDL value or, if unset, the `value` content
-    // attribute's default) BEFORE flipping the type so we can re-run the
-    // new state's sanitizer against the old text.
-    let (previous_type, current_value): (Option<InputType>, Option<String>) = {
+    let previous_state: Option<(InputType, String)> = {
         let runtime = unsafe { &*runtime_ptr };
         runtime
             .dom_host()
             .node(handle)
             .and_then(Node::as_element)
             .map(|element| (element.input_type(), element.input_value().to_owned()))
-            .unzip()
     };
 
     set_reflected_attribute(scope, runtime_ptr, handle, "type", &value);
 
-    if let Some(raw) = current_value {
-        let sanitized = sanitize_input_value_for_type(canonical, &raw);
-        let was_selectable =
-            previous_type.is_some_and(InputType::supports_variable_length_selection);
+    if let Some((previous_type, previous_value)) = previous_state {
+        let was_selectable = previous_type.supports_variable_length_selection();
         let is_selectable = canonical.supports_variable_length_selection();
-        if sanitized.is_empty() && canonical.is_checkable() {
-            let runtime = unsafe { &mut *runtime_ptr };
-            let _ = runtime.set_input_value_with_dirty(handle, "", false);
-        } else if sanitized != raw {
-            let runtime = unsafe { &mut *runtime_ptr };
-            let _ = runtime.set_input_value(handle, &sanitized);
-            if !was_selectable && is_selectable {
-                let _ = runtime.set_selection_range(handle, 0, 0);
-            } else {
-                reset_input_selection_to_end(runtime, handle);
-            }
-        } else if !was_selectable && is_selectable {
+        if !was_selectable && is_selectable {
             let _ = unsafe { &mut *runtime_ptr }.set_selection_range(handle, 0, 0);
+        } else if was_selectable && is_selectable {
+            let current_value = unsafe { &*runtime_ptr }
+                .dom_host()
+                .node(handle)
+                .and_then(Node::as_element)
+                .map(Element::input_value)
+                .unwrap_or_default();
+            if current_value != previous_value {
+                reset_input_selection_to_end(unsafe { &mut *runtime_ptr }, handle);
+            }
         }
     }
 
