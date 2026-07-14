@@ -71,6 +71,20 @@ impl PageOwnedDocumentScriptHooks for MainPageOwnedDocumentScriptHooks<'_, '_> {
             .perform_script_task_checkpoint(Some(script_url))
     }
 
+    fn begin_classic_defer_timer_schedule_range(&mut self) {
+        self.page_vm
+            .vm_mut()
+            .document_runtime
+            .begin_classic_defer_timer_schedule_range();
+    }
+
+    fn finish_classic_defer_timer_schedule_range(&mut self) {
+        self.page_vm
+            .vm_mut()
+            .document_runtime
+            .finish_classic_defer_timer_schedule_range();
+    }
+
     fn execute_prepared_script<'a>(
         &'a mut self,
         script: PreparedScript,

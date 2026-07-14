@@ -77,6 +77,7 @@ pub(crate) use devtools_mutations::{
 };
 pub(crate) use inspector_issues::PendingInspectorIssue;
 pub(crate) use meta_refresh::MetaRefreshNavigation;
+use moli_time::{TimerScheduleRange, TimerScheduleSnapshot};
 use parser_blocking::{ParserInsertionWork, PendingParserBlockingWork, PendingParserInsertion};
 pub(crate) use parser_modulepreload::MainDocumentModulepreloadFetchOutcome;
 pub(crate) use script_lifecycle::{
@@ -757,6 +758,8 @@ pub(super) struct DocumentRuntime {
     script_lifecycle: DocumentScriptLifecycle,
     parser_script_start_positions: HashMap<DomHandle, ParserScriptStartPosition>,
     timeouts: HostTimeoutScheduler,
+    classic_defer_timer_schedule_start: Option<TimerScheduleSnapshot>,
+    classic_defer_timer_schedule_ranges: Vec<TimerScheduleRange>,
     events: HostEventTargetRegistry,
     mutations: MutationCoordinator,
     meta_refresh_scheduler: meta_refresh::MetaRefreshScheduler,

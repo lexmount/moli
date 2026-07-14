@@ -170,6 +170,16 @@ impl ParserCompletion {
         // terminal reactions first; the lifecycle coordinator then owns DCL's
         // separate task-end checkpoint.
         Self::finish_task(page_vm, task_effect)?;
+        let request_client = page_vm.request_client.clone();
+        while page_vm
+            .vm()
+            .document_runtime
+            .has_ready_timeout_queued_by_classic_defer_script()
+        {
+            page_vm
+                .run_classic_defer_timer_before_domcontentloaded(&request_client)
+                .await?;
+        }
         let run = super::main_document_lifecycle_completion::execute_parser_exact_domcontentloaded_on_owner_local_task(
             page_vm,
             successor_owner,
@@ -408,6 +418,14 @@ impl PageVm {
                 };
                 if let Some(dcl_task) = claimed_dcl {
                     ParserCompletion::finish_task_with_replacement_admission(self, task_effect)?;
+                    while self
+                        .vm()
+                        .document_runtime
+                        .has_ready_timeout_queued_by_classic_defer_script()
+                    {
+                        self.run_classic_defer_timer_before_domcontentloaded(loader)
+                            .await?;
+                    }
                     let replacement_lifecycle_snapshot =
                         self.document_replacement_lifecycle_action_snapshot();
                     let execution = self
