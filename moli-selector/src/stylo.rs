@@ -12,6 +12,15 @@ use crate::{
     selector::SelectorError,
 };
 
+/// Returns heading elements below `root` in flat-tree order.
+///
+/// Renderer state invalidation uses the same traversal as `:heading()` so a
+/// `headingoffset` or `headingreset` mutation cannot leave computed styles on
+/// shadow/slotted descendants stale.
+pub fn stylo_flat_tree_heading_descendants(host: &DomHost, root: NodeId) -> Vec<NodeId> {
+    query::flat_tree_heading_descendants(host, root)
+}
+
 mod atoms;
 mod invalidation;
 mod presentation;

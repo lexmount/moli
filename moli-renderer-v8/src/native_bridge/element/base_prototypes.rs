@@ -65,6 +65,20 @@ pub(super) struct ElementPrototypeReflectionDeclaration {
     #[webapi(accessor_property, enumerable, getter = element_prefix_getter_function)]
     prefix: (),
     #[webapi(
+        accessor_property = "headingOffset",
+        enumerable,
+        getter = element_heading_offset_getter_function,
+        setter = element_heading_offset_setter_function
+    )]
+    heading_offset: (),
+    #[webapi(
+        accessor_property = "headingReset",
+        enumerable,
+        getter = element_heading_reset_getter_function,
+        setter = element_heading_reset_setter_function
+    )]
+    heading_reset: (),
+    #[webapi(
         accessor_property = "innerHTML",
         enumerable,
         getter = node_inner_html_getter_function,
