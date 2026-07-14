@@ -36,6 +36,10 @@ use super::{
     stream::HtmlTreeSinkStream,
 };
 
+const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
+const MATHML_NAMESPACE: &str = "http://www.w3.org/1998/Math/MathML";
+const SVG_NAMESPACE: &str = "http://www.w3.org/2000/svg";
+
 /// HTML parser configured with the scripting state of the target `Document`.
 ///
 /// This state controls HTML parsing semantics such as `<noscript>` tokenization;
@@ -330,6 +334,7 @@ pub enum ParserPumpStep {
 pub(super) struct ParseHandle {
     identity: ParseHandleIdentity,
     pub(super) element_name: Option<Rc<QualName>>,
+    tokenizer_adjusted_element_name: Option<Rc<QualName>>,
     pub(super) parser_flags: ParserElementFlags,
 }
 
@@ -364,6 +369,20 @@ impl ParserElementFlags {
     }
 }
 
+fn is_cdata_integration_point(name: &QualName, flags: ParserElementFlags) -> bool {
+    match name.ns.as_ref() {
+        MATHML_NAMESPACE => {
+            matches!(name.local.as_ref(), "mi" | "mo" | "mn" | "ms" | "mtext")
+                || (name.local.as_ref() == "annotation-xml"
+                    && flags.mathml_annotation_xml_integration_point)
+        }
+        SVG_NAMESPACE => {
+            matches!(name.local.as_ref(), "foreignObject" | "desc" | "title")
+        }
+        _ => false,
+    }
+}
+
 pub(super) struct DocumentSink {
     target: RefCell<ParserStreamHtmlTreeSinkTarget>,
     // html5ever exposes token lines but not columns. Once inserted input is
@@ -371,6 +390,7 @@ pub(super) struct DocumentSink {
     // lines from the original document tail, so location fidelity only
     // degrades and never recovers for this parser session.
     source_positions_known: Cell<bool>,
+    tokenizer_adjusted_node_namespace_query: Cell<bool>,
 }
 
 impl HtmlParser {
@@ -1297,19 +1317,19 @@ impl Drop for ParserInputContext {
 
 impl ParseHandle {
     pub(super) fn new(node_id: NativeNodeId, element_name: Option<Rc<QualName>>) -> Self {
-        Self {
-            identity: ParseHandleIdentity::DomNode(node_id),
+        Self::new_with_identity(
+            ParseHandleIdentity::DomNode(node_id),
             element_name,
-            parser_flags: ParserElementFlags::default(),
-        }
+            ParserElementFlags::default(),
+        )
     }
 
     pub(super) fn new_synthetic_fragment_context(element_name: Rc<QualName>) -> Self {
-        Self {
-            identity: ParseHandleIdentity::SyntheticFragmentContext,
-            element_name: Some(element_name),
-            parser_flags: ParserElementFlags::default(),
-        }
+        Self::new_with_identity(
+            ParseHandleIdentity::SyntheticFragmentContext,
+            Some(element_name),
+            ParserElementFlags::default(),
+        )
     }
 
     pub(super) fn new_element(
@@ -1317,9 +1337,31 @@ impl ParseHandle {
         element_name: Rc<QualName>,
         parser_flags: ParserElementFlags,
     ) -> Self {
+        Self::new_with_identity(
+            ParseHandleIdentity::DomNode(node_id),
+            Some(element_name),
+            parser_flags,
+        )
+    }
+
+    fn new_with_identity(
+        identity: ParseHandleIdentity,
+        element_name: Option<Rc<QualName>>,
+        parser_flags: ParserElementFlags,
+    ) -> Self {
+        let tokenizer_adjusted_element_name = element_name.as_deref().and_then(|name| {
+            is_cdata_integration_point(name, parser_flags).then(|| {
+                Rc::new(QualName::new(
+                    name.prefix.clone(),
+                    Namespace::from(HTML_NAMESPACE),
+                    name.local.clone(),
+                ))
+            })
+        });
         Self {
-            identity: ParseHandleIdentity::DomNode(node_id),
-            element_name: Some(element_name),
+            identity,
+            element_name,
+            tokenizer_adjusted_element_name,
             parser_flags,
         }
     }
@@ -1379,7 +1421,18 @@ impl DocumentSink {
         Self {
             target: RefCell::new(target),
             source_positions_known: Cell::new(true),
+            tokenizer_adjusted_node_namespace_query: Cell::new(false),
         }
+    }
+
+    pub(super) fn with_tokenizer_adjusted_node_namespace_query<T>(
+        &self,
+        query: impl FnOnce() -> T,
+    ) -> T {
+        let previous = self.tokenizer_adjusted_node_namespace_query.replace(true);
+        let result = query();
+        self.tokenizer_adjusted_node_namespace_query.set(previous);
+        result
     }
 
     pub(super) fn snapshot_parser_stream_document(&self) -> NativeDom {
@@ -1572,6 +1625,11 @@ impl TreeSink for DocumentSink {
     }
 
     fn elem_name<'a>(&'a self, target: &'a Self::Handle) -> Self::ElemName<'a> {
+        if self.tokenizer_adjusted_node_namespace_query.get()
+            && let Some(name) = target.tokenizer_adjusted_element_name.as_deref()
+        {
+            return name;
+        }
         target
             .element_name
             .as_deref()
@@ -1738,13 +1796,12 @@ impl TreeSink for DocumentSink {
 mod tests {
     use std::rc::Rc;
 
-    use super::{HtmlParser, ParseHandle, ParserInputQueue};
+    use super::{
+        HTML_NAMESPACE, HtmlParser, MATHML_NAMESPACE, ParseHandle, ParserInputQueue, SVG_NAMESPACE,
+    };
     use html5ever::{LocalName, Namespace, QualName};
     use moli_dom::native::{NativeDom, NativeNodeId};
     use url::Url;
-
-    const HTML_NS: &str = "http://www.w3.org/1999/xhtml";
-    const MATHML_NS: &str = "http://www.w3.org/1998/Math/MathML";
 
     fn parse_test_document(html: &str) -> NativeDom {
         HtmlParser::SCRIPTING_ENABLED.parse(
@@ -1782,7 +1839,7 @@ mod tests {
         let document = ParseHandle::new(NativeNodeId::new(0), None);
         let context = Rc::new(QualName::new(
             None,
-            Namespace::from(HTML_NS),
+            Namespace::from(HTML_NAMESPACE),
             LocalName::from("body"),
         ));
         let fragment_context = ParseHandle::new_synthetic_fragment_context(context);
@@ -1812,14 +1869,24 @@ mod tests {
         let disabled = parse_test_document_with_scripting(html, false);
         assert_eq!(
             disabled
-                .elements_by_tag_name_ns(disabled.document_node_id(), Some(HTML_NS), "link", true,)
+                .elements_by_tag_name_ns(
+                    disabled.document_node_id(),
+                    Some(HTML_NAMESPACE),
+                    "link",
+                    true,
+                )
                 .len(),
             1,
             "head noscript content must be parsed as markup when scripting is disabled"
         );
         assert_eq!(
             disabled
-                .elements_by_tag_name_ns(disabled.document_node_id(), Some(HTML_NS), "main", true,)
+                .elements_by_tag_name_ns(
+                    disabled.document_node_id(),
+                    Some(HTML_NAMESPACE),
+                    "main",
+                    true,
+                )
                 .len(),
             1,
             "body noscript content must be parsed as markup when scripting is disabled"
@@ -1828,13 +1895,23 @@ mod tests {
         let enabled = parse_test_document_with_scripting(html, true);
         assert!(
             enabled
-                .elements_by_tag_name_ns(enabled.document_node_id(), Some(HTML_NS), "link", true,)
+                .elements_by_tag_name_ns(
+                    enabled.document_node_id(),
+                    Some(HTML_NAMESPACE),
+                    "link",
+                    true,
+                )
                 .is_empty(),
             "head noscript markup must remain inert when scripting is enabled"
         );
         assert!(
             enabled
-                .elements_by_tag_name_ns(enabled.document_node_id(), Some(HTML_NS), "main", true,)
+                .elements_by_tag_name_ns(
+                    enabled.document_node_id(),
+                    Some(HTML_NAMESPACE),
+                    "main",
+                    true,
+                )
                 .is_empty(),
             "body noscript markup must remain raw text when scripting is enabled"
         );
@@ -1846,7 +1923,7 @@ mod tests {
             HtmlParser::with_scripting_enabled(scripting_enabled)
                 .parse_fragment_without_declarative_shadow_roots(
                     Url::parse("https://example.test/").expect("test url"),
-                    HTML_NS,
+                    HTML_NAMESPACE,
                     "body",
                     "<noscript><span id='fallback'></span></noscript>".to_owned(),
                 )
@@ -1855,7 +1932,12 @@ mod tests {
         let disabled = parse(false);
         assert_eq!(
             disabled
-                .elements_by_tag_name_ns(disabled.document_node_id(), Some(HTML_NS), "span", true,)
+                .elements_by_tag_name_ns(
+                    disabled.document_node_id(),
+                    Some(HTML_NAMESPACE),
+                    "span",
+                    true,
+                )
                 .len(),
             1,
             "a scripting-disabled fragment must parse noscript children as markup"
@@ -1864,7 +1946,12 @@ mod tests {
         let enabled = parse(true);
         assert!(
             enabled
-                .elements_by_tag_name_ns(enabled.document_node_id(), Some(HTML_NS), "span", true,)
+                .elements_by_tag_name_ns(
+                    enabled.document_node_id(),
+                    Some(HTML_NAMESPACE),
+                    "span",
+                    true,
+                )
                 .is_empty(),
             "a scripting-enabled fragment must keep noscript children as text"
         );
@@ -1892,13 +1979,86 @@ mod tests {
     }
 
     #[test]
+    fn fragment_cdata_is_disallowed_at_foreign_content_integration_points() {
+        for (namespace, local_name) in [
+            (MATHML_NAMESPACE, "mi"),
+            (MATHML_NAMESPACE, "mo"),
+            (MATHML_NAMESPACE, "mn"),
+            (MATHML_NAMESPACE, "ms"),
+            (MATHML_NAMESPACE, "mtext"),
+            (SVG_NAMESPACE, "foreignObject"),
+            (SVG_NAMESPACE, "desc"),
+            (SVG_NAMESPACE, "title"),
+        ] {
+            let document = HtmlParser::SCRIPTING_ENABLED.parse_fragment(
+                Url::parse("https://example.test/").expect("test url"),
+                namespace,
+                local_name,
+                "x<![CDATA[y]]>".to_owned(),
+            );
+            let fragment_root = document
+                .child_ids(document.document_node_id())
+                .find(|child| document.node(*child).is_some_and(|node| node.is_element()))
+                .expect("fragment staging root");
+            let children = document.child_ids(fragment_root).collect::<Vec<_>>();
+            let child_snapshot = children
+                .iter()
+                .map(|child| {
+                    document
+                        .node(*child)
+                        .map(|node| (node.node_type(), node.data_value().map(str::to_owned)))
+                })
+                .collect::<Vec<_>>();
+
+            assert_eq!(
+                children.len(),
+                2,
+                "{namespace} {local_name}: {child_snapshot:?}"
+            );
+            assert_eq!(
+                document
+                    .node(children[0])
+                    .and_then(|node| node.data_value()),
+                Some("x"),
+                "{namespace} {local_name} text"
+            );
+            assert!(
+                document
+                    .node(children[1])
+                    .and_then(|node| node.as_comment())
+                    .is_some(),
+                "{namespace} {local_name} CDATA should become a comment"
+            );
+        }
+
+        let document = HtmlParser::SCRIPTING_ENABLED.parse_fragment(
+            Url::parse("https://example.test/").expect("test url"),
+            SVG_NAMESPACE,
+            "path",
+            "x<![CDATA[y]]>".to_owned(),
+        );
+        let fragment_root = document
+            .child_ids(document.document_node_id())
+            .find(|child| document.node(*child).is_some_and(|node| node.is_element()))
+            .expect("fragment staging root");
+        let children = document.child_ids(fragment_root).collect::<Vec<_>>();
+        assert_eq!(children.len(), 1);
+        assert_eq!(
+            document
+                .node(children[0])
+                .and_then(|node| node.data_value()),
+            Some("xy")
+        );
+    }
+
+    #[test]
     fn mathml_annotation_xml_text_html_is_html_integration_point() {
         let document = parse_test_document(concat!(
             "<!doctype html>",
             "<math><annotation-xml encoding='text/html'><div></div></annotation-xml></math>"
         ));
-        let annotation = first_element_by_ns(&document, MATHML_NS, "annotation-xml");
-        let div = first_element_by_ns(&document, HTML_NS, "div");
+        let annotation = first_element_by_ns(&document, MATHML_NAMESPACE, "annotation-xml");
+        let div = first_element_by_ns(&document, HTML_NAMESPACE, "div");
 
         assert_eq!(
             document.node(div).and_then(|node| node.parent_node_id()),
@@ -1913,8 +2073,8 @@ mod tests {
             "<!doctype html>",
             "<div><math><annotation-xml><p></p></annotation-xml></math></div>"
         ));
-        let annotation = first_element_by_ns(&document, MATHML_NS, "annotation-xml");
-        let paragraph = first_element_by_ns(&document, HTML_NS, "p");
+        let annotation = first_element_by_ns(&document, MATHML_NAMESPACE, "annotation-xml");
+        let paragraph = first_element_by_ns(&document, HTML_NAMESPACE, "p");
 
         assert_ne!(
             document

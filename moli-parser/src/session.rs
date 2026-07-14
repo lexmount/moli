@@ -131,8 +131,15 @@ impl TokenSink for EmbedderPausingTreeBuilder {
     }
 
     fn adjusted_current_node_present_but_not_in_html_namespace(&self) -> bool {
+        // html5ever's default query only checks the namespace. During this
+        // tokenizer-only query, foreign-content integration points must behave
+        // as HTML so a CDATA opener is emitted as a bogus comment.
         self.inner
-            .adjusted_current_node_present_but_not_in_html_namespace()
+            .sink
+            .with_tokenizer_adjusted_node_namespace_query(|| {
+                self.inner
+                    .adjusted_current_node_present_but_not_in_html_namespace()
+            })
     }
 }
 

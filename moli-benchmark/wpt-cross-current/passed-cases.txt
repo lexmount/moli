@@ -6081,6 +6081,7 @@ html/syntax/parsing/Element.getElementsByTagName-foreign-01.html
 html/syntax/parsing/Element.getElementsByTagName-foreign-02.html
 html/syntax/parsing/adoption_agency_check_the_end_tag_name.html
 html/syntax/parsing/ambiguous-ampersand.html
+html/syntax/parsing/cdata-in-integration-point-fragment.html
 html/syntax/parsing/empty-doctype-ids.html
 html/syntax/parsing/html-integration-point.html
 html/syntax/parsing/html5lib_adoption01.html?run_type=uri

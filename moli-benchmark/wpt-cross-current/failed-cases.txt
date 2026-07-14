@@ -3471,7 +3471,6 @@ html/syntax/charset/with-inheritance.html
 html/syntax/charset/xhr.html
 html/syntax/parsing-html-fragments/tokenizer-modes-001.html
 html/syntax/parsing/DOMContentLoaded-defer.html
-html/syntax/parsing/cdata-in-integration-point-fragment.html
 html/syntax/parsing/doctype-system-identifier-distinction.html
 html/syntax/parsing/html5lib_innerHTML_tests_innerHTML_1.html
 html/syntax/parsing/html5lib_webkit02.html?run_type=uri
