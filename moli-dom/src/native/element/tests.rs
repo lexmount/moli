@@ -327,6 +327,22 @@ fn input_type_change_sanitizes_without_dirtying_default_value() {
 }
 
 #[test]
+fn email_multiple_attribute_resanitizes_dirty_value() {
+    let mut input = Element::new_html("input");
+    assert!(input.set_attribute("type".to_owned(), String::new(), None, "email".to_owned()));
+    assert!(input.set_input_value("  first@example.com  , second@example.test  "));
+    assert_eq!(
+        input.input_value(),
+        "first@example.com  , second@example.test"
+    );
+    assert!(input.input_value_dirty());
+
+    assert!(input.set_attribute("multiple".to_owned(), String::new(), None, String::new()));
+    assert_eq!(input.input_value(), "first@example.com,second@example.test");
+    assert!(input.input_value_dirty());
+}
+
+#[test]
 fn script_element_state_distinguishes_dynamic_and_parser_created_scripts() {
     let dynamic = Element::new_html("script");
     assert!(dynamic.script_async());
