@@ -6254,6 +6254,7 @@ html/semantics/scripting-1/the-template-element/template-element/template-conten
 html/semantics/scripting-1/the-template-element/template-element/template-descendant-body.html
 html/semantics/scripting-1/the-template-element/template-element/template-descendant-frameset.html
 html/semantics/scripting-1/the-template-element/template-element/template-descendant-head.html
+html/semantics/sections/headingoffset-and-headingreset.html
 html/semantics/selectors/pseudo-classes/checked-type-change.html
 html/semantics/selectors/pseudo-classes/checked.html
 html/semantics/selectors/pseudo-classes/default.html

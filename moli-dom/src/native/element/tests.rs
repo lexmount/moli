@@ -343,6 +343,47 @@ fn email_multiple_attribute_resanitizes_dirty_value() {
 }
 
 #[test]
+fn heading_reflections_parse_range_and_modal_state() {
+    let mut heading = Element::new_html("h1");
+    assert_eq!(heading.heading_offset(), 0);
+    assert!(!heading.heading_reset());
+
+    for (raw, expected) in [
+        ("3", 3),
+        (" +7tail", 7),
+        ("20", 8),
+        ("429496729600", 8),
+        ("-0", 0),
+        ("-3", 0),
+        ("invalid", 0),
+        ("\u{000b}7", 0),
+    ] {
+        assert!(heading.set_attribute(
+            "headingoffset".to_owned(),
+            String::new(),
+            None,
+            raw.to_owned(),
+        ));
+        assert_eq!(heading.heading_offset(), expected, "{raw:?}");
+    }
+
+    assert!(heading.set_attribute(
+        "headingreset".to_owned(),
+        String::new(),
+        None,
+        String::new(),
+    ));
+    assert!(heading.heading_reset());
+
+    let mut dialog = Element::new_html("dialog");
+    assert!(!dialog.heading_reset());
+    assert!(dialog.set_dialog_modal(true));
+    assert!(dialog.heading_reset());
+    assert!(dialog.set_dialog_modal(false));
+    assert!(!dialog.heading_reset());
+}
+
+#[test]
 fn script_element_state_distinguishes_dynamic_and_parser_created_scripts() {
     let dynamic = Element::new_html("script");
     assert!(dynamic.script_async());

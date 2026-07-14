@@ -427,6 +427,54 @@ fn computed_style_exposes_non_inherited_touch_action() {
 }
 
 #[test]
+fn heading_offset_and_modal_reset_invalidate_live_computed_styles() {
+    let mut vm = new_parsed_test_vm(
+        "https://heading-state-invalidation.test/",
+        r#"<!doctype html>
+<html><head><style>
+  :heading(1) { color: rgb(1, 2, 3); }
+  :heading(4) { color: rgb(4, 5, 6); }
+  :heading(9) { color: rgb(9, 10, 11); }
+</style></head><body>
+  <div id="parent"><h1 id="target"></h1></div>
+  <div headingoffset="8"><dialog id="modal"><h1 id="modal-heading"></h1></dialog></div>
+</body></html>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const parent = document.getElementById('parent');
+  const target = document.getElementById('target');
+  const modal = document.getElementById('modal');
+  const modalHeading = document.getElementById('modal-heading');
+  const targetStyle = getComputedStyle(target);
+  const modalStyle = getComputedStyle(modalHeading);
+  const values = [targetStyle.color, modalStyle.color];
+
+  parent.headingOffset = 3;
+  values.push(targetStyle.color);
+  target.headingReset = true;
+  values.push(targetStyle.color);
+
+  modal.showModal();
+  values.push(modalStyle.color);
+  modal.close();
+  values.push(modalStyle.color);
+  return values.join('|');
+})()
+"#,
+        )
+        .expect("heading state invalidation probe should evaluate");
+
+    assert_eq!(
+        result,
+        "rgb(1, 2, 3)|rgb(9, 10, 11)|rgb(4, 5, 6)|rgb(1, 2, 3)|rgb(1, 2, 3)|rgb(9, 10, 11)"
+    );
+}
+
+#[test]
 fn style_element_type_attribute_uses_raw_exact_css_match() {
     let mut vm = new_parsed_test_vm(
         "https://style-type-attribute.test/",

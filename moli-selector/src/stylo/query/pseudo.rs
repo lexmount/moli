@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::{CssDirection, first_strong_text_direction};
 use dom::{ElementState, HEADING_LEVEL_OFFSET};
 
@@ -102,19 +104,7 @@ impl<'a> QueryElement<'a> {
     }
 
     pub(super) fn heading_state(self) -> ElementState {
-        const HEADING_NAMES: [(&str, u64); 6] = [
-            ("h1", 1),
-            ("h2", 2),
-            ("h3", 3),
-            ("h4", 4),
-            ("h5", 5),
-            ("h6", 6),
-        ];
-        HEADING_NAMES
-            .iter()
-            .find_map(|(name, level)| self.element().is_html_element(name).then_some(*level))
-            .map(|level| ElementState::from_bits_retain(level << HEADING_LEVEL_OFFSET))
-            .unwrap_or_else(ElementState::empty)
+        heading_state_for_element(self.host, self.handle)
     }
 
     pub(in crate::stylo) fn resolved_direction(self) -> CssDirection {
@@ -589,6 +579,107 @@ impl<'a> QueryElement<'a> {
         }
         None
     }
+}
+
+pub(crate) fn heading_state_for_element(host: &DomHost, handle: NodeId) -> ElementState {
+    let Some(base_level) = host
+        .node(handle)
+        .and_then(Node::as_element)
+        .and_then(heading_base_level)
+    else {
+        return ElementState::empty();
+    };
+
+    let mut offset = 0_u32;
+    let mut current = Some(handle);
+    let mut visited = HashSet::new();
+    while let Some(candidate) = current {
+        if !visited.insert(candidate) {
+            break;
+        }
+        if let Some(element) = host.node(candidate).and_then(Node::as_element)
+            && element.namespace() == "http://www.w3.org/1999/xhtml"
+        {
+            offset = offset.saturating_add(element.heading_offset());
+            if element.heading_reset() {
+                break;
+            }
+        }
+        current = flat_tree_parent(host, candidate);
+    }
+
+    let level = base_level.saturating_add(offset).min(9) as u64;
+    ElementState::from_bits_retain(level << HEADING_LEVEL_OFFSET)
+}
+
+pub(crate) fn flat_tree_heading_descendants(host: &DomHost, root: NodeId) -> Vec<NodeId> {
+    let mut stack = flat_tree_children(host, root);
+    stack.reverse();
+    let mut seen = HashSet::new();
+    let mut headings = Vec::new();
+    while let Some(candidate) = stack.pop() {
+        if !seen.insert(candidate) {
+            continue;
+        }
+        if host
+            .node(candidate)
+            .and_then(Node::as_element)
+            .and_then(heading_base_level)
+            .is_some()
+        {
+            headings.push(candidate);
+        }
+        let mut children = flat_tree_children(host, candidate);
+        children.reverse();
+        stack.extend(children);
+    }
+    headings
+}
+
+fn heading_base_level(element: &Element) -> Option<u32> {
+    ["h1", "h2", "h3", "h4", "h5", "h6"]
+        .iter()
+        .position(|name| element.is_html_element(name))
+        .map(|index| index as u32 + 1)
+}
+
+fn flat_tree_parent(host: &DomHost, handle: NodeId) -> Option<NodeId> {
+    if let Some(slot) = host.assigned_slot_for_node(handle) {
+        return Some(slot);
+    }
+
+    let parent = host.node(handle).and_then(Node::parent_node)?;
+    if host.is_shadow_root(parent) {
+        return host.shadow_root_host(parent);
+    }
+    if host.is_html_element_named(parent, "slot")
+        && !host
+            .assigned_nodes_for_slot_with_options(parent, false)
+            .is_empty()
+    {
+        return None;
+    }
+    if host.shadow_root_handle(parent).is_some()
+        && host
+            .node(handle)
+            .is_some_and(|node| node.is_element() || node.is_text())
+    {
+        return None;
+    }
+    Some(parent)
+}
+
+fn flat_tree_children(host: &DomHost, handle: NodeId) -> Vec<NodeId> {
+    if host.is_html_element_named(handle, "slot") {
+        let assigned = host.assigned_nodes_for_slot_with_options(handle, false);
+        if !assigned.is_empty() {
+            return assigned;
+        }
+    }
+    if let Some(shadow_root) = host.shadow_root_handle(handle) {
+        return host.child_handles(shadow_root).collect();
+    }
+    host.child_handles(handle).collect()
 }
 
 pub(crate) fn html_directionality(host: &DomHost, handle: NodeId) -> CssDirection {

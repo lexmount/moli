@@ -211,6 +211,27 @@ impl Element {
         self.attribute_ns(namespace, local_name).is_some()
     }
 
+    /// Returns the reflected `headingOffset` value.
+    ///
+    /// HTML defines this unsigned-long reflection with `ReflectRange=(0, 8)`:
+    /// malformed and negative values fall back to zero, while larger parsed
+    /// values are clamped to eight.
+    pub fn heading_offset(&self) -> u32 {
+        self.attribute("headingoffset")
+            .and_then(parse_html_non_negative_integer)
+            .map(|value| value.min(8))
+            .unwrap_or(0)
+    }
+
+    /// Returns the reflected `headingReset` state.
+    ///
+    /// Modal dialogs are heading-offset boundaries even without an explicit
+    /// `headingreset` content attribute.
+    pub fn heading_reset(&self) -> bool {
+        self.has_attribute("headingreset")
+            || (self.is_html_element("dialog") && self.dialog_modal())
+    }
+
     pub fn custom_element_state(&self) -> CustomElementState {
         self.rare_data.custom_element_state()
     }
@@ -1320,6 +1341,35 @@ impl Element {
             _ => self.local_name.to_string(),
         }
     }
+}
+
+fn parse_html_non_negative_integer(value: &str) -> Option<u32> {
+    let mut chars = value
+        .chars()
+        .skip_while(|ch| matches!(ch, '\t' | '\n' | '\u{000c}' | '\r' | ' '));
+    let negative = match chars.clone().next() {
+        Some('+') => {
+            chars.next();
+            false
+        }
+        Some('-') => {
+            chars.next();
+            true
+        }
+        _ => false,
+    };
+
+    let mut value = 0_u32;
+    let mut had_digit = false;
+    for ch in chars {
+        let Some(digit) = ch.to_digit(10) else {
+            break;
+        };
+        had_digit = true;
+        value = value.saturating_mul(10).saturating_add(digit);
+    }
+
+    (had_digit && (!negative || value == 0)).then_some(value)
 }
 
 fn utf16_units_contain_unpaired_surrogate(units: &[u16]) -> bool {
