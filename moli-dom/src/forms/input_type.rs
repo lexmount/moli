@@ -30,18 +30,25 @@ pub fn form_control_type_supports_intrinsic_validation(
 }
 
 pub fn sanitize_input_value_for_type(input_type: InputType, value: &str) -> String {
+    sanitize_input_value_for_type_with_multiple(input_type, value, false)
+}
+
+pub fn sanitize_input_value_for_type_with_multiple(
+    input_type: InputType,
+    value: &str,
+    multiple: bool,
+) -> String {
     match input_type {
         // Text-family — strip newlines / CR but leave whitespace runs alone.
         InputType::Text | InputType::Search | InputType::Tel | InputType::Password => {
             strip_input_value_line_breaks(value)
         }
-        // URL / Email — strip newlines AND trim leading/trailing ASCII whitespace.
-        // (Email's multi-value parsing isn't relevant here since the dirty
-        //  value path only ever sees a single value.)
-        InputType::Url | InputType::Email => {
+        // URL — strip newlines AND trim leading/trailing ASCII whitespace.
+        InputType::Url => {
             let stripped = strip_input_value_line_breaks(value);
             stripped.trim_matches(is_ascii_whitespace_char).to_owned()
         }
+        InputType::Email => sanitize_email_input_value(value, multiple),
         InputType::Number if !is_valid_number_input_value(value) => String::new(),
         InputType::Date if !is_valid_date_input_value(value) => String::new(),
         InputType::Time if !is_valid_time_input_value(value) => String::new(),
@@ -64,6 +71,29 @@ pub fn sanitize_input_value_for_type(input_type: InputType, value: &str) -> Stri
         InputType::File => String::new(),
         _ => value.to_owned(),
     }
+}
+
+fn sanitize_email_input_value(value: &str, multiple: bool) -> String {
+    let stripped = strip_input_value_line_breaks(value);
+    if !multiple {
+        return sanitize_email_address(stripped.trim_matches(is_ascii_whitespace_char));
+    }
+    stripped
+        .split(',')
+        .map(|address| address.trim_matches(is_ascii_whitespace_char))
+        .map(sanitize_email_address)
+        .collect::<Vec<String>>()
+        .join(",")
+}
+
+fn sanitize_email_address(address: &str) -> String {
+    let Some((local, domain)) = address.rsplit_once('@') else {
+        return address.to_owned();
+    };
+    let Ok(url::Host::Domain(domain)) = url::Host::parse(domain) else {
+        return address.to_owned();
+    };
+    format!("{local}@{domain}")
 }
 
 fn strip_input_value_line_breaks(value: &str) -> String {
@@ -191,7 +221,7 @@ pub fn url_value_type_mismatch(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_input_value_for_type;
+    use super::{sanitize_input_value_for_type, sanitize_input_value_for_type_with_multiple};
     use moli_html_input_type::InputType;
 
     const INITIAL: &str = "  foo\rbar  ";
@@ -227,6 +257,38 @@ mod tests {
                 "foobar"
             );
         }
+    }
+
+    #[test]
+    fn multiple_email_trims_each_comma_separated_address() {
+        assert_eq!(
+            sanitize_input_value_for_type_with_multiple(
+                InputType::Email,
+                "  first@example.com \r, second@example.test\n  ",
+                true,
+            ),
+            "first@example.com,second@example.test"
+        );
+        assert_eq!(
+            sanitize_input_value_for_type_with_multiple(
+                InputType::Email,
+                " first@example.com , , third@example.test ",
+                true,
+            ),
+            "first@example.com,,third@example.test"
+        );
+        assert_eq!(
+            sanitize_input_value_for_type(InputType::Email, " test@exämle.com "),
+            "test@xn--exmle-hra.com"
+        );
+        assert_eq!(
+            sanitize_input_value_for_type_with_multiple(
+                InputType::Email,
+                " test@exämle.com, user@お.com ",
+                true,
+            ),
+            "test@xn--exmle-hra.com,user@xn--t8j.com"
+        );
     }
 
     #[test]
