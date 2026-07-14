@@ -6,7 +6,10 @@ mod element_methods;
 mod node_accessors;
 mod node_methods;
 
-use crate::{context_bootstrap::bridge_descriptor::BridgeDescriptor, native_bridge::element};
+use crate::{
+    context_bootstrap::bridge_descriptor::BridgeDescriptor,
+    native_bridge::{element, named_access},
+};
 
 pub(super) fn build_node_wrapper_template<'s, 'i>(
     scope: &mut v8::PinScope<'s, 'i, ()>,
@@ -14,6 +17,10 @@ pub(super) fn build_node_wrapper_template<'s, 'i>(
 ) -> v8::Local<'s, v8::ObjectTemplate> {
     let template = v8::ObjectTemplate::new(scope);
     let _ = template.set_internal_field_count(1);
+
+    if descriptor.prototype_name == "HTMLDocument" {
+        named_access::install_document_named_property_handler(template);
+    }
 
     node_accessors::install_node_accessors(scope, template, descriptor);
     document_accessors::install_document_accessors(scope, template, descriptor);
