@@ -215,6 +215,7 @@ impl ElementRareData {
         namespace: &str,
         local_name: &str,
         input_type: InputType,
+        input_value_attribute: Option<&str>,
         attribute_name: &str,
         attribute_value: Option<&str>,
     ) {
@@ -227,6 +228,7 @@ impl ElementRareData {
                 namespace,
                 local_name,
                 input_type,
+                input_value_attribute,
                 attribute_name,
                 attribute_value,
             );
@@ -246,6 +248,7 @@ impl ElementRareData {
             namespace,
             local_name,
             input_type,
+            input_value_attribute,
             attribute_name,
             attribute_value,
         );
