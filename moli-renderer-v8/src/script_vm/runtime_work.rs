@@ -28,6 +28,7 @@ pub(crate) enum PostParseDrainResult {
 
 pub(crate) enum PostParseLifecycleAdvance {
     PageOwnedTask(Box<PostParsePageOwnedTask>),
+    TimerQueuedByClassicDeferBeforeDomContentLoaded,
     NeedsContinuation,
     AwaitProgress,
     Complete(PostParseLifecycleCompletionAction),
@@ -322,6 +323,7 @@ impl PostParseProcessingAction {
 
 pub(crate) enum ReadyPostParseAction {
     Processing(Box<PostParseProcessingAction>),
+    TimerQueuedByClassicDeferBeforeDomContentLoaded,
 }
 
 pub(crate) enum PostParseRuntimeDriverStep {
@@ -338,6 +340,7 @@ pub(crate) enum PostParseDriverStep {
 
 pub(crate) enum PostParseProcessingStep {
     Action(Box<PostParseProcessingAction>),
+    TimerQueuedByClassicDeferBeforeDomContentLoaded,
     NeedsContinuation,
     AwaitProgress,
     Idle,

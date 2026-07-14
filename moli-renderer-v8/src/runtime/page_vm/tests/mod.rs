@@ -12771,6 +12771,77 @@ queueMicrotask(() => globalThis.__mainParserDeferCheckpointEvents.push('script-m
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn main_parser_classic_defer_records_its_timer_range_for_domcontentloaded() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/defer-timer.html").expect("document URL"),
+        );
+        page_vm
+            .vm_mut()
+            .eval(
+                "globalThis.__mainParserDeferTimerEvents = []; \
+                 setTimeout(() => __mainParserDeferTimerEvents.push('outside'), 0);",
+            )
+            .expect("defer timer state should initialize");
+        let script = append_parser_owned_external_classic_defer_for_page_vm_test(
+            &mut page_vm,
+            1,
+            "timer-defer",
+            Url::parse("https://example.com/timer-defer.js").expect("script URL"),
+            ScriptSource::Loaded(
+                "setTimeout(() => __mainParserDeferTimerEvents.push('defer'), 0);".to_owned(),
+            ),
+            ("onload", ""),
+        );
+        let task_owner = page_vm
+            .vm()
+            .current_main_document_task_owner()
+            .expect("defer timer test requires a document owner");
+        assert!(
+            page_vm
+                .vm_mut()
+                .claim_main_parser_deferred_script(
+                    task_owner,
+                    script,
+                    None,
+                    None,
+                    Default::default(),
+                )
+                .expect("loaded classic defer should be accepted")
+        );
+        page_vm
+            .seal_main_parser_deferred_scripts(task_owner)
+            .expect("defer timer queue should seal");
+
+        run_ready_parser_deferred_body_for_test(&mut page_vm, &loader, "timer classic defer").await;
+        assert!(
+            page_vm
+                .vm()
+                .document_runtime
+                .has_ready_timeout_queued_by_classic_defer_script(),
+            "the specialized main-parser defer executor must retain its task-local timer range"
+        );
+        page_vm
+            .run_classic_defer_timer_before_domcontentloaded(&loader)
+            .await
+            .expect("the recorded defer timer should be selected");
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval("__mainParserDeferTimerEvents.join('|')")
+                .expect("defer timer events should evaluate"),
+            "defer",
+            "the older unrelated timer must not enter the pre-DOMContentLoaded range"
+        );
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn dcl_lifecycle_yields_parser_deferred_source_wait_to_page_vm_resource_queue() {
     run_page_vm_async_test(async move {
         let loader =

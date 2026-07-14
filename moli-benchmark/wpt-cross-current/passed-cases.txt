@@ -6334,6 +6334,7 @@ html/syntax/parsing-html-fragments/the-input-byte-stream-034.html
 html/syntax/parsing-html-fragments/the-input-byte-stream-037.html
 html/syntax/parsing-html-fragments/the-input-byte-stream-038.html
 html/syntax/parsing-html-fragments/tokenizer-modes-001.html
+html/syntax/parsing/DOMContentLoaded-defer.html
 html/syntax/parsing/Document.getElementsByTagName-foreign-01.html
 html/syntax/parsing/Document.getElementsByTagName-foreign-02.html
 html/syntax/parsing/Element.getElementsByTagName-foreign-01.html

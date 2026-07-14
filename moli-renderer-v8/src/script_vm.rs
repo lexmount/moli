@@ -5976,6 +5976,18 @@ impl ScriptVm {
         Ok(result)
     }
 
+    /// Execute one ready timer whose scheduling sequence belongs to a classic
+    /// defer script, without committing its task-end callback completion.
+    pub(crate) fn run_next_classic_defer_timer_callback_body(
+        &mut self,
+    ) -> Result<HostTimeoutRunResult> {
+        let result = self.run_next_timeout_queued_by_classic_defer_script_body()?;
+        if let HostTimeoutRunResult::CallbackError(error) = &result {
+            self.record_runtime_warning(format_args!("timer callback dispatch failed: {error}"));
+        }
+        Ok(result)
+    }
+
     /// Complete one timer in a standalone ScriptVm fixture.
     ///
     /// Production and PageVm behavior tests must use the selected Page-task

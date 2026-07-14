@@ -4123,6 +4123,139 @@ fn drive_post_parse_lifecycle_loop_returns_at_domcontentloaded_before_trailing_t
 }
 
 #[test]
+fn defer_queued_timer_runs_before_domcontentloaded_without_draining_nested_timer() {
+    run_page_vm_local_runtime_async_test("page-vm-defer-timer-before-dcl", || async move {
+        let mut page_vm = test_page_vm();
+        let local_executor = page_vm.local_executor.clone();
+
+        let (completion, before_later_timers, after_outside_timer, after_nested_timer) =
+            local_executor
+                .run(async move {
+                    page_vm.vm_mut().eval(
+                        r#"
+                    globalThis.__deferDclTaskOrder = [];
+                    setTimeout(() => {
+                        globalThis.__deferDclTaskOrder.push("timer-outside-defer");
+                    }, 0);
+                    document.addEventListener("DOMContentLoaded", () => {
+                        globalThis.__deferDclTaskOrder.push("dcl");
+                    });
+                    "installed";
+                    "#,
+                    )?;
+                    let body = page_vm
+                        .vm()
+                        .document_runtime
+                        .snapshot_document()
+                        .document_body_handle()
+                        .expect("test document should have a body");
+                    let defer_script_node = page_vm
+                        .vm_mut()
+                        .document_runtime
+                        .dom_host_mut()
+                        .create_parser_element_without_attributes(
+                            "script".to_owned(),
+                            "http://www.w3.org/1999/xhtml".to_owned(),
+                            None,
+                        );
+                    assert!(
+                        page_vm
+                            .vm_mut()
+                            .document_runtime
+                            .dom_host_mut()
+                            .append_child(body, defer_script_node),
+                        "defer script test node should attach to the document"
+                    );
+                    let mut defer_script = prepared_loaded_classic_for_page_vm_test(
+                        &page_vm,
+                        9100,
+                        r#"
+                    globalThis.__deferDclTaskOrder.push("defer");
+                    setTimeout(() => {
+                        globalThis.__deferDclTaskOrder.push("timer-before-dcl");
+                        setTimeout(() => {
+                            globalThis.__deferDclTaskOrder.push("timer-after-dcl");
+                        }, 0);
+                    }, 0);
+                    "#,
+                    );
+                    defer_script.mode = ScriptMode::Defer;
+                    defer_script.source_kind = ScriptSourceKind::External;
+                    defer_script.node_id = defer_script_node;
+
+                    let lifecycle_driver = {
+                        let PageVm {
+                            vm,
+                            page_task_queue,
+                            report,
+                            ..
+                        } = &mut page_vm;
+                        vm.as_mut()
+                            .expect("page vm must retain a live ScriptVm until drop")
+                            .start_post_parse_lifecycle_round(
+                                PageVmInitStage::DomContentLoaded,
+                                page_task_queue,
+                                report,
+                                vec![classic_defer_work(defer_script)],
+                            )
+                            .await
+                    };
+                    let completion = page_vm
+                        .drive_post_parse_lifecycle_loop_on_named_owner_lane(
+                            PageVmInitStage::DomContentLoaded,
+                            lifecycle_driver,
+                        )
+                        .await?;
+                    let before_later_timers = page_vm
+                        .vm_mut()
+                        .eval("JSON.stringify(globalThis.__deferDclTaskOrder)")?;
+
+                    let loader = page_vm.request_client.clone();
+                    assert!(
+                        page_vm
+                            .run_one_due_timer_selected_task_for_test(&loader)
+                            .await?,
+                        "the timer queued outside defer must remain runnable after DCL"
+                    );
+                    let after_outside_timer = page_vm
+                        .vm_mut()
+                        .eval("JSON.stringify(globalThis.__deferDclTaskOrder)")?;
+                    assert!(
+                        page_vm
+                            .run_one_due_timer_selected_task_for_test(&loader)
+                            .await?,
+                        "the timer queued by the first timer must remain runnable after DCL"
+                    );
+                    let after_nested_timer = page_vm
+                        .vm_mut()
+                        .eval("JSON.stringify(globalThis.__deferDclTaskOrder)")?;
+                    Ok::<_, anyhow::Error>((
+                        completion,
+                        before_later_timers,
+                        after_outside_timer,
+                        after_nested_timer,
+                    ))
+                })
+                .await
+                .expect("driver loop should preserve the DCL task boundary");
+
+        assert!(matches!(
+            completion,
+            PostParseLifecycleCompletionAction::ReturnAtStage("DOMContentLoaded")
+        ));
+        assert_eq!(before_later_timers, r#"["defer","timer-before-dcl","dcl"]"#);
+        assert_eq!(
+            after_outside_timer,
+            r#"["defer","timer-before-dcl","dcl","timer-outside-defer"]"#
+        );
+        assert_eq!(
+            after_nested_timer,
+            r#"["defer","timer-before-dcl","dcl","timer-outside-defer","timer-after-dcl"]"#
+        );
+    });
+}
+
+#[test]
 fn drive_post_parse_lifecycle_loop_returns_at_domcontentloaded_before_listener_work() {
     run_page_vm_local_runtime_async_test("page-vm-dcl-before-listener-work", || async move {
         let mut page_vm = test_page_vm();

@@ -908,6 +908,10 @@ impl ScriptVm {
         report: &mut ScriptExecutionReport,
         work: Vec<PostParsePageOwnedWork>,
     ) -> PostParseLifecycleRound {
+        if !self.document_runtime.dom_content_loaded_dispatched() {
+            self.document_runtime
+                .clear_classic_defer_timer_schedule_ranges();
+        }
         let queue_stats = post_parse_lifecycle_queue_stats(&work);
         self.queue_initial_connected_style_loads_for_current_owner();
         self.document_runtime.drain_document_processing_wakes();
@@ -1783,6 +1787,21 @@ impl ScriptVm {
             reached_boundary,
             invalidation_policy,
         } = PostParseProcessingAction::from_document_processing_action(action);
+        if work.is_domcontentloaded_task()
+            && self
+                .document_runtime
+                .has_ready_timeout_queued_by_classic_defer_script()
+        {
+            // The lifecycle plan pre-seeds this boundary marker so owner work
+            // stays ordered. It has now reached the front after defer-like and
+            // parser-owned pre-DCL work, which is the point at which HTML queues
+            // the actual DOMContentLoaded global task. Give only ready timers
+            // scheduled by classic defer scripts their intervening task turn.
+            page_task_queue.enqueue_front_post_parse_work_preserving_order(vec![work]);
+            return PostParseDriverStep::Ready(Box::new(
+                ReadyPostParseAction::TimerQueuedByClassicDeferBeforeDomContentLoaded,
+            ));
+        }
         if !(work.is_domcontentloaded_task() || work.is_window_load_task()) {
             return PostParseDriverStep::Ready(Box::new(ReadyPostParseAction::Processing(
                 Box::new(PostParseProcessingAction {
@@ -1905,6 +1924,11 @@ impl ScriptVm {
                     ReadyPostParseAction::Processing(action) => {
                         return Ok(PostParseProcessingStep::Action(action));
                     }
+                    ReadyPostParseAction::TimerQueuedByClassicDeferBeforeDomContentLoaded => {
+                        return Ok(
+                            PostParseProcessingStep::TimerQueuedByClassicDeferBeforeDomContentLoaded,
+                        );
+                    }
                 },
                 PostParseDriverStep::NeedsContinuation => {
                     return Ok(PostParseProcessingStep::NeedsContinuation);
@@ -1942,6 +1966,11 @@ impl ScriptVm {
                     return Ok(PostParseLifecycleAdvance::PageOwnedTask(Box::new(
                         execution.into_page_owned_task(),
                     )));
+                }
+                PostParseProcessingStep::TimerQueuedByClassicDeferBeforeDomContentLoaded => {
+                    return Ok(
+                        PostParseLifecycleAdvance::TimerQueuedByClassicDeferBeforeDomContentLoaded,
+                    );
                 }
                 PostParseProcessingStep::NeedsContinuation => {
                     return Ok(PostParseLifecycleAdvance::NeedsContinuation);
