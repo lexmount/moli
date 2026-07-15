@@ -279,6 +279,10 @@ pub fn html_directionality(host: &DomHost, handle: NodeId) -> CssDirection {
     stylo::html_directionality(host, handle)
 }
 
+pub fn html_auto_directionality_invalidation_root(host: &DomHost, start: NodeId) -> Option<NodeId> {
+    stylo::html_auto_directionality_invalidation_root(host, start)
+}
+
 pub fn validate_supports_selector_condition_argument(selector: &str) -> Result<(), SelectorError> {
     stylo::validate_supports_selector_condition_argument(selector)
 }
@@ -374,8 +378,9 @@ fn serialize_cssom_style_rule_selector_text(
 mod tests {
     use super::{
         QueryEngine, StyleRuleNamespaceContext, StyleRuleSelectorContext, StyloDomStyleAdapter,
-        canonicalize_cssom_style_rule_selector_text, normalize_scope_end_selector_list,
-        normalize_scope_selector_list, validate_supports_selector_condition_argument,
+        canonicalize_cssom_style_rule_selector_text, html_auto_directionality_invalidation_root,
+        normalize_scope_end_selector_list, normalize_scope_selector_list,
+        validate_supports_selector_condition_argument,
     };
     use crate::dom::native::{DomHost, NativeDom};
     use crate::stylo::{
@@ -1525,6 +1530,46 @@ mod tests {
     }
 
     #[test]
+    fn dir_auto_mutation_root_stops_at_contained_text_boundaries() {
+        let url = url::Url::parse("https://example.test/").unwrap();
+        let mut host = DomHost::from_dom(NativeDom::new_html(url));
+        host.reset_html_document_shell();
+        let body = host.document_body_handle().unwrap();
+
+        let auto = host.create_element("div");
+        let transparent = host.create_element("span");
+        let explicit = host.create_element("section");
+        let explicit_child = host.create_element("span");
+        let bdi = host.create_element("bdi");
+        let script = host.create_element("script");
+        assert!(host.set_attribute(auto, "dir", "auto"));
+        assert!(host.set_attribute(explicit, "dir", "rtl"));
+        assert!(host.append_child(body, auto));
+        assert!(host.append_child(auto, transparent));
+        assert!(host.append_child(auto, explicit));
+        assert!(host.append_child(explicit, explicit_child));
+        assert!(host.append_child(auto, bdi));
+        assert!(host.append_child(auto, script));
+
+        assert_eq!(
+            html_auto_directionality_invalidation_root(&host, transparent),
+            Some(auto)
+        );
+        assert_eq!(
+            html_auto_directionality_invalidation_root(&host, explicit_child),
+            None
+        );
+        assert_eq!(
+            html_auto_directionality_invalidation_root(&host, bdi),
+            Some(bdi)
+        );
+        assert_eq!(
+            html_auto_directionality_invalidation_root(&host, script),
+            None
+        );
+    }
+
+    #[test]
     fn dom_api_selectors_dir_on_input_uses_html_directionality_rules() {
         let url = url::Url::parse("https://example.test/").unwrap();
         let mut host = DomHost::from_dom(NativeDom::new_html(url));
@@ -1571,6 +1616,17 @@ mod tests {
         assert!(host.set_attribute(auto, "type", "hidden"));
         assert!(!engine.matches_host(&host, auto, ":dir(ltr)").unwrap());
         assert!(engine.matches_host(&host, auto, ":dir(rtl)").unwrap());
+
+        let textarea = host.create_element("textarea");
+        assert!(host.set_attribute(textarea, "dir", "auto"));
+        assert!(host.set_input_value(textarea, "\u{05ea}"));
+        assert!(host.append_child(body, textarea));
+        assert!(!engine.matches_host(&host, textarea, ":dir(ltr)").unwrap());
+        assert!(engine.matches_host(&host, textarea, ":dir(rtl)").unwrap());
+
+        assert!(host.set_input_value(textarea, "A"));
+        assert!(engine.matches_host(&host, textarea, ":dir(ltr)").unwrap());
+        assert!(!engine.matches_host(&host, textarea, ":dir(rtl)").unwrap());
     }
 
     #[test]

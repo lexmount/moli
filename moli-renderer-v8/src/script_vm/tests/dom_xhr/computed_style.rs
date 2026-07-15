@@ -10156,6 +10156,82 @@ fn computed_direction_tracks_input_html_directionality() {
 }
 
 #[test]
+fn computed_direction_tracks_textarea_auto_value() {
+    let mut vm = new_storage_test_vm("https://textarea-auto-direction.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  if (!document.documentElement) {
+    document.appendChild(document.createElement('html'));
+  }
+  if (!document.body) {
+    document.documentElement.appendChild(document.createElement('body'));
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.dir = 'auto';
+  document.body.appendChild(textarea);
+  const empty = `${textarea.matches(':dir(ltr)')}:${getComputedStyle(textarea).direction}`;
+  textarea.value = '\u05ea';
+  const rtl = `${textarea.matches(':dir(rtl)')}:${getComputedStyle(textarea).direction}`;
+  textarea.value = 'A';
+  const ltr = `${textarea.matches(':dir(ltr)')}:${getComputedStyle(textarea).direction}`;
+
+  return `${empty}|${rtl}|${ltr}`;
+})()
+"#,
+        )
+        .expect("textarea dir=auto value direction should evaluate");
+
+    assert_eq!(result, "true:ltr|true:rtl|true:ltr");
+}
+
+#[test]
+fn computed_direction_tracks_dir_auto_tree_mutations() {
+    let mut vm = new_storage_test_vm("https://dir-auto-tree-mutation.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  if (!document.documentElement) {
+    document.appendChild(document.createElement('html'));
+  }
+  if (!document.head) {
+    document.documentElement.appendChild(document.createElement('head'));
+  }
+  if (!document.body) {
+    document.documentElement.appendChild(document.createElement('body'));
+  }
+  document.head.appendChild(document.createElement('style')).textContent =
+    '#source:dir(rtl) + #target { display: none; }';
+
+  const source = document.createElement('div');
+  source.id = 'source';
+  source.dir = 'auto';
+  const target = document.createElement('div');
+  target.id = 'target';
+  document.body.append(source, target);
+
+  const before = `${getComputedStyle(source).direction}:${getComputedStyle(target).display}`;
+  const text = document.createTextNode('\u0627\u062e\u062a\u0628\u0631');
+  source.appendChild(text);
+  const afterAppend = `${getComputedStyle(source).direction}:${getComputedStyle(target).display}`;
+  text.data = 'A';
+  const afterText = `${getComputedStyle(source).direction}:${getComputedStyle(target).display}`;
+
+  return `${before}|${afterAppend}|${afterText}`;
+})()
+"#,
+        )
+        .expect("dir=auto tree mutation direction should evaluate");
+
+    assert_eq!(result, "ltr:block|rtl:none|ltr:block");
+}
+
+#[test]
 fn has_pseudo_class_computed_style_updates_after_dom_mutation() {
     let mut vm = new_storage_test_vm("https://has-pseudo-computed-style.test/");
 
