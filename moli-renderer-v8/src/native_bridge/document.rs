@@ -137,7 +137,8 @@ pub(in crate::native_bridge) use css_state::{
 };
 pub(crate) use css_state::{
     apply_stylesheet_owner_css_projections, apply_stylesheet_source_css_projection,
-    clear_adopted_stylesheet_font_face_wrappers, sync_document_fonts_for_handle,
+    clear_adopted_stylesheet_font_face_wrappers, load_font_faces_used_by_subtrees,
+    sync_document_fonts_for_handle,
 };
 use css_state::{detached_document_fonts_getter, document_fonts_getter_function};
 pub(crate) use css_state::{

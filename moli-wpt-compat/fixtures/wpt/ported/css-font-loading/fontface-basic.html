@@ -34,7 +34,7 @@ test(function () {
   assert_equals(face.variant, "small-caps");
   assert_equals(face.featureSettings, '"liga" off');
   assert_equals(face.display, "swap");
-  assert_equals(face.status, "loaded");
+  assert_equals(face.status, "unloaded");
   assert_true(face.loaded instanceof Promise);
   assert_true(face.load() instanceof Promise);
 }, "FontFace exposes constructor metadata and descriptors");
@@ -69,9 +69,10 @@ test(function () {
 
 promise_test(async function () {
   const face = new FontFace("PromiseFace", "url(promise.woff)");
+  const loaded = face.loaded;
 
-  assert_equals(await face.loaded, face);
   assert_equals(await face.load(), face);
+  assert_equals(await loaded, face);
 }, "FontFace loaded and load promises resolve with the face");
 
 promise_test(async function () {
