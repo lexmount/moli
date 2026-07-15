@@ -5920,6 +5920,7 @@ html/semantics/forms/the-select-element/common-HTMLOptionsCollection-namedItem.h
 html/semantics/forms/the-select-element/common-HTMLOptionsCollection.html
 html/semantics/forms/the-select-element/customizable-select/option-color-inheritance.html
 html/semantics/forms/the-select-element/customizable-select/option-disabled-invalid-nesting.html
+html/semantics/forms/the-select-element/customizable-select/option-disabled-optgroup.html
 html/semantics/forms/the-select-element/customizable-select/option-form-ancestor-select.html
 html/semantics/forms/the-select-element/customizable-select/option-list.html
 html/semantics/forms/the-select-element/customizable-select/select-options-id.html

@@ -124,7 +124,7 @@ pub(crate) fn form_control_is_effectively_disabled(
     {
         return true;
     }
-    if option_is_disabled_by_optgroup(runtime, handle) {
+    if runtime.dom_host().option_is_disabled(handle) {
         return true;
     }
 
@@ -158,33 +158,6 @@ fn disabled_attribute_applies_to_control(
                 element.local_name(),
                 "button" | "input" | "select" | "textarea" | "option" | "optgroup" | "fieldset"
             ))
-}
-
-fn option_is_disabled_by_optgroup(runtime: &JsContextHost, handle: DomHandle) -> bool {
-    if !runtime
-        .dom_host()
-        .node(handle)
-        .and_then(Node::as_element)
-        .is_some_and(|element| element.is_html_element("option"))
-    {
-        return false;
-    }
-
-    let mut current = runtime.dom_host().parent_node(handle);
-    while let Some(parent) = current {
-        let Some(parent_element) = runtime.dom_host().node(parent).and_then(Node::as_element)
-        else {
-            current = runtime.dom_host().parent_node(parent);
-            continue;
-        };
-        match parent_element.local_name() {
-            "optgroup" => return parent_element.has_attribute("disabled"),
-            "select" | "hr" | "datalist" | "option" => return false,
-            _ => {}
-        }
-        current = runtime.dom_host().parent_node(parent);
-    }
-    false
 }
 
 fn control_is_in_first_legend(

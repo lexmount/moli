@@ -1,7 +1,10 @@
 use super::storage::{form_data_entries, form_data_is_object, push_form_data_entry};
 use super::*;
 use crate::custom_elements::is_form_associated_custom_element_handle;
-use crate::dom::{forms::InputType, native::Node};
+use crate::dom::{
+    forms::{InputType, OptionDisabledAncestorStep, option_disabled_ancestor_step},
+    native::Node,
+};
 use crate::native_bridge::{
     element::{
         element_attribute_for_object, element_internals_form_value_for_target,
@@ -504,18 +507,21 @@ fn control_has_datalist_ancestor<'s>(
 }
 
 fn option_is_disabled(scope: &mut v8::PinScope<'_, '_>, option: v8::Local<'_, v8::Object>) -> bool {
-    let mut current = Some(option);
+    if object_bool_property(scope, option, "disabled").unwrap_or(false) {
+        return true;
+    }
+
+    let mut current = object_property_as_object(scope, option, "parentElement");
     while let Some(element) = current {
-        let tag = object_string_property_defined(scope, element, "tagName")
-            .map(|tag| tag.to_ascii_lowercase())
-            .unwrap_or_default();
-        if matches!(tag.as_str(), "option" | "optgroup")
-            && object_bool_property(scope, element, "disabled").unwrap_or(false)
-        {
-            return true;
-        }
-        if tag == "select" {
-            return false;
+        let namespace =
+            object_string_property_defined(scope, element, "namespaceURI").unwrap_or_default();
+        let local_name =
+            object_string_property_defined(scope, element, "localName").unwrap_or_default();
+        let has_disabled_attribute =
+            object_bool_property(scope, element, "disabled").unwrap_or(false);
+        match option_disabled_ancestor_step(&namespace, &local_name, has_disabled_attribute) {
+            OptionDisabledAncestorStep::Continue => {}
+            OptionDisabledAncestorStep::Disabled(disabled) => return disabled,
         }
         current = object_property_as_object(scope, element, "parentElement");
     }

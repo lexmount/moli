@@ -1559,11 +1559,13 @@ mod tests {
         assert!(host.append_child(datalist, datalist_option));
 
         let optgroup = host.create_element("optgroup");
+        let optgroup_div = host.create_element("div");
         let optgroup_option = host.create_element("option");
         let nested_optgroup = host.create_element("optgroup");
         let nested_optgroup_option = host.create_element("option");
         assert!(host.append_child(child_select, optgroup));
-        assert!(host.append_child(optgroup, optgroup_option));
+        assert!(host.append_child(optgroup, optgroup_div));
+        assert!(host.append_child(optgroup_div, optgroup_option));
         assert!(host.append_child(optgroup, nested_optgroup));
         assert!(host.append_child(nested_optgroup, nested_optgroup_option));
 
@@ -1585,6 +1587,18 @@ mod tests {
             nested_optgroup_option,
         ] {
             assert_eq!(host.option_nearest_ancestor_select(option), None);
+        }
+
+        assert!(host.set_attribute(optgroup, "disabled", ""));
+        assert!(host.option_is_disabled(optgroup_option));
+        for option in [
+            normal_option,
+            nested_option,
+            hr_option,
+            datalist_option,
+            nested_optgroup_option,
+        ] {
+            assert!(!host.option_is_disabled(option));
         }
     }
 

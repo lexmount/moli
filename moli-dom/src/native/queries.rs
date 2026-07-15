@@ -2,7 +2,8 @@ use super::NativeDom;
 use super::element::Element;
 use super::node::{NativeNodeId, Node};
 use crate::forms::{
-    OptionNearestSelectStep, OptionNearestSelectTraversal, parse_non_negative_integer_prefix,
+    OptionDisabledAncestorStep, OptionNearestSelectStep, OptionNearestSelectTraversal,
+    option_disabled_ancestor_step, parse_non_negative_integer_prefix,
 };
 
 impl NativeDom {
@@ -73,8 +74,33 @@ impl NativeDom {
             return None;
         }
 
-        let mut traversal = OptionNearestSelectTraversal::default();
-        let mut current = self.parent_node(option_id);
+        self.nearest_ancestor_select(option_id, OptionNearestSelectTraversal::default())
+    }
+
+    pub fn optgroup_nearest_ancestor_select(
+        &self,
+        optgroup_id: NativeNodeId,
+    ) -> Option<NativeNodeId> {
+        if !self
+            .node(optgroup_id)
+            .and_then(Node::as_element)
+            .is_some_and(|element| element.is_html_element("optgroup"))
+        {
+            return None;
+        }
+
+        self.nearest_ancestor_select(
+            optgroup_id,
+            OptionNearestSelectTraversal::starting_at_optgroup(),
+        )
+    }
+
+    fn nearest_ancestor_select(
+        &self,
+        element_id: NativeNodeId,
+        mut traversal: OptionNearestSelectTraversal,
+    ) -> Option<NativeNodeId> {
+        let mut current = self.parent_node(element_id);
         while let Some(parent) = current {
             let Some(element) = self.node(parent).and_then(Node::as_element) else {
                 current = self.parent_node(parent);
@@ -88,6 +114,36 @@ impl NativeDom {
             current = self.parent_node(parent);
         }
         None
+    }
+
+    pub fn option_is_disabled(&self, option_id: NativeNodeId) -> bool {
+        let Some(option) = self.node(option_id).and_then(Node::as_element) else {
+            return false;
+        };
+        if !option.is_html_option() {
+            return false;
+        }
+        if option.has_attribute("disabled") {
+            return true;
+        }
+
+        let mut current = self.parent_node(option_id);
+        while let Some(parent) = current {
+            let Some(element) = self.node(parent).and_then(Node::as_element) else {
+                current = self.parent_node(parent);
+                continue;
+            };
+            match option_disabled_ancestor_step(
+                element.namespace(),
+                element.local_name(),
+                element.has_attribute("disabled"),
+            ) {
+                OptionDisabledAncestorStep::Continue => {}
+                OptionDisabledAncestorStep::Disabled(disabled) => return disabled,
+            }
+            current = self.parent_node(parent);
+        }
+        false
     }
 
     pub fn select_selected_option_elements(&self, select_id: NativeNodeId) -> Vec<NativeNodeId> {
@@ -207,26 +263,6 @@ impl NativeDom {
             stack.extend(self.child_ids_reversed(handle));
         }
         out
-    }
-
-    fn option_is_disabled(&self, option_id: NativeNodeId) -> bool {
-        let mut current = Some(option_id);
-        while let Some(candidate) = current {
-            let Some(element) = self.node(candidate).and_then(Node::as_element) else {
-                current = self.parent_node(candidate);
-                continue;
-            };
-            if matches!(element.local_name(), "option" | "optgroup")
-                && element.has_attribute("disabled")
-            {
-                return true;
-            }
-            if element.is_html_select() {
-                return false;
-            }
-            current = self.parent_node(candidate);
-        }
-        false
     }
 }
 
