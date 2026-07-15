@@ -1311,6 +1311,153 @@ mod tests {
     }
 
     #[test]
+    fn parser_form_owner_resets_when_the_control_moves_without_its_owner() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+        host.reset_html_document_shell();
+        let body = host.document_body_handle().expect("document body");
+        let first_form = host.create_element("form");
+        let parser_form = host.create_element("form");
+        let input = host.create_parser_element_without_attributes(
+            "input".to_owned(),
+            "http://www.w3.org/1999/xhtml".to_owned(),
+            None,
+        );
+
+        assert!(host.append_child(body, first_form));
+        assert!(host.append_child(body, parser_form));
+        assert!(host.associate_parser_form_owner(input, parser_form));
+        assert!(host.append_child(parser_form, input));
+        assert_eq!(host.form_control_owner(input), Some(parser_form));
+
+        assert!(host.append_child(first_form, input));
+        assert_eq!(host.form_control_owner(input), Some(first_form));
+        assert_eq!(
+            host.node(input)
+                .and_then(Node::as_element)
+                .and_then(Element::parser_associated_form_owner),
+            None
+        );
+    }
+
+    #[test]
+    fn parser_form_owner_survives_only_while_control_and_owner_move_together() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+        host.reset_html_document_shell();
+        let body = host.document_body_handle().expect("document body");
+        let destination = host.create_element("div");
+        let subtree = host.create_element("section");
+        let parser_form = host.create_element("form");
+        let control_container = host.create_element("div");
+        let input = host.create_parser_element_without_attributes(
+            "input".to_owned(),
+            "http://www.w3.org/1999/xhtml".to_owned(),
+            None,
+        );
+
+        assert!(host.append_child(body, destination));
+        assert!(host.append_child(body, subtree));
+        assert!(host.append_child(subtree, parser_form));
+        assert!(host.append_child(subtree, control_container));
+        assert!(host.associate_parser_form_owner(input, parser_form));
+        assert!(host.append_child(control_container, input));
+        assert_eq!(host.form_control_owner(input), Some(parser_form));
+
+        assert!(host.remove_child(body, subtree));
+        assert_eq!(host.form_control_owner(input), Some(parser_form));
+        assert!(host.append_child(destination, subtree));
+        assert_eq!(host.form_control_owner(input), Some(parser_form));
+
+        assert!(host.append_child(destination, input));
+        assert_eq!(host.form_control_owner(input), None);
+    }
+
+    #[test]
+    fn moving_parser_form_without_its_control_resets_the_external_control() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+        host.reset_html_document_shell();
+        let body = host.document_body_handle().expect("document body");
+        let destination = host.create_element("div");
+        let parser_form = host.create_element("form");
+        let input = host.create_parser_element_without_attributes(
+            "input".to_owned(),
+            "http://www.w3.org/1999/xhtml".to_owned(),
+            None,
+        );
+
+        assert!(host.append_child(body, destination));
+        assert!(host.append_child(body, parser_form));
+        assert!(host.associate_parser_form_owner(input, parser_form));
+        assert!(host.append_child(body, input));
+        assert_eq!(host.form_control_owner(input), Some(parser_form));
+
+        assert!(host.append_child(destination, parser_form));
+        assert_eq!(host.form_control_owner(input), None);
+        assert_eq!(
+            host.node(input)
+                .and_then(Node::as_element)
+                .and_then(Element::parser_associated_form_owner),
+            None
+        );
+    }
+
+    #[test]
+    fn disconnected_form_attribute_uses_only_a_nearest_ancestor_form() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+        host.reset_html_document_shell();
+        let body = host.document_body_handle().expect("document body");
+        let form = host.create_element("form");
+        let outside = host.create_element("div");
+        let outside_input = host.create_element("input");
+        let nested_input = host.create_element("input");
+
+        assert!(host.set_attribute(form, "id", "owner"));
+        assert!(host.set_attribute(outside_input, "form", "owner"));
+        assert!(host.set_attribute(nested_input, "form", "missing"));
+        assert!(host.append_child(body, form));
+        assert!(host.append_child(body, outside));
+        assert!(host.append_child(outside, outside_input));
+        assert!(host.append_child(form, nested_input));
+        assert_eq!(host.form_control_owner(outside_input), Some(form));
+
+        assert!(host.remove_child(body, outside));
+        assert!(!host.is_connected_to_document(outside_input));
+        assert_eq!(host.form_control_owner(outside_input), None);
+        assert!(host.remove_child(body, form));
+        assert!(!host.is_connected_to_document(nested_input));
+        assert_eq!(host.form_control_owner(nested_input), Some(form));
+    }
+
+    #[test]
+    fn secondary_document_form_attribute_remains_authoritative() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+        let document = host.create_detached_html_document();
+        let mut create_element = |local_name: &str| {
+            host.create_parser_element_without_attributes_for_document(
+                document,
+                local_name.to_owned(),
+                "http://www.w3.org/1999/xhtml".to_owned(),
+                None,
+            )
+        };
+        let root = create_element("html");
+        let form = create_element("form");
+        let external_input = create_element("input");
+        let nested_input = create_element("input");
+
+        assert!(host.set_attribute(form, "id", "owner"));
+        assert!(host.set_attribute(external_input, "form", "owner"));
+        assert!(host.set_attribute(nested_input, "form", ""));
+        assert!(host.append_child(document, root));
+        assert!(host.append_child(root, form));
+        assert!(host.append_child(root, external_input));
+        assert!(host.append_child(form, nested_input));
+
+        assert!(host.is_connected_to_document(external_input));
+        assert_eq!(host.form_control_owner(external_input), Some(form));
+        assert_eq!(host.form_control_owner(nested_input), None);
+    }
+
+    #[test]
     fn native_dom_select_queries_use_effective_selectedness() {
         let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
         let document = host.document_node_id();
