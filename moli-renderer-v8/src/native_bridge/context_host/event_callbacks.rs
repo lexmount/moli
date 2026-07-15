@@ -220,14 +220,14 @@ impl JsContextHost {
         handler: Option<v8::Local<'s, v8::Function>>,
         target_context: v8::Local<'s, v8::Context>,
     ) {
-        self.set_registered_event_handler_property_with_contexts(
-            scope,
-            target,
-            event_type,
-            handler,
-            target_context,
-            target_context,
-        );
+        let callback_id = handler.map(|handler| {
+            self.register_event_callback(scope, handler.into(), target_context, target_context)
+        });
+        if let Some(previous) =
+            self.set_compiled_event_handler_property(target, event_type, callback_id)
+        {
+            self.release_event_callback(previous);
+        }
     }
 
     fn set_registered_event_handler_property_with_contexts<'s>(
