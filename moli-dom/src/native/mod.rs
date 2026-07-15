@@ -1603,6 +1603,50 @@ mod tests {
     }
 
     #[test]
+    fn selectedcontent_owner_rejects_recursive_clone_boundaries() {
+        let url = url::Url::parse("https://selectedcontent-owner.test/").unwrap();
+        let mut host = DomHost::from_dom(NativeDom::new_html(url));
+        host.reset_html_document_shell();
+        let body = host.document_body_handle().unwrap();
+
+        let select = host.create_element("select");
+        let button = host.create_element("button");
+        let selectedcontent = host.create_element("selectedcontent");
+        assert!(host.append_child(body, select));
+        assert!(host.append_child(select, button));
+        assert!(host.append_child(button, selectedcontent));
+        assert_eq!(
+            host.selectedcontent_nearest_ancestor_select(selectedcontent),
+            Some(select)
+        );
+
+        let option = host.create_element("option");
+        let option_selectedcontent = host.create_element("selectedcontent");
+        assert!(host.append_child(select, option));
+        assert!(host.append_child(option, option_selectedcontent));
+
+        let nested_selectedcontent = host.create_element("selectedcontent");
+        assert!(host.append_child(selectedcontent, nested_selectedcontent));
+
+        let nested_select = host.create_element("select");
+        let nested_select_selectedcontent = host.create_element("selectedcontent");
+        assert!(host.append_child(select, nested_select));
+        assert!(host.append_child(nested_select, nested_select_selectedcontent));
+
+        for rejected in [
+            option_selectedcontent,
+            nested_selectedcontent,
+            nested_select_selectedcontent,
+        ] {
+            assert_eq!(host.selectedcontent_nearest_ancestor_select(rejected), None);
+        }
+        assert_eq!(
+            host.select_selectedcontent_elements(select),
+            vec![selectedcontent]
+        );
+    }
+
+    #[test]
     fn selected_option_insertion_deselects_single_select_peers_without_dirtying_them() {
         let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
         let document = host.document_node_id();

@@ -313,6 +313,12 @@ impl ParserDomMutationConsumer for DocumentWriteParserMutationOwner<'_, '_, '_> 
             .finish_parsing_link_children(node_id);
     }
 
+    fn maybe_clone_an_option_into_selectedcontent(&mut self, node_id: DomHandle) {
+        let _ = self
+            .runtime
+            .sync_selectedcontents_after_parser_option_finished(self.scope, self.host_ptr, node_id);
+    }
+
     fn attach_declarative_shadow_for_parser(
         &mut self,
         host_id: DomHandle,
