@@ -19,6 +19,8 @@ mod resources;
 mod tree_order;
 
 pub(in crate::document_runtime) use adoption::TreeAdoptionPlan;
+pub(super) use insertion_plan::{TreeInsertionPlan, TreeInsertionPostConnectionStep};
 pub(in crate::document_runtime) use parser_post_step::ParserPostStepRuntimeWork;
 #[cfg(test)]
 pub(crate) use parser_post_step::ParserPostStepRuntimeWorkForTest;
+pub(super) use policy::TreeReactionDispatchPolicy;
