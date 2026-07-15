@@ -1843,6 +1843,7 @@ pub(crate) struct RuntimeMutationApplyResult {
     stylesheet_owner_changes: Vec<crate::dom::native::DomStylesheetOwnerChange>,
     inline_style_attribute_csp_mutations: Vec<InlineStyleAttributeCspMutation>,
     connected_style_csp_roots: Vec<DomHandle>,
+    font_face_use_roots: Vec<DomHandle>,
 }
 
 #[derive(Clone, Debug)]
@@ -1879,6 +1880,7 @@ pub(super) fn finish_runtime_mutation_effects(
         stylesheet_owner_changes,
         inline_style_attribute_csp_mutations,
         connected_style_csp_roots,
+        font_face_use_roots,
     } = result;
 
     runtime.queue_devtools_dom_mutations(devtools_dom_mutations);
@@ -1990,6 +1992,11 @@ pub(super) fn finish_runtime_mutation_effects(
             unsafe { &*host_ptr },
             &stylesheet_owner_changes,
         );
+        crate::native_bridge::document::load_font_faces_used_by_subtrees(
+            scope,
+            unsafe { &*host_ptr },
+            &font_face_use_roots,
+        );
         let completed_clients = prime_result.take_completed_stylesheet_clients();
         runtime.settle_stylesheet_link_clients_in_current_scope(scope, host_ptr, completed_clients);
         runtime
@@ -2092,6 +2099,15 @@ pub(super) fn prepare_runtime_mutation_effects(
     };
     let devtools_dom_mutations =
         super::devtools_mutations::capture_devtools_dom_mutation_facts(dom_host, effects);
+    let mut font_face_use_roots = effects.tree().connected_roots().to_vec();
+    for mutation in effects.style().attribute_mutations() {
+        if mutation.namespace().is_none()
+            && mutation.local_name().eq_ignore_ascii_case("style")
+            && !font_face_use_roots.contains(&mutation.target())
+        {
+            font_face_use_roots.push(mutation.target());
+        }
+    }
     RuntimeMutationApplyResult {
         changed: effects.did_change(),
         meta_refresh_candidates,
@@ -2102,6 +2118,7 @@ pub(super) fn prepare_runtime_mutation_effects(
         stylesheet_owner_changes,
         inline_style_attribute_csp_mutations,
         connected_style_csp_roots,
+        font_face_use_roots,
     }
 }
 
