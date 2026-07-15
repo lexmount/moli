@@ -4,8 +4,6 @@ pub(in crate::context_bootstrap) const WINDOW_CONSOLE_SLOT: &str = "__moliWindow
 pub(in crate::context_bootstrap) const WINDOW_ORIGINAL_CONSOLE_SLOT: &str =
     "__moliWindowOriginalConsole";
 pub(in crate::context_bootstrap) const WINDOW_ONERROR_SLOT: &str = "__moliWindowOnError";
-pub(in crate::context_bootstrap) const WINDOW_BODY_ONERROR_COMPILED_SLOT: &str =
-    "__moliWindowBodyOnErrorCompiled";
 pub(in crate::context_bootstrap) const WINDOW_ONUNHANDLEDREJECTION_SLOT: &str =
     "__moliWindowOnUnhandledRejection";
 pub(in crate::context_bootstrap) const WINDOW_ONREJECTIONHANDLED_SLOT: &str =

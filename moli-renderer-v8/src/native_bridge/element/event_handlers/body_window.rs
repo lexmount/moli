@@ -36,17 +36,23 @@ pub(in crate::native_bridge) fn body_onmessageerror_getter_function<'s>(
         return;
     }
 
-    let Some(handler) = compile_body_onmessageerror_attribute(scope, runtime, handle) else {
+    if element_attribute(runtime, handle, ONMESSAGEERROR_ATTRIBUTE).is_none() {
         rv.set_null();
         return;
-    };
-    runtime.set_registered_event_handler_property(
+    }
+    let handler = compile_body_onmessageerror_attribute(scope, runtime, handle);
+    let target_context = scope.get_current_context();
+    runtime.set_registered_content_attribute_event_handler_property(
         scope,
         EventTargetHandle::Window,
         MESSAGEERROR_EVENT_TYPE,
-        Some(handler),
+        handler,
+        target_context,
     );
-    rv.set(handler.into());
+    match handler {
+        Some(handler) => rv.set(handler.into()),
+        None => rv.set(v8::null(scope).into()),
+    }
 }
 
 pub(in crate::native_bridge) fn body_onmessageerror_setter_function<'s>(
