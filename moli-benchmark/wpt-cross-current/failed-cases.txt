@@ -2901,8 +2901,6 @@ html/browsers/windows/nested-browsing-contexts/window-top-null.html
 html/browsers/windows/noreferrer-window-name.html
 html/cross-origin-embedder-policy/coep-on-response-from-service-worker.https.html
 html/cross-origin-embedder-policy/service-worker-cache-storage.https.html
-html/dom/aria-element-reflection-disconnected.html
-html/dom/aria-element-reflection.html
 html/dom/documents/dom-tree-accessors/nameditem-01.html
 html/dom/documents/dom-tree-accessors/nameditem-02.html
 html/dom/documents/dom-tree-accessors/nameditem-04.html

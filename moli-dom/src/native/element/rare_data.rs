@@ -118,6 +118,16 @@ impl ElementRareData {
             .get_or_insert_with(ElementControlState::default)
     }
 
+    pub(super) fn clear_explicit_aria_element_references(&mut self, attribute: &str) {
+        if let Some(control_state) = self
+            .payload
+            .as_deref_mut()
+            .and_then(|payload| payload.control_state.as_mut())
+        {
+            control_state.clear_explicit_aria_element_references(attribute);
+        }
+    }
+
     pub(super) fn custom_element_state(&self) -> CustomElementState {
         self.payload
             .as_deref()

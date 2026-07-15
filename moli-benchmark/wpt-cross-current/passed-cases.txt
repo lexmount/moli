@@ -5334,6 +5334,8 @@ html/cross-origin-embedder-policy/no-secure-context.html
 html/cross-origin-opener-policy/no-https.html
 html/dom/access-key-label.html
 html/dom/aria-attribute-reflection.html
+html/dom/aria-element-reflection-disconnected.html
+html/dom/aria-element-reflection.html
 html/dom/documents/dom-tree-accessors/Document.body.html
 html/dom/documents/dom-tree-accessors/Document.getElementsByClassName-null-undef.html
 html/dom/documents/dom-tree-accessors/Element.getElementsByClassName-null-undef.html

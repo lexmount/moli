@@ -3,6 +3,33 @@ use std::sync::Arc;
 use super::*;
 
 impl DomHost {
+    pub fn explicit_aria_element_references(
+        &self,
+        handle: DomHandle,
+        attribute: &str,
+    ) -> Option<Vec<DomHandle>> {
+        self.node(handle)?
+            .as_element()?
+            .explicit_aria_element_references(attribute)
+            .map(<[DomHandle]>::to_vec)
+    }
+
+    pub fn set_explicit_aria_element_references(
+        &mut self,
+        handle: DomHandle,
+        attribute: &str,
+        references: Vec<DomHandle>,
+    ) -> bool {
+        let Some(element) = self
+            .node_mut(handle)
+            .and_then(|node| node.data_mut().as_element_mut())
+        else {
+            return false;
+        };
+        element.set_explicit_aria_element_references(attribute, references);
+        true
+    }
+
     pub fn get_attribute(&self, handle: DomHandle, name: &str) -> Option<String> {
         self.dom.get_attribute(handle, name)
     }
