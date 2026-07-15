@@ -555,6 +555,12 @@ impl DomHost {
             .is_some_and(|node| node.flags().connected())
     }
 
+    /// Returns whether the node's shadow-including root is a `Document`.
+    ///
+    /// This is the DOM Standard's connectedness test. It intentionally also
+    /// counts nodes in secondary documents, whose internal lifecycle
+    /// `connected` flag is false because they are not part of the host
+    /// document tree.
     pub fn is_connected_to_document(&self, handle: DomHandle) -> bool {
         let Some(mut root) = self.root_node_handle(handle) else {
             return false;
