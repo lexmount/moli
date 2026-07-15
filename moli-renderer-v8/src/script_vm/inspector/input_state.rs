@@ -150,28 +150,5 @@ pub(in crate::script_vm) fn current_selection_state(
 }
 
 pub(in crate::script_vm) fn option_is_disabled(runtime: &JsContextHost, handle: DomHandle) -> bool {
-    if runtime
-        .dom_host()
-        .node(handle)
-        .and_then(Node::as_element)
-        .is_some_and(|element| element.has_attribute("disabled"))
-    {
-        return true;
-    }
-
-    let mut current = runtime.dom_host().parent_node(handle);
-    while let Some(parent) = current {
-        let Some(parent_element) = runtime.dom_host().node(parent).and_then(Node::as_element)
-        else {
-            current = runtime.dom_host().parent_node(parent);
-            continue;
-        };
-        match parent_element.local_name() {
-            "optgroup" => return parent_element.has_attribute("disabled"),
-            "select" | "hr" | "datalist" | "option" => return false,
-            _ => {}
-        }
-        current = runtime.dom_host().parent_node(parent);
-    }
-    false
+    runtime.dom_host().option_is_disabled(handle)
 }
