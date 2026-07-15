@@ -1359,3 +1359,110 @@ document.body.setAttribute("data-range", [
             );
         }));
 }
+
+    #[test]
+    fn parser_option_finish_and_select_value_sync_selectedcontent_clones() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let mut page_vm = parse_phase_one_html_into_page_vm_for_test(
+                r#"<!doctype html><html><body>
+<select id="select">
+  <button><selectedcontent id="selectedcontent">default</selectedcontent></button>
+  <div><option id="one"><span id="source-span">one</span></option></div>
+  <div><option id="two"><strong>two</strong></option></div>
+</select>
+<script>
+const select = document.getElementById('select');
+const selectedcontent = document.getElementById('selectedcontent');
+const sourceSpan = document.querySelector('#one > span');
+window.selectedcontentState = [
+  selectedcontent.textContent.trim(),
+  selectedcontent.firstElementChild !== sourceSpan,
+];
+select.value = 'two';
+window.selectedcontentState.push(
+  selectedcontent.textContent.trim(),
+  selectedcontent.firstElementChild.tagName,
+);
+</script>
+</body></html>"#,
+            )
+            .await;
+
+            let result = page_vm
+                .evaluate_expression("JSON.stringify(window.selectedcontentState)")
+                .expect("selectedcontent parser state should evaluate");
+            assert_eq!(
+                result.get("value").and_then(serde_json::Value::as_str),
+                Some(r#"["one",true,"two","STRONG"]"#),
+                "parser option completion and select.value must synchronously clone the selected option children"
+            );
+        }));
+    }
+
+    #[test]
+    fn parser_eof_option_finish_syncs_selectedcontent_clones() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let mut text_page_vm = parse_finished_phase_one_html_into_page_vm_for_test(
+                r#"<select><button><selectedcontent></button><option>X"#,
+            )
+            .await;
+            let text_result = text_page_vm
+                .evaluate_expression(
+                    r#"
+(() => {
+  const selectedcontent = document.querySelector('selectedcontent');
+  const source = document.querySelector('option');
+  return [
+    selectedcontent.textContent,
+    selectedcontent.firstChild !== source.firstChild
+  ].join('|');
+})()
+"#,
+                )
+                .expect("EOF-closed text option selectedcontent state should evaluate");
+            assert_eq!(
+                text_result.get("value").and_then(serde_json::Value::as_str),
+                Some("X|true"),
+                "EOF-closing an option must clone its text into selectedcontent"
+            );
+
+            let mut nested_page_vm = parse_finished_phase_one_html_into_page_vm_for_test(
+                r#"<select><button><selectedcontent></button><option>x<i>i<b>ib</i>b"#,
+            )
+            .await;
+            let nested_result = nested_page_vm
+                .evaluate_expression(
+                    r#"
+(() => {
+  const selectedcontent = document.querySelector('selectedcontent');
+  const source = document.querySelector('option');
+  return [
+    selectedcontent.textContent,
+    selectedcontent.innerHTML === source.innerHTML,
+    selectedcontent.firstChild !== source.firstChild,
+    selectedcontent.querySelector('i') !== source.querySelector('i'),
+    selectedcontent.querySelectorAll('b').length
+  ].join('|');
+})()
+"#,
+                )
+                .expect("EOF-closed nested option selectedcontent state should evaluate");
+            assert_eq!(
+                nested_result
+                    .get("value")
+                    .and_then(serde_json::Value::as_str),
+                Some("xiibb|true|true|true|2"),
+                "EOF-closing an option must deep-clone its parsed children into selectedcontent"
+            );
+        }));
+    }
