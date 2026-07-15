@@ -107,7 +107,10 @@ fn trusted_type_policy_callbacks_follow_webidl_dictionary_and_callback_rules() {
       errorName(() => trustedTypes.createPolicy("throwing-getter", {
         get createHTML() { throw new RangeError("getter"); }
       })),
-      errorName(() => nullPolicy.createHTML())
+      errorName(() => nullPolicy.createHTML()),
+      errorName(() => emptyFromOmission.createHTML("html")),
+      errorName(() => emptyFromOmission.createScript("script")),
+      errorName(() => emptyFromOmission.createScriptURL("script-url"))
     ]
   });
 })()
@@ -117,7 +120,79 @@ fn trusted_type_policy_callbacks_follow_webidl_dictionary_and_callback_rules() {
 
     assert_eq!(
         result,
-        r#"{"emptyMethods":[["undefined","undefined","undefined"],["undefined","undefined","undefined"]],"nullResults":["","",""],"observed":[true,"converted",2,true,42],"variadicResults":["abc","abundefined","a123null"],"errors":["TypeError","TypeError","RangeError","TypeError"]}"#
+        r#"{"emptyMethods":[["function","function","function"],["function","function","function"]],"nullResults":["","",""],"observed":[true,"converted",2,true,42],"variadicResults":["abc","abundefined","a123null"],"errors":["TypeError","TypeError","RangeError","TypeError","TypeError","TypeError","TypeError"]}"#
+    );
+}
+
+#[test]
+fn trusted_type_factory_interface_exposes_stable_branded_empty_values() {
+    let mut vm = new_storage_test_vm("https://trusted-type-factory-empty-values.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const errorName = callback => {
+    try {
+      callback();
+      return "none";
+    } catch (error) {
+      return error.constructor.name;
+    }
+  };
+  const assign = (name, value) => {
+    "use strict";
+    trustedTypes[name] = value;
+  };
+  const prototype = TrustedTypePolicyFactory.prototype;
+  const describeAccessor = name => {
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
+    return [
+      typeof descriptor.get,
+      descriptor.set === undefined,
+      descriptor.enumerable,
+      descriptor.configurable,
+      Object.hasOwn(trustedTypes, name)
+    ];
+  };
+  const emptyHTML = trustedTypes.emptyHTML;
+  const emptyScript = trustedTypes.emptyScript;
+  const errors = [
+    errorName(() => new TrustedTypePolicyFactory()),
+    errorName(() => assign("emptyHTML", "fake")),
+    errorName(() => assign("emptyScript", "fake")),
+    errorName(() => Object.getOwnPropertyDescriptor(prototype, "emptyHTML").get.call({}))
+  ];
+  return JSON.stringify({
+    factory: [
+      TrustedTypePolicyFactory.name,
+      TrustedTypePolicyFactory.length,
+      trustedTypes instanceof TrustedTypePolicyFactory,
+      Object.getPrototypeOf(trustedTypes) === prototype,
+      Object.hasOwn(prototype, "createPolicy"),
+      Object.hasOwn(trustedTypes, "createPolicy")
+    ],
+    accessors: [describeAccessor("emptyHTML"), describeAccessor("emptyScript")],
+    html: [
+      trustedTypes.isHTML(emptyHTML),
+      String(emptyHTML),
+      emptyHTML === trustedTypes.emptyHTML
+    ],
+    script: [
+      trustedTypes.isScript(emptyScript),
+      String(emptyScript),
+      emptyScript === trustedTypes.emptyScript
+    ],
+    errors
+  });
+})()
+"#,
+        )
+        .expect("TrustedTypePolicyFactory empty value probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"factory":["TrustedTypePolicyFactory",0,true,true,true,false],"accessors":[["function",true,true,true,false],["function",true,true,true,false]],"html":[true,"",true],"script":[true,"",true],"errors":["TypeError","TypeError","TypeError","TypeError"]}"#
     );
 }
 

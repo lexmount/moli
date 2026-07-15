@@ -61,6 +61,25 @@ pub(super) fn install_lazy_trusted_types_runtime_state<'s>(
         return Ok(());
     }
     install_trusted_script_code_like_constructor(scope, global)?;
+    let policy_factory_constructor = TrustedTypePolicyFactoryInterfaceDeclaration::build(scope)
+        .get_function(scope)
+        .ok_or_else(|| anyhow!("failed to build TrustedTypePolicyFactory interface"))?;
+    global
+        .define_own_property(
+            scope,
+            v8str(scope, "TrustedTypePolicyFactory").into(),
+            policy_factory_constructor.into(),
+            v8::PropertyAttribute::DONT_ENUM,
+        )
+        .unwrap_or(false)
+        .then_some(())
+        .ok_or_else(|| anyhow!("failed to publish TrustedTypePolicyFactory interface"))?;
+    set_private_value(
+        scope,
+        global,
+        TRUSTED_TYPE_POLICY_FACTORY_CONSTRUCTOR_SLOT,
+        policy_factory_constructor.into(),
+    );
     for (property, name) in TrustedTypesGlobalProperty::ALL {
         let data = v8::Integer::new_from_unsigned(scope, property.callback_data());
         global
@@ -148,15 +167,11 @@ fn build_and_cache_trusted_types_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     global: v8::Local<'s, v8::Object>,
 ) -> Result<()> {
-    let factory = TrustedTypesFactoryDeclaration::default()
-        .bind(scope)
-        .map_err(|error| anyhow!("failed to bind TrustedTypePolicyFactory: {error}"))?;
     let constructors = TRUSTED_TYPE_KINDS
         .into_iter()
         .map(|kind| build_trusted_type_constructor(scope, kind))
         .collect::<Result<Vec<_>>>()?;
 
-    set_private_value(scope, global, TRUSTED_TYPES_FACTORY_SLOT, factory.into());
     for binding in constructors {
         set_private_value(
             scope,
@@ -171,6 +186,17 @@ fn build_and_cache_trusted_types_state<'s>(
             binding.prototype.into(),
         );
     }
+    let empty_html = build_trusted_type_object(scope, TrustedTypeKind::Html, String::new())
+        .ok_or_else(|| anyhow!("failed to create trustedTypes.emptyHTML"))?;
+    let empty_script = build_trusted_type_object(scope, TrustedTypeKind::Script, String::new())
+        .ok_or_else(|| anyhow!("failed to create trustedTypes.emptyScript"))?;
+    let factory = TrustedTypesFactoryObjectDeclaration {
+        empty_html,
+        empty_script,
+    }
+    .bind(scope)
+    .map_err(|error| anyhow!("failed to bind TrustedTypePolicyFactory object: {error}"))?;
+    set_private_value(scope, global, TRUSTED_TYPES_FACTORY_SLOT, factory.into());
     Ok(())
 }
 
@@ -179,10 +205,15 @@ fn cached_public_value<'s>(
     property: TrustedTypesGlobalProperty,
 ) -> Result<v8::Local<'s, v8::Value>> {
     let global = scope.get_current_context().global(scope);
-    let slot = property.trusted_type_kind().map_or(
-        TRUSTED_TYPES_FACTORY_SLOT,
-        TrustedTypeKind::constructor_slot,
-    );
+    let slot = match property {
+        TrustedTypesGlobalProperty::Html
+        | TrustedTypesGlobalProperty::Script
+        | TrustedTypesGlobalProperty::ScriptUrl => property
+            .trusted_type_kind()
+            .expect("trusted type constructor property must have a kind")
+            .constructor_slot(),
+        TrustedTypesGlobalProperty::Factory => TRUSTED_TYPES_FACTORY_SLOT,
+    };
     get_private_value(scope, global, slot)
         .ok_or_else(|| anyhow!("materialized Trusted Types value is missing"))
 }
