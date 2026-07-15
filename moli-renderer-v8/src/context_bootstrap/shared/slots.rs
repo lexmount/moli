@@ -134,8 +134,12 @@ pub(in crate::context_bootstrap) const PERFORMANCE_OBSERVER_ACTIVE_SLOT: &str =
     "__moliPerformanceObserverActive";
 pub(in crate::context_bootstrap) const PERFORMANCE_OBSERVER_SCHEDULED_SLOT: &str =
     "__moliPerformanceObserverScheduled";
+pub(in crate::context_bootstrap) const PERFORMANCE_OBSERVER_REGISTRY_SLOT: &str =
+    "__moliPerformanceObserverRegistry";
 pub(in crate::context_bootstrap) const PERFORMANCE_OBSERVER_QUEUE_SLOT: &str =
     "__moliPerformanceObserverQueue";
+pub(in crate::context_bootstrap) const PERFORMANCE_OBSERVER_SUPPORTED_ENTRY_TYPES_SLOT: &str =
+    "__moliPerformanceObserverSupportedEntryTypes";
 pub(in crate::context_bootstrap) const PERFORMANCE_ENTRY_LIST_ENTRIES_SLOT: &str =
     "__moliPerformanceEntryListEntries";
 pub(in crate::context_bootstrap) const PERFORMANCE_ENTRIES_SLOT: &str = "__moliPerformanceEntries";

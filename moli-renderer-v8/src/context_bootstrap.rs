@@ -309,7 +309,6 @@ pub(crate) use self::media_queries::{
     simple_object_event_set_ordered_handler, simple_object_event_target_add_listener,
     simple_object_event_target_remove_listener,
 };
-use self::message_ports::schedule_host_callback;
 pub(crate) use self::message_ports::{
     MessagePortDeliveryRunResult, MessagePortEventListenerId, MessagePortEventListenerSnapshot,
     MessagePortRealmBinding, PreparedMessagePortEventListener,
@@ -319,6 +318,7 @@ pub(crate) use self::message_ports::{
     dispatch_one_authorized_message_port_event, ensure_message_port_wrapper_for_id,
     ensure_message_port_wrapper_for_id_in_realm, message_port_id_from_object,
 };
+use self::message_ports::{schedule_host_callback, schedule_scope_callback};
 pub(crate) use self::microtask_checkpoint::{
     install_agent_microtask_checkpoint_tasks, run_end_of_microtask_checkpoint_tasks,
 };
@@ -786,6 +786,17 @@ struct WorkerAbortControllerTemplateDeclaration {
 
 #[derive(Default, WebApiObject)]
 #[webapi(fragment, prototype = "WorkerGlobalScope", enumerable)]
+struct WorkerGlobalScopePerformancePrototypeDeclaration {
+    #[webapi(
+        accessor_property,
+        getter = worker_performance_getter_callback,
+        setter = worker_performance_setter_callback
+    )]
+    performance: (),
+}
+
+#[derive(Default, WebApiObject)]
+#[webapi(fragment, prototype = "WorkerGlobalScope", enumerable)]
 struct WorkerGlobalScopeCryptoPrototypeDeclaration {
     #[webapi(accessor_property, getter = worker_crypto_getter_callback)]
     crypto: (),
@@ -797,6 +808,75 @@ pub(crate) fn initialize_worker_fetch_realm_state<'s>(
 ) -> Result<()> {
     crate::network_host::initialize_fetch_realm_helpers(scope)?;
     Ok(())
+}
+
+pub(crate) fn initialize_worker_performance_realm_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    global: v8::Local<'s, v8::Object>,
+) -> Result<()> {
+    self::performance_runtime::install_worker_performance_runtime_state(scope, global)?;
+    install_worker_performance_global_attribute(scope, global)
+}
+
+fn install_worker_performance_global_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    global: v8::Local<'s, v8::Object>,
+) -> Result<()> {
+    let performance = get_own_static_property(scope, global, WINDOW_PERFORMANCE_SLOT)
+        .filter(|value| !value.is_undefined())
+        .ok_or_else(|| anyhow!("worker performance runtime state did not install performance"))?;
+    let Some(prototype) = global_constructor_prototype(scope, "WorkerGlobalScope") else {
+        return define_global_value(scope, global, "performance", performance);
+    };
+    WorkerGlobalScopePerformancePrototypeDeclaration::default()
+        .initialize(scope, prototype)
+        .map_err(|error| anyhow!("failed to initialize WorkerGlobalScope performance: {error}"))
+}
+
+fn worker_performance_getter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_current_worker_global_receiver(scope, args.this()) {
+        return;
+    }
+    let global = scope.get_current_context().global(scope);
+    match get_own_static_property(scope, global, WINDOW_PERFORMANCE_SLOT)
+        .filter(|value| !value.is_undefined())
+    {
+        Some(value) => rv.set(value),
+        None => rv.set_undefined(),
+    }
+}
+
+fn worker_performance_setter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let receiver = args.this();
+    if !require_current_worker_global_receiver(scope, receiver) {
+        return;
+    }
+    let _ = receiver.define_own_property(
+        scope,
+        v8str(scope, "performance").into(),
+        args.get(0),
+        v8::PropertyAttribute::NONE,
+    );
+}
+
+fn require_current_worker_global_receiver(
+    scope: &mut v8::PinScope<'_, '_>,
+    receiver: v8::Local<'_, v8::Object>,
+) -> bool {
+    let global = scope.get_current_context().global(scope);
+    if receiver.strict_equals(global.into()) {
+        return true;
+    }
+    throw_type_error(scope, "Illegal invocation");
+    false
 }
 
 pub(crate) fn initialize_worker_crypto_realm_state<'s>(
@@ -838,11 +918,10 @@ fn worker_crypto_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let global = scope.get_current_context().global(scope);
-    if !args.this().strict_equals(global.into()) {
-        throw_type_error(scope, "Illegal invocation");
+    if !require_current_worker_global_receiver(scope, args.this()) {
         return;
     }
+    let global = scope.get_current_context().global(scope);
     match self::crypto::ensure_worker_crypto_for_global(scope, global) {
         Ok(crypto) => rv.set(crypto.into()),
         Err(error) => throw_error(

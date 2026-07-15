@@ -256,9 +256,10 @@ async fn worker_storage_surfaces_materialize_in_independent_stages() {
     );
     let diagnostics = lazy_diagnostics(&handle).await;
     assert_eq!(diagnostics.storage_constructor_materializations, 0);
-    assert!(
-        diagnostics.materialized_interfaces.is_empty(),
-        "blank worker bootstrap must not materialize Navigator or Crypto constructors"
+    assert_eq!(
+        diagnostics.materialized_interfaces,
+        vec![("Performance", 1), ("EventTarget", 1)],
+        "only constructors required by the eagerly exposed performance object may materialize during worker bootstrap"
     );
     assert!(!diagnostics.storage_manager_materialized);
     assert!(!diagnostics.storage_bucket_manager_materialized);

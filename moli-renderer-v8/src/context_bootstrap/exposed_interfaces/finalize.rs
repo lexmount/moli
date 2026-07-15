@@ -3,6 +3,7 @@ use anyhow::Result;
 use super::materialize::{
     ensure_intrinsic_interface_constructor, ensure_intrinsic_interface_prototype,
 };
+use super::metadata::RealmKind;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RealmDependentFinalizer {
@@ -13,6 +14,7 @@ enum RealmDependentFinalizer {
     XmlHttpRequestEventTargetState,
     NotificationPermission,
     PointerEventSecureContextSurface,
+    PerformanceWindowAccessors,
     PerformanceObserverSupportedEntryTypes,
 }
 
@@ -57,6 +59,10 @@ const REALM_DEPENDENT_FINALIZER_ALLOWLIST: &[(&str, RealmDependentFinalizer)] = 
         RealmDependentFinalizer::PointerEventSecureContextSurface,
     ),
     (
+        "Performance",
+        RealmDependentFinalizer::PerformanceWindowAccessors,
+    ),
+    (
         "PerformanceObserver",
         RealmDependentFinalizer::PerformanceObserverSupportedEntryTypes,
     ),
@@ -77,6 +83,7 @@ fn realm_dependent_finalizer(interface_name: &str) -> Option<RealmDependentFinal
 pub(super) fn finalize_materialized_interface(
     scope: &mut v8::PinScope<'_, '_>,
     interface_name: &str,
+    realm_kind: RealmKind,
 ) -> Result<()> {
     let prototype = ensure_intrinsic_interface_prototype(scope, interface_name)?;
 
@@ -113,11 +120,24 @@ pub(super) fn finalize_materialized_interface(
                 scope, prototype,
             )?;
         }
+        RealmDependentFinalizer::PerformanceWindowAccessors => {
+            if realm_kind == RealmKind::Window {
+                crate::context_bootstrap::performance_runtime::finalize_window_performance_realm_bindings(
+                    scope, prototype,
+                )?;
+            }
+        }
         RealmDependentFinalizer::PerformanceObserverSupportedEntryTypes => {
             let constructor = ensure_intrinsic_interface_constructor(scope, "PerformanceObserver")?;
+            let supported_entry_types = if realm_kind == RealmKind::Window {
+                crate::context_bootstrap::performance_runtime::WINDOW_PERFORMANCE_OBSERVER_SUPPORTED_ENTRY_TYPES
+            } else {
+                crate::context_bootstrap::performance_runtime::WORKER_PERFORMANCE_OBSERVER_SUPPORTED_ENTRY_TYPES
+            };
             crate::context_bootstrap::performance_runtime::finalize_performance_observer_realm_bindings(
                 scope,
                 constructor.into(),
+                supported_entry_types,
             );
         }
     }
@@ -161,6 +181,7 @@ mod tests {
                 "XMLHttpRequestEventTarget",
                 "Notification",
                 "PointerEvent",
+                "Performance",
                 "PerformanceObserver",
             ]
         );
