@@ -86,8 +86,8 @@ pub use invalidation::{
     stylo_stylesheet_source_scope_fallback_roots,
 };
 pub use presentation::is_svg_presentation_attribute_name;
-pub(crate) use query::html_directionality;
 use query::{QueryDocument, QueryElement, QueryNode};
+pub(crate) use query::{html_auto_directionality_invalidation_root, html_directionality};
 #[cfg(test)]
 pub(crate) use selector_parse::validate_supports_selector_list;
 pub(crate) use selector_parse::{
