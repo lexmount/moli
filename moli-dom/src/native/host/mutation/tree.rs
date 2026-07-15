@@ -520,7 +520,11 @@ impl DomHost {
                     .node(option)
                     .and_then(Node::as_element)
                     .is_some_and(Element::selected);
-                (option, self.owner_select_for_option(option), selected)
+                (
+                    option,
+                    self.option_nearest_ancestor_select(option),
+                    selected,
+                )
             })
             .collect()
     }
@@ -530,7 +534,7 @@ impl DomHost {
         snapshots: &[(DomHandle, Option<DomHandle>, bool)],
     ) {
         for &(option, previous_select, was_selected) in snapshots {
-            let Some(select) = self.owner_select_for_option(option) else {
+            let Some(select) = self.option_nearest_ancestor_select(option) else {
                 continue;
             };
             if previous_select == Some(select)
