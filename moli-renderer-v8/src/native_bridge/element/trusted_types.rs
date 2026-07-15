@@ -5,6 +5,8 @@ use crate::document_runtime::DomHandle;
 pub(in crate::native_bridge) enum TrustedAttributeSetter {
     SetAttribute,
     SetAttributeNs,
+    SetAttributeNode,
+    AttrValue,
 }
 
 impl TrustedAttributeSetter {
@@ -12,6 +14,8 @@ impl TrustedAttributeSetter {
         match self {
             Self::SetAttribute => "setAttribute",
             Self::SetAttributeNs => "setAttributeNS",
+            Self::SetAttributeNode => "setAttributeNode",
+            Self::AttrValue => "value",
         }
     }
 
@@ -19,6 +23,10 @@ impl TrustedAttributeSetter {
         match self {
             Self::SetAttribute => crate::webidl::Context::argument("Element setAttribute", 2),
             Self::SetAttributeNs => crate::webidl::Context::argument("Element setAttributeNS", 3),
+            Self::SetAttributeNode => {
+                crate::webidl::Context::argument("Element setAttributeNode", 1)
+            }
+            Self::AttrValue => crate::webidl::Context::member("Attr", "value"),
         }
     }
 }
@@ -247,6 +255,25 @@ pub(in crate::native_bridge) fn trusted_attribute_value_string<'s>(
             None
         }
     }
+}
+
+pub(in crate::native_bridge) fn trusted_attribute_string_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_and_handle: Option<(*mut JsContextHost, DomHandle)>,
+    attribute_namespace: Option<&str>,
+    local_name: &str,
+    value: &str,
+    setter: TrustedAttributeSetter,
+) -> Option<String> {
+    let value = crate::util::v8_string(scope, value)?;
+    trusted_attribute_value_string(
+        scope,
+        runtime_and_handle,
+        attribute_namespace,
+        local_name,
+        value.into(),
+        setter,
+    )
 }
 
 pub(crate) fn trusted_script_source_for_execution(
