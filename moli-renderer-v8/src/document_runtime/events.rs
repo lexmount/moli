@@ -1,5 +1,4 @@
 use super::*;
-use crate::dom::native::Node;
 use crate::host::HostTimerOwner;
 use crate::host::PublicEventDispatchResult;
 use crate::script_provenance::CompiledStringProvenance;
@@ -364,6 +363,18 @@ impl DocumentRuntime {
         event_type: &str,
         registration: crate::host::EventListenerRegistration,
     ) {
+        if !self
+            .events
+            .has_event_handler_property_entry(target, event_type)
+        {
+            let content_attribute_present =
+                crate::host::event_handler_content_attribute_present(self, target, event_type);
+            self.events.ensure_event_handler_content_attribute(
+                target,
+                event_type,
+                content_attribute_present,
+            );
+        }
         self.events
             .insert_listener(target, event_type, registration);
     }
@@ -396,38 +407,50 @@ impl DocumentRuntime {
             .set_event_handler_property(target, event_type, callback_id)
     }
 
-    pub(crate) fn clear_event_handler_property(
+    pub(crate) fn set_compiled_event_handler_property(
         &mut self,
         target: EventTargetHandle,
         event_type: &str,
+        callback_id: Option<crate::native_bridge::EventCallbackId>,
     ) -> Option<crate::native_bridge::EventCallbackId> {
-        self.events.clear_event_handler_property(target, event_type)
+        self.events
+            .set_compiled_event_handler_property(target, event_type, callback_id)
     }
 
-    pub(crate) fn sync_body_window_messageerror_content_attribute(
+    pub(crate) fn set_event_handler_content_attribute(
+        &mut self,
+        target: EventTargetHandle,
+        event_type: &str,
+        present: bool,
+    ) -> Option<crate::native_bridge::EventCallbackId> {
+        self.events
+            .set_event_handler_content_attribute(target, event_type, present)
+    }
+
+    pub(crate) fn sync_event_handler_content_attribute(
         &mut self,
         handle: DomHandle,
         name: &str,
         namespace: Option<&str>,
         present: bool,
     ) -> Option<crate::native_bridge::EventCallbackId> {
-        if namespace.is_some() || !name.eq_ignore_ascii_case("onmessageerror") {
+        if namespace.is_some() {
             return None;
         }
-        let document_handle = self.document_handle();
-        let dom = self.dom_host().dom();
-        let body_handle = dom
-            .node(document_handle)
-            .and_then(Node::as_document)
-            .and_then(|document| document.body_or_frameset_handle(dom, document_handle));
-        if body_handle != Some(handle) {
-            return None;
-        }
-        if present {
-            self.clear_event_handler_property(EventTargetHandle::Window, "messageerror")
+        let normalized_name = name.to_ascii_lowercase();
+        let event_type = normalized_name
+            .strip_prefix("on")
+            .filter(|event_type| !event_type.is_empty())?;
+        let reflects_to_window = matches!(event_type, "load" | "error" | "messageerror")
+            && self.dom_host().node(handle).is_some_and(|node| {
+                node.is_html_element_named("body") || node.is_html_element_named("frameset")
+            });
+        let target = if reflects_to_window {
+            EventTargetHandle::Window
         } else {
-            self.set_event_handler_property(EventTargetHandle::Window, "messageerror", None)
-        }
+            EventTargetHandle::Node(handle)
+        };
+        self.set_event_handler_content_attribute(target, event_type, present)
     }
 
     pub(crate) fn event_handler_property_callback_id(
