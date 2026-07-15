@@ -22,22 +22,22 @@ struct AttributeNamespaceNameArgs {
 
 #[derive(crate::webidl::WebIdlArgs)]
 #[webidl(prefix = "Element setAttribute")]
-struct SetAttributeArgs {
+struct SetAttributeArgs<'s> {
     #[webidl(required)]
     name: String,
-    #[webidl(required)]
-    value: String,
+    #[webidl(required, converter = "raw")]
+    value: v8::Local<'s, v8::Value>,
 }
 
 #[derive(crate::webidl::WebIdlArgs)]
 #[webidl(prefix = "Element setAttributeNS")]
-struct SetAttributeNsArgs {
+struct SetAttributeNsArgs<'s> {
     #[webidl(required, nullable)]
     namespace: Option<String>,
     #[webidl(required)]
     qualified_name: String,
-    #[webidl(required)]
-    value: String,
+    #[webidl(required, converter = "raw")]
+    value: v8::Local<'s, v8::Value>,
 }
 
 #[derive(crate::webidl::WebIdlArgs)]
