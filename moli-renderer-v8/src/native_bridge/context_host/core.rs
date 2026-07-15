@@ -483,6 +483,7 @@ impl PageScriptHost {
             intersection_observer_tasks: None,
             file_entry_file_callbacks:
                 super::file_entry_file_callbacks::FileEntryFileCallbackState::default(),
+            pending_selectedcontent_updates: HashSet::new(),
             user_interaction_tasks:
                 super::user_interaction_tasks::UserInteractionTaskState::default(),
             pending_image_load_events: HashMap::new(),
@@ -1712,6 +1713,14 @@ impl PageScriptHost {
         {
             self.pending_text_control_change_commit = None;
         }
+    }
+
+    pub(crate) fn mark_pending_selectedcontent_update(&mut self, select: DomHandle) -> bool {
+        self.pending_selectedcontent_updates.insert(select)
+    }
+
+    pub(crate) fn take_pending_selectedcontent_update(&mut self, select: DomHandle) -> bool {
+        self.pending_selectedcontent_updates.remove(&select)
     }
 
     pub(crate) fn pending_image_load_event(
