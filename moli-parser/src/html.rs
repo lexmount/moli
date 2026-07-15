@@ -2061,6 +2061,78 @@ mod tests {
         );
     }
     #[test]
+    fn customizable_select_preserves_option_wrapper_elements() {
+        let document = parse_test_document(concat!(
+            "<!doctype html>",
+            "<select>",
+            "<option>one</option>",
+            "<div id='wrapper'><option>two</option>",
+            "<div id='nested'><option>three</option></div></div>",
+            "</select>"
+        ));
+        let select = first_element_by_ns(&document, HTML_NS, "select");
+        let divs = document.elements_by_tag_name_ns(
+            document.document_node_id(),
+            Some(HTML_NS),
+            "div",
+            true,
+        );
+        let wrapper = divs
+            .iter()
+            .copied()
+            .find(|handle| document.get_attribute(*handle, "id").as_deref() == Some("wrapper"))
+            .expect("select wrapper div");
+        let nested = divs
+            .iter()
+            .copied()
+            .find(|handle| document.get_attribute(*handle, "id").as_deref() == Some("nested"))
+            .expect("nested select wrapper div");
+
+        assert_eq!(
+            document
+                .node(wrapper)
+                .and_then(|node| node.parent_node_id()),
+            Some(select)
+        );
+        assert_eq!(
+            document.node(nested).and_then(|node| node.parent_node_id()),
+            Some(wrapper)
+        );
+        assert_eq!(document.select_option_elements(select).len(), 3);
+
+        let fragment = HtmlParser::SCRIPTING_ENABLED
+            .parse_fragment_without_declarative_shadow_roots(
+                Url::parse("https://example.test/").expect("test url"),
+                HTML_NS,
+                "select",
+                "<div id='fragment-wrapper'><option>value</option></div>".to_owned(),
+            );
+        let fragment_wrapper = first_element_by_ns(&fragment, HTML_NS, "div");
+        let fragment_option = first_element_by_ns(&fragment, HTML_NS, "option");
+        assert_eq!(
+            fragment
+                .node(fragment_option)
+                .and_then(|node| node.parent_node_id()),
+            Some(fragment_wrapper),
+            "select innerHTML parsing should preserve option wrapper elements"
+        );
+    }
+
+    #[test]
+    fn decoded_parser_continues_after_meta_encoding_indicator() {
+        let document = parse_test_document(concat!(
+            "<!doctype html><meta charset='windows-1252'>",
+            "<div id='after-meta'></div>"
+        ));
+        let div = first_element_by_ns(&document, HTML_NS, "div");
+
+        assert_eq!(
+            document.get_attribute(div, "id").as_deref(),
+            Some("after-meta")
+        );
+    }
+
+    #[test]
     fn parser_input_session_keeps_nested_pending_buffers_on_a_stack() {
         let queue = ParserInputQueue::default();
         let session = queue.session();
