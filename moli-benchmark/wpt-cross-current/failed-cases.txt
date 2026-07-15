@@ -3096,7 +3096,6 @@ html/semantics/forms/the-input-element/range-2.html
 html/semantics/forms/the-input-element/range.html
 html/semantics/forms/the-input-element/show-picker-cross-origin-iframe.html
 html/semantics/forms/the-select-element/customizable-select/base-appearance-inheritance.html
-html/semantics/forms/the-select-element/customizable-select/option-disabled-optgroup.html
 html/semantics/forms/the-select-element/customizable-select/picker-icon-animation.html
 html/semantics/forms/the-select-element/customizable-select/select-base-appearance-computed-style.html
 html/semantics/forms/the-select-element/customizable-select/select-value-selectedOption.html
