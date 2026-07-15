@@ -192,9 +192,9 @@ use child_documents::{ChildDocumentParserStore, PendingChildDocumentNavigation};
 use child_events::ChildWindowEventListenerEntry;
 use child_frame_runtime::ChildWindowProxyRecords;
 pub(crate) use child_frame_runtime::{
-    caller_can_access_window, contexts_can_script_access, cross_origin_lightweight_popup_id,
-    is_cross_origin_location_proxy, is_cross_origin_top_window_proxy,
-    throw_cross_origin_location_security_error, throw_cross_origin_type_error,
+    cross_origin_lightweight_popup_id, is_cross_origin_location_proxy,
+    is_cross_origin_top_window_proxy, throw_cross_origin_location_security_error,
+    throw_cross_origin_type_error,
 };
 #[cfg(feature = "devtools")]
 pub(crate) use child_frame_snapshots::DetachedChildBrowsingContextDocumentSnapshot;
@@ -969,6 +969,7 @@ pub(crate) struct PageScriptHost {
     file_reading_tasks: file_reading_tasks::FileReadingState,
     misc_platform_api_tasks: misc_platform_api_tasks::MiscPlatformApiTaskState,
     file_entry_file_callbacks: file_entry_file_callbacks::FileEntryFileCallbackState,
+    pending_selectedcontent_updates: HashSet<DomHandle>,
     user_interaction_tasks: user_interaction_tasks::UserInteractionTaskState,
     pending_image_load_events: HashMap<DomHandle, PendingImageLoadEvent>,
     next_image_load_event_id: u64,
