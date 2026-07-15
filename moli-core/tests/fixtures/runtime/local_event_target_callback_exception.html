@@ -27,6 +27,7 @@
     throw new Error("font handler boom");
   };
   try {
+    document.fonts.add(new FontFace("Roboto", "url(roboto.woff2)"));
     document.fonts.load("italic bold 16px Roboto");
     body.setAttribute("data-font-continued", "true");
   } catch (error) {

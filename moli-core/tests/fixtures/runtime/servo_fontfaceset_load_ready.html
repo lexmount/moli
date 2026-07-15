@@ -14,6 +14,7 @@
         const ready1 = document.fonts.ready;
         body.setAttribute('data-ready-stable', String(ready1 === document.fonts.ready));
 
+        document.fonts.add(new FontFace('FixtureFace', 'url(fixture.woff2)'));
         const loadPromise = document.fonts.load('10px FixtureFace');
         const ready2 = document.fonts.ready;
         body.setAttribute('data-ready-replaced', String(ready1 !== ready2));
