@@ -264,7 +264,7 @@ pub(crate) fn trusted_script_url_string_or_throw<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
     requirements: TrustedTypesForScriptRequirements,
-    sink: &'static str,
+    sink: &str,
     api_name: &'static str,
 ) -> Option<String> {
     trusted_type_string_or_throw(
@@ -282,7 +282,7 @@ pub(crate) fn trusted_html_string_or_throw<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
     requirements: TrustedTypesForScriptRequirements,
-    sink: &'static str,
+    sink: &str,
     api_name: &'static str,
 ) -> Option<String> {
     trusted_type_string_or_throw(
@@ -307,7 +307,7 @@ pub(crate) fn trusted_script_string_or_type_error<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
     requirements: TrustedTypesForScriptRequirements,
-    sink: &'static str,
+    sink: &str,
     api_name: &'static str,
 ) -> Option<String> {
     trusted_type_string_or_throw(
@@ -324,7 +324,7 @@ pub(crate) fn trusted_script_string_or_type_error<'s>(
 pub(crate) fn trusted_script_string_for_script_element_execution(
     scope: &mut v8::PinScope<'_, '_>,
     original: &str,
-    sink: &'static str,
+    sink: &str,
 ) -> Option<String> {
     let default_value = {
         let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
@@ -572,7 +572,7 @@ fn trusted_type_string_or_throw<'s>(
     value: v8::Local<'s, v8::Value>,
     kind: TrustedTypeKind,
     requirements: TrustedTypesForScriptRequirements,
-    sink: &'static str,
+    sink: &str,
     api_name: &'static str,
     error_kind: TrustedTypeErrorKind,
 ) -> Option<String> {
@@ -607,7 +607,7 @@ fn apply_default_trusted_type_policy<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     input: &str,
     kind: TrustedTypeKind,
-    sink: &'static str,
+    sink: &str,
     error_kind: TrustedTypeErrorKind,
 ) -> Option<String> {
     match apply_default_trusted_type_policy_outcome(scope, input, kind, sink) {
@@ -625,7 +625,7 @@ fn apply_default_trusted_type_policy_outcome<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     input: &str,
     kind: TrustedTypeKind,
-    sink: &'static str,
+    sink: &str,
 ) -> DefaultTrustedTypePolicyOutcome {
     let global = scope.get_current_context().global(scope);
     let Some(policy) = get_private_value(scope, global, TRUSTED_TYPES_DEFAULT_POLICY_SLOT)
@@ -637,7 +637,9 @@ fn apply_default_trusted_type_policy_outcome<'s>(
         return DefaultTrustedTypePolicyOutcome::Exception;
     };
     let type_name = v8str(scope, kind.constructor_name());
-    let sink = v8str(scope, sink);
+    let Some(sink) = v8_string(scope, sink) else {
+        return DefaultTrustedTypePolicyOutcome::Exception;
+    };
     let args = [input.into(), type_name.into(), sink.into()];
     match invoke_policy_callback(scope, policy, kind, &args) {
         TrustedTypePolicyCallbackOutcome::Missing => DefaultTrustedTypePolicyOutcome::Unavailable,
@@ -1240,7 +1242,7 @@ fn throw_trusted_type_error(
     error_kind: TrustedTypeErrorKind,
     api_name: &'static str,
     kind: TrustedTypeKind,
-    sink: &'static str,
+    sink: &str,
 ) {
     let message = format!(
         "Failed to execute '{api_name}': This document requires '{}' assignment for the '{}' sink.",
