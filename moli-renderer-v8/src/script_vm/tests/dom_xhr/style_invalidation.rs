@@ -268,6 +268,42 @@ fn has_pseudo_class_invalidation_updates_derived_form_states() {
 }
 
 #[test]
+fn optgroup_disabled_invalidation_updates_nested_option_computed_style() {
+    let mut vm = new_storage_test_vm("https://nested-option-disabled-style.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const root = document.documentElement || document.appendChild(document.createElement('html'));
+  const head = document.head || root.appendChild(document.createElement('head'));
+  const body = document.body || root.appendChild(document.createElement('body'));
+  const style = document.createElement('style');
+  style.textContent = 'option { color: black; } option:disabled { color: gray; }';
+  head.append(style);
+
+  const select = document.createElement('select');
+  const optgroup = document.createElement('optgroup');
+  const div = document.createElement('div');
+  const option = document.createElement('option');
+  div.append(option);
+  optgroup.append(div);
+  select.append(optgroup);
+  body.append(select);
+
+  const computed = getComputedStyle(option);
+  const before = computed.color;
+  optgroup.disabled = true;
+  return [before, computed.color, option.matches(':disabled')].join('|');
+})()
+"#,
+        )
+        .expect("nested option disabled style should evaluate");
+
+    assert_eq!(result, "rgb(0, 0, 0)|rgb(128, 128, 128)|true");
+}
+
+#[test]
 fn focus_selector_invalidation_preserves_unrelated_cache_entries() {
     let mut vm = new_storage_test_vm("https://focus-style-cache-targeted.test/");
     let document = vm.document_handle_for_test();
