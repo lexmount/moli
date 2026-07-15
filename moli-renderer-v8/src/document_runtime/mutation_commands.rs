@@ -1819,6 +1819,24 @@ impl DocumentRuntime {
         options: RuntimeMutationOptions,
         prepublished_removals: Vec<devtools_mutations::DevToolsDomPrepublishedRemoval>,
     ) -> bool {
+        let result = self.apply_runtime_mutation_effects_before_runtime_followups(
+            scope,
+            host_ptr,
+            effects,
+            options,
+            prepublished_removals,
+        );
+        finish_runtime_mutation_effects(self, scope, host_ptr, result)
+    }
+
+    pub(super) fn apply_runtime_mutation_effects_before_runtime_followups(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        effects: DomMutationEffects,
+        options: RuntimeMutationOptions,
+        prepublished_removals: Vec<devtools_mutations::DevToolsDomPrepublishedRemoval>,
+    ) -> RuntimeMutationApplyResult {
         let mut result = apply_runtime_mutation_effects_to_dom_host(
             &mut self.mutations,
             &self.document,
@@ -1834,7 +1852,7 @@ impl DocumentRuntime {
             &mut result.devtools_dom_mutations,
             prepublished_removals,
         );
-        finish_runtime_mutation_effects(self, scope, host_ptr, result)
+        result
     }
 }
 
@@ -1849,6 +1867,12 @@ pub(super) struct RuntimeMutationApplyResult {
     inline_style_attribute_csp_mutations: Vec<InlineStyleAttributeCspMutation>,
     connected_style_csp_roots: Vec<DomHandle>,
     font_face_use_roots: Vec<DomHandle>,
+}
+
+impl RuntimeMutationApplyResult {
+    pub(super) fn did_change(&self) -> bool {
+        self.changed
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1913,22 +1937,7 @@ pub(super) fn finish_runtime_mutation_effects(
     }
 
     for candidate in runtime_script_start_candidates {
-        let (node, host_script_handle) = candidate.into_parts();
-        let Some(plan) = runtime.host_plan_script_start(node, &host_script_handle) else {
-            continue;
-        };
-        match unsafe { &mut *host_ptr }.commit_current_main_runtime_script_start(runtime, plan) {
-            Ok(Some(committed)) => {
-                execute_committed_inline_classic_script(runtime, scope, host_ptr, committed);
-            }
-            Ok(None) => {}
-            Err(message) => {
-                if let Some(message) = v8::String::new(scope, &message) {
-                    let exception = v8::Exception::error(scope, message);
-                    scope.throw_exception(exception);
-                }
-            }
-        }
+        finish_runtime_script_start_candidate(runtime, scope, host_ptr, candidate);
     }
 
     for popover in removed_open_popovers {
@@ -2009,6 +2018,30 @@ pub(super) fn finish_runtime_mutation_effects(
             .extend(prime_result);
     }
     changed
+}
+
+pub(super) fn finish_runtime_script_start_candidate(
+    runtime: &mut DocumentRuntime,
+    scope: &mut v8::PinScope<'_, '_>,
+    host_ptr: *mut JsContextHost,
+    candidate: crate::mutation_coordinator::RuntimeScriptStartCandidate,
+) {
+    let (node, host_script_handle) = candidate.into_parts();
+    let Some(plan) = runtime.host_plan_script_start(node, &host_script_handle) else {
+        return;
+    };
+    match unsafe { &mut *host_ptr }.commit_current_main_runtime_script_start(runtime, plan) {
+        Ok(Some(committed)) => {
+            execute_committed_inline_classic_script(runtime, scope, host_ptr, committed);
+        }
+        Ok(None) => {}
+        Err(message) => {
+            if let Some(message) = v8::String::new(scope, &message) {
+                let exception = v8::Exception::error(scope, message);
+                scope.throw_exception(exception);
+            }
+        }
+    }
 }
 
 fn execute_committed_inline_classic_script(
