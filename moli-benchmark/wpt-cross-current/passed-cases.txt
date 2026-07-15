@@ -6696,6 +6696,7 @@ html/webappapis/scripting/events/event-handler-processing-algorithm-error/window
 html/webappapis/scripting/events/event-handler-processing-algorithm.html
 html/webappapis/scripting/events/event-handler-sourcetext.html
 html/webappapis/scripting/events/eventhandler-cancellation.html
+html/webappapis/scripting/events/inline-event-handler-ordering.html
 html/webappapis/scripting/events/uncompiled_event_handler_with_scripting_disabled.html
 html/webappapis/scripting/processing-model-2/addEventListener.html
 html/webappapis/scripting/processing-model-2/body-onerror-compile-error-data-url.html

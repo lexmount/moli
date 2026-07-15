@@ -34,7 +34,15 @@ const BODY_ONERROR_RESOLUTION_GUARD_SLOT: &str = "__moliBodyOnerrorResolutionGua
 
 pub(super) fn ensure_window_reflecting_body_onerror_handler(scope: &mut v8::PinScope<'_, '_>) {
     let global = scope.get_current_context().global(scope);
-    if global_hidden_value(scope, WINDOW_ONERROR_SLOT).is_some_and(|handler| handler.is_function())
+    if context_host_ptr_from_global_bridge(scope)
+        .and_then(|host_ptr| {
+            unsafe { &*host_ptr }.registered_event_handler_property_value(
+                scope,
+                EventTargetHandle::Window,
+                "error",
+            )
+        })
+        .is_some_and(|handler| handler.is_function())
     {
         return;
     }

@@ -1545,13 +1545,13 @@ fn stop_propagation_at_target_capture_skips_target_bubble_listeners() {
 
               const handlerTarget = document.createElement("div");
               const handlerCalls = [];
-              handlerTarget.addEventListener("y", () => handlerCalls.push("capture"), { capture: true });
-              handlerTarget.ony = event => {
+              handlerTarget.addEventListener("click", () => handlerCalls.push("capture"), { capture: true });
+              handlerTarget.onclick = event => {
                 handlerCalls.push("handler");
                 event.stopPropagation();
               };
-              handlerTarget.addEventListener("y", () => handlerCalls.push("bubble"));
-              handlerTarget.dispatchEvent(new Event("y", { bubbles: true }));
+              handlerTarget.addEventListener("click", () => handlerCalls.push("bubble"));
+              handlerTarget.dispatchEvent(new Event("click", { bubbles: true }));
 
               return `${nativeCalls.join(",")}|${handlerCalls.join(",")}`;
             })()
@@ -1559,7 +1559,7 @@ fn stop_propagation_at_target_capture_skips_target_bubble_listeners() {
         )
         .expect("target stopPropagation dispatch probe should evaluate");
 
-    assert_eq!(result, "capture:2,capture2:2|handler,capture");
+    assert_eq!(result, "capture:2,capture2:2|capture,handler,bubble");
 }
 #[test]
 fn bubble_stop_propagation_keeps_current_ancestor_listeners() {
@@ -1581,21 +1581,21 @@ fn bubble_stop_propagation_keeps_current_ancestor_listeners() {
               document.body.appendChild(outer);
 
               const stoppedCalls = [];
-              outer.onx = event => {
+              outer.onclick = event => {
                 stoppedCalls.push("handler");
                 event.stopPropagation();
               };
-              outer.addEventListener("x", () => stoppedCalls.push("listener"));
-              document.body.addEventListener("x", () => stoppedCalls.push("body"));
-              inner.dispatchEvent(new Event("x", { bubbles: true }));
+              outer.addEventListener("click", () => stoppedCalls.push("listener"));
+              document.body.addEventListener("click", () => stoppedCalls.push("body"));
+              inner.dispatchEvent(new Event("click", { bubbles: true }));
 
               const immediateCalls = [];
-              outer.ony = event => {
+              outer.ondblclick = event => {
                 immediateCalls.push("handler");
                 event.stopImmediatePropagation();
               };
-              outer.addEventListener("y", () => immediateCalls.push("listener"));
-              inner.dispatchEvent(new Event("y", { bubbles: true }));
+              outer.addEventListener("dblclick", () => immediateCalls.push("listener"));
+              inner.dispatchEvent(new Event("dblclick", { bubbles: true }));
 
               const sameTargetCalls = [];
               inner.addEventListener("z", event => {

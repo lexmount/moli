@@ -3276,7 +3276,6 @@ html/webappapis/scripting/events/event-handler-onresize.html
 html/webappapis/scripting/events/event-handler-processing-algorithm-error/body-element-synthetic-errorevent.html
 html/webappapis/scripting/events/event-handler-processing-algorithm-error/frameset-element-synthetic-errorevent.html
 html/webappapis/scripting/events/event-handler-processing-algorithm-error/worker.html
-html/webappapis/scripting/events/inline-event-handler-ordering.html
 html/webappapis/scripting/processing-model-2/compile-error-cross-origin.html
 html/webappapis/scripting/processing-model-2/integration-with-the-javascript-job-queue/promise-job-detached-iframe.html
 html/webappapis/scripting/processing-model-2/integration-with-the-javascript-job-queue/promise-job-entry-different-function-realm.html

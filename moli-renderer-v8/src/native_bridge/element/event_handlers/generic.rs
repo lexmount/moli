@@ -10,8 +10,6 @@ use super::super::forms::form_associated_form_owner;
 use super::super::{element_attribute, queue_text_track_load_if_needed};
 use super::shared::compile_event_attribute_handler;
 
-const EVENT_HANDLER_SLOT_PREFIX: &str = "__moliEventHandler_";
-
 pub(crate) const GENERIC_EVENT_HANDLER_PROPERTIES: &[&str] = &[
     "onclick",
     "onauxclick",
@@ -104,7 +102,11 @@ pub(crate) const GENERIC_EVENT_HANDLER_PROPERTIES: &[&str] = &[
     "onratechange",
 ];
 
-const DOCUMENT_EVENT_HANDLER_PROPERTIES: &[&str] = &["onpointerlockchange", "onpointerlockerror"];
+const DOCUMENT_EVENT_HANDLER_PROPERTIES: &[&str] = &[
+    "onpointerlockchange",
+    "onpointerlockerror",
+    "onreadystatechange",
+];
 
 #[derive(Clone, Copy)]
 pub(crate) enum GlobalEventHandlerOwner {
@@ -261,10 +263,6 @@ pub(crate) fn node_event_handler_getter_function<'s>(
         rv.set_null();
         return;
     };
-    if !node_is_element(unsafe { &*runtime_ptr }, handle) || !handler_name.starts_with("on") {
-        rv.set_null();
-        return;
-    }
     if let Some(event_type) = event_handler_event_type(&handler_name)
         && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
         && let Some(current) = unsafe { &*host_ptr }.registered_event_handler_property_value(
@@ -276,30 +274,32 @@ pub(crate) fn node_event_handler_getter_function<'s>(
         rv.set(current);
         return;
     }
-    let slot_name = event_handler_slot_name(&handler_name);
-    let Some(slot_key) = v8_string(scope, &slot_name) else {
+    if !node_is_element(unsafe { &*runtime_ptr }, handle) || !handler_name.starts_with("on") {
         rv.set_null();
-        return;
-    };
-    if let Some(current) = object.get(scope, slot_key.into())
-        && !current.is_undefined()
-    {
-        rv.set(current);
         return;
     }
     let Some(source) = element_attribute(unsafe { &*runtime_ptr }, handle, &handler_name) else {
         rv.set(v8::null(scope).into());
         return;
     };
-    if source.is_empty() {
-        rv.set(v8::null(scope).into());
-        return;
-    }
-
     let Some(target_context) = node_event_handler_target_context(scope, runtime_ptr, handle) else {
         rv.set(v8::null(scope).into());
         return;
     };
+    if source.is_empty() {
+        if let Some(event_type) = event_handler_event_type(&handler_name) {
+            unsafe { &mut *runtime_ptr }.set_registered_content_attribute_event_handler_property(
+                scope,
+                EventTargetHandle::Node(handle),
+                event_type,
+                None,
+                target_context,
+            );
+        }
+        rv.set(v8::null(scope).into());
+        return;
+    }
+
     let handler = if target_context == scope.get_current_context() {
         compile_node_event_attribute_handler(
             scope,
@@ -425,19 +425,8 @@ pub(crate) fn node_event_handler_setter_function<'s>(
         rv.set_undefined();
         return;
     };
-    let slot_name = event_handler_slot_name(&handler_name);
-    let Some(slot_key) = v8_string(scope, &slot_name) else {
-        rv.set_undefined();
-        return;
-    };
     let object = args.this();
     let value = args.get(0);
-    let stored = if value.is_function() {
-        value
-    } else {
-        v8::null(scope).into()
-    };
-    let _ = object.set(scope, slot_key.into(), stored);
     let runtime_and_handle = node_runtime_and_handle_from_object_or_detached(scope, object).ok();
     if let Some(event_type) = event_handler_event_type(&handler_name)
         && let Some((_runtime_ptr, handle)) = runtime_and_handle
@@ -472,23 +461,7 @@ fn event_handler_name_from_data<'s>(
         .map(|name| name.to_rust_string_lossy(scope))
 }
 
-fn event_handler_slot_name(name: &str) -> String {
-    format!("{EVENT_HANDLER_SLOT_PREFIX}{name}")
-}
-
 fn event_handler_event_type(name: &str) -> Option<&str> {
     name.strip_prefix("on")
         .filter(|event_type| !event_type.is_empty())
-}
-
-pub(super) fn invalidate_node_event_attribute_handler(
-    runtime: &mut super::super::super::JsContextHost,
-    handle: crate::document_runtime::DomHandle,
-    name: &str,
-) {
-    let normalized_name = name.to_ascii_lowercase();
-    let Some(event_type) = event_handler_event_type(&normalized_name) else {
-        return;
-    };
-    runtime.clear_event_handler_property(EventTargetHandle::Node(handle), event_type);
 }

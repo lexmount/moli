@@ -451,8 +451,6 @@ pub(crate) use self::websocket::{WebSocketDispatchResult, dispatch_websocket_eve
 pub(crate) use self::window_events::{
     WINDOW_EVENT_HANDLER_PROPERTIES, dispatch_window_error_event_with_details,
     dispatch_window_promise_rejection_event, dispatch_window_report_error_message,
-    set_window_body_onerror_handler_compiled, set_window_onerror_handler_value,
-    window_body_onerror_handler_is_compiled,
 };
 #[cfg(test)]
 pub(crate) use self::window_lazy_surface::window_lazy_surface_diagnostics;
