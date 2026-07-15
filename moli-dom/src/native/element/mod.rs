@@ -1227,37 +1227,33 @@ impl Element {
     ) {
         let is_html_input =
             self.namespace() == "http://www.w3.org/1999/xhtml" && self.local_name() == "input";
-        let input_value_attribute =
-            if is_html_input && matches!(attribute_name, "type" | "multiple") {
-                self.attribute("value").map(str::to_owned)
-            } else {
-                None
-            };
+        let input_value_attribute = is_html_input
+            .then(|| self.attribute("value").map(str::to_owned))
+            .flatten();
+        let input_min = is_html_input
+            .then(|| self.attribute("min").map(str::to_owned))
+            .flatten();
+        let input_max = is_html_input
+            .then(|| self.attribute("max").map(str::to_owned))
+            .flatten();
+        let input_step = is_html_input
+            .then(|| self.attribute("step").map(str::to_owned))
+            .flatten();
         let input_type = if is_html_input && attribute_name == "type" {
             InputType::from_attribute_value(attribute_value)
         } else {
             self.input_type()
         };
-        let input_multiple = is_html_input && self.has_attribute("multiple");
-        let range_attribute = |name| {
-            (input_type == InputType::Range)
-                .then(|| self.attribute(name).map(str::to_owned))
-                .flatten()
-        };
-        let input_min = range_attribute("min");
-        let input_max = range_attribute("max");
-        let input_step = range_attribute("step");
-        let input_value = range_attribute("value");
         self.rare_data.sync_control_state_from_attribute(
             self.namespace.as_ref(),
             self.local_name.as_ref(),
             input_type,
             InputValueSanitizationContext {
-                multiple: input_multiple,
+                multiple: is_html_input && self.has_attribute("multiple"),
                 min: input_min.as_deref(),
                 max: input_max.as_deref(),
                 step: input_step.as_deref(),
-                value_attribute: input_value_attribute.as_deref().or(input_value.as_deref()),
+                value_attribute: input_value_attribute.as_deref(),
             },
             attribute_name,
             attribute_value,
