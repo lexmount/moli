@@ -720,7 +720,10 @@ fn auto_direction_for_element(host: &DomHost, root: NodeId) -> Option<CssDirecti
                 let Some(element) = node.as_element() else {
                     continue;
                 };
-                if descendant_is_directionally_isolated_for_auto(element) {
+                if descendant_is_directionally_isolated_for_auto(
+                    element,
+                    specified_directionality(element),
+                ) {
                     continue;
                 }
                 if let Some(direction) = contained_text_auto_directionality(host, handle) {

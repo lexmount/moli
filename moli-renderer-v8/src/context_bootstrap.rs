@@ -497,8 +497,7 @@ pub(crate) use self::performance_runtime::{
     bind_window_document_performance, current_performance_time_origin,
     current_window_performance_time_origin_seed, increment_performance_event_count,
     project_document_lifecycle_timing, project_window_document_lifecycle_timing,
-    record_resource_performance_entry,
-    run_resource_timing_buffer_full_task,
+    record_resource_performance_entry, run_resource_timing_buffer_full_task,
 };
 use self::range_live::{
     update_live_ranges_for_character_data_edit, update_live_ranges_for_character_data_reset,

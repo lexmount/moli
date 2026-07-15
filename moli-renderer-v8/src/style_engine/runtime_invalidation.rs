@@ -1,6 +1,7 @@
 use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
 use dom::ElementState as StyloElementState;
+use indexmap::IndexSet;
 use moli_selector::{
     CssDirection, StyloStyleSourceScope as StyleSourceScope, html_auto_directionality_root,
     html_directionality,
@@ -92,6 +93,15 @@ impl MoliStyleEngine {
             no_cached_style_us += no_cached_style_started
                 .map(|started| started.elapsed().as_micros())
                 .unwrap_or_default();
+            // Directionality can affect inherited styles before the deferred
+            // structural selector work is drained.
+            self.invalidate_mutation_dependent_subtrees(
+                &world,
+                host,
+                document_effects,
+                emulated_media,
+                viewport,
+            );
             if should_defer_structural_mutations(document_effects) {
                 let deferred_started = profile_enabled.then(std::time::Instant::now);
                 world.document_state.note_style_input_change();
@@ -103,7 +113,6 @@ impl MoliStyleEngine {
                     .unwrap_or_default();
                 continue;
             }
-            self.invalidate_mutation_dependent_subtrees(&world, host, document_effects);
             let detached_cleanup_started = profile_enabled.then(std::time::Instant::now);
             self.invalidate_detached_style_subtrees_for_mutations(host, document_effects);
             detached_cleanup_us += detached_cleanup_started
@@ -216,7 +225,6 @@ impl MoliStyleEngine {
             // Exhausted fragments can still contribute detached roots and source
             // ownership. Resolve these against the full history before pruning.
             self.invalidate_detached_style_subtrees_for_mutations(host, &effects);
-            self.invalidate_mutation_dependent_subtrees(world, host, &effects);
             let source_scope = source_scope_for_mutations(host, &effects);
             let merged_count = effects.len();
             retain_live_structural_mutation_effects(host, &mut effects);
@@ -258,39 +266,48 @@ impl MoliStyleEngine {
         world: &DocumentStyleWorld,
         host: &DomHost,
         effects: &[StyleMutationEffect],
+        emulated_media: &EmulatedMediaOverrides,
+        viewport: StyleViewport,
     ) {
-        let mut roots = effects
-            .iter()
-            .filter_map(|effect| match effect {
-                StyleMutationEffect::CharacterData { node } => {
-                    let node = host.node(*node)?;
-                    node.as_text()?;
-                    html_auto_directionality_root(host, node.parent_node()?)
-                }
-                StyleMutationEffect::ChildList { parent, .. } => {
-                    html_auto_directionality_root(host, *parent)
-                }
-                StyleMutationEffect::Attribute { element, name, .. } if name == "dir" => {
-                    // The enclosing auto-direction root also covers attr(dir)
-                    // dependencies on the element whose boundary changed.
-                    let root = host
-                        .parent_node(*element)
-                        .and_then(|parent| html_auto_directionality_root(host, parent));
-                    Some(root.unwrap_or(*element))
-                }
-                StyleMutationEffect::Attribute { element, name, .. } => {
-                    let uses_attribute = self
-                        .dom_adapter
-                        .element_styles_reference_attribute(host, *element, name)
-                        || world
-                            .pseudo_style_cache
-                            .references_attribute(*element, name);
-                    uses_attribute.then_some(*element)
-                }
-                _ => None,
-            })
-            .peekable();
-        if roots.peek().is_some() {
+        let mut roots = html_auto_directionality_roots_for_mutations(host, effects);
+        let direction_bits = StyloElementState::LTR | StyloElementState::RTL;
+        for &element in &roots {
+            // Mutation effects do not carry the previous direction. Invalidate
+            // both sides of :dir() dependencies by supplying the opposite state.
+            let old_state = self
+                .retained_current_element_state(host, element)
+                .map(synthetic_opposite_directionality_state);
+            if let Some(old_state) = old_state {
+                self.queue_style_invalidation_scope(
+                    world.document,
+                    world,
+                    host,
+                    emulated_media,
+                    viewport,
+                    source_scope_for_element_state_change(host, element, direction_bits),
+                    PendingStyleInvalidationCause::StateChange {
+                        element,
+                        state: direction_bits,
+                        old_state: Some(old_state),
+                    },
+                );
+            }
+        }
+
+        roots.extend(effects.iter().filter_map(|effect| {
+            let StyleMutationEffect::Attribute { element, name, .. } = effect else {
+                return None;
+            };
+            let invalidates_subtree = name == "dir"
+                || self
+                    .dom_adapter
+                    .element_styles_reference_attribute(host, *element, name)
+                || world
+                    .pseudo_style_cache
+                    .references_attribute(*element, name);
+            invalidates_subtree.then_some(*element)
+        }));
+        if !roots.is_empty() {
             // Direction hints and attr() can affect inherited styles without
             // a dependency in the stylesheet selector maps.
             self.invalidation_cleanup_for_world(world)
@@ -764,6 +781,54 @@ fn owner_document_for_mutation_effect(
         StyleMutationEffect::ConnectedSubtrees { .. }
         | StyleMutationEffect::DisconnectedSubtrees { .. } => None,
     }
+}
+
+fn html_auto_directionality_roots_for_mutations(
+    host: &DomHost,
+    effects: &[StyleMutationEffect],
+) -> IndexSet<DomHandle> {
+    let mut roots = IndexSet::new();
+    let mut record_root = |start| {
+        if let Some(root) = html_auto_directionality_root(host, start) {
+            roots.insert(root);
+        }
+    };
+    for effect in effects {
+        match effect {
+            StyleMutationEffect::ChildList { parent, .. } => record_root(*parent),
+            StyleMutationEffect::CharacterData { node } => {
+                if let Some(parent) = host
+                    .node(*node)
+                    .filter(|node| node.is_text())
+                    .and_then(|node| node.parent_node())
+                {
+                    record_root(parent);
+                }
+            }
+            StyleMutationEffect::SlotAssignment { slot, .. } => record_root(*slot),
+            StyleMutationEffect::Attribute { element, name, .. } if name == "dir" => {
+                record_root(*element);
+                if let Some(parent) = host.parent_node(*element) {
+                    record_root(parent);
+                }
+            }
+            StyleMutationEffect::Attribute { .. }
+            | StyleMutationEffect::ConnectedSubtrees { .. }
+            | StyleMutationEffect::DisconnectedSubtrees { .. } => {}
+        }
+    }
+    roots
+}
+
+fn synthetic_opposite_directionality_state(mut state: StyloElementState) -> StyloElementState {
+    let opposite = if state.contains(StyloElementState::RTL) {
+        StyloElementState::LTR
+    } else {
+        StyloElementState::RTL
+    };
+    state.remove(StyloElementState::LTR | StyloElementState::RTL);
+    state.insert(opposite);
+    state
 }
 
 fn owner_document_for_handle(host: &DomHost, handle: DomHandle) -> Option<DomHandle> {
