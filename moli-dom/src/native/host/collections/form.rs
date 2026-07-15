@@ -162,6 +162,10 @@ impl DomHost {
         None
     }
 
+    pub fn option_nearest_ancestor_select(&self, handle: DomHandle) -> Option<DomHandle> {
+        self.dom.option_nearest_ancestor_select(handle)
+    }
+
     pub fn radio_group_members(&self, handle: DomHandle) -> Vec<DomHandle> {
         let Some(element) = self.node(handle).and_then(Node::as_element) else {
             return Vec::new();
@@ -188,32 +192,8 @@ impl DomHost {
         })
     }
 
-    pub fn owner_select_for_option(&self, handle: DomHandle) -> Option<DomHandle> {
-        if !self.is_html_element_named(handle, "option") {
-            return None;
-        }
-        let mut current = self.parent_node(handle);
-        while let Some(parent) = current {
-            let Some(element) = self.node(parent).and_then(Node::as_element) else {
-                current = self.parent_node(parent);
-                continue;
-            };
-            if element.is_html_select() {
-                return Some(parent);
-            }
-            current = self.parent_node(parent);
-        }
-        None
-    }
-
     pub fn select_option_elements(&self, select_handle: DomHandle) -> Vec<DomHandle> {
-        if !self.is_html_element_named(select_handle, "select") {
-            return Vec::new();
-        }
-        self.collect_matching_elements(select_handle, false, |handle| {
-            self.is_html_element_named(handle, "option")
-                && self.option_belongs_to_select(handle, select_handle)
-        })
+        self.dom.select_option_elements(select_handle)
     }
 
     pub fn select_selected_option_elements(&self, select_handle: DomHandle) -> Vec<DomHandle> {
@@ -249,28 +229,6 @@ impl DomHost {
             .find(|handle| !self.option_is_disabled(*handle))
             .into_iter()
             .collect()
-    }
-
-    fn option_belongs_to_select(&self, option: DomHandle, select_handle: DomHandle) -> bool {
-        let mut current = self.parent_node(option);
-        let mut seen_optgroup = false;
-        while let Some(parent) = current {
-            if parent == select_handle {
-                return true;
-            }
-            let Some(element) = self.node(parent).and_then(Node::as_element) else {
-                current = self.parent_node(parent);
-                continue;
-            };
-            match element.local_name() {
-                "option" | "hr" | "select" => return false,
-                "optgroup" if seen_optgroup => return false,
-                "optgroup" => seen_optgroup = true,
-                _ => {}
-            }
-            current = self.parent_node(parent);
-        }
-        false
     }
 
     fn option_is_disabled(&self, handle: DomHandle) -> bool {
