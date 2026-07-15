@@ -18,6 +18,43 @@ struct TreeReplacementPlan<'a> {
 }
 
 impl DocumentRuntime {
+    /// Replace every child of `parent` with the children of `fragment` while
+    /// preserving the single DOM "replace all" mutation record.
+    ///
+    /// `existing_children` must be captured before constructing `fragment`:
+    /// ParentNode.replaceChildren() is allowed to move an existing child into
+    /// that fragment before the final splice.
+    pub(crate) fn replace_all_children_with_fragment_appending_to_current_reaction_queue(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        parent: DomHandle,
+        fragment: DomHandle,
+        existing_children: &[DomHandle],
+    ) -> bool {
+        let added_children = self.dom_host.child_handles(fragment).collect::<Vec<_>>();
+        let records_enabled = self.dom_host.mutation_records_enabled();
+        let removes_existing_children = !existing_children.is_empty();
+        for child in existing_children {
+            let _ = self
+                .remove_child_appending_to_current_reaction_queue(scope, host_ptr, parent, *child);
+        }
+        let changed = self
+            .append_child_appending_to_current_reaction_queue(scope, host_ptr, parent, fragment)
+            || removes_existing_children;
+        if changed && records_enabled {
+            crate::observer_runtime::coalesce_child_list_replacement_records(
+                host_ptr,
+                parent,
+                &added_children,
+                existing_children,
+                None,
+                None,
+            );
+        }
+        changed
+    }
+
     pub(crate) fn replace_child_appending_to_current_reaction_queue(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,

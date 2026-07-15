@@ -2911,7 +2911,6 @@ html/dom/documents/dom-tree-accessors/nameditem-08.html
 html/dom/documents/dom-tree-accessors/nameditem-names.html
 html/dom/elements/the-innertext-and-outertext-properties/dynamic-getter.html
 html/dom/elements/the-innertext-and-outertext-properties/getter.html
-html/dom/elements/the-innertext-and-outertext-properties/innertext-setter.html
 html/dom/elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=normal
 html/dom/elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=normal&contenteditable=plaintext-only
 html/dom/elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=normal&contenteditable=true
@@ -2924,7 +2923,6 @@ html/dom/elements/the-innertext-and-outertext-properties/innertext-with-white-sp
 html/dom/elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=pre-wrap
 html/dom/elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=pre-wrap&contenteditable=plaintext-only
 html/dom/elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=pre-wrap&contenteditable=true
-html/dom/elements/the-innertext-and-outertext-properties/outertext-setter.html
 html/dom/partial-updates/tentative/processing-instruction-attributes.html
 html/dom/partial-updates/tentative/stream-append-has-invalidation.html
 html/dom/partial-updates/tentative/stream-append-positional-pseudo-class-invalidation.html
