@@ -19,6 +19,7 @@ pub(super) struct TreeRemovalPlan {
     pub(super) live_range_previous_sibling: Option<DomHandle>,
     pub(super) node_iterator_plan: Option<NodeIteratorRemovalPlan>,
     pub(super) registry_retargets: Vec<custom_elements::RegistryAssociationRetarget>,
+    pub(super) selected_option_owners_before_remove: Vec<(DomHandle, DomHandle)>,
 }
 
 impl DocumentRuntime {
@@ -58,6 +59,8 @@ impl DocumentRuntime {
         };
         let registry_retargets =
             custom_elements::registry_association_retargets_before_removal(host_ptr, root);
+        let selected_option_owners_before_remove =
+            self.selected_option_owners_in_subtrees(std::slice::from_ref(&root));
         TreeRemovalPlan {
             parent,
             root,
@@ -69,6 +72,7 @@ impl DocumentRuntime {
             live_range_previous_sibling,
             node_iterator_plan,
             registry_retargets,
+            selected_option_owners_before_remove,
         }
     }
 
