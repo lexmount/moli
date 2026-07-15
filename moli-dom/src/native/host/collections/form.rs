@@ -170,6 +170,14 @@ impl DomHost {
         self.dom.optgroup_nearest_ancestor_select(handle)
     }
 
+    pub fn selectedcontent_nearest_ancestor_select(&self, handle: DomHandle) -> Option<DomHandle> {
+        self.dom.selectedcontent_nearest_ancestor_select(handle)
+    }
+
+    pub fn select_selectedcontent_elements(&self, handle: DomHandle) -> Vec<DomHandle> {
+        self.dom.select_selectedcontent_elements(handle)
+    }
+
     pub fn option_is_disabled(&self, handle: DomHandle) -> bool {
         self.dom.option_is_disabled(handle)
     }

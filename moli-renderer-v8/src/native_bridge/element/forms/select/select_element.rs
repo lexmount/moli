@@ -700,7 +700,7 @@ pub(in crate::native_bridge) fn select_value_setter_function<'s>(
     else {
         return;
     };
-    let _ = unsafe { &mut *runtime_ptr }.set_select_value(handle, &next_value);
+    let _ = unsafe { &mut *runtime_ptr }.set_select_value(scope, runtime_ptr, handle, &next_value);
     rv.set_undefined();
 }
 

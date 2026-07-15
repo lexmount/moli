@@ -5862,6 +5862,17 @@ impl ScriptVm {
         })
     }
 
+    pub(crate) fn sync_selectedcontents_after_parser_option_finished_in_default_context(
+        &mut self,
+        option: NativeNodeId,
+    ) -> Result<()> {
+        self.with_default_context_scope(|scope, host_ptr| {
+            unsafe { &mut *host_ptr }
+                .sync_selectedcontents_after_parser_option_finished(scope, host_ptr, option);
+            Ok(())
+        })
+    }
+
     pub(crate) fn apply_parser_created_null_registry_associations_in_default_context(
         &mut self,
         handles: &[NativeNodeId],
