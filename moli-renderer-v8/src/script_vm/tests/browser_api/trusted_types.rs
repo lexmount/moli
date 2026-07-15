@@ -1056,6 +1056,115 @@ fn url_attribute_writes_enforce_the_non_iframe_trusted_script_url_sink_table() {
 }
 
 #[test]
+fn attached_attribute_mutations_recheck_trusted_types_after_domstring_conversion() {
+    let mut vm = new_storage_test_vm("https://attached-attribute-trusted-types.test/");
+    vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const explicit = trustedTypes.createPolicy("attached-attribute", {
+    createScript: value => value
+  });
+
+  const alreadyAttached = document.createElement("button");
+  alreadyAttached.setAttribute("onclick", explicit.createScript("same-input"));
+  const alreadyAttachedAttr = alreadyAttached.getAttributeNode("onclick");
+  let sameAttributeRejected = false;
+  try {
+    alreadyAttached.setAttributeNode(alreadyAttachedAttr);
+  } catch (error) {
+    sameAttributeRejected = error instanceof TypeError;
+  }
+
+  const calls = [];
+  let detachAttr;
+  let moveAttr;
+  let moveTarget;
+  let moving = false;
+  trustedTypes.createPolicy("default", {
+    createScript: (value, type, sink) => {
+      calls.push([value, type, sink]);
+      if (value === "detach-input") {
+        detachAttr.ownerElement.removeAttributeNode(detachAttr);
+      }
+      if (value === "move-input" && !moving) {
+        moving = true;
+        const owner = moveAttr.ownerElement;
+        if (owner) owner.removeAttributeNode(moveAttr);
+        moveTarget.setAttributeNode(moveAttr);
+        moving = false;
+      }
+      return `safe-${value}`;
+    }
+  });
+
+  const nodeSetters = [
+    ["setAttributeNode", (element, attr) => element.setAttributeNode(attr)],
+    ["setAttributeNodeNS", (element, attr) => element.setAttributeNodeNS(attr)],
+    ["setNamedItem", (element, attr) => element.attributes.setNamedItem(attr)],
+    ["setNamedItemNS", (element, attr) => element.attributes.setNamedItemNS(attr)]
+  ];
+  const nodeValues = nodeSetters.map(([name, setter], index) => {
+    const element = document.createElement("button");
+    const attr = document.createAttribute("onclick");
+    attr.value = index === 0
+      ? explicit.createScript(`${name}-input`)
+      : `${name}-input`;
+    const previous = setter(element, attr);
+    return [previous === null, attr.ownerElement === element, attr.value];
+  });
+
+  const valueSetters = [
+    ["value", (attr, value) => { attr.value = value; }],
+    ["nodeValue", (attr, value) => { attr.nodeValue = value; }],
+    ["textContent", (attr, value) => { attr.textContent = value; }]
+  ];
+  const valueResults = valueSetters.map(([name, setter], index) => {
+    const element = document.createElement("button");
+    element.setAttribute("onclick", explicit.createScript("initial"));
+    const attr = element.getAttributeNode("onclick");
+    setter(attr, index === 0 ? explicit.createScript(`${name}-input`) : `${name}-input`);
+    return [attr.ownerElement === element, attr.value];
+  });
+
+  const detachedOwner = document.createElement("button");
+  detachedOwner.setAttribute("onclick", explicit.createScript("initial"));
+  detachAttr = detachedOwner.getAttributeNode("onclick");
+  detachAttr.value = "detach-input";
+
+  const originalMoveOwner = document.createElement("button");
+  moveTarget = document.createElement("button");
+  moveAttr = document.createAttribute("onclick");
+  moveAttr.value = "move-input";
+  let moveRejected = false;
+  try {
+    originalMoveOwner.setAttributeNode(moveAttr);
+  } catch (error) {
+    moveRejected = error.name === "InUseAttributeError";
+  }
+
+  return JSON.stringify({
+    sameAttributeRejected,
+    nodeValues,
+    valueResults,
+    detached: [detachAttr.ownerElement === null, detachAttr.value],
+    moved: [moveRejected, moveAttr.ownerElement === moveTarget, moveAttr.value],
+    calls
+  });
+})()
+"#,
+        )
+        .expect("attached attribute Trusted Types mutation probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"sameAttributeRejected":true,"nodeValues":[[true,true,"safe-setAttributeNode-input"],[true,true,"safe-setAttributeNodeNS-input"],[true,true,"safe-setNamedItem-input"],[true,true,"safe-setNamedItemNS-input"]],"valueResults":[[true,"safe-value-input"],[true,"safe-nodeValue-input"],[true,"safe-textContent-input"]],"detached":[true,"safe-detach-input"],"moved":[true,true,"safe-move-input"],"calls":[["setAttributeNode-input","TrustedScript","Element onclick"],["setAttributeNodeNS-input","TrustedScript","Element onclick"],["setNamedItem-input","TrustedScript","Element onclick"],["setNamedItemNS-input","TrustedScript","Element onclick"],["value-input","TrustedScript","Element onclick"],["nodeValue-input","TrustedScript","Element onclick"],["textContent-input","TrustedScript","Element onclick"],["detach-input","TrustedScript","Element onclick"],["move-input","TrustedScript","Element onclick"],["move-input","TrustedScript","Element onclick"]]}"#
+    );
+}
+
+#[test]
 fn empty_default_policy_reports_each_rejected_element_sink() {
     let mut vm = new_storage_test_vm("https://empty-default-policy.test/");
     vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
