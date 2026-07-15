@@ -9,7 +9,7 @@ use moli_html_input_type::InputType;
 pub fn form_control_type_supports_intrinsic_validation(
     local_name: &str,
     input_type: Option<InputType>,
-    button_type: Option<&str>,
+    button_is_submit: bool,
 ) -> bool {
     match local_name {
         "input" => !matches!(
@@ -17,14 +17,7 @@ pub fn form_control_type_supports_intrinsic_validation(
             InputType::Hidden | InputType::Button | InputType::Reset
         ),
         "select" | "textarea" => true,
-        "button" => !matches!(
-            button_type
-                .unwrap_or("submit")
-                .trim()
-                .to_ascii_lowercase()
-                .as_str(),
-            "button" | "reset"
-        ),
+        "button" => button_is_submit,
         _ => false,
     }
 }
