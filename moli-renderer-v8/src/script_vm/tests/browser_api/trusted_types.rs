@@ -41,6 +41,87 @@ fn trusted_types_csp_policy_creation_matches_only_valid_name_tokens() {
 }
 
 #[test]
+fn trusted_type_policy_callbacks_follow_webidl_dictionary_and_callback_rules() {
+    let mut vm = new_storage_test_vm("https://trusted-type-policy-webidl.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const errorName = callback => {
+    try {
+      callback();
+      return "none";
+    } catch (error) {
+      return error.constructor.name;
+    }
+  };
+  const methodTypes = policy => [
+    typeof policy.createHTML,
+    typeof policy.createScript,
+    typeof policy.createScriptURL
+  ];
+
+  const emptyFromNull = trustedTypes.createPolicy("empty-null", null);
+  const emptyFromOmission = trustedTypes.createPolicy("empty-omitted");
+  const extra = { marker: "extra" };
+  let observed;
+  class NullCallbacks {
+    createHTML(input, ...rest) {
+      observed = [this === undefined, input, rest.length, rest[0] === extra, rest[1]];
+      return null;
+    }
+    createScript() {
+      return null;
+    }
+    createScriptURL() {
+      return null;
+    }
+  }
+  const nullPolicy = trustedTypes.createPolicy("null-results", new NullCallbacks());
+  const nullResults = [
+    String(nullPolicy.createHTML({ toString: () => "converted" }, extra, 42)),
+    String(nullPolicy.createScript("script")),
+    String(nullPolicy.createScriptURL("script-url"))
+  ];
+
+  const variadicPolicy = trustedTypes.createPolicy("variadic", {
+    createHTML: (a, b, c) => a + b + c,
+    createScript: (a, b, c) => a + b + c,
+    createScriptURL: (a, b, c) => a + b + c
+  });
+  const variadicResults = [
+    String(variadicPolicy.createHTML("a", "b", "c")),
+    String(variadicPolicy.createScript("a", "b")),
+    String(variadicPolicy.createScriptURL("a", 123, null))
+  ];
+
+  return JSON.stringify({
+    emptyMethods: [methodTypes(emptyFromNull), methodTypes(emptyFromOmission)],
+    nullResults,
+    observed,
+    variadicResults,
+    errors: [
+      errorName(() => trustedTypes.createPolicy("primitive-options", 1)),
+      errorName(() => trustedTypes.createPolicy("non-callable", { createHTML: null })),
+      errorName(() => trustedTypes.createPolicy("throwing-getter", {
+        get createHTML() { throw new RangeError("getter"); }
+      })),
+      errorName(() => nullPolicy.createHTML())
+    ]
+  });
+})()
+"#,
+        )
+        .expect("TrustedTypePolicy WebIDL callback probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"emptyMethods":[["undefined","undefined","undefined"],["undefined","undefined","undefined"]],"nullResults":["","",""],"observed":[true,"converted",2,true,42],"variadicResults":["abc","abundefined","a123null"],"errors":["TypeError","TypeError","RangeError","TypeError"]}"#
+    );
+}
+
+#[test]
 fn element_markup_sinks_enforce_trusted_html_and_standard_sink_names() {
     let mut vm = new_storage_test_vm("https://element-markup-trusted-types.test/");
     vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
