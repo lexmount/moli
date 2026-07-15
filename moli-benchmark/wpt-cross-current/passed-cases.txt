@@ -1464,6 +1464,7 @@ css/css-flexbox/total-min-max-violation-zero.html
 css/css-flexbox/webkit-box-vertical-writing-mode.html
 css/css-flexbox/whitespace-in-flexitem-001.html
 css/css-font-loading/empty-family-load.html
+css/css-font-loading/font-face-reject.html
 css/css-font-loading/fontface-font-variation-settings-persisted-js-api.html
 css/css-font-loading/fontface-fonts-loading.html
 css/css-font-loading/fontface-invalid-arraybuffer.html

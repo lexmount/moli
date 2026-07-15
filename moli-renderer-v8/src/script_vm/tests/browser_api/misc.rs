@@ -1445,9 +1445,81 @@ fn font_face_declared_slots_ignore_prototype_spoofing() {
 
     assert_eq!(
         result,
-        r#"{"values":"Changed|url(demo.woff)|italic|700|condensed|small-caps|\"kern\"|swap|loaded|function","fake":"TypeError|TypeError|TypeError|TypeError|Promise","descriptors":["family:function:get family:0:function:set family:1:true:true:false","style:function:get style:0:function:set style:1:true:true:false","weight:function:get weight:0:function:set weight:1:true:true:false","stretch:function:get stretch:0:function:set stretch:1:true:true:false","variant:function:get variant:0:function:set variant:1:true:true:false","featureSettings:function:get featureSettings:0:function:set featureSettings:1:true:true:false","display:function:get display:0:function:set display:1:true:true:false","source:function:get source:0:undefined:undefined:undefined:true:true:false","status:function:get status:0:undefined:undefined:undefined:true:true:false","loaded:function:get loaded:0:undefined:undefined:undefined:true:true:false"],"ownSlots":[]}"#
+        r#"{"values":"Changed|url(demo.woff)|italic|700|condensed|small-caps|\"kern\"|swap|unloaded|function","fake":"TypeError|TypeError|TypeError|TypeError|Promise","descriptors":["family:function:get family:0:function:set family:1:true:true:false","style:function:get style:0:function:set style:1:true:true:false","weight:function:get weight:0:function:set weight:1:true:true:false","stretch:function:get stretch:0:function:set stretch:1:true:true:false","variant:function:get variant:0:function:set variant:1:true:true:false","featureSettings:function:get featureSettings:0:function:set featureSettings:1:true:true:false","display:function:get display:0:function:set display:1:true:true:false","source:function:get source:0:undefined:undefined:undefined:true:true:false","status:function:get status:0:undefined:undefined:undefined:true:true:false","loaded:function:get loaded:0:undefined:undefined:undefined:true:true:false"],"ownSlots":[]}"#
     );
     assert_eq!(vm.eval("fakeLoadedResult").unwrap(), "rejected:TypeError");
+}
+
+#[test]
+fn font_face_string_sources_follow_load_state_and_connected_style_use() {
+    let mut vm = new_storage_test_vm("https://font-face-string-source-state.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  const remote = new FontFace('RemoteFace', 'url(remote.woff2)');
+  const remoteLoaded = remote.loaded;
+  const invalid = new FontFace('InvalidFace', 'not a font source');
+  const local = new FontFace(
+    'MissingLocalFace',
+    'local("definitely-missing-moli-font")'
+  );
+  document.fonts.add(local);
+
+  globalThis.__fontFaceStringSourceProbe = {
+    remote: {
+      before: remote.status,
+      stablePromise: remote.loaded === remoteLoaded,
+      loadReturnsLoaded: remote.load() === remoteLoaded,
+      after: remote.status,
+      settlement: 'pending'
+    },
+    invalid: {
+      status: invalid.status,
+      settlement: 'pending'
+    },
+    local: {
+      beforeStyle: local.status,
+      afterDetachedStyle: '',
+      afterConnection: '',
+      settlement: 'pending'
+    }
+  };
+  remoteLoaded.then(
+    value => {
+      globalThis.__fontFaceStringSourceProbe.remote.settlement =
+        value === remote ? 'resolved-self' : 'resolved-other';
+    },
+    error => {
+      globalThis.__fontFaceStringSourceProbe.remote.settlement = error.name;
+    }
+  );
+  invalid.loaded.then(
+    () => { globalThis.__fontFaceStringSourceProbe.invalid.settlement = 'resolved'; },
+    error => { globalThis.__fontFaceStringSourceProbe.invalid.settlement = error.name; }
+  );
+  local.loaded.then(
+    () => { globalThis.__fontFaceStringSourceProbe.local.settlement = 'resolved'; },
+    error => { globalThis.__fontFaceStringSourceProbe.local.settlement = error.name; }
+  );
+
+  const target = document.createElement('div');
+  target.style.fontFamily = 'MissingLocalFace';
+  globalThis.__fontFaceStringSourceProbe.local.afterDetachedStyle = local.status;
+  (document.body || document.documentElement || document).appendChild(target);
+  globalThis.__fontFaceStringSourceProbe.local.afterConnection = local.status;
+})()
+"#,
+    )
+    .expect("string-backed FontFace state probe should initialize");
+
+    let result = vm
+        .eval("JSON.stringify(globalThis.__fontFaceStringSourceProbe)")
+        .expect("string-backed FontFace promises should settle");
+    assert_eq!(
+        result,
+        r#"{"remote":{"before":"unloaded","stablePromise":true,"loadReturnsLoaded":true,"after":"loaded","settlement":"resolved-self"},"invalid":{"status":"error","settlement":"SyntaxError"},"local":{"beforeStyle":"unloaded","afterDetachedStyle":"unloaded","afterConnection":"error","settlement":"NetworkError"}}"#
+    );
 }
 
 #[test]

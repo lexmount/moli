@@ -126,7 +126,7 @@ pub(crate) use crypto::{
     CryptoKeyAlgorithmClonePayload, CryptoKeyClonePayload, WebCryptoRejection, WebCryptoTaskResult,
     crypto_key_clone_payload_from_object, crypto_key_object_from_clone_payload,
 };
-pub(crate) use css_fontface_runtime::rebuild_font_face_set_faces;
+pub(crate) use css_fontface_runtime::{load_font_faces_for_family, rebuild_font_face_set_faces};
 pub(crate) use location_navigation::{
     LocationNavigationKind, dispatch_top_level_form_navigation_event,
     dispatch_top_level_navigation_event_with_source_element, meta_refresh_navigation_kind,

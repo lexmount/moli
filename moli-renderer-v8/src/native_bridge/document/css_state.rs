@@ -14,6 +14,7 @@ pub(crate) use accessors::{
     node_document_adopted_style_sheets_getter_function,
     node_document_adopted_style_sheets_setter_function, node_document_style_sheets_getter_function,
 };
+pub(crate) use font_faces::load_font_faces_used_by_subtrees;
 pub(crate) use projection::{
     apply_stylesheet_owner_css_projections, apply_stylesheet_source_css_projection,
 };
