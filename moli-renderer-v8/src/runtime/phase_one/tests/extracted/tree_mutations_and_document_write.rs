@@ -1363,49 +1363,7 @@ document.body.setAttribute("data-range", [
         }));
 }
 
-    #[test]
-    fn parser_option_finish_and_select_value_sync_selectedcontent_clones() {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("current-thread runtime should build");
 
-        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
-            let mut page_vm = parse_phase_one_html_into_page_vm_for_test(
-                r#"<!doctype html><html><body>
-<select id="select">
-  <button><selectedcontent id="selectedcontent">default</selectedcontent></button>
-  <div><option id="one"><span id="source-span">one</span></option></div>
-  <div><option id="two"><strong>two</strong></option></div>
-</select>
-<script>
-const select = document.getElementById('select');
-const selectedcontent = document.getElementById('selectedcontent');
-const sourceSpan = document.querySelector('#one > span');
-window.selectedcontentState = [
-  selectedcontent.textContent.trim(),
-  selectedcontent.firstElementChild !== sourceSpan,
-];
-select.value = 'two';
-window.selectedcontentState.push(
-  selectedcontent.textContent.trim(),
-  selectedcontent.firstElementChild.tagName,
-);
-</script>
-</body></html>"#,
-            )
-            .await;
-
-            let result = page_vm
-                .evaluate_expression("JSON.stringify(window.selectedcontentState)")
-                .expect("selectedcontent parser state should evaluate");
-            assert_eq!(
-                result.get("value").and_then(serde_json::Value::as_str),
-                Some(r#"["one",true,"two","STRONG"]"#),
-                "parser option completion and select.value must synchronously clone the selected option children"
-            );
-        }));
-    }
 
     #[test]
     fn parser_eof_option_finish_syncs_selectedcontent_clones() {
@@ -1466,6 +1424,96 @@ window.selectedcontentState.push(
                     .and_then(serde_json::Value::as_str),
                 Some("xiibb|true|true|true|2"),
                 "EOF-closing an option must deep-clone its parsed children into selectedcontent"
+            );
+        }));
+    }
+
+    #[test]
+    fn parser_option_finish_and_select_setters_sync_selectedcontent_clones() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let mut page_vm = parse_phase_one_html_into_page_vm_for_test(
+                r#"<!doctype html><html><body>
+<form id="form"><select id="select">
+  <button><selectedcontent id="selectedcontent">default</selectedcontent></button>
+  <div><option id="one"><span id="source-span">one</span></option></div>
+  <div><option id="two"><strong>two</strong></option></div>
+</select></form>
+<script>
+const select = document.getElementById('select');
+const selectedcontent = document.getElementById('selectedcontent');
+const sourceSpan = document.querySelector('#one > span');
+window.selectedcontentState = [
+  selectedcontent.textContent.trim(),
+  selectedcontent.firstElementChild !== sourceSpan,
+];
+select.value = 'two';
+window.selectedcontentState.push(
+  selectedcontent.textContent.trim(),
+  selectedcontent.firstElementChild.tagName,
+);
+document.querySelector('#two > strong').textContent = 'updated';
+select.selectedIndex = select.selectedIndex;
+window.selectedcontentState.push(selectedcontent.textContent.trim());
+document.getElementById('form').reset();
+window.selectedcontentState.push(selectedcontent.textContent.trim());
+</script>
+</body></html>"#,
+            )
+            .await;
+
+            let result = page_vm
+                .evaluate_expression("JSON.stringify(window.selectedcontentState)")
+                .expect("selectedcontent parser state should evaluate");
+            assert_eq!(
+                result.get("value").and_then(serde_json::Value::as_str),
+                Some(r#"["one",true,"two","STRONG","updated","one"]"#),
+                "parser option completion and select setters must synchronously clone the selected option children"
+            );
+        }));
+    }
+
+    #[test]
+    fn moving_selected_option_updates_previous_select_selectedcontent_in_a_microtask() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let mut page_vm = parse_phase_one_html_into_page_vm_for_test(
+                r#"<!doctype html><html><body>
+<select id="source">
+  <button><selectedcontent id="selectedcontent"></selectedcontent></button>
+  <option id="moved">one</option>
+  <option>two</option>
+</select>
+<div id="destination"></div>
+<script>
+const selectedcontent = document.getElementById('selectedcontent');
+document.getElementById('destination').appendChild(document.getElementById('moved'));
+window.selectedcontentMoveState = [selectedcontent.textContent.trim()];
+</script>
+</body></html>"#,
+            )
+            .await;
+
+            page_vm
+                .evaluate_expression("0")
+                .expect("selectedcontent removal microtask checkpoint should run");
+            let result = page_vm
+                .evaluate_expression(
+                    "JSON.stringify([...window.selectedcontentMoveState, document.getElementById('selectedcontent').textContent.trim()])",
+                )
+                .expect("selectedcontent move state should evaluate");
+            assert_eq!(
+                result.get("value").and_then(serde_json::Value::as_str),
+                Some(r#"["one","two"]"#),
+                "implicit option removal must keep the old clone synchronously and update it at the next microtask checkpoint"
             );
         }));
     }
