@@ -88,6 +88,10 @@ impl IntrinsicInterfaceRegistry {
         Ok(registry)
     }
 
+    pub(super) const fn realm_kind(&self) -> RealmKind {
+        self.realm_kind
+    }
+
     pub(super) fn state(&self, id: InterfaceId) -> Option<RealmInterfaceState> {
         self.states.borrow().get(id.index()).copied()
     }
