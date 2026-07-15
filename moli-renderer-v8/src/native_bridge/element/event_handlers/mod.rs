@@ -14,6 +14,7 @@ pub(crate) use body_window::compile_window_body_onmessageerror_attribute;
 pub(super) use body_window::{
     body_onmessageerror_getter_function, body_onmessageerror_setter_function,
 };
+pub(super) use generic::is_element_event_handler_content_attribute_name;
 pub(crate) use generic::{
     GlobalEventHandlerOwner, install_global_event_handler_template_bindings,
     node_event_handler_getter_function, node_event_handler_setter_function,
