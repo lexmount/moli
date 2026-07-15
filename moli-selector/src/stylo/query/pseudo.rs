@@ -239,25 +239,15 @@ impl<'a> QueryElement<'a> {
         if self.element().has_attribute("disabled") {
             return true;
         }
-        if self.element().local_name() == "option"
-            && self.parent_element().is_some_and(|(_, parent)| {
-                parent.local_name() == "optgroup" && parent.has_attribute("disabled")
-            })
-        {
+        if self.element().local_name() == "option" && self.host.option_is_disabled(self.handle) {
             return true;
         }
         if matches!(self.element().local_name(), "option" | "optgroup")
-            && self.disabled_select_ancestor().is_some()
+            && self.disabled_associated_select().is_some()
         {
             return true;
         }
         self.disabled_fieldset_ancestor().is_some()
-    }
-
-    pub(super) fn parent_element(self) -> Option<(NodeId, &'a Element)> {
-        let parent = self.node().parent_node()?;
-        let element = self.host.node(parent)?.as_element()?;
-        Some((parent, element))
     }
 
     pub(super) fn disabled_fieldset_ancestor(self) -> Option<NodeId> {
@@ -275,22 +265,17 @@ impl<'a> QueryElement<'a> {
         None
     }
 
-    pub(super) fn disabled_select_ancestor(self) -> Option<NodeId> {
-        let mut current = self.node().parent_node();
-        while let Some(parent) = current {
-            let Some(element) = self.host.node(parent).and_then(Node::as_element) else {
-                current = self.host.node(parent).and_then(Node::parent_node);
-                continue;
-            };
-            match element.local_name() {
-                "select" if element.has_attribute("disabled") => return Some(parent),
-                "select" | "option" => return None,
-                "optgroup" if self.element().local_name() == "optgroup" => return None,
-                _ => {}
-            }
-            current = self.host.node(parent).and_then(Node::parent_node);
-        }
-        None
+    pub(super) fn disabled_associated_select(self) -> Option<NodeId> {
+        let select = match self.element().local_name() {
+            "option" => self.host.option_nearest_ancestor_select(self.handle),
+            "optgroup" => self.host.optgroup_nearest_ancestor_select(self.handle),
+            _ => None,
+        }?;
+        self.host
+            .node(select)
+            .and_then(Node::as_element)
+            .is_some_and(|element| element.has_attribute("disabled"))
+            .then_some(select)
     }
 
     pub(super) fn is_inside_first_legend_child(self, fieldset: NodeId) -> bool {
