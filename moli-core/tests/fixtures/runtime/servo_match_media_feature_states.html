@@ -12,6 +12,8 @@
     data-display-mode-bool=""
     data-display-mode-browser=""
     data-display-mode-standalone=""
+    data-display-mode-picture-in-picture=""
+    data-display-mode-picture-in-picture-media=""
     data-dynamic-range-bool=""
     data-dynamic-range-standard=""
     data-dynamic-range-high=""
@@ -33,6 +35,7 @@
         ['data-display-mode-bool', '(display-mode)'],
         ['data-display-mode-browser', '(display-mode: browser)'],
         ['data-display-mode-standalone', '(display-mode: standalone)'],
+        ['data-display-mode-picture-in-picture', '(display-mode: picture-in-picture)'],
         ['data-dynamic-range-bool', '(dynamic-range)'],
         ['data-dynamic-range-standard', '(dynamic-range: standard)'],
         ['data-dynamic-range-high', '(dynamic-range: high)'],
@@ -43,6 +46,10 @@
       for (const [attr, query] of cases) {
         body.setAttribute(attr, String(window.matchMedia(query).matches));
       }
+      body.setAttribute(
+        'data-display-mode-picture-in-picture-media',
+        window.matchMedia('(display-mode: picture-in-picture)').media,
+      );
     </script>
   </body>
 </html>
