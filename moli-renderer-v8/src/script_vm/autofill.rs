@@ -203,7 +203,7 @@ fn fill_credit_card_control(
     };
 
     if is_select {
-        let _ = unsafe { &mut *runtime_ptr }.set_select_value(handle, &value);
+        let _ = unsafe { &mut *runtime_ptr }.set_select_value(scope, runtime_ptr, handle, &value);
     } else {
         let _ = unsafe { &mut *runtime_ptr }.set_input_value(handle, &value);
     }
