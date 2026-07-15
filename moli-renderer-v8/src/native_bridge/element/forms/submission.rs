@@ -400,6 +400,11 @@ pub(in crate::native_bridge) fn reset_form_default_action(
                 did_change |= runtime
                     .dom_host_mut()
                     .set_select_explicit_none_state(handle, false);
+                did_change |= runtime.sync_selectedcontents_for_select_in_reaction_scope(
+                    scope,
+                    runtime_ptr,
+                    handle,
+                );
             }
             FormResetPlan::Output { handle, value } => {
                 did_change |= runtime.dom_host_mut().set_text_content(handle, &value);

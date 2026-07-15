@@ -909,6 +909,7 @@ pub(crate) struct JsContextHost {
     directory_reader_callbacks: directory_reader_callbacks::DirectoryReaderCallbackState,
     misc_platform_api_tasks: misc_platform_api_tasks::MiscPlatformApiTaskState,
     file_entry_file_callbacks: file_entry_file_callbacks::FileEntryFileCallbackState,
+    pending_selectedcontent_updates: HashSet<DomHandle>,
     user_interaction_tasks: user_interaction_tasks::UserInteractionTaskState,
     pending_image_load_events: HashMap<DomHandle, PendingImageLoadEvent>,
     next_image_load_event_id: u64,

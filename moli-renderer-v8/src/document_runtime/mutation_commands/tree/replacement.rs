@@ -39,9 +39,11 @@ impl DocumentRuntime {
             let _ = self
                 .remove_child_appending_to_current_reaction_queue(scope, host_ptr, parent, *child);
         }
-        let changed = self
-            .append_child_appending_to_current_reaction_queue(scope, host_ptr, parent, fragment)
-            || removes_existing_children;
+        let inserted_new_children = !added_children.is_empty()
+            && self.append_child_appending_to_current_reaction_queue(
+                scope, host_ptr, parent, fragment,
+            );
+        let changed = inserted_new_children || removes_existing_children;
         if changed && records_enabled {
             crate::observer_runtime::coalesce_child_list_replacement_records(
                 host_ptr,
@@ -249,11 +251,14 @@ impl DocumentRuntime {
                 next_sibling,
             );
         }
-        let changed = self.apply_runtime_mutation_effects_with_prepublished_removals(
+        let changed = self.apply_tree_insertion_mutation_effects_with_post_connection_steps(
             scope,
             host_ptr,
+            &insertion_plan,
             effects,
             RuntimeMutationOptions::js_dom_api(),
+            reaction_policy,
+            true,
             prepublished_removals,
         );
         if !changed {
@@ -279,6 +284,13 @@ impl DocumentRuntime {
         replacement_plan: &TreeReplacementPlan<'_>,
         reaction_policy: TreeReactionDispatchPolicy,
     ) {
+        self.queue_selectedcontent_updates_after_tree_removal(
+            scope,
+            host_ptr,
+            &replacement_plan
+                .removal
+                .selected_option_owners_before_remove,
+        );
         let insertion_plan = &replacement_plan.insertion;
         let mut dispatch_reactions = |scope: &mut v8::PinScope<'_, '_>| {
             self.dispatch_tree_insertion_immediate_side_effects_after_change(

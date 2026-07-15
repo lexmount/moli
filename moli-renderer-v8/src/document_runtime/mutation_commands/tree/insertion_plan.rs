@@ -9,7 +9,24 @@ use crate::{
     native_bridge::JsContextHost,
 };
 
-pub(super) struct TreeInsertionPlan<'a> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::document_runtime::mutation_commands) enum TreeInsertionPostConnectionStep {
+    Script(DomHandle),
+    SelectedContent(DomHandle),
+    SelectedOption(DomHandle),
+}
+
+impl TreeInsertionPostConnectionStep {
+    pub(in crate::document_runtime::mutation_commands) fn handle(self) -> DomHandle {
+        match self {
+            Self::Script(handle) | Self::SelectedContent(handle) | Self::SelectedOption(handle) => {
+                handle
+            }
+        }
+    }
+}
+
+pub(in crate::document_runtime::mutation_commands) struct TreeInsertionPlan<'a> {
     pub(super) parent: DomHandle,
     pub(super) insertion_roots: &'a [DomHandle],
     pub(super) inserting_fragment_children: bool,
@@ -23,6 +40,10 @@ pub(super) struct TreeInsertionPlan<'a> {
     pub(super) image_relevant_mutation_plan: ImageRelevantMutationPlan,
     pub(super) media_relevant_mutation_plan: MediaRelevantMutationPlan,
     pub(super) option_selectedness_before_insert: Option<Vec<(DomHandle, bool)>>,
+    pub(in crate::document_runtime::mutation_commands) selected_option_owners_before_insert:
+        Vec<(DomHandle, DomHandle)>,
+    pub(in crate::document_runtime::mutation_commands) post_connection_steps:
+        Vec<TreeInsertionPostConnectionStep>,
 }
 
 #[derive(Clone, Copy)]
@@ -47,6 +68,13 @@ pub(super) struct TreeInsertionPlanOptions {
 impl TreeInsertionPlan<'_> {
     pub(super) fn was_lifecycle_connected_before_insert(&self) -> bool {
         !self.lifecycle_connected_roots_before_insert.is_empty()
+    }
+    pub(in crate::document_runtime::mutation_commands) fn requires_interleaved_post_connection_steps(
+        &self,
+    ) -> bool {
+        self.post_connection_steps
+            .iter()
+            .any(|step| !matches!(step, TreeInsertionPostConnectionStep::Script(_)))
     }
 }
 
@@ -130,6 +158,12 @@ impl DocumentRuntime {
         let option_selectedness_before_insert = (options.selectedness_policy.captures()
             && subtree_plan.may_have_options)
             .then(|| self.option_selectedness_before_insert(insertion_roots));
+        let selected_option_owners_before_insert = if subtree_plan.may_have_options {
+            self.selected_option_owners_in_subtrees(insertion_roots)
+        } else {
+            Vec::new()
+        };
+        let post_connection_steps = self.tree_insertion_post_connection_steps(insertion_roots);
         let adoption = self.tree_adoption_plan_before_insert(host_ptr, insertion_roots, parent);
         let lifecycle_connected_roots_before_insert: Vec<DomHandle> = insertion_roots
             .iter()
@@ -154,6 +188,36 @@ impl DocumentRuntime {
             image_relevant_mutation_plan,
             media_relevant_mutation_plan,
             option_selectedness_before_insert,
+            selected_option_owners_before_insert,
+            post_connection_steps,
         }
+    }
+
+    fn tree_insertion_post_connection_steps(
+        &self,
+        roots: &[DomHandle],
+    ) -> Vec<TreeInsertionPostConnectionStep> {
+        let mut stack = roots.iter().rev().copied().collect::<Vec<_>>();
+        let mut steps = Vec::new();
+        while let Some(handle) = stack.pop() {
+            let Some(node) = self.dom_host.node(handle) else {
+                continue;
+            };
+            if node.is_script_element() {
+                steps.push(TreeInsertionPostConnectionStep::Script(handle));
+            } else if let Some(element) = node.as_element() {
+                if element.is_html_element("selectedcontent") {
+                    steps.push(TreeInsertionPostConnectionStep::SelectedContent(handle));
+                } else if element.is_html_option() {
+                    steps.push(TreeInsertionPostConnectionStep::SelectedOption(handle));
+                }
+            }
+
+            stack.extend(self.dom_host.child_handles_reversed(handle));
+            if let Some(shadow_root) = self.dom_host.shadow_root_handle(handle) {
+                stack.push(shadow_root);
+            }
+        }
+        steps
     }
 }

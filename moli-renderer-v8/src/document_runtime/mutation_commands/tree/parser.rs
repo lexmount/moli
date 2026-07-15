@@ -155,6 +155,7 @@ impl DocumentRuntime {
         if !changed {
             return;
         }
+        self.run_parser_tree_insertion_post_connection_steps(scope, host_ptr, &insertion_plan);
         self.dispatch_tree_insertion_side_effects_after_change(
             scope,
             host_ptr,

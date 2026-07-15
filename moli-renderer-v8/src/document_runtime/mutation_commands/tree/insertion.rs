@@ -158,11 +158,14 @@ impl DocumentRuntime {
             .map(|started| started.elapsed().as_micros())
             .unwrap_or_default();
         let mutation_started = cpu_profile_enabled.then(std::time::Instant::now);
-        let changed = self.apply_runtime_mutation_effects_with_prepublished_removals(
+        let changed = self.apply_tree_insertion_mutation_effects_with_post_connection_steps(
             scope,
             host_ptr,
+            &insertion_plan,
             effects,
             RuntimeMutationOptions::js_dom_api(),
+            source_profile.reaction_policy,
+            true,
             prepublished_removals,
         );
         let mutation_us = mutation_started
@@ -410,11 +413,14 @@ impl DocumentRuntime {
         if effects.did_change() {
             self.apply_node_iterator_pre_remove_plans(host_ptr, &insertion_plan.node_iterator_plan);
         }
-        let changed = self.apply_runtime_mutation_effects_with_prepublished_removals(
+        let changed = self.apply_tree_insertion_mutation_effects_with_post_connection_steps(
             scope,
             host_ptr,
+            &insertion_plan,
             effects,
             mutation_options,
+            source_profile.reaction_policy,
+            !dispatch_atomic_move_callbacks,
             prepublished_removals,
         );
         if changed {
