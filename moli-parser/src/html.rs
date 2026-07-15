@@ -2133,6 +2133,20 @@ mod tests {
     }
 
     #[test]
+    fn decoded_parser_continues_after_meta_encoding_indicator() {
+        let document = parse_test_document(concat!(
+            "<!doctype html><meta charset='windows-1252'>",
+            "<div id='after-meta'></div>"
+        ));
+        let div = first_element_by_ns(&document, HTML_NS, "div");
+
+        assert_eq!(
+            document.get_attribute(div, "id").as_deref(),
+            Some("after-meta")
+        );
+    }
+
+    #[test]
     fn parser_input_session_keeps_nested_pending_buffers_on_a_stack() {
         let queue = ParserInputQueue::default();
         let session = queue.session();
