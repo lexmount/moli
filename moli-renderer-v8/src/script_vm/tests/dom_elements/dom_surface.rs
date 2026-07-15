@@ -6477,6 +6477,71 @@ async fn element_matches_delegates_loaded_child_document_elements() {
 }
 
 #[tokio::test]
+async fn child_parser_eof_syncs_selectedcontent_for_navigation_and_document_write() {
+    let mut vm = new_storage_test_vm("https://child-selectedcontent-parser.test/");
+    vm.eval(
+        r#"
+(() => {
+  const frame = document.createElement("iframe");
+  frame.srcdoc = "<select><button><selectedcontent></button><option>X";
+  (document.body || document.documentElement || document).appendChild(frame);
+})()
+"#,
+    )
+    .expect("child selectedcontent navigation setup should evaluate");
+    run_child_navigation_commit_and_host_load_for_test(&mut vm, "child selectedcontent navigation")
+        .await;
+
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const doc = document.querySelector("iframe").contentDocument;
+  const selectedcontent = doc.querySelector("selectedcontent");
+  const source = doc.querySelector("option");
+  return [selectedcontent.textContent, selectedcontent.firstChild !== source.firstChild].join("|");
+})()
+"#,
+        )
+        .expect("child selectedcontent navigation state should evaluate"),
+        "X|true"
+    );
+
+    vm.eval(
+        r#"
+(() => {
+  const doc = document.querySelector("iframe").contentDocument;
+  doc.open();
+  doc.write("<select><button><selectedcontent></button><option>x<i>i<b>ib</i>b");
+  doc.close();
+})()
+"#,
+    )
+    .expect("child selectedcontent document.write setup should evaluate");
+
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const doc = document.querySelector("iframe").contentDocument;
+  const selectedcontent = doc.querySelector("selectedcontent");
+  const source = doc.querySelector("option");
+  return [
+    selectedcontent.textContent,
+    selectedcontent.innerHTML === source.innerHTML,
+    selectedcontent.firstChild !== source.firstChild,
+    selectedcontent.querySelector("i") !== source.querySelector("i"),
+    selectedcontent.querySelectorAll("b").length
+  ].join("|");
+})()
+"#,
+        )
+        .expect("child selectedcontent document.write state should evaluate"),
+        "xiibb|true|true|true|2"
+    );
+}
+
+#[tokio::test]
 async fn child_navigation_performance_name_updates_after_iframe_src_change() {
     let mut vm = new_storage_test_vm("https://child-navigation-performance.test/page.html");
     vm.eval(

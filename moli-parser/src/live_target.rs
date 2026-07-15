@@ -598,6 +598,8 @@ pub trait ParserDomMutationConsumer {
 
     fn finish_parsing_link_children(&mut self, node_id: NativeNodeId);
 
+    fn maybe_clone_an_option_into_selectedcontent(&mut self, _node_id: NativeNodeId) {}
+
     fn attach_declarative_shadow_for_parser(
         &mut self,
         host_id: NativeNodeId,
@@ -629,6 +631,7 @@ struct ParserDomMutationSink {
     mark_script_already_started_for_parser: unsafe fn(NonNull<()>, NativeNodeId),
     finish_parsing_script_children: unsafe fn(NonNull<()>, NativeNodeId),
     finish_parsing_link_children: unsafe fn(NonNull<()>, NativeNodeId),
+    maybe_clone_an_option_into_selectedcontent: unsafe fn(NonNull<()>, NativeNodeId),
     attach_declarative_shadow_for_parser:
         unsafe fn(NonNull<()>, NativeNodeId, NativeNodeId, Vec<NativeAttribute>) -> bool,
     associate_parser_form_owner: unsafe fn(NonNull<()>, NativeNodeId, NativeNodeId) -> bool,
@@ -787,6 +790,15 @@ impl ParserDomMutationSink {
             // pointed-to consumer to remain live and exclusive for the pump step.
             unsafe { data.cast::<T>().as_mut() }.finish_parsing_link_children(node_id);
         }
+        unsafe fn maybe_clone_an_option_into_selectedcontent_impl<T: ParserDomMutationConsumer>(
+            data: NonNull<()>,
+            node_id: NativeNodeId,
+        ) {
+            // SAFETY: ParserDomMutationSink::from_consumer requires the
+            // pointed-to consumer to remain live and exclusive for the pump step.
+            unsafe { data.cast::<T>().as_mut() }
+                .maybe_clone_an_option_into_selectedcontent(node_id);
+        }
         unsafe fn attach_declarative_shadow_for_parser_impl<T: ParserDomMutationConsumer>(
             data: NonNull<()>,
             host_id: NativeNodeId,
@@ -829,6 +841,8 @@ impl ParserDomMutationSink {
             mark_script_already_started_for_parser: mark_script_already_started_for_parser_impl::<T>,
             finish_parsing_script_children: finish_parsing_script_children_impl::<T>,
             finish_parsing_link_children: finish_parsing_link_children_impl::<T>,
+            maybe_clone_an_option_into_selectedcontent:
+                maybe_clone_an_option_into_selectedcontent_impl::<T>,
             attach_declarative_shadow_for_parser: attach_declarative_shadow_for_parser_impl::<T>,
             associate_parser_form_owner: associate_parser_form_owner_impl::<T>,
         }
@@ -949,6 +963,12 @@ impl ParserDomMutationSink {
         // SAFETY: construction ties the raw pointer and callback to the same
         // consumer remains live for the current runtime-DOM sink step.
         unsafe { (self.finish_parsing_link_children)(self.data, node_id) };
+    }
+
+    fn maybe_clone_an_option_into_selectedcontent(self, node_id: NativeNodeId) {
+        // SAFETY: construction ties the raw pointer and callback to the same
+        // consumer remains live for the current runtime-DOM sink step.
+        unsafe { (self.maybe_clone_an_option_into_selectedcontent)(self.data, node_id) };
     }
 
     fn attach_declarative_shadow_for_parser(
@@ -2791,6 +2811,14 @@ impl ParserStreamHtmlTreeSinkTarget {
                 .finish_parsing_link_children(node_id);
         } else {
             let _ = self.dom_host_mut().finish_parsing_link_children(node_id);
+        }
+    }
+
+    pub(super) fn maybe_clone_an_option_into_selectedcontent(&mut self, node_id: NativeNodeId) {
+        if let Some(owner) = &self.runtime_dom_sinks {
+            owner
+                .dom_mutation_sink()
+                .maybe_clone_an_option_into_selectedcontent(node_id);
         }
     }
 
