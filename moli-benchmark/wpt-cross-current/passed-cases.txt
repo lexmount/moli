@@ -463,8 +463,10 @@ css/css-counter-styles/counter-style-at-rule/fallback.html
 css/css-counter-styles/counter-style-at-rule/name-syntax.html
 css/css-counter-styles/counter-style-at-rule/negative-syntax.html
 css/css-counter-styles/counter-style-at-rule/pad-syntax.html
+css/css-counter-styles/counter-style-at-rule/prefix-suffix-syntax.html
 css/css-counter-styles/counter-style-at-rule/range-syntax.html
 css/css-counter-styles/counter-style-at-rule/speak-as-syntax.html
+css/css-counter-styles/counter-style-at-rule/symbols-syntax.html
 css/css-counter-styles/counter-style-at-rule/system-syntax.html
 css/css-device-adapt/viewport-should-not-affect-devicePixelRatio.html
 css/css-easing/linear-timing-functions-syntax.html

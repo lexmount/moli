@@ -121,8 +121,6 @@ css/css-conditional/container-queries/scroll-state/container-type-scroll-state-p
 css/css-conditional/container-queries/style-container-for-shadow-dom.html
 css/css-conditional/container-queries/style-query-registered-custom-rem-change.html
 css/css-content/parsing/content-counter-valid.html
-css/css-counter-styles/counter-style-at-rule/prefix-suffix-syntax.html
-css/css-counter-styles/counter-style-at-rule/symbols-syntax.html
 css/css-counter-styles/idlharness.html
 css/css-easing/cubic-bezier-timing-functions-output.html
 css/css-easing/linear-timing-functions-output.html
