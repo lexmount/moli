@@ -13,22 +13,16 @@ pub(crate) fn form_associated_form_owner(
     if !is_builtin_form_associated_element(element) {
         return None;
     }
-    if let Some(form_id) = element.attribute("form") {
-        if form_id.is_empty() {
-            return None;
-        }
-        return runtime
-            .dom_host()
-            .form_control_owner(handle)
-            .filter(|candidate| {
-                runtime
-                    .dom_host()
-                    .node(*candidate)
-                    .and_then(Node::as_element)
-                    .is_some_and(|form| form.is_html_element("form"))
-            });
-    }
-    runtime.dom_host().form_control_owner(handle)
+    runtime
+        .dom_host()
+        .form_control_owner(handle)
+        .filter(|candidate| {
+            runtime
+                .dom_host()
+                .node(*candidate)
+                .and_then(Node::as_element)
+                .is_some_and(|form| form.is_html_element("form"))
+        })
 }
 
 fn custom_element_form_owner(
@@ -36,16 +30,13 @@ fn custom_element_form_owner(
     handle: DomHandle,
     element: &crate::dom::native::Element,
 ) -> Option<DomHandle> {
-    if let Some(form_id) = element.attribute("form") {
+    if let Some(form_id) = element.attribute("form")
+        && runtime.dom_host().is_connected_to_document(handle)
+    {
         if form_id.is_empty() {
             return None;
         }
         let tree_root = runtime.dom_host().root_node_handle(handle)?;
-        if runtime.dom_host().is_shadow_root(tree_root)
-            && !runtime.dom_host().is_connected(tree_root)
-        {
-            return None;
-        }
         let candidate = runtime
             .dom_host()
             .element_handle_by_id_in_subtree(tree_root, form_id)?;
@@ -84,16 +75,13 @@ fn form_associated_reflected_form_owner(
     if !is_builtin_form_associated_element(element) {
         return None;
     }
-    if let Some(form_id) = element.attribute("form") {
+    if let Some(form_id) = element.attribute("form")
+        && runtime.dom_host().is_connected_to_document(handle)
+    {
         if form_id.is_empty() {
             return None;
         }
         let tree_root = runtime.dom_host().root_node_handle(handle)?;
-        if runtime.dom_host().is_shadow_root(tree_root)
-            && !runtime.dom_host().is_connected(tree_root)
-        {
-            return None;
-        }
         let candidate = runtime
             .dom_host()
             .element_handle_by_id_in_subtree(tree_root, form_id)?;
