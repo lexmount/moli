@@ -101,6 +101,7 @@ fn trusted_type_policy_callbacks_follow_webidl_dictionary_and_callback_rules() {
     missingCallbacks: [emptyFromNull, emptyFromOmission].map(policy =>
       ['createHTML', 'createScript', 'createScriptURL'].map(method =>
         errorName(() => policy[method]('input')))),
+    policyBrand: nullPolicy instanceof TrustedTypePolicy,
     nullResults,
     observed,
     variadicResults,
@@ -110,6 +111,7 @@ fn trusted_type_policy_callbacks_follow_webidl_dictionary_and_callback_rules() {
       errorName(() => trustedTypes.createPolicy("throwing-getter", {
         get createHTML() { throw new RangeError("getter"); }
       })),
+      errorName(() => emptyFromNull.createHTML("missing callback")),
       errorName(() => nullPolicy.createHTML()),
       errorName(() => emptyFromOmission.createHTML("html")),
       errorName(() => emptyFromOmission.createScript("script")),
@@ -123,7 +125,7 @@ fn trusted_type_policy_callbacks_follow_webidl_dictionary_and_callback_rules() {
 
     assert_eq!(
         result,
-        r#"{"emptyMethods":[["function","function","function"],["function","function","function"]],"missingCallbacks":[["TypeError","TypeError","TypeError"],["TypeError","TypeError","TypeError"]],"nullResults":["","",""],"observed":[true,"converted",2,true,42],"variadicResults":["abc","abundefined","a123null"],"errors":["TypeError","TypeError","RangeError","TypeError","TypeError","TypeError","TypeError"]}"#
+        r#"{"emptyMethods":[["function","function","function"],["function","function","function"]],"missingCallbacks":[["TypeError","TypeError","TypeError"],["TypeError","TypeError","TypeError"]],"policyBrand":true,"nullResults":["","",""],"observed":[true,"converted",2,true,42],"variadicResults":["abc","abundefined","a123null"],"errors":["TypeError","TypeError","RangeError","TypeError","TypeError","TypeError","TypeError","TypeError"]}"#
     );
 }
 
@@ -196,6 +198,64 @@ fn trusted_type_factory_interface_exposes_stable_branded_empty_values() {
     assert_eq!(
         result,
         r#"{"factory":["TrustedTypePolicyFactory",0,true,true,true,false],"accessors":[["function",true,true,true,false],["function",true,true,true,false]],"html":[true,"",true],"script":[true,"",true],"errors":["TypeError","TypeError","TypeError","TypeError"]}"#
+    );
+}
+
+#[test]
+fn trusted_type_factory_default_policy_getter_tracks_the_branded_policy() {
+    let mut vm = new_storage_test_vm("https://trusted-type-factory-default-policy.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const errorName = callback => {
+    try {
+      callback();
+      return "none";
+    } catch (error) {
+      return error.constructor.name;
+    }
+  };
+  const initial = trustedTypes.defaultPolicy;
+  const policy = trustedTypes.createPolicy("default", { createHTML: value => value });
+  const other = trustedTypes.createPolicy("other", { createHTML: value => value });
+  const descriptor = Object.getOwnPropertyDescriptor(
+    TrustedTypePolicyFactory.prototype,
+    "defaultPolicy"
+  );
+  const errors = [
+    errorName(() => {
+      "use strict";
+      trustedTypes.defaultPolicy = other;
+    }),
+    errorName(() => descriptor.get.call({})),
+    errorName(() => new TrustedTypePolicy())
+  ];
+  return JSON.stringify({
+    initialIsNull: initial === null,
+    policy: [
+      policy instanceof TrustedTypePolicy,
+      policy.name,
+      trustedTypes.defaultPolicy === policy,
+      trustedTypes.defaultPolicy !== other
+    ],
+    descriptor: [
+      typeof descriptor.get,
+      descriptor.set === undefined,
+      descriptor.enumerable,
+      descriptor.configurable
+    ],
+    errors
+  });
+})()
+"#,
+        )
+        .expect("TrustedTypePolicyFactory default policy probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"initialIsNull":true,"policy":[true,"default",true,true],"descriptor":["function",true,true,true],"errors":["TypeError","TypeError","TypeError"]}"#
     );
 }
 
