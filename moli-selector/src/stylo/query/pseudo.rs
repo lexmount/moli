@@ -431,7 +431,7 @@ impl<'a> QueryElement<'a> {
             self.element()
                 .is_html_input()
                 .then(|| self.element().input_type()),
-            self.element().attribute("type"),
+            self.host.button_is_submit_button(self.handle),
         )
     }
 
