@@ -14,6 +14,15 @@ struct PerformanceMarkArgs {
     name: String,
 }
 
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "PerformanceMarkOptions")]
+struct PerformanceMarkOptions<'s> {
+    #[webidl(converter = "raw")]
+    detail: Option<v8::Local<'s, v8::Value>>,
+    #[webidl(name = "startTime", converter = "double")]
+    start_time: Option<f64>,
+}
+
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "PerformanceMark")]
 struct PerformanceMarkConstructorArgs {
