@@ -220,7 +220,7 @@ use network_state::{
 };
 pub(crate) use origin::worker_global_origin;
 use origin::{WorkerGlobalOriginDeclaration, WorkerGlobalOriginPrototypeDeclaration};
-use performance::{install_worker_performance, monotonic_unix_epoch_millis};
+use performance::monotonic_unix_epoch_millis;
 pub(super) use service_worker_results::{
     PendingServiceWorkerClientFocus, PendingServiceWorkerClientNavigate,
     PendingServiceWorkerClientQuery, PendingServiceWorkerClientQueryType,

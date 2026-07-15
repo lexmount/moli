@@ -86,8 +86,10 @@ pub(super) const PERFORMANCE_LIFECYCLE_TIMESTAMPS_SLOT: &str =
     "__moliPerformanceLifecycleTimestamps";
 pub(super) const PERFORMANCE_PENDING_EVENT_COUNTS_SLOT: &str =
     "__moliPerformancePendingEventCounts";
-pub(in crate::context_bootstrap) const PERFORMANCE_OBSERVER_SUPPORTED_ENTRY_TYPES: &[&str] =
-    &["mark", "measure", "navigation", "resource"];
+pub(in crate::context_bootstrap) const WINDOW_PERFORMANCE_OBSERVER_SUPPORTED_ENTRY_TYPES:
+    &[&str] = &["mark", "measure", "navigation", "resource"];
+pub(in crate::context_bootstrap) const WORKER_PERFORMANCE_OBSERVER_SUPPORTED_ENTRY_TYPES:
+    &[&str] = &["mark", "measure", "resource"];
 
 pub(super) use super::performance_observer_runtime::{
     performance_entry_list_get_entries_by_name_callback,
@@ -108,9 +110,13 @@ pub(in crate::context_bootstrap) use entries::{
     performance_entry_slot_number, performance_entry_slot_string, performance_entry_slot_value,
     set_performance_entry_slot_number,
 };
-pub(crate) use install::finalize_performance_observer_realm_bindings;
 pub(crate) use install::increment_performance_event_count;
-pub(super) use install::install_performance_template_bindings;
+pub(crate) use install::{
+    finalize_performance_observer_realm_bindings, finalize_window_performance_realm_bindings,
+};
+pub(super) use install::{
+    install_performance_template_bindings, install_worker_performance_runtime_state,
+};
 pub(crate) use install::{
     record_performance_dom_content_loaded_event_end,
     record_performance_dom_content_loaded_event_start, record_performance_load_event_end,
@@ -176,7 +182,7 @@ pub(in crate::context_bootstrap) fn current_window_navigation_timing_snapshot(
 pub(in crate::context_bootstrap) fn ensure_navigation_performance_entry_for_api<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     performance: v8::Local<'s, v8::Object>,
-) -> v8::Local<'s, v8::Object> {
+) {
     install::ensure_navigation_performance_entry(scope, performance)
 }
 
@@ -231,6 +237,7 @@ fn record_performance_load_event_for_window(
     let scope = &mut v8::ContextScope::new(scope, relevant_context);
     record(scope);
 }
+
 pub(crate) struct ResourcePerformanceEntry {
     name: String,
     initiator_type: String,

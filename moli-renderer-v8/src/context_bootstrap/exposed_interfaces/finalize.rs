@@ -7,6 +7,7 @@ use crate::context_bootstrap::{
     web_audio_runtime::finalize_base_audio_context_realm_bindings,
 };
 use crate::network_host::finalize_xml_http_request_event_target_realm_bindings;
+use super::metadata::RealmKind;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RealmDependentFinalizer {
@@ -18,6 +19,7 @@ enum RealmDependentFinalizer {
     XmlHttpRequestEventTargetState,
     NotificationPermission,
     PointerEventSecureContextSurface,
+    PerformanceWindowAccessors,
     PerformanceObserverSupportedEntryTypes,
 }
 
@@ -73,6 +75,10 @@ const REALM_DEPENDENT_FINALIZER_ALLOWLIST: &[(&str, RealmDependentFinalizer)] = 
         RealmDependentFinalizer::GlobalEventHandlersSecureContextSurface,
     ),
     (
+        "Performance",
+        RealmDependentFinalizer::PerformanceWindowAccessors,
+    ),
+    (
         "PerformanceObserver",
         RealmDependentFinalizer::PerformanceObserverSupportedEntryTypes,
     ),
@@ -96,6 +102,7 @@ pub(super) fn finalize_materialized_interface<'s>(
     interface_name: &str,
     constructor: v8::Local<'s, v8::Function>,
     prototype: v8::Local<'s, v8::Object>,
+    realm_kind: RealmKind,
 ) -> Result<()> {
     let Some(finalizer) = realm_dependent_finalizer(interface_name) else {
         return Ok(());
@@ -130,8 +137,22 @@ pub(super) fn finalize_materialized_interface<'s>(
         RealmDependentFinalizer::PointerEventSecureContextSurface => {
             finalize_pointer_event_realm_bindings(scope, prototype)
         }
+        RealmDependentFinalizer::PerformanceWindowAccessors => {
+            if realm_kind == RealmKind::Window {
+                crate::context_bootstrap::performance_runtime::finalize_window_performance_realm_bindings(
+                    scope, prototype,
+                )
+            } else {
+                Ok(())
+            }
+        }
         RealmDependentFinalizer::PerformanceObserverSupportedEntryTypes => {
-            finalize_performance_observer_realm_bindings(scope, constructor.into())
+            let supported_entry_types = if realm_kind == RealmKind::Window {
+                crate::context_bootstrap::performance_runtime::WINDOW_PERFORMANCE_OBSERVER_SUPPORTED_ENTRY_TYPES
+            } else {
+                crate::context_bootstrap::performance_runtime::WORKER_PERFORMANCE_OBSERVER_SUPPORTED_ENTRY_TYPES
+            };
+            finalize_performance_observer_realm_bindings(scope, constructor.into(), supported_entry_types)
         }
     }
     .with_context(|| format!("failed to finalize intrinsic interface `{interface_name}`"))
@@ -179,6 +200,7 @@ mod tests {
                 "HTMLElement",
                 "SVGElement",
                 "MathMLElement",
+                "Performance",
                 "PerformanceObserver",
             ]
         );

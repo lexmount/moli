@@ -142,7 +142,6 @@ pub(in crate::worker) fn install_worker_global_scope<'s>(
     )
     .initialize(scope, global)
     .map_err(|error| anyhow!("failed to initialize worker global bootstrap properties: {error}"))?;
-    install_worker_performance(scope, global)?;
     install_worker_global_scope_constructors(scope, global, &global_kind, worker_templates)?;
     let (_, realm_kind) = worker_global_scope_interface(&global_kind);
     crate::context_bootstrap::install_worker_lazy_exposed_interfaces(
@@ -178,6 +177,7 @@ pub(in crate::worker) fn install_worker_global_scope<'s>(
         install_service_worker_extendable_event_constructors(scope, global)?;
     }
     crate::context_bootstrap::initialize_worker_fetch_realm_state(scope, global)?;
+    crate::context_bootstrap::initialize_worker_performance_realm_state(scope, global)?;
     let subtle_crypto_available = secure_context;
     crate::context_bootstrap::initialize_worker_crypto_realm_state(
         scope,
