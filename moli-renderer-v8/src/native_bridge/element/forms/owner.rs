@@ -117,7 +117,7 @@ pub(crate) fn is_valid_submit_button(runtime: &JsContextHost, handle: DomHandle)
             if element.is_html_input() {
                 element.input_type().is_submit_button()
             } else if element.is_html_element("button") {
-                !matches!(element.attribute("type"), Some("reset" | "button"))
+                runtime.dom_host().button_is_submit_button(handle)
             } else {
                 false
             }

@@ -973,10 +973,15 @@ pub(in crate::native_bridge) fn button_type_getter_function<'s>(
         rv.set_empty_string();
         return;
     };
-    let value = element_attribute(unsafe { &*runtime_ptr }, handle, "type")
-        .map(|value| canonical_button_type(&value).to_owned())
-        .unwrap_or_else(|| "submit".to_owned());
-    if let Some(value) = v8_string(scope, &value) {
+    let runtime = unsafe { &*runtime_ptr };
+    let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
+        rv.set_empty_string();
+        return;
+    };
+    let value = element
+        .button_type_state()
+        .reflected_keyword(runtime.dom_host().button_is_submit_button(handle));
+    if let Some(value) = v8_string(scope, value) {
         rv.set(value.into());
     } else {
         rv.set_empty_string();
@@ -999,14 +1004,6 @@ pub(in crate::native_bridge) fn button_type_setter_function<'s>(
     };
     set_reflected_attribute(scope, runtime_ptr, handle, "type", &value);
     rv.set_undefined();
-}
-
-fn canonical_button_type(value: &str) -> &'static str {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "button" => "button",
-        "reset" => "reset",
-        _ => "submit",
-    }
 }
 
 fn private_command_for_element_handle<'s>(

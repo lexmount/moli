@@ -1,8 +1,10 @@
+mod button_type;
 mod input_type;
 mod numeric;
 mod text;
 mod validity;
 
+pub use button_type::ButtonTypeState;
 pub(crate) use input_type::{
     InputValueSanitizationContext, sanitize_input_value_for_type_with_context,
 };
