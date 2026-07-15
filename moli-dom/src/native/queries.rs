@@ -95,6 +95,55 @@ impl NativeDom {
         )
     }
 
+    pub fn selectedcontent_nearest_ancestor_select(
+        &self,
+        selectedcontent_id: NativeNodeId,
+    ) -> Option<NativeNodeId> {
+        if !self
+            .node(selectedcontent_id)
+            .and_then(Node::as_element)
+            .is_some_and(|element| element.is_html_element("selectedcontent"))
+        {
+            return None;
+        }
+
+        let mut nearest_select = None;
+        let mut current = self.parent_node(selectedcontent_id);
+        while let Some(parent) = current {
+            let Some(element) = self.node(parent).and_then(Node::as_element) else {
+                current = self.parent_node(parent);
+                continue;
+            };
+            if element.is_html_option() || element.is_html_element("selectedcontent") {
+                return None;
+            }
+            if element.is_html_select() {
+                if nearest_select.is_some() {
+                    return None;
+                }
+                nearest_select = Some(parent);
+            }
+            current = self.parent_node(parent);
+        }
+        nearest_select
+    }
+
+    pub fn select_selectedcontent_elements(&self, select_id: NativeNodeId) -> Vec<NativeNodeId> {
+        if !self
+            .node(select_id)
+            .and_then(Node::as_element)
+            .is_some_and(Element::is_html_select)
+        {
+            return Vec::new();
+        }
+        self.elements_by_tag_name(select_id, "selectedcontent", false)
+            .into_iter()
+            .filter(|selectedcontent| {
+                self.selectedcontent_nearest_ancestor_select(*selectedcontent) == Some(select_id)
+            })
+            .collect()
+    }
+
     fn nearest_ancestor_select(
         &self,
         element_id: NativeNodeId,

@@ -13,6 +13,7 @@ use moli_selector::stylo_flat_tree_heading_descendants;
 use super::*;
 
 mod details;
+mod selectedcontent;
 mod tree;
 
 #[cfg(test)]
@@ -1769,8 +1770,15 @@ impl DocumentRuntime {
             .set_select_explicit_none_state(handle, explicit_none)
     }
 
-    pub(crate) fn set_select_value(&mut self, handle: DomHandle, value: &str) -> bool {
-        self.dom_host.set_select_value(handle, value)
+    pub(crate) fn set_select_value(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        handle: DomHandle,
+        value: &str,
+    ) -> bool {
+        let changed = self.dom_host.set_select_value(handle, value);
+        self.sync_selectedcontents_for_select_in_reaction_scope(scope, host_ptr, handle) || changed
     }
 
     pub(crate) fn set_script_async(
