@@ -8,9 +8,10 @@
       document.fonts.onloading = (event) => events.push(event.type);
       document.fonts.onloadingdone = (event) => events.push(event.type);
       document.fonts.onloadingerror = (event) => events.push(event.type);
+      document.fonts.add(new FontFace('FixtureFace', 'url(fixture.woff2)'));
 
       document.fonts
-        .load('10px sans-serif')
+        .load('10px FixtureFace')
         .then(() => document.fonts.ready)
         .then(() => {
           body.setAttribute('data-order', events.join(','));
