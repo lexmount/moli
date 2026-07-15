@@ -45,14 +45,14 @@
         }
         window.addEventListener("custom-window", onWindow);
         window.addEventListener("custom-window", onWindow);
-        window["oncancel-window"] = (event) => {
+        window.oncancel = (event) => {
           event.preventDefault();
         };
         globalThis.__moliFakeWindowListeners = new Map();
         window.dispatchEvent(new Event("custom-window"));
         window.removeEventListener("custom-window", onWindow);
         window.dispatchEvent(new Event("custom-window"));
-        const cancelWindowEvent = new Event("cancel-window", { cancelable: true });
+        const cancelWindowEvent = new Event("cancel", { cancelable: true });
         window.windowCancelDispatchReturn = window.dispatchEvent(cancelWindowEvent);
         window.windowCancelDefaultPrevented = cancelWindowEvent.defaultPrevented;
         let plainWindowDispatchError = null;
@@ -89,16 +89,16 @@
             documentCalls += 1;
           }
         }
-        document.addEventListener("custom-document", onDocument);
-        document["oncustom-document"] = (event) => {
+        document.addEventListener("click", onDocument);
+        document.onclick = (event) => {
           if (event.target === document && event.currentTarget === document) {
             documentCalls += 10;
           }
         };
         document.__moliListeners = new Map();
-        document.dispatchEvent(new Event("custom-document"));
-        document.removeEventListener("custom-document", onDocument);
-        document.dispatchEvent(new Event("custom-document"));
+        document.dispatchEvent(new Event("click"));
+        document.removeEventListener("click", onDocument);
+        document.dispatchEvent(new Event("click"));
         window.documentEventCalls = documentCalls;
 
         const container = document.getElementById("container");
