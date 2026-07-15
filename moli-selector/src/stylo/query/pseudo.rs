@@ -715,6 +715,37 @@ fn auto_direction_for_element(host: &DomHost, root: NodeId) -> Option<CssDirecti
         return input_auto_direction(element);
     }
 
+    if host.is_html_element_named(root, "slot") {
+        let assigned = host.assigned_nodes_for_slot_with_options(root, false);
+        if !assigned.is_empty() {
+            for handle in assigned {
+                let Some(node) = host.node(handle) else {
+                    continue;
+                };
+                if let Some(text) = node.as_text() {
+                    if let Some(direction) = first_strong_text_direction(text.data()) {
+                        return Some(direction);
+                    }
+                    continue;
+                }
+                let Some(element) = node.as_element() else {
+                    continue;
+                };
+                if descendant_is_directionally_isolated_for_auto(element) {
+                    continue;
+                }
+                if let Some(direction) = contained_text_auto_directionality(host, handle) {
+                    return Some(direction);
+                }
+            }
+            return None;
+        }
+    }
+
+    contained_text_auto_directionality(host, root)
+}
+
+fn contained_text_auto_directionality(host: &DomHost, root: NodeId) -> Option<CssDirection> {
     let mut stack = host.child_handles(root).collect::<Vec<_>>();
     stack.reverse();
     while let Some(handle) = stack.pop() {
@@ -733,6 +764,13 @@ fn auto_direction_for_element(host: &DomHost, root: NodeId) -> Option<CssDirecti
         if descendant_is_directionally_isolated_for_auto(element) {
             continue;
         }
+        if element.is_html_element("slot")
+            && let Some(shadow_host) = host
+                .containing_shadow_root(handle)
+                .and_then(|root| host.shadow_root_host(root))
+        {
+            return Some(html_directionality(host, shadow_host));
+        }
         let mut children = host.child_handles(handle).collect::<Vec<_>>();
         children.reverse();
         stack.extend(children);
@@ -741,7 +779,11 @@ fn auto_direction_for_element(host: &DomHost, root: NodeId) -> Option<CssDirecti
 }
 
 fn descendant_is_directionally_isolated_for_auto(element: &Element) -> bool {
-    if element.is_html_element("bdi") {
+    if matches!(
+        element.local_name(),
+        "bdi" | "script" | "style" | "textarea"
+    ) && element.namespace() == "http://www.w3.org/1999/xhtml"
+    {
         return true;
     }
     element.attribute("dir").is_some_and(|value| {
