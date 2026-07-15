@@ -2298,7 +2298,13 @@ impl PageScriptHost {
             .retained_current_element_state(unsafe { &*dom_host }, element)
     }
 
-    pub(crate) fn set_select_value(&mut self, handle: DomHandle, value: &str) -> bool {
+    pub(crate) fn set_select_value(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut PageScriptHost,
+        handle: DomHandle,
+        value: &str,
+    ) -> bool {
         // Capture selected peers before the native multi-option commit. The
         // same wrapper serves the Web setter and native autofill.
         let old_states = self
@@ -2319,7 +2325,13 @@ impl PageScriptHost {
             })
             .collect::<Vec<_>>();
         let changed = unsafe {
-            DocumentRuntime::set_select_value(&mut *self.document_runtime, handle, value)
+            DocumentRuntime::set_select_value(
+                &mut *self.document_runtime,
+                scope,
+                host_ptr,
+                handle,
+                value,
+            )
         };
         if changed {
             for (option, was_selected, old_state) in old_states {

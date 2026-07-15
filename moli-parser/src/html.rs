@@ -1455,6 +1455,13 @@ impl ParseHandle {
         })
     }
 
+    fn is_html_option_element(&self) -> bool {
+        self.element_name.as_ref().is_some_and(|name| {
+            AsRef::<str>::as_ref(&name.local) == "option"
+                && AsRef::<str>::as_ref(&name.ns) == "http://www.w3.org/1999/xhtml"
+        })
+    }
+
     pub(super) fn node_id(&self) -> NativeNodeId {
         self.dom_node_id()
             .expect("parser operation requires a real DOM node handle")
@@ -1934,12 +1941,25 @@ impl TreeSink for DocumentSink {
         }
     }
 
+    fn maybe_clone_an_option_into_selectedcontent(&self, option: &Self::Handle) {
+        if let Some(option_id) = option.dom_node_id() {
+            self.target
+                .borrow_mut()
+                .maybe_clone_an_option_into_selectedcontent(option_id);
+        }
+    }
+
     fn pop(&self, node: &Self::Handle) {
         self.flush_pending_text();
         self.committed_dom_mutations.set(true);
         // html5ever calls `pop()` when the element has been fully closed by the parser. For
         // classic parser-inserted scripts that is the earliest safe moment to hand execution back
         // to the runtime without risking partial inline source or a half-built element subtree.
+        // Its explicit `</option>` path invokes the selectedcontent hook itself, but implicit
+        // stack pops (including EOF) only arrive here, so route those through the same hook.
+        if node.is_html_option_element() {
+            self.maybe_clone_an_option_into_selectedcontent(node);
+        }
         if let Some(node_id) = node.dom_node_id() {
             self.target
                 .borrow_mut()

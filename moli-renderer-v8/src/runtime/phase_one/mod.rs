@@ -444,6 +444,15 @@ mod tests {
         parse_phase_one_html_into_page_vm_for_test_with_env_and_finish(html, env, false).await
     }
 
+    async fn parse_finished_phase_one_html_into_page_vm_for_test(html: &'static str) -> PageVm {
+        parse_phase_one_html_into_page_vm_for_test_with_env_and_finish(
+            html,
+            default_test_page_vm_env_config(),
+            true,
+        )
+        .await
+    }
+
     async fn parse_phase_one_html_into_page_vm_for_test_with_env_and_finish(
         html: &'static str,
         env: PageVmEnvConfig,
