@@ -3,7 +3,7 @@ use crate::content_security_policy::TrustedTypesForScriptRequirements;
 use crate::util::{get_private_value, set_private_value};
 use crate::web_api_interfaces;
 use crate::webidl;
-use moli_webapi_declare::WebApiObject;
+use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 mod policy_callbacks;
 mod realm_state;
@@ -23,22 +23,79 @@ const TRUSTED_TYPE_SCRIPT_URL_PROTOTYPE_SLOT: &str = "__moliTrustedScriptURLProt
 const TRUSTED_TYPE_HTML_CONSTRUCTOR_SLOT: &str = "__moliTrustedHTMLConstructor";
 const TRUSTED_TYPE_SCRIPT_CONSTRUCTOR_SLOT: &str = "__moliTrustedScriptConstructor";
 const TRUSTED_TYPE_SCRIPT_URL_CONSTRUCTOR_SLOT: &str = "__moliTrustedScriptURLConstructor";
+const TRUSTED_TYPE_POLICY_FACTORY_CONSTRUCTOR_SLOT: &str =
+    "__moliTrustedTypePolicyFactoryConstructor";
 const TRUSTED_TYPES_DEFAULT_POLICY_SLOT: &str = "__moliTrustedTypesDefaultPolicy";
 const TRUSTED_TYPES_CREATE_HTML_SLOT: &str = "__moliTrustedTypesCreateHTML";
 const TRUSTED_TYPES_CREATE_SCRIPT_SLOT: &str = "__moliTrustedTypesCreateScript";
 const TRUSTED_TYPES_CREATE_SCRIPT_URL_SLOT: &str = "__moliTrustedTypesCreateScriptURL";
+const TRUSTED_TYPES_EMPTY_HTML_SLOT: &str = "__moliTrustedTypesEmptyHTML";
+const TRUSTED_TYPES_EMPTY_SCRIPT_SLOT: &str = "__moliTrustedTypesEmptyScript";
+const TRUSTED_TYPES_EMPTY_VALUE_SLOTS: [&str; 2] = [
+    TRUSTED_TYPES_EMPTY_HTML_SLOT,
+    TRUSTED_TYPES_EMPTY_SCRIPT_SLOT,
+];
 
-#[derive(Default, WebApiObject)]
-#[webapi(prototype = "Object", interface = web_api_interfaces::TrustedTypePolicyFactory)]
-struct TrustedTypesFactoryDeclaration {
-    #[webapi(method, callback = trusted_types_create_policy_callback, length = 2)]
+#[derive(WebApiFunctionTemplate)]
+#[webapi(
+    interface = web_api_interfaces::TrustedTypePolicyFactory,
+    constructor = "illegal",
+    constructor_length = 0,
+    readonly_prototype,
+    prototype_to_string_tag = "TrustedTypePolicyFactory"
+)]
+struct TrustedTypePolicyFactoryInterfaceDeclaration {
+    #[webapi(
+        method,
+        callback = trusted_types_create_policy_callback,
+        length = 2,
+        enumerable
+    )]
     create_policy: (),
-    #[webapi(method = "isHTML", callback = trusted_types_is_html_callback, length = 1)]
+    #[webapi(
+        method = "isHTML",
+        callback = trusted_types_is_html_callback,
+        length = 1,
+        enumerable
+    )]
     is_html: (),
-    #[webapi(method, callback = trusted_types_is_script_callback, length = 1)]
+    #[webapi(
+        method,
+        callback = trusted_types_is_script_callback,
+        length = 1,
+        enumerable
+    )]
     is_script: (),
-    #[webapi(method = "isScriptURL", callback = trusted_types_is_script_url_callback, length = 1)]
+    #[webapi(
+        method = "isScriptURL",
+        callback = trusted_types_is_script_url_callback,
+        length = 1,
+        enumerable
+    )]
     is_script_url: (),
+    #[webapi(
+        accessor_property = "emptyHTML",
+        getter = trusted_types_empty_value_getter_callback,
+        data = crate::util::callback_data_index_value(scope, 0),
+        enumerable
+    )]
+    empty_html: (),
+    #[webapi(
+        accessor_property = "emptyScript",
+        getter = trusted_types_empty_value_getter_callback,
+        data = crate::util::callback_data_index_value(scope, 1),
+        enumerable
+    )]
+    empty_script: (),
+}
+
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::TrustedTypePolicyFactory, require_prototype)]
+struct TrustedTypesFactoryObjectDeclaration<'scope> {
+    #[webapi(slot = TRUSTED_TYPES_EMPTY_HTML_SLOT)]
+    empty_html: v8::Local<'scope, v8::Object>,
+    #[webapi(slot = TRUSTED_TYPES_EMPTY_SCRIPT_SLOT)]
+    empty_script: v8::Local<'scope, v8::Object>,
 }
 
 #[derive(WebApiObject)]
@@ -694,6 +751,26 @@ fn trusted_type_to_string_callback<'s>(
 ) {
     let this = args.this();
     let Some(value) = get_private_value(scope, this, TRUSTED_TYPE_VALUE_SLOT) else {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    };
+    rv.set(value);
+}
+
+fn trusted_types_empty_value_getter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(slot) = crate::util::callback_data_item(
+        scope,
+        &args,
+        &TRUSTED_TYPES_EMPTY_VALUE_SLOTS,
+        "TrustedTypePolicyFactory empty values",
+    ) else {
+        return;
+    };
+    let Some(value) = get_private_value(scope, args.this(), slot) else {
         throw_type_error(scope, "Illegal invocation");
         return;
     };
