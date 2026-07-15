@@ -2124,6 +2124,16 @@ impl JsContextHost {
                 | StyloElementState::VALIDITY_STATES,
             old_state,
         );
+        if self
+            .dom_host()
+            .get_attribute(handle, "dir")
+            .is_some_and(|value| value.eq_ignore_ascii_case("auto"))
+        {
+            // The resolved direction is also synthesized into the CSS cascade as
+            // a presentation hint, so changing the value must rebuild the input's
+            // style even when no selector depends on :dir().
+            self.note_style_subtree_context_change(handle);
+        }
         for (container, old_state) in container_old_states {
             self.note_element_state_style_activity_with_old_state(
                 *container,

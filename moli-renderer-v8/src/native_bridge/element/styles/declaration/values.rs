@@ -5875,8 +5875,9 @@ fn computed_direction_with_resolution(
         }
     }
     let direction = resolution.raw_property(runtime, handle, "direction");
-    if direction.eq_ignore_ascii_case("rtl") {
-        return "rtl".to_owned();
+    let direction = direction.to_ascii_lowercase();
+    if matches!(direction.as_str(), "ltr" | "rtl") {
+        return direction;
     }
     html_directionality(runtime.dom_host(), handle)
         .as_str()

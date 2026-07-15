@@ -5384,6 +5384,7 @@ html/dom/elements/global-attributes/dataset-set.html
 html/dom/elements/global-attributes/dataset.html
 html/dom/elements/global-attributes/dir-auto-div-append-child.html
 html/dom/elements/global-attributes/dir-bdi-script.html
+html/dom/elements/global-attributes/dir-slots-directionality.html
 html/dom/elements/global-attributes/document-dir.html
 html/dom/elements/global-attributes/id-attribute.html
 html/dom/elements/global-attributes/id-name-specialcase.html

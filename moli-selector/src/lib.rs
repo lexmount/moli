@@ -1574,6 +1574,50 @@ mod tests {
     }
 
     #[test]
+    fn dom_api_selectors_dir_auto_resolves_slot_directionality_boundaries() {
+        let url = url::Url::parse("https://example.test/").unwrap();
+        let mut host = DomHost::from_dom(NativeDom::new_html(url));
+        host.reset_html_document_shell();
+        let body = host.document_body_handle().unwrap();
+        let engine = QueryEngine;
+
+        let assigned_host = host.create_element("div");
+        assert!(host.append_child(body, assigned_host));
+        let assigned_text = host.create_text_node("\u{0627}\u{062e}\u{062a}\u{0628}\u{0631}");
+        assert!(host.append_child(assigned_host, assigned_text));
+        let assigned_shadow = host.attach_shadow_root(assigned_host, "open").unwrap();
+        let auto_slot = host.create_element("slot");
+        assert!(host.set_attribute(auto_slot, "dir", "auto"));
+        assert!(host.append_child(assigned_shadow, auto_slot));
+
+        assert!(engine.matches_host(&host, auto_slot, ":dir(rtl)").unwrap());
+        assert!(!engine.matches_host(&host, auto_slot, ":dir(ltr)").unwrap());
+
+        let inherited_host = host.create_element("div");
+        assert!(host.set_attribute(inherited_host, "dir", "rtl"));
+        assert!(host.append_child(body, inherited_host));
+        let inherited_shadow = host.attach_shadow_root(inherited_host, "open").unwrap();
+        let auto_container = host.create_element("div");
+        assert!(host.set_attribute(auto_container, "dir", "auto"));
+        let inherited_slot = host.create_element("slot");
+        let later_ltr_text = host.create_text_node("A");
+        assert!(host.append_child(auto_container, inherited_slot));
+        assert!(host.append_child(auto_container, later_ltr_text));
+        assert!(host.append_child(inherited_shadow, auto_container));
+
+        assert!(
+            engine
+                .matches_host(&host, auto_container, ":dir(rtl)")
+                .unwrap()
+        );
+        assert!(
+            !engine
+                .matches_host(&host, auto_container, ":dir(ltr)")
+                .unwrap()
+        );
+    }
+
+    #[test]
     fn dom_api_selectors_invalid_form_walks_deep_dom_iteratively() {
         let url = url::Url::parse("https://example.test/").unwrap();
         let mut host = DomHost::from_dom(NativeDom::new_html(url));

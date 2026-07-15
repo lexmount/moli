@@ -10065,6 +10065,55 @@ fn shadow_dir_pseudo_styles_slotted_nodes_from_document_direction() {
 }
 
 #[test]
+fn slotted_nodes_inherit_css_direction_from_slot_without_changing_html_directionality() {
+    let mut vm = new_storage_test_vm("https://slotted-direction-inheritance.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  if (!document.documentElement) {
+    document.appendChild(document.createElement('html'));
+  }
+  if (!document.body) {
+    document.documentElement.appendChild(document.createElement('body'));
+  }
+
+  const host = document.createElement('div');
+  const slotted = document.createElement('span');
+  host.appendChild(slotted);
+  const shadow = host.attachShadow({ mode: 'open' });
+  const style = document.createElement('style');
+  style.textContent = 'slot { color: rgb(1, 2, 3); }';
+  const slot = document.createElement('slot');
+  slot.dir = 'rtl';
+  shadow.append(style, slot);
+  document.body.appendChild(host);
+
+  const inherited = `${slotted.matches(':dir(ltr)')}:${getComputedStyle(slotted).direction}:${getComputedStyle(slotted).color}`;
+
+  const overriddenHost = document.createElement('div');
+  const overriddenSlotted = document.createElement('span');
+  overriddenHost.appendChild(overriddenSlotted);
+  const overriddenShadow = overriddenHost.attachShadow({ mode: 'open' });
+  const overriddenStyle = document.createElement('style');
+  overriddenStyle.textContent = 'slot { direction: ltr; }';
+  const overriddenSlot = document.createElement('slot');
+  overriddenSlot.dir = 'rtl';
+  overriddenShadow.append(overriddenStyle, overriddenSlot);
+  document.body.appendChild(overriddenHost);
+
+  const authorOverride = `${overriddenSlot.matches(':dir(rtl)')}:${getComputedStyle(overriddenSlot).direction}:${getComputedStyle(overriddenSlotted).direction}`;
+  return `${inherited}|${authorOverride}`;
+})()
+"#,
+        )
+        .expect("slotted direction inheritance should evaluate");
+
+    assert_eq!(result, "true:rtl:rgb(1, 2, 3)|true:ltr:ltr");
+}
+
+#[test]
 fn computed_direction_tracks_input_html_directionality() {
     let mut vm = new_storage_test_vm("https://input-direction-computed-style.test/");
 

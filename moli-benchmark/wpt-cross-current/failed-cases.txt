@@ -2909,7 +2909,6 @@ html/dom/documents/dom-tree-accessors/nameditem-06.html
 html/dom/documents/dom-tree-accessors/nameditem-07.html
 html/dom/documents/dom-tree-accessors/nameditem-08.html
 html/dom/documents/dom-tree-accessors/nameditem-names.html
-html/dom/elements/global-attributes/dir-slots-directionality.html
 html/dom/elements/the-innertext-and-outertext-properties/dynamic-getter.html
 html/dom/elements/the-innertext-and-outertext-properties/getter.html
 html/dom/elements/the-innertext-and-outertext-properties/innertext-setter.html
