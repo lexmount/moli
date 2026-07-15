@@ -8,16 +8,16 @@ use super::super::{
         v8_string, v8str,
     },
 };
-use super::JsContextHost;
 use super::node::{
-    element_name_for_owner_document, node_is_document, node_is_element,
-    node_runtime_and_handle_from_object, node_runtime_and_handle_from_object_or_detached,
-    node_text_content_getter_function, require_element_getter_receiver,
-    require_element_setter_receiver, set_text_content_in_reaction_scope,
-    throw_incompatible_getter_receiver, throw_incompatible_method_receiver,
-    throw_incompatible_setter_receiver,
+    current_or_live_delegate_node_arg_handle, element_name_for_owner_document, node_is_document,
+    node_is_element, node_runtime_and_handle_from_object,
+    node_runtime_and_handle_from_object_or_detached, node_text_content_getter_function,
+    require_element_getter_receiver, require_element_setter_receiver,
+    set_text_content_in_reaction_scope, throw_incompatible_getter_receiver,
+    throw_incompatible_method_receiver, throw_incompatible_setter_receiver,
 };
-use crate::{document_runtime::DomHandle, web_api_interfaces, webidl};
+use super::{JsContextHost, wrapped_handle_value};
+use crate::{custom_elements, document_runtime::DomHandle, web_api_interfaces, webidl};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiTemplateValue};
 
 mod activation;
@@ -7528,12 +7528,215 @@ fn aria_string_attribute_setter_callback<'s>(
     rv.set_undefined();
 }
 
-fn aria_element_reference_slot(attribute: &str) -> String {
-    format!("__moliAriaElementReference:{attribute}")
+fn aria_element_reference_array_cache_slot(attribute: &str) -> String {
+    format!("__moliAriaElementReferenceArrayCache:{attribute}")
 }
 
 fn aria_element_reference_is_singular(attribute: &str) -> bool {
     attribute == "aria-activedescendant"
+}
+
+struct AriaElementReferenceValue<'s> {
+    object: v8::Local<'s, v8::Object>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+}
+
+impl<'s> webidl::WebIdlConverter<'s> for AriaElementReferenceValue<'s> {
+    type Options = ();
+
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        _context: webidl::Context,
+        _options: &Self::Options,
+    ) -> std::result::Result<Self, webidl::WebIdlError> {
+        let object = v8::Local::<v8::Object>::try_from(value).map_err(|_| {
+            webidl::WebIdlError::custom_message("ARIA element references must be Elements.")
+        })?;
+        let (runtime_ptr, handle) = node_runtime_and_handle_from_object_or_detached(scope, object)
+            .map_err(|_| {
+                webidl::WebIdlError::custom_message("ARIA element references must be Elements.")
+            })?;
+        if !node_is_element(unsafe { &*runtime_ptr }, handle) {
+            return Err(webidl::WebIdlError::custom_message(
+                "ARIA element references must be Elements.",
+            ));
+        }
+        Ok(Self {
+            object,
+            runtime_ptr,
+            handle,
+        })
+    }
+}
+
+fn aria_element_reference_handle_for_owner(
+    scope: &mut v8::PinScope<'_, '_>,
+    owner_runtime_ptr: *mut JsContextHost,
+    reference: AriaElementReferenceValue<'_>,
+) -> Option<DomHandle> {
+    current_or_live_delegate_node_arg_handle(scope, owner_runtime_ptr, reference.object.into())
+        .filter(|handle| node_is_element(unsafe { &*owner_runtime_ptr }, *handle))
+        .or_else(|| (reference.runtime_ptr == owner_runtime_ptr).then_some(reference.handle))
+}
+
+fn aria_element_reference_is_in_valid_scope(
+    runtime: &JsContextHost,
+    owner: DomHandle,
+    candidate: DomHandle,
+) -> bool {
+    if !node_is_element(runtime, candidate) {
+        return false;
+    }
+    let Some(candidate_root) = runtime.dom_host().root_node_handle(candidate) else {
+        return false;
+    };
+    let Some(mut owner_root) = runtime.dom_host().root_node_handle(owner) else {
+        return false;
+    };
+    loop {
+        if candidate_root == owner_root {
+            return true;
+        }
+        if !runtime.dom_host().is_shadow_root(owner_root) {
+            return false;
+        }
+        let Some(host) = runtime.dom_host().shadow_root_host(owner_root) else {
+            return false;
+        };
+        let Some(next_root) = runtime.dom_host().root_node_handle(host) else {
+            return false;
+        };
+        owner_root = next_root;
+    }
+}
+
+fn aria_element_by_id_including_disconnected(
+    runtime: &JsContextHost,
+    owner: DomHandle,
+    id: &str,
+) -> Option<DomHandle> {
+    if id.is_empty() {
+        return None;
+    }
+    let root = runtime.dom_host().root_node_handle(owner)?;
+    let mut stack = runtime
+        .dom_host()
+        .child_handles_reversed(root)
+        .collect::<Vec<_>>();
+    while let Some(candidate) = stack.pop() {
+        if node_is_element(runtime, candidate)
+            && runtime.dom_host().get_attribute(candidate, "id").as_deref() == Some(id)
+        {
+            return Some(candidate);
+        }
+        stack.extend(runtime.dom_host().child_handles_reversed(candidate));
+    }
+    None
+}
+
+fn aria_element_reference_content_handles(
+    runtime: &JsContextHost,
+    owner: DomHandle,
+    attribute: &str,
+) -> Option<Vec<DomHandle>> {
+    let value = runtime.dom_host().get_attribute(owner, attribute)?;
+    if aria_element_reference_is_singular(attribute) {
+        return Some(
+            aria_element_by_id_including_disconnected(runtime, owner, &value)
+                .into_iter()
+                .collect(),
+        );
+    }
+    Some(
+        value
+            .split([' ', '\t', '\n', '\r', '\u{000c}'])
+            .filter(|token| !token.is_empty())
+            .filter_map(|token| aria_element_by_id_including_disconnected(runtime, owner, token))
+            .collect(),
+    )
+}
+
+fn aria_element_reference_handles(
+    runtime: &JsContextHost,
+    owner: DomHandle,
+    attribute: &str,
+) -> Option<Vec<DomHandle>> {
+    match runtime
+        .dom_host()
+        .explicit_aria_element_references(owner, attribute)
+    {
+        Some(references) => Some(
+            references
+                .into_iter()
+                .filter(|candidate| {
+                    aria_element_reference_is_in_valid_scope(runtime, owner, *candidate)
+                })
+                .collect(),
+        ),
+        None => aria_element_reference_content_handles(runtime, owner, attribute),
+    }
+}
+
+fn aria_element_reference_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+) -> Option<v8::Local<'s, v8::Value>> {
+    wrapped_handle_value(scope, runtime_ptr, handle)
+}
+
+fn aria_element_reference_array_values<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handles: Vec<DomHandle>,
+) -> Option<Vec<v8::Local<'s, v8::Value>>> {
+    handles
+        .into_iter()
+        .map(|handle| aria_element_reference_value(scope, runtime_ptr, handle))
+        .collect()
+}
+
+fn aria_cached_frozen_element_array<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    attribute: &str,
+    values: &[v8::Local<'s, v8::Value>],
+) -> v8::Local<'s, v8::Array> {
+    let slot = aria_element_reference_array_cache_slot(attribute);
+    if let Some(cached) = get_private_value(scope, receiver, &slot)
+        .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
+        && cached.length() as usize == values.len()
+    {
+        let mut equal = true;
+        for (index, expected) in values.iter().copied().enumerate() {
+            if !cached
+                .get_index(scope, index as u32)
+                .is_some_and(|actual| actual.strict_equals(expected))
+            {
+                equal = false;
+                break;
+            }
+        }
+        if equal {
+            return cached;
+        }
+    }
+    let array = v8::Array::new_with_elements(scope, values);
+    let _ = array.set_integrity_level(scope, v8::IntegrityLevel::Frozen);
+    set_private_value(scope, receiver, &slot, array.into());
+    array
+}
+
+fn clear_aria_element_reference_array_cache(
+    scope: &mut v8::PinScope<'_, '_>,
+    receiver: v8::Local<'_, v8::Object>,
+    attribute: &str,
+) {
+    let slot = aria_element_reference_array_cache_slot(attribute);
+    let undefined = v8::undefined(scope);
+    set_private_value(scope, receiver, &slot, undefined.into());
 }
 
 fn aria_element_reference_attribute_getter_callback<'s>(
@@ -7545,15 +7748,85 @@ fn aria_element_reference_attribute_getter_callback<'s>(
         rv.set_null();
         return;
     };
-    let slot = aria_element_reference_slot(&attribute);
-    if let Some(value) = get_private_value(scope, args.this(), &slot) {
-        rv.set(value);
+    let Some((runtime_ptr, owner)) = element_getter_receiver(scope, args.this(), &attribute) else {
+        return;
+    };
+    let Some(handles) = aria_element_reference_handles(unsafe { &*runtime_ptr }, owner, &attribute)
+    else {
+        clear_aria_element_reference_array_cache(scope, args.this(), &attribute);
+        rv.set_null();
+        return;
+    };
+    if aria_element_reference_is_singular(&attribute) {
+        match handles
+            .into_iter()
+            .next()
+            .and_then(|handle| aria_element_reference_value(scope, runtime_ptr, handle))
+        {
+            Some(value) => rv.set(value),
+            None => rv.set_null(),
+        }
         return;
     }
-    if aria_element_reference_is_singular(&attribute) {
+    let Some(values) = aria_element_reference_array_values(scope, runtime_ptr, handles) else {
         rv.set_null();
-    } else {
-        rv.set(v8::Array::new(scope, 0).into());
+        return;
+    };
+    let array = aria_cached_frozen_element_array(scope, args.this(), &attribute, &values);
+    rv.set(array.into());
+}
+
+fn set_explicit_aria_element_references(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    owner: DomHandle,
+    attribute: &str,
+    handles: Vec<DomHandle>,
+) {
+    custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
+        let _ = unsafe { &mut *runtime_ptr }.set_attribute_appending_to_current_reaction_queue(
+            scope,
+            runtime_ptr,
+            owner,
+            attribute,
+            "",
+        );
+        let _ = unsafe { &mut *runtime_ptr }
+            .dom_host_mut()
+            .set_explicit_aria_element_references(owner, attribute, handles);
+    });
+}
+
+fn clear_explicit_aria_element_references(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    owner: DomHandle,
+    attribute: &str,
+) {
+    custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
+        let _ = unsafe { &mut *runtime_ptr }.remove_attribute_appending_to_current_reaction_queue(
+            scope,
+            runtime_ptr,
+            owner,
+            attribute,
+        );
+    });
+}
+
+fn converted_aria_element_reference<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+) -> Option<AriaElementReferenceValue<'s>> {
+    match webidl::convert::<AriaElementReferenceValue<'s>>(
+        scope,
+        value,
+        webidl::Context::argument("Element ARIA element reflection", 1),
+    ) {
+        Ok(reference) => Some(reference),
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            None
+        }
     }
 }
 
@@ -7566,14 +7839,45 @@ fn aria_element_reference_attribute_setter_callback<'s>(
         rv.set_undefined();
         return;
     };
-    let slot = aria_element_reference_slot(&attribute);
-    set_private_value(scope, args.this(), &slot, args.get(0));
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
-    else {
-        rv.set_undefined();
+    let Some((runtime_ptr, owner)) = element_setter_receiver(scope, args.this(), &attribute) else {
         return;
     };
-    let _ = unsafe { &mut *runtime_ptr }.set_attribute(scope, runtime_ptr, handle, &attribute, "");
+    let value = args.get(0);
+    if value.is_null_or_undefined() {
+        clear_explicit_aria_element_references(scope, runtime_ptr, owner, &attribute);
+        rv.set_undefined();
+        return;
+    }
+    if aria_element_reference_is_singular(&attribute) {
+        let Some(reference) = converted_aria_element_reference(scope, value) else {
+            return;
+        };
+        let handles = aria_element_reference_handle_for_owner(scope, runtime_ptr, reference)
+            .into_iter()
+            .collect();
+        set_explicit_aria_element_references(scope, runtime_ptr, owner, &attribute, handles);
+        rv.set_undefined();
+        return;
+    }
+    let sequence = match webidl::convert::<webidl::Sequence<AriaElementReferenceValue<'s>>>(
+        scope,
+        value,
+        webidl::Context::argument("Element ARIA element reflection", 1),
+    ) {
+        Ok(sequence) => sequence,
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            return;
+        }
+    };
+    let mut handles = Vec::with_capacity(sequence.0.len());
+    for reference in sequence.0 {
+        if let Some(handle) = aria_element_reference_handle_for_owner(scope, runtime_ptr, reference)
+            && !handles.contains(&handle)
+        {
+            handles.push(handle);
+        }
+    }
+    set_explicit_aria_element_references(scope, runtime_ptr, owner, &attribute, handles);
     rv.set_undefined();
 }

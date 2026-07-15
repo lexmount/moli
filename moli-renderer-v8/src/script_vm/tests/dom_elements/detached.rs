@@ -2677,7 +2677,11 @@ fn detached_reflected_element_attributes_use_owner_prototype_accessors() {
   assert(section.getAttribute("aria-label") === "Proxy label", "proxy aria-label attribute");
   const controls = [div];
   section.ariaControlsElements = controls;
-  assert(section.ariaControlsElements === controls, "proxy ariaControlsElements");
+  const reflectedControls = section.ariaControlsElements;
+  assert(reflectedControls !== controls, "proxy ariaControlsElements snapshots input");
+  assert(reflectedControls.length === 1 && reflectedControls[0] === div, "proxy ariaControlsElements");
+  assert(Object.isFrozen(reflectedControls), "proxy ariaControlsElements frozen");
+  assert(section.ariaControlsElements === reflectedControls, "proxy ariaControlsElements cached");
   assert(section.getAttribute("aria-controls") === "", "proxy aria-controls attribute");
   assert(!own(section, "ariaControlsElements"), "ariaControlsElements should stay inherited after set");
   assert(section.contentEditable === "plaintext-only", "proxy contentEditable");
@@ -2709,7 +2713,7 @@ fn detached_reflected_element_attributes_use_owner_prototype_accessors() {
   assert(section.attributes.getNamedItem("data-x").value === "1", "proxy attributes after delete");
   assert(section.shadowRoot === root, "proxy shadowRoot after delete");
   assert(section.ariaLabel === "Proxy label", "proxy ariaLabel after delete");
-  assert(section.ariaControlsElements === controls, "proxy ariaControlsElements after delete");
+  assert(section.ariaControlsElements === reflectedControls, "proxy ariaControlsElements after delete");
   assert(section.contentEditable === "plaintext-only", "proxy contentEditable after delete");
   assert(section.isContentEditable === true, "proxy isContentEditable after delete");
   assert(section.getHTML() === "<b>x</b>", "proxy getHTML after delete");
