@@ -2717,8 +2717,6 @@ html/cross-origin-embedder-policy/coep-on-response-from-service-worker.https.htm
 html/cross-origin-embedder-policy/service-worker-cache-storage.https.html
 html/cross-origin-opener-policy/coop-navigate-same-origin-csp-sandbox.html
 html/cross-origin-opener-policy/coop-same-origin-allow-popups-document-write.html
-html/dom/aria-element-reflection-disconnected.html
-html/dom/aria-element-reflection.html
 html/dom/documents/dom-tree-accessors/Document.currentScript.html
 html/dom/documents/dom-tree-accessors/nameditem-01.html
 html/dom/documents/dom-tree-accessors/nameditem-02.html
