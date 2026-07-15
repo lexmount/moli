@@ -708,11 +708,51 @@ pub(crate) fn html_directionality(host: &DomHost, handle: NodeId) -> CssDirectio
     CssDirection::Ltr
 }
 
+/// Return the nearest auto-directionality element whose resolved direction may
+/// depend on a mutation below `start`.
+///
+/// Contained-text auto directionality stops at the same HTML boundaries, so a
+/// mutation below an explicit `dir`, `bdi`, `script`, `style`, or `textarea`
+/// element must not invalidate an outer `dir=auto` element.
+pub(crate) fn html_auto_directionality_invalidation_root(
+    host: &DomHost,
+    start: NodeId,
+) -> Option<NodeId> {
+    let mut current = Some(start);
+    while let Some(handle) = current {
+        let node = host.node(handle)?;
+        if let Some(element) = node.as_element()
+            && element.namespace() == "http://www.w3.org/1999/xhtml"
+        {
+            let dir = element.attribute("dir");
+            let has_auto_direction = dir.is_some_and(|value| value.eq_ignore_ascii_case("auto"))
+                || (element.is_html_element("bdi")
+                    && !dir.is_some_and(|value| {
+                        normalized_direction(value).is_some() || value.eq_ignore_ascii_case("auto")
+                    }));
+            if has_auto_direction {
+                return Some(handle);
+            }
+            if element.is_html_element("bdi")
+                || dir.and_then(normalized_direction).is_some()
+                || matches!(element.local_name(), "script" | "style" | "textarea")
+            {
+                return None;
+            }
+        }
+        current = node.parent_node();
+    }
+    None
+}
+
 fn auto_direction_for_element(host: &DomHost, root: NodeId) -> Option<CssDirection> {
-    if let Some(element) = host.node(root).and_then(Node::as_element)
-        && element.is_html_input()
-    {
-        return input_auto_direction(element);
+    if let Some(element) = host.node(root).and_then(Node::as_element) {
+        if element.is_html_textarea() {
+            return first_strong_text_direction(&element.input_value());
+        }
+        if element.is_html_input() {
+            return input_auto_direction(element);
+        }
     }
 
     if host.is_html_element_named(root, "slot") {
