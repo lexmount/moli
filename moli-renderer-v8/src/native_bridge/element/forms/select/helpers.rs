@@ -25,20 +25,11 @@ pub(super) fn effective_option_selected(runtime: &JsContextHost, handle: DomHand
         return false;
     }
 
-    let mut current = runtime.dom_host().parent_node(handle);
-    while let Some(parent) = current {
-        let Some(parent_element) = runtime.dom_host().node(parent).and_then(Node::as_element)
-        else {
-            current = runtime.dom_host().parent_node(parent);
-            continue;
-        };
-        if parent_element.is_html_select() {
-            return runtime
-                .dom_host()
-                .select_selected_option_elements(parent)
-                .contains(&handle);
-        }
-        current = runtime.dom_host().parent_node(parent);
+    if let Some(select) = runtime.dom_host().option_nearest_ancestor_select(handle) {
+        return runtime
+            .dom_host()
+            .select_selected_option_elements(select)
+            .contains(&handle);
     }
     element.selected()
 }
