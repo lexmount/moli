@@ -5645,32 +5645,102 @@ fn custom_element_popover_reflection_is_visible_on_html_element_prototype() {
 }
 
 #[test]
-fn element_aria_element_reference_reflection_preserves_assigned_value() {
+fn element_aria_element_reference_reflection_tracks_dom_owned_associations() {
     let mut vm = new_storage_test_vm("https://example.com/");
 
     let result = vm
         .eval(
-            r#"
+            r##"
             (() => {
-              const target = document.createElement("div");
-              const element = document.createElement("div");
-              const defaultReferences = element.ariaDescribedByElements;
-              element.ariaControlsElements = [target];
-              element.ariaActiveDescendantElement = target;
+              const probe = callback => {
+                try {
+                  callback();
+                  return "ok";
+                } catch (error) {
+                  return error && error.name;
+                }
+              };
+              const html = document.documentElement ||
+                document.appendChild(document.createElement("html"));
+              const body = document.body ||
+                html.appendChild(document.createElement("body"));
+              const container = document.createElement("div");
+              container.innerHTML = `
+                <input aria-activedescendant="first" aria-describedby="first second">
+                <p id="first"></p><p id="second"></p>`;
+              body.appendChild(container);
+              const element = container.querySelector("input");
+              const first = container.querySelector("#first");
+              const second = container.querySelector("#second");
+              const initialDescriptions = element.ariaDescribedByElements;
+              const initialActive = element.ariaActiveDescendantElement;
+
+              container.remove();
+              const disconnectedDescriptions = element.ariaDescribedByElements;
+              const disconnectedActive = element.ariaActiveDescendantElement;
+              body.appendChild(container);
+
+              const assigned = [first, second];
+              element.ariaControlsElements = assigned;
+              assigned.pop();
+              const explicitControlsAttributeBlank =
+                element.getAttribute("aria-controls") === "";
+              const controls = element.ariaControlsElements;
+              const cachedControls = element.ariaControlsElements;
+              container.remove();
+              const disconnectedControls = element.ariaControlsElements;
+              body.appendChild(container);
+
+              element.setAttribute("aria-controls", "second");
+              const contentAttributeControls = element.ariaControlsElements;
+              element.removeAttribute("aria-controls");
+
+              element.ariaActiveDescendantElement = first;
+              const explicitActive = element.ariaActiveDescendantElement;
+              element.ariaActiveDescendantElement = null;
+
+              const missing = document.createElement("div");
+              const reactions = [];
+              class AriaReferenceElement extends HTMLElement {
+                static observedAttributes = ["aria-controls"];
+                attributeChangedCallback() {
+                  reactions.push(this.ariaControlsElements?.[0] === first);
+                }
+              }
+              customElements.define("aria-reference-element", AriaReferenceElement);
+              const custom = document.createElement("aria-reference-element");
+              body.appendChild(custom);
+              custom.ariaControlsElements = [first];
               return [
-                Array.isArray(defaultReferences),
-                defaultReferences.length,
-                element.getAttribute("aria-controls") === "",
-                element.ariaControlsElements[0] === target,
-                element.getAttribute("aria-activedescendant") === "",
-                element.ariaActiveDescendantElement === target
+                missing.ariaDescribedByElements === null,
+                initialDescriptions.length === 2 && initialDescriptions[0] === first && initialDescriptions[1] === second,
+                initialActive === first,
+                disconnectedDescriptions.length === 2 && disconnectedDescriptions[0] === first && disconnectedDescriptions[1] === second,
+                disconnectedActive === first,
+                explicitControlsAttributeBlank,
+                controls.length === 2 && controls[0] === first && controls[1] === second,
+                Object.isFrozen(controls),
+                controls === cachedControls,
+                disconnectedControls === controls,
+                contentAttributeControls.length === 1 && contentAttributeControls[0] === second,
+                element.ariaControlsElements === null,
+                explicitActive === first,
+                element.ariaActiveDescendantElement === null,
+                !element.hasAttribute("aria-activedescendant"),
+                probe(() => { element.ariaActiveDescendantElement = "not an element"; }),
+                probe(() => { element.ariaControlsElements = [first, 1]; }),
+                probe(() => { element.ariaControlsElements = first; }),
+                reactions.length === 1 && reactions[0]
               ].join("|");
             })()
-            "#,
+            "##,
         )
         .expect("ARIA element reference reflection probe should evaluate");
 
-    assert_eq!(result, "true|0|true|true|true|true");
+    assert_eq!(
+        result,
+        "true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|TypeError|TypeError|TypeError|true"
+    );
 }
 
 #[test]
