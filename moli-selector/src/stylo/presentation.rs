@@ -26,7 +26,13 @@ use style_traits::{ParsingMode, ToCss};
 
 use crate::dom::native::Element;
 
-use super::{presentational_hints::synthesize_hidden_presentational_hint, query::QueryElement};
+use super::{
+    presentational_hints::{
+        synthesize_directionality_presentational_hint,
+        synthesize_hidden_presentational_hint,
+    },
+    query::QueryElement,
+};
 
 const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
 const SVG_NAMESPACE: &str = "http://www.w3.org/2000/svg";
@@ -176,6 +182,12 @@ impl QueryElement<'_> {
             ));
         }
         synthesize_hidden_presentational_hint(
+            self.host(),
+            self.handle(),
+            self.shared_lock(),
+            hints,
+        );
+        synthesize_directionality_presentational_hint(
             self.host(),
             self.handle(),
             self.shared_lock(),
