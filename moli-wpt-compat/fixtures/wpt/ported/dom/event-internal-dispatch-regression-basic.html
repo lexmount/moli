@@ -92,27 +92,28 @@ test(function () {
   (document.body || document.documentElement).appendChild(parent);
   const calls = [];
 
-  parent.addEventListener("moli-target-handler-stop", function () {
+  parent.addEventListener("click", function () {
     calls.push("parent-bubble");
   });
-  target["onmoli-target-handler-stop"] = function (event) {
+  target.onclick = function (event) {
     calls.push("target-handler");
     event.stopPropagation();
   };
-  target.addEventListener("moli-target-handler-stop", function () {
+  target.addEventListener("click", function () {
     calls.push("target-capture");
   }, { capture: true });
-  target.addEventListener("moli-target-handler-stop", function () {
+  target.addEventListener("click", function () {
     calls.push("target-bubble");
   });
 
-  target.dispatchEvent(new Event("moli-target-handler-stop", { bubbles: true }));
-  target["onmoli-target-handler-stop"] = null;
+  target.dispatchEvent(new Event("click", { bubbles: true }));
+  target.onclick = null;
   parent.remove();
 
   assert_array_equals(calls, [
-    "target-handler",
     "target-capture",
+    "target-handler",
+    "target-bubble",
   ]);
-}, "stopPropagation from an at-target event handler skips later at-target bubble listeners");
+}, "stopPropagation from an at-target event handler keeps later target listeners and skips ancestors");
 </script>

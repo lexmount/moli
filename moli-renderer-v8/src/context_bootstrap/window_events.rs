@@ -146,10 +146,6 @@ pub(crate) fn is_window_event_handler_property(property: &str) -> bool {
         || SECURE_GLOBAL_EVENT_HANDLER_PROPERTIES.contains(&property)
 }
 
-pub(crate) use accessors::{
-    set_window_body_onerror_handler_compiled, set_window_onerror_handler_value,
-    window_body_onerror_handler_is_compiled,
-};
 pub(super) use accessors::{
     window_console_getter, window_event_getter, window_event_setter,
     window_onerror_getter_function, window_onerror_setter_function,
