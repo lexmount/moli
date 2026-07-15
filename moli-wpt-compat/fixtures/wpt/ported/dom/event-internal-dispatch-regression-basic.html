@@ -102,11 +102,22 @@ test(function () {
     calls.push("target-handler");
     event.stopPropagation();
   };
+  target.addEventListener("click", function () {
+    calls.push("target-capture");
+  }, { capture: true });
+  target.addEventListener("click", function () {
+    calls.push("target-bubble");
+  });
 
   target.dispatchEvent(new Event("click", { bubbles: true }));
   target.onclick = null;
   parent.remove();
 
-  assert_array_equals(calls, ["parent-capture", "target-handler"]);
-}, "stopPropagation from a native click handler skips ancestor bubble listeners");
+  assert_array_equals(calls, [
+    "parent-capture",
+    "target-capture",
+    "target-handler",
+    "target-bubble",
+  ]);
+}, "stopPropagation from an at-target event handler keeps later target listeners and skips ancestors");
 </script>
