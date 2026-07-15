@@ -923,7 +923,11 @@ fn script_source_setter_function<'s>(
     let _ = unsafe { &mut *runtime_ptr }
         .dom_host_mut()
         .set_script_text_internal_slot(handle, &text);
-    let _ = set_text_content_in_reaction_scope(scope, runtime_ptr, handle, &text);
+    if sink == TrustedScriptElementSink::InnerText {
+        let _ = set_inner_text_in_reaction_scope(scope, runtime_ptr, handle, &text);
+    } else {
+        let _ = set_text_content_in_reaction_scope(scope, runtime_ptr, handle, &text);
+    }
     rv.set_undefined();
 }
 
