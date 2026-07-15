@@ -81,6 +81,12 @@ struct TrustedTypePolicyFactoryInterfaceDeclaration {
         enumerable
     )]
     empty_script: (),
+    #[webapi(
+        accessor_property = "defaultPolicy",
+        getter = trusted_types_default_policy_getter_callback,
+        enumerable
+    )]
+    default_policy: (),
 }
 
 #[derive(WebApiObject)]
@@ -565,10 +571,21 @@ fn trusted_types_empty_value_getter_callback<'s>(
         return;
     };
     let Some(value) = get_private_value(scope, args.this(), slot) else {
-        throw_type_error(scope, "Illegal invocation");
         return;
     };
     rv.set(value);
+}
+
+fn trusted_types_default_policy_getter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    _args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let global = scope.get_current_context().global(scope);
+    rv.set(
+        get_private_value(scope, global, TRUSTED_TYPES_DEFAULT_POLICY_SLOT)
+            .unwrap_or_else(|| v8::null(scope).into()),
+    );
 }
 
 fn trusted_types_create_policy_callback<'s>(
@@ -652,10 +669,6 @@ fn trusted_type_policy_create_callback<'s>(
         return;
     };
     let policy = args.this();
-    if !web_api_interfaces::TrustedTypePolicy::is_instance(scope, policy) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     let Some(input) = webidl::required_argument::<webidl::DomString16>(
         scope,
         &args,
@@ -1009,10 +1022,6 @@ fn trusted_type_policy_name_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !web_api_interfaces::TrustedTypePolicy::is_instance(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
     let Some(name) = get_private_value(scope, args.this(), TRUSTED_TYPES_POLICY_NAME_SLOT) else {
         throw_type_error(scope, "Illegal invocation");
         return;
