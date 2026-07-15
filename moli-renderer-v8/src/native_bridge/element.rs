@@ -255,12 +255,12 @@ pub(crate) use details_dialog::{
     queue_details_toggle_event_for_attribute_change, queue_parser_details_toggle_event,
     queue_parser_details_toggle_events_in_subtree,
 };
-pub(crate) use event_handlers::compile_window_body_onmessageerror_attribute;
 use event_handlers::install_global_event_handler_template_bindings as install_global_event_handler_templates_for_owner;
 pub(crate) use event_handlers::{
     EventAttributeHandlerScope, GlobalEventHandlerOwner, compile_event_attribute_handler_for_owner,
     event_handler_content_attribute_name, initialize_parser_inserted_body_window_event_handlers,
     node_event_handler_getter_function, node_event_handler_setter_function,
+    compile_window_body_onload_attribute, compile_window_body_onmessageerror_attribute,
 };
 use event_handlers::{
     body_onerror_getter_function, body_onerror_setter_function, body_onload_getter_function,
@@ -705,14 +705,6 @@ pub(in crate::native_bridge) fn set_live_element_attribute_appending_to_current_
         queue_media_load_if_source_or_loading_change(scope, runtime_ptr, handle, name);
         queue_text_track_load_if_source(scope, runtime_ptr, handle, name);
     }
-    if did_set {
-        event_handlers::invalidate_event_handler_content_attribute(
-            scope,
-            runtime_ptr,
-            handle,
-            name,
-        );
-    }
     crate::context_bootstrap::reset_html_canvas_backing_store_for_dimension_assignment(
         scope,
         runtime_ptr,
@@ -816,14 +808,6 @@ pub(in crate::native_bridge) fn set_live_element_attribute_ns_appending_to_curre
         queue_media_load_if_source_or_loading_change(scope, runtime_ptr, handle, local_name);
         queue_text_track_load_if_source(scope, runtime_ptr, handle, local_name);
     }
-    if did_set && namespace.is_none() {
-        event_handlers::invalidate_event_handler_content_attribute(
-            scope,
-            runtime_ptr,
-            handle,
-            local_name,
-        );
-    }
     crate::context_bootstrap::reset_html_canvas_backing_store_for_dimension_assignment(
         scope,
         runtime_ptr,
@@ -871,14 +855,6 @@ pub(in crate::native_bridge) fn remove_live_element_attribute_appending_to_curre
         }
         queue_media_load_if_source_or_loading_change(scope, runtime_ptr, handle, name);
         queue_text_track_load_if_source(scope, runtime_ptr, handle, name);
-    }
-    if did_remove {
-        event_handlers::invalidate_event_handler_content_attribute(
-            scope,
-            runtime_ptr,
-            handle,
-            name,
-        );
     }
     did_remove
 }
@@ -952,14 +928,6 @@ pub(in crate::native_bridge) fn remove_live_element_attribute_ns_appending_to_cu
         }
         queue_media_load_if_source_or_loading_change(scope, runtime_ptr, handle, local_name);
         queue_text_track_load_if_source(scope, runtime_ptr, handle, local_name);
-    }
-    if did_remove && namespace.is_none() {
-        event_handlers::invalidate_event_handler_content_attribute(
-            scope,
-            runtime_ptr,
-            handle,
-            local_name,
-        );
     }
     did_remove
 }
