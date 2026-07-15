@@ -2610,6 +2610,7 @@ dependencies = [
  "selectors",
  "serde_json",
  "servo_arc",
+ "strum",
  "thin-vec",
  "url",
 ]
