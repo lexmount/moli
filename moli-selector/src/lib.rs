@@ -1902,6 +1902,70 @@ mod tests {
     }
 
     #[test]
+    fn dom_api_selectors_option_disabledness_respects_association_boundaries() {
+        let url = url::Url::parse("https://example.test/").unwrap();
+        let mut host = DomHost::from_dom(NativeDom::new_html(url));
+        host.reset_html_document_shell();
+        let body = host.document_body_handle().unwrap();
+        let engine = QueryEngine;
+
+        let select = host.create_element("select");
+        let optgroup = host.create_element("optgroup");
+        let div = host.create_element("div");
+        let option = host.create_element("option");
+        assert!(host.append_child(body, select));
+        assert!(host.append_child(select, optgroup));
+        assert!(host.append_child(optgroup, div));
+        assert!(host.append_child(div, option));
+        assert!(host.set_attribute(optgroup, "disabled", ""));
+        assert!(engine.matches_host(&host, option, ":disabled").unwrap());
+
+        let disabled_select = host.create_element("select");
+        let valid_optgroup = host.create_element("optgroup");
+        let valid_option = host.create_element("option");
+        let nested_optgroup = host.create_element("optgroup");
+        let nested_optgroup_option = host.create_element("option");
+        let parent_option = host.create_element("option");
+        let nested_option = host.create_element("option");
+        let hr = host.create_element("hr");
+        let hr_option = host.create_element("option");
+        let datalist = host.create_element("datalist");
+        let datalist_option = host.create_element("option");
+        assert!(host.set_attribute(disabled_select, "disabled", ""));
+        assert!(host.append_child(body, disabled_select));
+        assert!(host.append_child(disabled_select, valid_optgroup));
+        assert!(host.append_child(valid_optgroup, valid_option));
+        assert!(host.append_child(valid_optgroup, nested_optgroup));
+        assert!(host.append_child(nested_optgroup, nested_optgroup_option));
+        assert!(host.append_child(disabled_select, parent_option));
+        assert!(host.append_child(parent_option, nested_option));
+        assert!(host.append_child(disabled_select, hr));
+        assert!(host.append_child(hr, hr_option));
+        assert!(host.append_child(disabled_select, datalist));
+        assert!(host.append_child(datalist, datalist_option));
+
+        assert!(
+            engine
+                .matches_host(&host, valid_optgroup, ":disabled")
+                .unwrap()
+        );
+        assert!(
+            engine
+                .matches_host(&host, valid_option, ":disabled")
+                .unwrap()
+        );
+        for handle in [
+            nested_optgroup,
+            nested_optgroup_option,
+            nested_option,
+            hr_option,
+            datalist_option,
+        ] {
+            assert!(!engine.matches_host(&host, handle, ":disabled").unwrap());
+        }
+    }
+
+    #[test]
     fn dom_api_selectors_disabled_fieldset_disables_option_descendants() {
         let url = url::Url::parse("https://example.test/").unwrap();
         let mut host = DomHost::from_dom(NativeDom::new_html(url));
