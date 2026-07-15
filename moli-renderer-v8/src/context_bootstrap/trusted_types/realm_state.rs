@@ -61,6 +61,25 @@ pub(super) fn install_lazy_trusted_types_runtime_state<'s>(
         return Ok(());
     }
     install_trusted_script_code_like_constructor(scope, global)?;
+    let policy_constructor = TrustedTypePolicyInterfaceDeclaration::build(scope)
+        .get_function(scope)
+        .ok_or_else(|| anyhow!("failed to build TrustedTypePolicy interface"))?;
+    global
+        .define_own_property(
+            scope,
+            v8str(scope, "TrustedTypePolicy").into(),
+            policy_constructor.into(),
+            v8::PropertyAttribute::DONT_ENUM,
+        )
+        .unwrap_or(false)
+        .then_some(())
+        .ok_or_else(|| anyhow!("failed to publish TrustedTypePolicy interface"))?;
+    set_private_value(
+        scope,
+        global,
+        TRUSTED_TYPE_POLICY_CONSTRUCTOR_SLOT,
+        policy_constructor.into(),
+    );
     let policy_factory_constructor = TrustedTypePolicyFactoryInterfaceDeclaration::build(scope)
         .get_function(scope)
         .ok_or_else(|| anyhow!("failed to build TrustedTypePolicyFactory interface"))?;

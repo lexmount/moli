@@ -309,7 +309,7 @@ fn wpt_webdriver_delete_all_cookies_is_declared_on_prototype() {
 }
 
 #[test]
-fn trusted_type_policy_declared_methods_preserve_surface() {
+fn trusted_type_policy_interface_shares_methods_and_rejects_missing_callbacks() {
     let mut vm = new_storage_test_vm("https://trusted-type-policy-declared-methods.test/");
 
     let result = vm
@@ -324,11 +324,9 @@ fn trusted_type_policy_declared_methods_preserve_surface() {
     createScript: value => value,
     createScriptURL: value => value
   });
-  const describe = (object, name) => {
-    const descriptor = Object.getOwnPropertyDescriptor(object, name);
-    if (!descriptor) {
-      return `${name}:missing`;
-    }
+  const prototype = TrustedTypePolicy.prototype;
+  const describe = name => {
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
     return [
       name,
       descriptor.enumerable,
@@ -342,36 +340,55 @@ fn trusted_type_policy_declared_methods_preserve_surface() {
   const html = htmlOnly.createHTML("ok");
   const script = full.createScript("1 + 1");
   const scriptURL = full.createScriptURL("data:text/javascript,");
-  const missingCallbackErrors = ["createScript", "createScriptURL"].map(name => {
+  const errorName = callback => {
     try {
-      htmlOnly[name]("missing");
+      callback();
       return "none";
     } catch (error) {
-      return error && error.name;
+      return error.constructor.name;
     }
-  });
+  };
+  const nameDescriptor = Object.getOwnPropertyDescriptor(prototype, "name");
 
   return JSON.stringify({
     htmlOnlyKeys: Object.keys(htmlOnly).join(","),
     fullKeys: Object.keys(full).join(","),
-    htmlOnlyMethods: ["createHTML", "createScript", "createScriptURL"].map(name => describe(htmlOnly, name)),
-    fullMethods: ["createHTML", "createScript", "createScriptURL"].map(name => describe(full, name)),
+    ownMethods: ["createHTML", "createScript", "createScriptURL"].map(name => Object.hasOwn(htmlOnly, name)),
+    prototypeMethods: ["createHTML", "createScript", "createScriptURL"].map(describe),
+    name: [
+      htmlOnly.name,
+      full.name,
+      typeof nameDescriptor.get,
+      nameDescriptor.set === undefined,
+      nameDescriptor.enumerable,
+      nameDescriptor.configurable,
+      Object.hasOwn(htmlOnly, "name")
+    ],
+    brands: [
+      htmlOnly instanceof TrustedTypePolicy,
+      full instanceof TrustedTypePolicy,
+      Object.getPrototypeOf(htmlOnly) === prototype,
+      htmlOnly.createHTML === full.createHTML
+    ],
+    missingCallbackErrors: [
+      errorName(() => htmlOnly.createScript("1 + 1")),
+      errorName(() => htmlOnly.createScriptURL("data:text/javascript,"))
+    ],
     trusted: [
       trustedTypes.isHTML(html),
       trustedTypes.isScript(script),
       trustedTypes.isScriptURL(scriptURL)
     ],
-    values: [String(html), String(script), String(scriptURL)],
-    missingCallbackErrors
+    values: [String(html), String(script), String(scriptURL)]
   });
 })()
 "#,
         )
-        .expect("TrustedTypePolicy optional method descriptors should evaluate");
+        .expect("TrustedTypePolicy interface descriptors should evaluate");
 
     assert_eq!(
         result,
-        r#"{"htmlOnlyKeys":"","fullKeys":"","htmlOnlyMethods":["createHTML:false:true:true:function:createHTML:1","createScript:false:true:true:function:createScript:1","createScriptURL:false:true:true:function:createScriptURL:1"],"fullMethods":["createHTML:false:true:true:function:createHTML:1","createScript:false:true:true:function:createScript:1","createScriptURL:false:true:true:function:createScriptURL:1"],"trusted":[true,true,true],"values":["<b>ok</b>","1 + 1","data:text/javascript,"],"missingCallbackErrors":["TypeError","TypeError"]}"#
+        r#"{"htmlOnlyKeys":"","fullKeys":"","ownMethods":[false,false,false],"prototypeMethods":["createHTML:true:true:true:function:createHTML:1","createScript:true:true:true:function:createScript:1","createScriptURL:true:true:true:function:createScriptURL:1"],"name":["html-only","full","function",true,true,true,false],"brands":[true,true,true,true],"missingCallbackErrors":["TypeError","TypeError"],"trusted":[true,true,true],"values":["<b>ok</b>","1 + 1","data:text/javascript,"]}"#
     );
 }
 
