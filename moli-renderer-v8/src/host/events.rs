@@ -4,6 +4,7 @@ use crate::{
         CHILD_BROWSING_CONTEXT_HANDLE_SLOT, clear_event_composed_path, event_is_error_event,
         mark_event_trusted, set_event_composed_path,
     },
+    document_runtime::DocumentRuntime,
     dom_parser::DOM_PARSER_FOREIGN_NODE_SLOT,
     util::{get_private_object, get_private_value, serialize_v8_iter_array, set_private_value},
 };
@@ -93,17 +94,99 @@ impl EventListenerRegistration {
 }
 
 #[derive(Clone, Copy)]
-enum EventHandlerPropertyEntry {
-    Callback {
-        callback_id: crate::native_bridge::EventCallbackId,
-        registration_id: u64,
-    },
+enum EventHandlerPropertyState {
+    Uncompiled,
+    Callback(crate::native_bridge::EventCallbackId),
     Null,
+}
+
+#[derive(Clone, Copy)]
+struct EventHandlerPropertyEntry {
+    listener_id: Option<u64>,
+    state: EventHandlerPropertyState,
+}
+
+fn event_handler_callback_id(
+    entry: EventHandlerPropertyEntry,
+) -> Option<crate::native_bridge::EventCallbackId> {
+    match entry.state {
+        EventHandlerPropertyState::Callback(callback_id) => Some(callback_id),
+        EventHandlerPropertyState::Uncompiled | EventHandlerPropertyState::Null => None,
+    }
 }
 
 enum EventHandlerPropertyValue {
     Callback(crate::native_bridge::EventCallbackId),
     Null,
+}
+
+struct EventListenerSnapshot {
+    id: u64,
+    callback_id: crate::native_bridge::EventCallbackId,
+    function_name: String,
+    script_id: i32,
+    script_url: Option<String>,
+    line_number: Option<u32>,
+    column_number: Option<u32>,
+    capture: bool,
+    once: bool,
+    passive: bool,
+}
+
+enum EventDispatchEntry {
+    Listener(EventListenerSnapshot),
+    Handler { id: u64 },
+}
+
+impl EventDispatchEntry {
+    fn id(&self) -> u64 {
+        match self {
+            Self::Listener(listener) => listener.id,
+            Self::Handler { id } => *id,
+        }
+    }
+}
+
+fn body_or_frameset_reflects_event_type(event_type: &str) -> bool {
+    matches!(event_type, "load" | "error" | "messageerror")
+}
+
+pub(crate) fn event_handler_content_attribute_present(
+    runtime: &DocumentRuntime,
+    target: EventTargetHandle,
+    event_type: &str,
+) -> bool {
+    let attribute_name = format!("on{event_type}");
+    let handle = match target {
+        EventTargetHandle::Node(handle) => {
+            if body_or_frameset_reflects_event_type(event_type)
+                && runtime.dom_host().node(handle).is_some_and(|node| {
+                    node.is_html_element_named("body") || node.is_html_element_named("frameset")
+                })
+            {
+                return false;
+            }
+            handle
+        }
+        EventTargetHandle::Window if body_or_frameset_reflects_event_type(event_type) => {
+            let document_handle = runtime.document_handle();
+            let dom = runtime.dom_host().dom();
+            let Some(handle) = dom
+                .node(document_handle)
+                .and_then(crate::dom::native::Node::as_document)
+                .and_then(|document| document.body_or_frameset_handle(dom, document_handle))
+            else {
+                return false;
+            };
+            handle
+        }
+        EventTargetHandle::ChildWindow(_) => return false,
+        EventTargetHandle::Window => return false,
+    };
+    runtime
+        .dom_host()
+        .get_attribute(handle, &attribute_name)
+        .is_some()
 }
 
 pub(crate) struct HostEventTargetRegistry {
@@ -256,8 +339,8 @@ fn invoke_event_handler_property<'s>(
     event: v8::Local<'s, v8::Object>,
 ) {
     let handler_name = format!("on{event_type}");
-    let (callback_id, temporary) = match registry.event_handler_property_value(target, event_type) {
-        Some(EventHandlerPropertyValue::Callback(callback_id)) => (callback_id, false),
+    let callback_id = match registry.event_handler_property_value(target, event_type) {
+        Some(EventHandlerPropertyValue::Callback(callback_id)) => callback_id,
         Some(EventHandlerPropertyValue::Null) => {
             return;
         }
@@ -268,17 +351,60 @@ fn invoke_event_handler_property<'s>(
             let handler = target_object
                 .get(scope, key.into())
                 .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok());
-            let (handler, persistent) = match handler {
-                Some(handler) => (handler, false),
-                None if target == EventTargetHandle::Window && event_type == "messageerror" => {
+            if let Some(value) = registry.event_handler_property_value(target, event_type) {
+                match value {
+                    EventHandlerPropertyValue::Callback(callback_id) => {
+                        return invoke_registered_event_handler(
+                            registry,
+                            scope,
+                            host_ptr,
+                            target,
+                            invocation_target_in_shadow_tree,
+                            event_type,
+                            event,
+                            callback_id,
+                        );
+                    }
+                    EventHandlerPropertyValue::Null => return,
+                }
+            }
+            let handler = match handler {
+                Some(handler) => handler,
+                None if target == EventTargetHandle::Window && event_type == "load" => {
                     let Some(handler) =
-                        crate::native_bridge::element::compile_window_body_onmessageerror_attribute(
+                        crate::native_bridge::element::compile_window_body_onload_attribute(
                             scope, host_ptr,
                         )
                     else {
+                        let previous = registry.set_compiled_event_handler_property(
+                            EventTargetHandle::Window,
+                            event_type,
+                            None,
+                        );
+                        if let Some(previous) = previous {
+                            unsafe { &mut *host_ptr }.release_event_callback(previous);
+                        }
                         return;
                     };
-                    (handler, true)
+                    handler
+                }
+                None if target == EventTargetHandle::Window && event_type == "messageerror" => {
+                    let handler =
+                        crate::native_bridge::element::compile_window_body_onmessageerror_attribute(
+                            scope, host_ptr,
+                        );
+                    let Some(handler) = handler else {
+                        let previous = registry.set_compiled_event_handler_property(
+                            EventTargetHandle::Window,
+                            event_type,
+                            None,
+                        );
+                        if let Some(previous) = previous {
+                            unsafe { &mut *host_ptr }.release_event_callback(previous);
+                        }
+                        return;
+                    };
+                    handler
                 }
                 None => return,
             };
@@ -295,24 +421,38 @@ fn invoke_event_handler_property<'s>(
                 relevant_context,
                 incumbent_context,
             );
-            if persistent {
-                if let Some(previous) = registry.set_event_handler_property(
-                    EventTargetHandle::Window,
-                    event_type,
-                    Some(callback_id),
-                ) {
-                    unsafe { &mut *host_ptr }.release_event_callback(previous);
-                }
-                (callback_id, false)
-            } else {
-                (callback_id, true)
+            if let Some(previous) =
+                registry.set_compiled_event_handler_property(target, event_type, Some(callback_id))
+            {
+                unsafe { &mut *host_ptr }.release_event_callback(previous);
             }
+            callback_id
         }
     };
+    invoke_registered_event_handler(
+        registry,
+        scope,
+        host_ptr,
+        target,
+        invocation_target_in_shadow_tree,
+        event_type,
+        event,
+        callback_id,
+    );
+}
+
+fn invoke_registered_event_handler<'s>(
+    _registry: &mut HostEventTargetRegistry,
+    scope: &mut v8::PinScope<'s, '_>,
+    host_ptr: *mut JsContextHost,
+    target: EventTargetHandle,
+    invocation_target_in_shadow_tree: bool,
+    event_type: &str,
+    event: v8::Local<'s, v8::Object>,
+    callback_id: crate::native_bridge::EventCallbackId,
+) {
+    let handler_name = format!("on{event_type}");
     let Some(prepared) = unsafe { &*host_ptr }.prepare_event_callback(scope, callback_id) else {
-        if temporary {
-            unsafe { &mut *host_ptr }.release_event_callback(callback_id);
-        }
         return;
     };
 
@@ -348,9 +488,6 @@ fn invoke_event_handler_property<'s>(
             event,
             &[message, source, lineno, colno, error],
         );
-        if temporary {
-            unsafe { &mut *host_ptr }.release_event_callback(callback_id);
-        }
         if let Some(returned) = returned {
             let returned = v8::Local::new(scope, returned);
             if returned.boolean_value(scope) {
@@ -385,9 +522,6 @@ fn invoke_event_handler_property<'s>(
         event,
         &[event.into()],
     );
-    if temporary {
-        unsafe { &mut *host_ptr }.release_event_callback(callback_id);
-    }
     if let Some(returned) = returned {
         let returned = v8::Local::new(scope, returned);
         if returned.is_boolean() && !returned.boolean_value(scope) {
@@ -408,33 +542,6 @@ fn invoke_event_handler_property<'s>(
             elapsed_ms = timing_started.elapsed().as_millis(),
         );
     }
-}
-
-fn invoke_event_target_handler_property<'s>(
-    registry: &mut HostEventTargetRegistry,
-    scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
-    target: EventTargetHandle,
-    invocation_target_in_shadow_tree: bool,
-    target_object: v8::Local<'s, v8::Object>,
-    event_type: &str,
-    event: v8::Local<'s, v8::Object>,
-) {
-    if matches!(target, EventTargetHandle::ChildWindow(_)) {
-        // Child Window event-handler properties share the native listener
-        // registry and are invoked in registration order by the listener phase.
-        return;
-    }
-    invoke_event_handler_property(
-        registry,
-        scope,
-        host_ptr,
-        target,
-        invocation_target_in_shadow_tree,
-        target_object,
-        event_type,
-        event,
-    );
 }
 
 fn call_event_target_listeners_filtered<'s>(
@@ -657,10 +764,11 @@ impl HostEventTargetRegistry {
         for (target, handlers) in &mut self.handler_properties {
             if targets_to_clear.contains(target) {
                 for handler in handlers.values_mut() {
-                    if let EventHandlerPropertyEntry::Callback { callback_id, .. } = *handler {
-                        retired.insert(callback_id);
+                    if let EventHandlerPropertyState::Callback(callback_id) = &handler.state {
+                        retired.insert(*callback_id);
                     }
-                    *handler = EventHandlerPropertyEntry::Null;
+                    handler.listener_id = None;
+                    handler.state = EventHandlerPropertyState::Null;
                 }
             }
         }
@@ -699,65 +807,120 @@ impl HostEventTargetRegistry {
         event_type: &str,
         callback_id: Option<crate::native_bridge::EventCallbackId>,
     ) -> Option<crate::native_bridge::EventCallbackId> {
-        let existing_registration_id = self
+        let existing_listener_id = self
             .handler_properties
             .get(&target)
             .and_then(|handlers| handlers.get(event_type))
-            .and_then(|entry| match entry {
-                EventHandlerPropertyEntry::Callback {
-                    registration_id, ..
-                } => Some(*registration_id),
-                EventHandlerPropertyEntry::Null => None,
-            });
-        let entry = match callback_id {
-            Some(callback_id) => {
-                let registration_id =
-                    existing_registration_id.unwrap_or_else(|| self.allocate_listener_id());
-                self.ensure_event_type_registration_id(target, event_type, registration_id);
-                EventHandlerPropertyEntry::Callback {
-                    callback_id,
-                    registration_id,
-                }
-            }
-            None => EventHandlerPropertyEntry::Null,
-        };
-        let previous = self
-            .handler_properties
-            .entry(target)
-            .or_default()
-            .insert(event_type.to_owned(), entry);
-        let previous_callback = match previous {
-            Some(EventHandlerPropertyEntry::Callback { callback_id, .. }) => Some(callback_id),
-            Some(EventHandlerPropertyEntry::Null) | None => None,
-        };
-        if callback_id.is_none() {
+            .and_then(|entry| entry.listener_id);
+        let listener_id = callback_id
+            .map(|_| existing_listener_id.unwrap_or_else(|| self.allocate_listener_id()));
+        if let Some(listener_id) = listener_id {
+            self.ensure_event_type_registration_id(target, event_type, listener_id);
+        }
+        let state = callback_id
+            .map(EventHandlerPropertyState::Callback)
+            .unwrap_or(EventHandlerPropertyState::Null);
+        let previous = self.handler_properties.entry(target).or_default().insert(
+            event_type.to_owned(),
+            EventHandlerPropertyEntry { listener_id, state },
+        );
+        let previous_callback = previous.and_then(event_handler_callback_id);
+        if listener_id.is_none() {
             self.remove_event_type_registration_id_if_unused(target, event_type);
         }
         previous_callback
     }
 
-    pub(crate) fn clear_event_handler_property(
+    pub(crate) fn set_compiled_event_handler_property(
         &mut self,
         target: EventTargetHandle,
         event_type: &str,
+        callback_id: Option<crate::native_bridge::EventCallbackId>,
     ) -> Option<crate::native_bridge::EventCallbackId> {
-        let removed = self
-            .handler_properties
-            .get_mut(&target)
-            .and_then(|handlers| handlers.remove(event_type));
-        let remove_target = self
+        let listener_id = self
             .handler_properties
             .get(&target)
-            .is_some_and(HashMap::is_empty);
-        if remove_target {
-            self.handler_properties.remove(&target);
+            .and_then(|handlers| handlers.get(event_type))
+            .and_then(|entry| entry.listener_id)
+            .unwrap_or_else(|| self.allocate_listener_id());
+        self.ensure_event_type_registration_id(target, event_type, listener_id);
+        let state = callback_id
+            .map(EventHandlerPropertyState::Callback)
+            .unwrap_or(EventHandlerPropertyState::Null);
+        let previous = self.handler_properties.entry(target).or_default().insert(
+            event_type.to_owned(),
+            EventHandlerPropertyEntry {
+                listener_id: Some(listener_id),
+                state,
+            },
+        );
+        previous.and_then(event_handler_callback_id)
+    }
+
+    pub(crate) fn set_event_handler_content_attribute(
+        &mut self,
+        target: EventTargetHandle,
+        event_type: &str,
+        present: bool,
+    ) -> Option<crate::native_bridge::EventCallbackId> {
+        if !present {
+            let removed = self
+                .handler_properties
+                .get_mut(&target)
+                .and_then(|handlers| handlers.remove(event_type));
+            let remove_target = self
+                .handler_properties
+                .get(&target)
+                .is_some_and(HashMap::is_empty);
+            if remove_target {
+                self.handler_properties.remove(&target);
+            }
+            let callback_id = removed.and_then(event_handler_callback_id);
+            self.remove_event_type_registration_id_if_unused(target, event_type);
+            return callback_id;
         }
-        let callback_id = match removed {
-            Some(EventHandlerPropertyEntry::Callback { callback_id, .. }) => Some(callback_id),
-            Some(EventHandlerPropertyEntry::Null) | None => None,
-        };
-        self.remove_event_type_registration_id_if_unused(target, event_type);
-        callback_id
+        let listener_id = self
+            .handler_properties
+            .get(&target)
+            .and_then(|handlers| handlers.get(event_type))
+            .and_then(|entry| entry.listener_id)
+            .unwrap_or_else(|| self.allocate_listener_id());
+        self.ensure_event_type_registration_id(target, event_type, listener_id);
+        let previous = self.handler_properties.entry(target).or_default().insert(
+            event_type.to_owned(),
+            EventHandlerPropertyEntry {
+                listener_id: Some(listener_id),
+                state: EventHandlerPropertyState::Uncompiled,
+            },
+        );
+        previous.and_then(event_handler_callback_id)
+    }
+
+    pub(crate) fn has_event_handler_property_entry(
+        &self,
+        target: EventTargetHandle,
+        event_type: &str,
+    ) -> bool {
+        self.handler_properties
+            .get(&target)
+            .is_some_and(|handlers| handlers.contains_key(event_type))
+    }
+
+    pub(crate) fn ensure_event_handler_content_attribute(
+        &mut self,
+        target: EventTargetHandle,
+        event_type: &str,
+        present: bool,
+    ) {
+        if present
+            && self
+                .handler_properties
+                .get(&target)
+                .and_then(|handlers| handlers.get(event_type))
+                .is_none()
+        {
+            let _ = self.set_event_handler_content_attribute(target, event_type, true);
+        }
     }
 
     fn event_handler_property_value(
@@ -765,15 +928,17 @@ impl HostEventTargetRegistry {
         target: EventTargetHandle,
         event_type: &str,
     ) -> Option<EventHandlerPropertyValue> {
-        match self
+        match &self
             .handler_properties
             .get(&target)
             .and_then(|target_handlers| target_handlers.get(event_type))?
+            .state
         {
-            EventHandlerPropertyEntry::Callback { callback_id, .. } => {
+            EventHandlerPropertyState::Uncompiled => None,
+            EventHandlerPropertyState::Callback(callback_id) => {
                 Some(EventHandlerPropertyValue::Callback(*callback_id))
             }
-            EventHandlerPropertyEntry::Null => Some(EventHandlerPropertyValue::Null),
+            EventHandlerPropertyState::Null => Some(EventHandlerPropertyValue::Null),
         }
     }
 
@@ -782,13 +947,15 @@ impl HostEventTargetRegistry {
         target: EventTargetHandle,
         event_type: &str,
     ) -> Option<Option<crate::native_bridge::EventCallbackId>> {
-        match self
+        match &self
             .handler_properties
             .get(&target)
             .and_then(|target_handlers| target_handlers.get(event_type))?
+            .state
         {
-            EventHandlerPropertyEntry::Callback { callback_id, .. } => Some(Some(*callback_id)),
-            EventHandlerPropertyEntry::Null => Some(None),
+            EventHandlerPropertyState::Uncompiled => None,
+            EventHandlerPropertyState::Callback(callback_id) => Some(Some(*callback_id)),
+            EventHandlerPropertyState::Null => Some(None),
         }
     }
 
@@ -835,11 +1002,10 @@ impl HostEventTargetRegistry {
         }
         if let Some(target_handlers) = self.handler_properties.get(&target) {
             for (event_type, entry) in target_handlers {
-                let EventHandlerPropertyEntry::Callback {
-                    callback_id,
-                    registration_id,
-                } = *entry
-                else {
+                let EventHandlerPropertyState::Callback(callback_id) = entry.state else {
+                    continue;
+                };
+                let Some(registration_id) = entry.listener_id else {
                     continue;
                 };
                 snapshots.push((
@@ -951,13 +1117,14 @@ impl HostEventTargetRegistry {
         for target_handlers in self.handler_properties.values_mut() {
             for entry in target_handlers.values_mut() {
                 if matches!(
-                    entry,
-                    EventHandlerPropertyEntry::Callback { callback_id, .. }
-                        if retired.contains(callback_id)
+                    entry.state,
+                    EventHandlerPropertyState::Callback(callback_id)
+                        if retired.contains(&callback_id)
                 ) {
                     // Absence enables the legacy wrapper fallback, which can
                     // rediscover a callback from its retired realm.
-                    *entry = EventHandlerPropertyEntry::Null;
+                    entry.listener_id = None;
+                    entry.state = EventHandlerPropertyState::Null;
                 }
             }
         }
@@ -965,10 +1132,15 @@ impl HostEventTargetRegistry {
     }
 
     pub(crate) fn has_listener(&self, target: EventTargetHandle, event_type: &str) -> bool {
-        self.listeners
+        self.handler_properties
             .get(&target)
-            .and_then(|target_listeners| target_listeners.get(event_type))
-            .is_some_and(|entries| entries.iter().any(|entry| !entry.removed))
+            .and_then(|handlers| handlers.get(event_type))
+            .is_some_and(|entry| entry.listener_id.is_some())
+            || self
+                .listeners
+                .get(&target)
+                .and_then(|target_listeners| target_listeners.get(event_type))
+                .is_some_and(|entries| entries.iter().any(|entry| !entry.removed))
     }
 
     fn allocate_listener_id(&mut self) -> u64 {
@@ -1017,7 +1189,7 @@ impl HostEventTargetRegistry {
                 .handler_properties
                 .get(&target)
                 .and_then(|handlers| handlers.get(event_type))
-                .is_some_and(|entry| matches!(entry, EventHandlerPropertyEntry::Callback { .. }))
+                .is_some_and(|entry| entry.listener_id.is_some())
     }
 
     fn remove_event_type_registration_id_if_unused(
@@ -1050,9 +1222,7 @@ impl HostEventTargetRegistry {
                         || handler_properties
                             .get(target)
                             .and_then(|handlers| handlers.get(event_type))
-                            .is_some_and(|entry| {
-                                matches!(entry, EventHandlerPropertyEntry::Callback { .. })
-                            })
+                            .is_some_and(|entry| entry.listener_id.is_some())
                 });
                 !event_types.is_empty()
             });
@@ -1069,48 +1239,57 @@ impl HostEventTargetRegistry {
         capture_only: bool,
         at_target: bool,
     ) -> std::result::Result<DispatchStatus, String> {
-        let snapshot: Vec<(
-            u64,
-            crate::native_bridge::EventCallbackId,
-            String,
-            i32,
-            Option<String>,
-            Option<u32>,
-            Option<u32>,
-            bool,
-            bool,
-            bool,
-        )> = {
-            let Some(target_map) = self.listeners.get(&target) else {
-                return Ok(DispatchStatus::Continue);
-            };
-            let Some(entries) = target_map.get(event_type) else {
-                return Ok(DispatchStatus::Continue);
-            };
-            entries
-                .iter()
-                .filter(|entry| !entry.removed)
-                .filter(|entry| {
-                    (at_target && entry.capture == capture_only)
-                        || (capture_only && entry.capture)
-                        || (!capture_only && !entry.capture)
+        if !self.has_event_handler_property_entry(target, event_type) {
+            let content_attribute_present =
+                event_handler_content_attribute_present(unsafe { &*host_ptr }, target, event_type);
+            self.ensure_event_handler_content_attribute(
+                target,
+                event_type,
+                content_attribute_present,
+            );
+        }
+
+        let mut snapshot = self
+            .listeners
+            .get(&target)
+            .and_then(|target_map| target_map.get(event_type))
+            .into_iter()
+            .flatten()
+            .filter(|entry| !entry.removed)
+            .filter(|entry| {
+                if at_target {
+                    entry.capture == capture_only
+                } else if capture_only {
+                    entry.capture
+                } else {
+                    !entry.capture
+                }
+            })
+            .map(|entry| {
+                EventDispatchEntry::Listener(EventListenerSnapshot {
+                    id: entry.id,
+                    callback_id: entry.callback_id,
+                    function_name: entry.function_name.clone(),
+                    script_id: entry.script_id,
+                    script_url: entry.script_url.clone(),
+                    line_number: entry.line_number,
+                    column_number: entry.column_number,
+                    capture: entry.capture,
+                    once: entry.once,
+                    passive: entry.passive,
                 })
-                .map(|entry| {
-                    (
-                        entry.id,
-                        entry.callback_id,
-                        entry.function_name.clone(),
-                        entry.script_id,
-                        entry.script_url.clone(),
-                        entry.line_number,
-                        entry.column_number,
-                        entry.capture,
-                        entry.once,
-                        entry.passive,
-                    )
-                })
-                .collect()
-        };
+            })
+            .collect::<Vec<_>>();
+        if !capture_only
+            && let Some(id) = self
+                .handler_properties
+                .get(&target)
+                .and_then(|handlers| handlers.get(event_type))
+                .and_then(|entry| entry.listener_id)
+        {
+            snapshot.push(EventDispatchEntry::Handler { id });
+        }
+        snapshot.sort_by_key(EventDispatchEntry::id);
 
         if snapshot.is_empty() {
             return Ok(DispatchStatus::Continue);
@@ -1128,113 +1307,133 @@ impl HostEventTargetRegistry {
                 listener_count = snapshot.len(),
             );
         }
-        for (
-            listener_index,
-            (
-                listener_id,
-                callback_id,
-                function_name,
-                script_id,
-                script_url,
-                line_number,
-                column_number,
-                capture_flag,
-                is_once,
-                is_passive,
-            ),
-        ) in snapshot.into_iter().enumerate()
-        {
-            let still_registered = self
-                .listeners
-                .get(&target)
-                .and_then(|listeners| listeners.get(event_type))
-                .is_some_and(|entries| {
-                    entries.iter().any(|entry| {
-                        !entry.removed
-                            && entry.capture == capture_flag
-                            && entry.callback_id == callback_id
-                    })
-                });
-
-            if !still_registered {
-                continue;
-            }
-
-            let Some(prepared) = unsafe { &*host_ptr }.prepare_event_callback(scope, callback_id)
-            else {
-                self.remove_listener_by_id(target, event_type, callback_id, capture_flag);
-                unsafe {
-                    (&mut *host_ptr).unregister_abort_target_listener(callback_id);
-                    (&mut *host_ptr).release_event_callback(callback_id);
+        for (listener_index, entry) in snapshot.into_iter().enumerate() {
+            match entry {
+                EventDispatchEntry::Handler { id } => {
+                    let still_registered = self
+                        .handler_properties
+                        .get(&target)
+                        .and_then(|handlers| handlers.get(event_type))
+                        .is_some_and(|entry| entry.listener_id == Some(id));
+                    if !still_registered {
+                        continue;
+                    }
+                    set_event_internal_flag(scope, event, EVENT_PASSIVE_SLOT, false);
+                    let target_object = event_target_object(scope, host_ptr, target)?;
+                    invoke_event_handler_property(
+                        self,
+                        scope,
+                        host_ptr,
+                        target,
+                        invocation_target_in_shadow_tree,
+                        target_object,
+                        event_type,
+                        event,
+                    );
                 }
-                tracing::debug!(
-                    listener_id,
-                    ?target,
-                    event_type,
-                    "skipped event listener owned by a retired execution context"
-                );
-                continue;
-            };
+                EventDispatchEntry::Listener(listener) => {
+                    let still_registered = self
+                        .listeners
+                        .get(&target)
+                        .and_then(|listeners| listeners.get(event_type))
+                        .is_some_and(|entries| {
+                            entries
+                                .iter()
+                                .any(|entry| !entry.removed && entry.id == listener.id)
+                        });
+                    if !still_registered {
+                        continue;
+                    }
 
-            if is_once {
-                self.remove_listener_by_id(target, event_type, callback_id, capture_flag);
-                unsafe {
-                    (&mut *host_ptr).unregister_abort_target_listener(callback_id);
-                    (&mut *host_ptr).release_event_callback(callback_id);
+                    let callback_id = listener.callback_id;
+                    let Some(prepared) =
+                        unsafe { &*host_ptr }.prepare_event_callback(scope, callback_id)
+                    else {
+                        self.remove_listener_by_id(
+                            target,
+                            event_type,
+                            callback_id,
+                            listener.capture,
+                        );
+                        unsafe {
+                            (&mut *host_ptr).unregister_abort_target_listener(callback_id);
+                            (&mut *host_ptr).release_event_callback(callback_id);
+                        }
+                        tracing::debug!(
+                            listener_id = listener.id,
+                            ?target,
+                            event_type,
+                            "skipped event listener owned by a retired execution context"
+                        );
+                        continue;
+                    };
+
+                    if listener.once {
+                        self.remove_listener_by_id(
+                            target,
+                            event_type,
+                            callback_id,
+                            listener.capture,
+                        );
+                        unsafe {
+                            (&mut *host_ptr).unregister_abort_target_listener(callback_id);
+                            (&mut *host_ptr).release_event_callback(callback_id);
+                        }
+                    }
+
+                    let listener_name = format!("{event_type} listener");
+                    set_event_internal_flag(scope, event, EVENT_PASSIVE_SLOT, listener.passive);
+                    let listener_started = timing_enabled.then(Instant::now);
+                    let layout_trace_before = timing_enabled
+                        .then(|| unsafe { &*host_ptr }.layout_metric_trace_snapshot());
+                    let _ = invoke_prepared_event_callback(
+                        scope,
+                        host_ptr,
+                        invocation_target_in_shadow_tree,
+                        event_type,
+                        &listener_name,
+                        prepared,
+                        target,
+                        event,
+                        &[event.into()],
+                    );
+                    if let Some(listener_started) = listener_started {
+                        let layout_trace = layout_trace_before
+                            .map(|before| {
+                                unsafe { &*host_ptr }
+                                    .layout_metric_trace_snapshot()
+                                    .saturating_delta(before)
+                            })
+                            .unwrap_or_default();
+                        tracing::info!(
+                            target: "moli_cdp_nav_timing",
+                            stage = "event_listener_invoked",
+                            listener_id = listener.id,
+                            event_type,
+                            ?target,
+                            capture_only,
+                            at_target,
+                            listener_index,
+                            function_name = listener.function_name.as_str(),
+                            script_id = listener.script_id,
+                            script_url = listener.script_url.as_deref().unwrap_or(""),
+                            line_number = listener.line_number.map(u64::from),
+                            column_number = listener.column_number.map(u64::from),
+                            capture_flag = listener.capture,
+                            is_once = listener.once,
+                            is_passive = listener.passive,
+                            layout_client_rect_count = layout_trace.client_rect_count,
+                            layout_client_rect_ms = layout_trace.client_rect_ms(),
+                            layout_offset_parent_count = layout_trace.offset_parent_count,
+                            layout_offset_parent_ms = layout_trace.offset_parent_ms(),
+                            layout_offset_position_count = layout_trace.offset_position_count,
+                            layout_offset_position_ms = layout_trace.offset_position_ms(),
+                            elapsed_ms = listener_started.elapsed().as_millis(),
+                        );
+                    }
+                    set_event_internal_flag(scope, event, EVENT_PASSIVE_SLOT, false);
                 }
             }
-
-            let listener_name = format!("{event_type} listener");
-            set_event_internal_flag(scope, event, EVENT_PASSIVE_SLOT, is_passive);
-            let listener_started = timing_enabled.then(Instant::now);
-            let layout_trace_before =
-                timing_enabled.then(|| unsafe { &*host_ptr }.layout_metric_trace_snapshot());
-            let _ = invoke_prepared_event_callback(
-                scope,
-                host_ptr,
-                invocation_target_in_shadow_tree,
-                event_type,
-                &listener_name,
-                prepared,
-                target,
-                event,
-                &[event.into()],
-            );
-            if let Some(listener_started) = listener_started {
-                let layout_trace = layout_trace_before
-                    .map(|before| {
-                        unsafe { &*host_ptr }
-                            .layout_metric_trace_snapshot()
-                            .saturating_delta(before)
-                    })
-                    .unwrap_or_default();
-                tracing::info!(
-                    target: "moli_cdp_nav_timing",
-                    stage = "event_listener_invoked",
-                    listener_id,
-                    event_type,
-                    ?target,
-                    capture_only,
-                    at_target,
-                    listener_index,
-                    function_name = function_name.as_str(),
-                    script_id,
-                    script_url = script_url.as_deref().unwrap_or(""),
-                    line_number = line_number.map(u64::from),
-                    column_number = column_number.map(u64::from),
-                    capture_flag,
-                    is_once,
-                    is_passive,
-                    layout_client_rect_count = layout_trace.client_rect_count,
-                    layout_client_rect_ms = layout_trace.client_rect_ms(),
-                    layout_offset_parent_count = layout_trace.offset_parent_count,
-                    layout_offset_parent_ms = layout_trace.offset_parent_ms(),
-                    layout_offset_position_count = layout_trace.offset_position_count,
-                    layout_offset_position_ms = layout_trace.offset_position_ms(),
-                    elapsed_ms = listener_started.elapsed().as_millis(),
-                );
-            }
-            set_event_internal_flag(scope, event, EVENT_PASSIVE_SLOT, false);
 
             if event_internal_bool_flag(scope, event, EVENT_STOP_IMMEDIATE_SLOT) {
                 return Ok(DispatchStatus::StopImmediate);
@@ -1412,23 +1611,20 @@ pub(crate) fn dispatch_public_event_with_original_target<'s, 'i>(
         )?;
         set_event_phase(scope, event, 2);
 
-        invoke_event_target_handler_property(
+        let status = call_event_target_listeners_filtered(
             registry,
             scope,
             host_ptr,
             dispatch_target,
             invocation_targets_in_shadow_tree.contains(&dispatch_target),
-            target_object,
             &event_type,
             event,
-        );
-
-        let stop_immediate = event_internal_bool_flag(scope, event, EVENT_STOP_IMMEDIATE_SLOT);
-        let stop_prop = event_internal_bool_flag(scope, event, EVENT_STOP_PROPAGATION_SLOT);
-        if !stop_immediate {
-            if stop_prop {
-                stopped = true;
-            }
+            true,
+            true,
+        )?;
+        if status == DispatchStatus::StopImmediate || status == DispatchStatus::StopPropagation {
+            stopped = true;
+        } else {
             let status = call_event_target_listeners_filtered(
                 registry,
                 scope,
@@ -1437,34 +1633,13 @@ pub(crate) fn dispatch_public_event_with_original_target<'s, 'i>(
                 invocation_targets_in_shadow_tree.contains(&dispatch_target),
                 &event_type,
                 event,
-                true,
+                false,
                 true,
             )?;
-            if status == DispatchStatus::StopPropagation {
+            if status == DispatchStatus::StopImmediate || status == DispatchStatus::StopPropagation
+            {
                 stopped = true;
             }
-            if status == DispatchStatus::StopImmediate {
-                stopped = true;
-            } else if !stopped {
-                let status = call_event_target_listeners_filtered(
-                    registry,
-                    scope,
-                    host_ptr,
-                    dispatch_target,
-                    invocation_targets_in_shadow_tree.contains(&dispatch_target),
-                    &event_type,
-                    event,
-                    false,
-                    true,
-                )?;
-                if status == DispatchStatus::StopImmediate
-                    || status == DispatchStatus::StopPropagation
-                {
-                    stopped = true;
-                }
-            }
-        } else {
-            stopped = true;
         }
     }
 
@@ -1594,19 +1769,6 @@ pub(crate) fn dispatch_public_event_with_original_target<'s, 'i>(
                 event_phase_for_current_target(host_ptr, original_target, *ancestor, 3),
             );
 
-            invoke_event_target_handler_property(
-                registry,
-                scope,
-                host_ptr,
-                *ancestor,
-                invocation_targets_in_shadow_tree.contains(ancestor),
-                ancestor_obj,
-                &event_type,
-                event,
-            );
-            if event_internal_bool_flag(scope, event, EVENT_STOP_IMMEDIATE_SLOT) {
-                break;
-            }
             let status = call_event_target_listeners_filtered(
                 registry,
                 scope,
@@ -1715,7 +1877,6 @@ pub(crate) fn dispatch_host_event(
         host_ptr,
         dispatch_target,
         invocation_target_in_shadow_tree,
-        target_object,
         event_type,
         event,
     );
@@ -1729,22 +1890,11 @@ fn run_host_event_dispatch<'s>(
     host_ptr: *mut JsContextHost,
     dispatch_target: EventTargetHandle,
     invocation_target_in_shadow_tree: bool,
-    target_object: v8::Local<'s, v8::Object>,
     event_type: &str,
     event: v8::Local<'s, v8::Object>,
 ) -> std::result::Result<(), String> {
-    invoke_event_handler_property(
+    let status = call_event_target_listeners_filtered(
         registry,
-        scope,
-        host_ptr,
-        dispatch_target,
-        invocation_target_in_shadow_tree,
-        target_object,
-        event_type,
-        event,
-    );
-
-    let status = registry.call_listeners_filtered(
         scope,
         host_ptr,
         dispatch_target,
@@ -1754,8 +1904,9 @@ fn run_host_event_dispatch<'s>(
         true,
         true,
     )?;
-    if status != DispatchStatus::StopImmediate {
-        let _ = registry.call_listeners_filtered(
+    if status == DispatchStatus::Continue {
+        let _ = call_event_target_listeners_filtered(
+            registry,
             scope,
             host_ptr,
             dispatch_target,
