@@ -60,7 +60,20 @@ fn initial_custom_element_state_for_identity(
 }
 
 fn is_element_reference_attribute(name: &str) -> bool {
-    matches!(name, "commandfor" | "interestfor" | "popovertarget")
+    matches!(
+        name,
+        "commandfor"
+            | "interestfor"
+            | "popovertarget"
+            | "aria-activedescendant"
+            | "aria-controls"
+            | "aria-describedby"
+            | "aria-details"
+            | "aria-errormessage"
+            | "aria-flowto"
+            | "aria-labelledby"
+            | "aria-owns"
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -1297,6 +1310,7 @@ impl Element {
         value: String,
         units: Vec<u16>,
     ) -> bool {
+        self.synchronize_element_reference_attribute(&namespace, &local_name);
         let next_value = value.clone();
         let value_utf16_units =
             utf16_units_contain_unpaired_surrogate(&units).then(|| units.into_boxed_slice());
