@@ -203,7 +203,10 @@ pub(in crate::context_bootstrap) fn window_onerror_getter_function<'s>(
         return;
     }
     super::error::ensure_window_reflecting_body_onerror_handler(scope);
-    rv.set(window_event_handler_slot_value(scope, WINDOW_ONERROR_SLOT));
+    rv.set(
+        window_event_handler_value(scope, args.this(), "onerror")
+            .unwrap_or_else(|| v8::null(scope).into()),
+    );
 }
 
 pub(in crate::context_bootstrap) fn window_onerror_setter_function<'s>(
@@ -214,41 +217,8 @@ pub(in crate::context_bootstrap) fn window_onerror_setter_function<'s>(
     if !require_window_receiver(scope, &args) {
         return;
     }
-    if window_child_context_handle(scope, args.this()).is_some() {
-        set_window_event_handler_value(scope, args.this(), "onerror", args.get(0));
-        rv.set_undefined();
-        return;
-    }
-    set_window_body_onerror_handler_compiled(scope, true);
-    set_window_onerror_handler_value(scope, args.get(0));
+    set_window_event_handler_value(scope, args.this(), "onerror", args.get(0));
     rv.set_undefined();
-}
-
-pub(crate) fn set_window_onerror_handler_value(
-    scope: &mut v8::PinScope<'_, '_>,
-    value: v8::Local<'_, v8::Value>,
-) {
-    set_window_event_handler_slot(scope, WINDOW_ONERROR_SLOT, value);
-}
-
-pub(crate) fn window_body_onerror_handler_is_compiled(scope: &mut v8::PinScope<'_, '_>) -> bool {
-    let global = scope.get_current_context().global(scope);
-    get_private_value(scope, global, WINDOW_BODY_ONERROR_COMPILED_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
-}
-
-pub(crate) fn set_window_body_onerror_handler_compiled(
-    scope: &mut v8::PinScope<'_, '_>,
-    compiled: bool,
-) {
-    let global = scope.get_current_context().global(scope);
-    let compiled = v8::Boolean::new(scope, compiled);
-    set_private_value(
-        scope,
-        global,
-        WINDOW_BODY_ONERROR_COMPILED_SLOT,
-        compiled.into(),
-    );
 }
 
 pub(in crate::context_bootstrap) fn window_onunhandledrejection_getter_function<'s>(
@@ -259,17 +229,10 @@ pub(in crate::context_bootstrap) fn window_onunhandledrejection_getter_function<
     if !require_window_receiver(scope, &args) {
         return;
     }
-    if window_child_context_handle(scope, args.this()).is_some() {
-        rv.set(
-            window_event_handler_value(scope, args.this(), "onunhandledrejection")
-                .unwrap_or_else(|| v8::null(scope).into()),
-        );
-        return;
-    }
-    rv.set(window_event_handler_slot_value(
-        scope,
-        WINDOW_ONUNHANDLEDREJECTION_SLOT,
-    ));
+    rv.set(
+        window_event_handler_value(scope, args.this(), "onunhandledrejection")
+            .unwrap_or_else(|| v8::null(scope).into()),
+    );
 }
 
 pub(in crate::context_bootstrap) fn window_onunhandledrejection_setter_function<'s>(
@@ -280,12 +243,7 @@ pub(in crate::context_bootstrap) fn window_onunhandledrejection_setter_function<
     if !require_window_receiver(scope, &args) {
         return;
     }
-    if window_child_context_handle(scope, args.this()).is_some() {
-        set_window_event_handler_value(scope, args.this(), "onunhandledrejection", args.get(0));
-        rv.set_undefined();
-        return;
-    }
-    set_window_event_handler_slot(scope, WINDOW_ONUNHANDLEDREJECTION_SLOT, args.get(0));
+    set_window_event_handler_value(scope, args.this(), "onunhandledrejection", args.get(0));
     rv.set_undefined();
 }
 
@@ -297,17 +255,10 @@ pub(in crate::context_bootstrap) fn window_onrejectionhandled_getter_function<'s
     if !require_window_receiver(scope, &args) {
         return;
     }
-    if window_child_context_handle(scope, args.this()).is_some() {
-        rv.set(
-            window_event_handler_value(scope, args.this(), "onrejectionhandled")
-                .unwrap_or_else(|| v8::null(scope).into()),
-        );
-        return;
-    }
-    rv.set(window_event_handler_slot_value(
-        scope,
-        WINDOW_ONREJECTIONHANDLED_SLOT,
-    ));
+    rv.set(
+        window_event_handler_value(scope, args.this(), "onrejectionhandled")
+            .unwrap_or_else(|| v8::null(scope).into()),
+    );
 }
 
 pub(in crate::context_bootstrap) fn window_onrejectionhandled_setter_function<'s>(
@@ -318,42 +269,6 @@ pub(in crate::context_bootstrap) fn window_onrejectionhandled_setter_function<'s
     if !require_window_receiver(scope, &args) {
         return;
     }
-    if window_child_context_handle(scope, args.this()).is_some() {
-        set_window_event_handler_value(scope, args.this(), "onrejectionhandled", args.get(0));
-        rv.set_undefined();
-        return;
-    }
-    set_window_event_handler_slot(scope, WINDOW_ONREJECTIONHANDLED_SLOT, args.get(0));
+    set_window_event_handler_value(scope, args.this(), "onrejectionhandled", args.get(0));
     rv.set_undefined();
-}
-
-fn set_window_event_handler_slot(
-    scope: &mut v8::PinScope<'_, '_>,
-    slot_name: &'static str,
-    value: v8::Local<'_, v8::Value>,
-) {
-    let global = scope.get_current_context().global(scope);
-    let key = v8str(scope, slot_name);
-
-    if value.is_null_or_undefined() {
-        let _ = global.set(scope, key.into(), v8::null(scope).into());
-        return;
-    }
-
-    if value.is_function() {
-        let _ = global.set(scope, key.into(), value);
-        return;
-    }
-
-    let _ = global.set(scope, key.into(), v8::null(scope).into());
-}
-
-fn window_event_handler_slot_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    slot_name: &'static str,
-) -> v8::Local<'s, v8::Value> {
-    match global_hidden_value(scope, slot_name) {
-        Some(value) if !value.is_undefined() => value,
-        _ => v8::null(scope).into(),
-    }
 }
