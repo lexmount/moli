@@ -3132,6 +3132,7 @@ css/geometry/DOMRect-002.html
 css/geometry/DOMRect-nan.html
 css/geometry/WebKitCSSMatrix.html
 css/mediaqueries/aspect-ratio-serialization.html
+css/mediaqueries/display-mode.html
 css/mediaqueries/dynamic-range.html
 css/mediaqueries/forced-colors.html
 css/mediaqueries/match-media-parsing.html
