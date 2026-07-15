@@ -155,6 +155,47 @@ fn template_contents_uses_and_releases_rare_data() {
 }
 
 #[test]
+fn aria_element_reference_state_is_owned_by_the_content_attribute() {
+    let mut element = Element::new_html("div");
+    assert!(element.set_attribute(
+        "aria-controls".to_owned(),
+        String::new(),
+        None,
+        String::new(),
+    ));
+    element.set_explicit_aria_element_references("aria-controls", vec![NativeNodeId::new(7)]);
+
+    assert!(!element.set_attribute(
+        "aria-controls".to_owned(),
+        String::new(),
+        None,
+        String::new(),
+    ));
+    assert_eq!(
+        element.explicit_aria_element_references("aria-controls"),
+        None
+    );
+
+    element.set_explicit_aria_element_references("aria-controls", vec![NativeNodeId::new(8)]);
+    assert!(element.set_attribute_ns(
+        "aria-controls".to_owned(),
+        "urn:example".to_owned(),
+        Some("x".to_owned()),
+        "foreign".to_owned(),
+    ));
+    assert_eq!(
+        element.explicit_aria_element_references("aria-controls"),
+        Some([NativeNodeId::new(8)].as_slice())
+    );
+
+    assert!(element.remove_attribute("aria-controls"));
+    assert_eq!(
+        element.explicit_aria_element_references("aria-controls"),
+        None
+    );
+}
+
+#[test]
 fn html_element_interface_name_covers_replay_tags() {
     assert_eq!(html_element_interface_name("meta"), "HTMLMetaElement");
     assert_eq!(html_element_interface_name("span"), "HTMLSpanElement");
