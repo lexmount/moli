@@ -1,9 +1,8 @@
 use crate::{
+    context_bootstrap::WINDOW_EVENT_HANDLER_PROPERTIES,
     document_runtime::EventTargetHandle,
-    util::{
-        context_host_ptr_from_global_bridge, get_private_value, node_wrapper_from_handle,
-        set_private_value, throw_type_error, v8_string, v8str,
-    },
+    native_bridge::OwnerDispatchScope,
+    util::{node_wrapper_from_handle, throw_type_error, v8_string, v8str},
 };
 
 use super::super::super::node::{
@@ -12,8 +11,6 @@ use super::super::super::node::{
 use super::super::forms::form_associated_form_owner;
 use super::super::{element_attribute, queue_text_track_load_if_needed};
 use super::shared::compile_event_attribute_handler;
-
-const EVENT_HANDLER_SLOT_PREFIX: &str = "__moliEventHandler_";
 
 pub(crate) const GENERIC_EVENT_HANDLER_PROPERTIES: &[&str] = &[
     "onclick",
@@ -127,6 +124,65 @@ const DOCUMENT_EVENT_HANDLER_PROPERTIES: &[&str] = &[
     "onreadystatechange",
     "onresume",
 ];
+const ELEMENT_SPECIFIC_EVENT_HANDLER_PROPERTIES: &[&str] = &[
+    "onencrypted",
+    "onwaitingforkey",
+    "onbegin",
+    "onend",
+    "onrepeat",
+];
+
+pub(in crate::native_bridge::element) fn is_element_event_handler_content_attribute_name(
+    name: &str,
+) -> bool {
+    GENERIC_EVENT_HANDLER_PROPERTIES
+        .iter()
+        .chain(WINDOW_EVENT_HANDLER_PROPERTIES)
+        .chain(ELEMENT_SPECIFIC_EVENT_HANDLER_PROPERTIES)
+        .copied()
+        .chain(["onmessageerror"])
+        .any(|candidate| candidate == name)
+}
+
+pub(crate) fn element_event_handler_content_attribute_applies(
+    dom_host: &crate::dom::native::DomHost,
+    handle: crate::document_runtime::DomHandle,
+    name: &str,
+) -> bool {
+    let Some(node) = dom_host.node(handle) else {
+        return false;
+    };
+    if !matches!(
+        node.namespace(),
+        Some(
+            "http://www.w3.org/1999/xhtml"
+                | "http://www.w3.org/2000/svg"
+                | "http://www.w3.org/1998/Math/MathML"
+        )
+    ) {
+        return false;
+    }
+    let interface_specific = match name {
+        "onencrypted" | "onwaitingforkey" => {
+            node.is_html_element_named("audio") || node.is_html_element_named("video")
+        }
+        "onbegin" | "onend" | "onrepeat" => {
+            node.namespace() == Some("http://www.w3.org/2000/svg")
+                && matches!(
+                    node.local_name(),
+                    Some("animate" | "animateMotion" | "animateTransform" | "set")
+                )
+        }
+        _ => false,
+    };
+    (name != "onstorage" && GENERIC_EVENT_HANDLER_PROPERTIES.contains(&name))
+        || ELEMENT_FULLSCREEN_EVENT_HANDLER_PROPERTIES.contains(&name)
+        || interface_specific
+        || ((node.is_html_element_named("body") || node.is_html_element_named("frameset"))
+            && name
+                .strip_prefix("on")
+                .is_some_and(super::body_or_frameset_reflects_window_event_type))
+}
 
 #[derive(Clone, Copy)]
 pub(crate) enum GlobalEventHandlerOwner {
@@ -220,7 +276,7 @@ fn set_event_handler_property_for_target<'s>(
     let Some(event_type) = event_handler_event_type(&handler_name) else {
         return;
     };
-    let handler = v8::Local::<v8::Function>::try_from(value).ok();
+    let handler = v8::Local::<v8::Object>::try_from(value).ok();
     unsafe { &mut *runtime_ptr }
         .set_registered_event_handler_property(scope, target, event_type, handler);
 }
@@ -300,26 +356,41 @@ pub(crate) fn node_event_handler_getter_function<'s>(
         handle_invalid_event_handler_receiver(scope, &mut rv, &handler_name);
         return;
     }
-    let target = unsafe { &*runtime_ptr }.event_handler_attribute_target(handle, &handler_name);
     if let Some(event_type) = event_handler_event_type(&handler_name)
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-        && let Some(current) =
-            unsafe { &*host_ptr }.registered_event_handler_property_value(scope, target, event_type)
+        && let Some(current) = unsafe { &*runtime_ptr }.registered_event_handler_property_value(
+            scope,
+            EventTargetHandle::Node(handle),
+            event_type,
+        )
     {
         rv.set(current);
         return;
     }
-    if target != EventTargetHandle::Window
-        && let Some(current) = node_event_handler_value_from_wrapper(scope, object, &handler_name)
+    if !handler_name.starts_with("on")
+        || !element_event_handler_content_attribute_applies(
+            unsafe { &*runtime_ptr }.dom_host(),
+            handle,
+            &handler_name,
+        )
     {
-        rv.set(current);
-        return;
-    }
-    if !handler_name.starts_with("on") {
         rv.set_null();
         return;
     }
-    let Some(source) = element_attribute(unsafe { &*runtime_ptr }, handle, &handler_name) else {
+    let handler = event_handler_event_type(&handler_name)
+        .and_then(|event_type| {
+            unsafe { &*runtime_ptr }.uncompiled_event_handler_content_attribute(
+                EventTargetHandle::Node(handle),
+                event_type,
+            )
+        })
+        .or_else(|| {
+            crate::host::UncompiledEventHandler::from_attribute(
+                unsafe { &*runtime_ptr }.dom_host(),
+                handle,
+                event_handler_event_type(&handler_name)?,
+            )
+        });
+    let Some(handler) = handler else {
         rv.set(v8::null(scope).into());
         return;
     };
@@ -352,7 +423,7 @@ pub(crate) fn node_event_handler_getter_function<'s>(
             handle,
             object,
             &handler_name,
-            &source,
+            &handler,
         )
         .map(|handler| v8::Global::new(target_scope, handler))
     };
@@ -388,44 +459,26 @@ fn node_event_handler_target_context<'s>(
         .ok()
 }
 
-pub(crate) fn compile_node_content_attribute_for_dispatch<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut crate::native_bridge::PageScriptHost,
-    handle: crate::document_runtime::DomHandle,
-    event_type: &str,
-) -> Option<v8::Local<'s, v8::Function>> {
-    let name = event_handler_content_attribute_name(event_type)?;
-    if !GENERIC_EVENT_HANDLER_PROPERTIES.contains(&name.as_str()) {
-        return None;
-    }
-    let source_node = unsafe { &*host_ptr }
-        .event_handler_content_attribute_node(EventTargetHandle::Node(handle), event_type)?;
-    let source = element_attribute(unsafe { &*host_ptr }, source_node, &name)?;
-    let context = node_event_handler_target_context(scope, host_ptr, source_node)?;
-    let handler = {
-        let target_scope = &mut v8::ContextScope::new(scope, context);
-        let object = node_wrapper_from_handle(target_scope, source_node)?;
-        compile_node_event_attribute_handler(
-            target_scope,
-            host_ptr,
-            source_node,
-            object,
-            &name,
-            &source,
-        )
-        .map(|handler| v8::Global::new(target_scope, handler))
-    }?;
-    Some(v8::Local::new(scope, &handler))
-}
-
 fn compile_node_event_attribute_handler<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
     object: v8::Local<'s, v8::Object>,
     handler_name: &str,
-    source: &str,
+    handler: &crate::host::UncompiledEventHandler,
 ) -> Option<v8::Local<'s, v8::Function>> {
+    let event_type = event_handler_event_type(handler_name)?;
+    let target_context = scope.get_current_context();
+    // A parse error reports to author code. Re-entrant getters must see null
+    // without removing the listener's position, and any changes made while
+    // reporting the error must survive this compilation attempt.
+    unsafe { &mut *runtime_ptr }.set_registered_content_attribute_event_handler_property(
+        scope,
+        EventTargetHandle::Node(handle),
+        event_type,
+        None,
+        target_context,
+    );
     let event_argument = v8_string(scope, "event")?;
     let global = scope.get_current_context().global(scope);
     let mut context_extensions = Vec::with_capacity(3);
@@ -446,43 +499,21 @@ fn compile_node_event_attribute_handler<'s>(
         scope,
         runtime_ptr,
         handle,
-        source,
+        handler,
         &[event_argument],
         &context_extensions,
-    );
-    let target = unsafe { &*runtime_ptr }.event_handler_attribute_target(handle, handler_name);
-    if let Some(handler) = handler {
-        if let Some(name) = v8_string(scope, handler_name) {
-            handler.set_name(name);
-        }
-        if let Some(event_type) = event_handler_event_type(handler_name)
-            && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-        {
-            let target_context = scope.get_current_context();
-            unsafe { &mut *host_ptr }.set_registered_content_attribute_event_handler_property(
-                scope,
-                target,
-                event_type,
-                Some(handler),
-                target_context,
-            );
-        }
-        Some(handler)
-    } else {
-        if let Some(event_type) = event_handler_event_type(handler_name)
-            && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-        {
-            let target_context = scope.get_current_context();
-            unsafe { &mut *host_ptr }.set_registered_content_attribute_event_handler_property(
-                scope,
-                target,
-                event_type,
-                None,
-                target_context,
-            );
-        }
-        None
+    )?;
+    if let Some(name) = v8_string(scope, handler_name) {
+        handler.set_name(name);
     }
+    unsafe { &mut *runtime_ptr }.set_registered_content_attribute_event_handler_property(
+        scope,
+        EventTargetHandle::Node(handle),
+        event_type,
+        Some(handler),
+        target_context,
+    );
+    Some(handler)
 }
 
 pub(crate) fn node_event_handler_setter_function<'s>(
@@ -505,27 +536,14 @@ pub(crate) fn node_event_handler_setter_function<'s>(
         handle_invalid_event_handler_receiver(scope, &mut rv, &handler_name);
         return;
     }
-    let target = unsafe { &*runtime_ptr }.event_handler_attribute_target(handle, &handler_name);
-    if target != EventTargetHandle::Window {
-        let stored = if value.is_function() {
-            value
-        } else {
-            v8::null(scope).into()
-        };
-        let backing = moli_webapi_declare::web_api_object_target(scope, object).unwrap_or(object);
-        set_private_value(
-            scope,
-            backing,
-            &event_handler_slot_name(&handler_name),
-            stored,
-        );
-    }
     if let Some(event_type) = event_handler_event_type(&handler_name) {
-        let handler = v8::Local::<v8::Function>::try_from(value).ok();
-        if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-            unsafe { &mut *host_ptr }
-                .set_registered_event_handler_property(scope, target, event_type, handler);
-        }
+        let handler = v8::Local::<v8::Object>::try_from(value).ok();
+        unsafe { &mut *runtime_ptr }.set_registered_event_handler_property(
+            scope,
+            EventTargetHandle::Node(handle),
+            event_type,
+            handler,
+        );
     }
     if matches!(handler_name.as_str(), "onload" | "onerror")
         && unsafe { &*runtime_ptr }
@@ -546,38 +564,13 @@ fn event_handler_name_from_data<'s>(
         .map(|name| name.to_rust_string_lossy(scope))
 }
 
-fn event_handler_slot_name(name: &str) -> String {
-    format!("{EVENT_HANDLER_SLOT_PREFIX}{name}")
-}
-
-/// An adopted node keeps its original wrapper and callback realm. Read its
-/// native handler slot without evaluating an author-defined property getter.
-pub(crate) fn node_event_handler_value_from_wrapper<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    name: &str,
-) -> Option<v8::Local<'s, v8::Value>> {
-    let backing = moli_webapi_declare::web_api_object_target(scope, object).unwrap_or(object);
-    get_private_value(scope, backing, &event_handler_slot_name(name))
-        .filter(|value| !value.is_undefined())
-}
-
-pub(crate) fn is_global_event_handler_attribute(name: &str) -> bool {
-    GENERIC_EVENT_HANDLER_PROPERTIES.contains(&name)
-}
-
 fn event_handler_event_type(name: &str) -> Option<&str> {
     name.strip_prefix("on")
         .filter(|event_type| !event_type.is_empty())
-        .map(|event_type| match event_type {
-            "begin" => "beginEvent",
-            "end" => "endEvent",
-            "repeat" => "repeatEvent",
-            event_type => event_type,
-        })
+        .map(canonical_event_handler_event_type)
 }
 
-fn legacy_lenient_this_event_handler(name: &str) -> bool {
+pub(crate) fn legacy_lenient_this_event_handler(name: &str) -> bool {
     matches!(name, "onmouseenter" | "onmouseleave" | "onreadystatechange")
 }
 
@@ -593,47 +586,69 @@ fn handle_invalid_event_handler_receiver<'s>(
     }
 }
 
-pub(super) fn invalidate_event_attribute_handler(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime: &mut super::super::super::PageScriptHost,
-    handle: crate::document_runtime::DomHandle,
-    name: &str,
-) {
-    let normalized_name = name.to_ascii_lowercase();
-    let Some(event_type) = event_handler_event_type(&normalized_name) else {
-        return;
-    };
-    let target = runtime.event_handler_attribute_target(handle, &normalized_name);
-    if let Some(callback) = runtime.clear_event_handler_property(target, event_type) {
-        runtime.release_event_callback(callback);
+pub(crate) fn canonical_event_handler_event_type(event_type: &str) -> &str {
+    match event_type {
+        "begin" => "beginEvent",
+        "end" => "endEvent",
+        "repeat" => "repeatEvent",
+        "webkitanimationend" => "webkitAnimationEnd",
+        "webkitanimationiteration" => "webkitAnimationIteration",
+        "webkitanimationstart" => "webkitAnimationStart",
+        "webkittransitionend" => "webkitTransitionEnd",
+        event_type => event_type,
     }
-    if target == EventTargetHandle::Window {
-        return;
-    }
-    crate::util::with_cached_node_wrapper_realm(scope, runtime, handle, |scope, wrapper| {
-        let object = crate::util::get_private_object(
-            scope,
-            wrapper,
-            crate::dom_parser::DOM_PARSER_FOREIGN_NODE_SLOT,
-        )
-        .unwrap_or(wrapper);
-        let backing = moli_webapi_declare::web_api_object_target(scope, object).unwrap_or(object);
-        set_private_value(
-            scope,
-            backing,
-            &event_handler_slot_name(&normalized_name),
-            v8::undefined(scope).into(),
-        );
-    });
 }
 
 pub(crate) fn event_handler_content_attribute_name(event_type: &str) -> Option<String> {
     let event_type = match event_type {
+        // The SVG handlers observe the *Event types, not events named after
+        // their attributes. Do not invoke onbegin for dispatchEvent("begin").
         "begin" | "end" | "repeat" => return None,
         "beginEvent" => "begin",
         "endEvent" => "end",
         "repeatEvent" => "repeat",
+        "webkitAnimationEnd" => "webkitanimationend",
+        "webkitAnimationIteration" => "webkitanimationiteration",
+        "webkitAnimationStart" => "webkitanimationstart",
+        "webkitTransitionEnd" => "webkittransitionend",
         event_type => event_type,
     };
     Some(format!("on{event_type}"))
+}
+
+pub(crate) fn compile_node_content_attribute_for_dispatch<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    host_ptr: *mut crate::native_bridge::PageScriptHost,
+    handle: crate::document_runtime::DomHandle,
+    event_type: &str,
+) -> Option<v8::Local<'s, v8::Function>> {
+    let name = event_handler_content_attribute_name(event_type)?;
+    if !element_event_handler_content_attribute_applies(
+        unsafe { &*host_ptr }.dom_host(),
+        handle,
+        &name,
+    ) {
+        return None;
+    }
+    let handler = unsafe { &*host_ptr }
+        .uncompiled_event_handler_content_attribute(EventTargetHandle::Node(handle), event_type)?;
+    let (context, dispatch_scope) = node_event_handler_target_context(scope, host_ptr, handle)?;
+    let handler = {
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let object = node_wrapper_from_handle(scope, handle)?;
+        let previous = dispatch_scope.enter(scope);
+        let compiled = compile_node_event_attribute_handler(
+            scope,
+            host_ptr,
+            dispatch_scope,
+            handle,
+            object,
+            &name,
+            &handler,
+        )
+        .map(|handler| v8::Global::new(scope, handler));
+        dispatch_scope.restore(scope, previous);
+        compiled
+    }?;
+    Some(v8::Local::new(scope, &handler))
 }
