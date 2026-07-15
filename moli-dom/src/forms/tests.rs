@@ -88,27 +88,28 @@ fn input_type_tokens_and_support_matrices_are_shared() {
     assert!(form_control_type_supports_intrinsic_validation(
         "input",
         Some(InputType::Text),
-        None
+        false
     ));
     assert!(!form_control_type_supports_intrinsic_validation(
         "input",
         Some(InputType::Hidden),
-        None
+        false
     ));
     assert!(form_control_type_supports_intrinsic_validation(
         "input",
         Some(InputType::Submit),
-        None
+        false
     ));
     assert!(form_control_type_supports_intrinsic_validation(
         "input",
         Some(InputType::Image),
-        None
+        false
     ));
     assert!(!form_control_type_supports_intrinsic_validation(
-        "button",
-        None,
-        Some("reset")
+        "button", None, false
+    ));
+    assert!(form_control_type_supports_intrinsic_validation(
+        "button", None, true
     ));
 }
 

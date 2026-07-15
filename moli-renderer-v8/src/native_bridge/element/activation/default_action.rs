@@ -3,7 +3,7 @@ use crate::context_bootstrap::{
     selection_value_for_window,
 };
 use crate::dom::{
-    forms::InputType,
+    forms::{ButtonTypeState, InputType},
     native::{Element, Node, SelectedFile},
 };
 use crate::util::{
@@ -1394,9 +1394,9 @@ fn perform_click_default_action(
         );
         return None;
     }
-    dispatch_button_command_event_if_needed(scope, runtime_ptr, handle);
+    let form_handle = form_associated_form_owner(runtime, handle);
     if is_valid_submit_button(runtime, handle)
-        && let Some(form_handle) = form_associated_form_owner(runtime, handle)
+        && let Some(form_handle) = form_handle
     {
         let previous = if is_image_submit_button(runtime, handle) {
             let (local_x, local_y) = match image_submitter_coordinate(runtime, handle, x, y) {
@@ -1423,7 +1423,7 @@ fn perform_click_default_action(
         return None;
     }
     if is_valid_reset_button(runtime, handle)
-        && let Some(form_handle) = form_associated_form_owner(runtime, handle)
+        && let Some(form_handle) = form_handle
     {
         if let Some(event) = construct_simple_event(scope, "reset", true, true, false)
             && dispatch_public_event(scope, runtime_ptr, form_handle, event).allows_default()
@@ -1437,6 +1437,18 @@ fn perform_click_default_action(
         }
         return None;
     }
+    if form_handle.is_some()
+        && runtime
+            .dom_host()
+            .node(handle)
+            .and_then(Node::as_element)
+            .is_some_and(|element| {
+                element.is_html_button() && element.button_type_state() == ButtonTypeState::Auto
+            })
+    {
+        return None;
+    }
+    dispatch_button_command_event_if_needed(scope, runtime_ptr, handle);
     if dispatch_button_popover_toggle_events_if_needed(scope, runtime_ptr, handle) {
         return None;
     }
@@ -1674,7 +1686,8 @@ fn is_valid_reset_button(runtime: &JsContextHost, handle: DomHandle) -> bool {
         .and_then(Node::as_element)
         .is_some_and(|element| {
             (element.is_html_input() && element.input_type() == InputType::Reset)
-                || (element.is_html_element("button") && element.attribute("type") == Some("reset"))
+                || (element.is_html_element("button")
+                    && element.button_type_state() == ButtonTypeState::Reset)
         })
 }
 

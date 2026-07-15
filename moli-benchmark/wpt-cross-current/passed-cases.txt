@@ -5745,6 +5745,7 @@ html/semantics/forms/textfieldselection/textfieldselection-setSelectionRange.htm
 html/semantics/forms/the-button-element/button-activate.html
 html/semantics/forms/the-button-element/button-checkvalidity.html
 html/semantics/forms/the-button-element/button-click-resets-with-commandfor.html
+html/semantics/forms/the-button-element/button-click-submits-with-commandfor.html
 html/semantics/forms/the-button-element/button-click-submits.html
 html/semantics/forms/the-button-element/button-events.html
 html/semantics/forms/the-button-element/button-labels.html
