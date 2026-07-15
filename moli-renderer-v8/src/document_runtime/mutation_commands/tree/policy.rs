@@ -5,7 +5,7 @@ pub(super) enum TreeMutationSideEffectSource {
 }
 
 #[derive(Clone, Copy)]
-pub(super) enum TreeReactionDispatchPolicy {
+pub(in crate::document_runtime::mutation_commands) enum TreeReactionDispatchPolicy {
     DispatchNow,
     AppendToCurrentQueue,
 }
