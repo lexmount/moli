@@ -441,7 +441,7 @@ fn element_is_constraint_validation_candidate(
     if control_is_readonly_barred_from_constraint_validation(element) {
         return false;
     }
-    element_type_supports_intrinsic_validation(element)
+    element_type_supports_intrinsic_validation_with_tree(runtime, handle, element)
 }
 
 fn element_matches_validity_pseudo(
@@ -455,17 +455,24 @@ fn element_matches_validity_pseudo(
     if control_has_datalist_ancestor(runtime, handle) {
         return false;
     }
-    element_type_supports_intrinsic_validation(element)
+    element_type_supports_intrinsic_validation_with_tree(runtime, handle, element)
 }
 
 fn element_type_supports_intrinsic_validation(element: &Element) -> bool {
     let input_type = element.is_html_input().then(|| element.input_type());
+    form_control_type_supports_intrinsic_validation(element.local_name(), input_type, false)
+}
+
+fn element_type_supports_intrinsic_validation_with_tree(
+    runtime: &JsContextHost,
+    handle: DomHandle,
+    element: &Element,
+) -> bool {
+    let input_type = element.is_html_input().then(|| element.input_type());
     form_control_type_supports_intrinsic_validation(
         element.local_name(),
         input_type,
-        element
-            .is_html_button()
-            .then(|| element.attribute("type").unwrap_or("submit")),
+        runtime.dom_host().button_is_submit_button(handle),
     )
 }
 
