@@ -1,4 +1,5 @@
 use crate::{
+    context_bootstrap::WINDOW_EVENT_HANDLER_PROPERTIES,
     document_runtime::EventTargetHandle,
     util::{
         context_host_ptr_from_global_bridge, node_wrapper_from_handle, throw_type_error, v8_string,
@@ -110,6 +111,25 @@ const DOCUMENT_EVENT_HANDLER_PROPERTIES: &[&str] = &[
     "onpointerlockerror",
     "onreadystatechange",
 ];
+const ELEMENT_SPECIFIC_EVENT_HANDLER_PROPERTIES: &[&str] = &[
+    "onencrypted",
+    "onwaitingforkey",
+    "onbegin",
+    "onend",
+    "onrepeat",
+];
+
+pub(in crate::native_bridge::element) fn is_element_event_handler_content_attribute_name(
+    name: &str,
+) -> bool {
+    GENERIC_EVENT_HANDLER_PROPERTIES
+        .iter()
+        .chain(WINDOW_EVENT_HANDLER_PROPERTIES)
+        .chain(ELEMENT_SPECIFIC_EVENT_HANDLER_PROPERTIES)
+        .copied()
+        .chain(["onmessageerror"])
+        .any(|candidate| candidate == name)
+}
 
 #[derive(Clone, Copy)]
 pub(crate) enum GlobalEventHandlerOwner {
