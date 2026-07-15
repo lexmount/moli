@@ -193,26 +193,4 @@ impl NativeDom {
         }
         None
     }
-
-    pub(super) fn option_is_disabled(&self, node_id: NativeNodeId) -> bool {
-        if self
-            .node(node_id)
-            .and_then(Node::as_element)
-            .is_some_and(|element| element.has_attribute_ns("", "disabled"))
-        {
-            return true;
-        }
-        let mut current = self.parent_node(node_id);
-        while let Some(parent) = current {
-            if let Some(element) = self.node(parent).and_then(Node::as_element) {
-                match (element.namespace(), element.local_name()) {
-                    (HTML_NS, "optgroup") => return element.has_attribute_ns("", "disabled"),
-                    (HTML_NS, "select" | "hr" | "datalist" | "option") => return false,
-                    _ => {}
-                }
-            }
-            current = self.parent_node(parent);
-        }
-        false
-    }
 }
