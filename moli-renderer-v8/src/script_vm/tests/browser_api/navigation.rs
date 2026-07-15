@@ -599,6 +599,79 @@ fn performance_mark_constructor_creates_detached_structured_entries() {
 }
 
 #[test]
+fn performance_user_timing_enforces_mark_and_measure_boundaries() {
+    let mut vm = new_storage_test_vm("https://performance-user-timing-boundaries.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const capture = callback => {
+                try {
+                  callback();
+                  return "none";
+                } catch (error) {
+                  return `${error.name}:${error.code}`;
+                }
+              };
+              performance.mark("later", { startTime: 5 });
+              const sourceDetail = { value: 1 };
+              const cloned = performance.measure("cloned", {
+                start: 1,
+                duration: 2,
+                detail: sourceDetail
+              });
+              sourceDetail.value = 9;
+              const negative = performance.measure(
+                "negative-duration",
+                "later",
+                "navigationStart"
+              );
+              const legacyPendingNames = [
+                "unloadEventStart",
+                "unloadEventEnd",
+                "redirectStart",
+                "redirectEnd",
+                "secureConnectionStart",
+                "domInteractive",
+                "domContentLoadedEventStart",
+                "domContentLoadedEventEnd",
+                "domComplete",
+                "loadEventStart",
+                "loadEventEnd"
+              ];
+              return JSON.stringify({
+                reservedMark: capture(() => performance.mark("navigationStart")),
+                missingMark: capture(() => performance.measure("missing", "does-not-exist")),
+                numericLegacyMark: capture(() => performance.measure("number", 51.15, "later")),
+                unavailableTiming: capture(() => performance.measure("pending", "redirectStart")),
+                detailOnlyOptions: capture(() => performance.measure("detail-only", { detail: 1 })),
+                overSpecifiedOptions: capture(() => performance.measure("all", {
+                  start: 1,
+                  duration: 2,
+                  end: 3
+                })),
+                negativeMark: capture(() => performance.mark("bad-mark", { startTime: -1 })),
+                infiniteMark: capture(() => performance.mark("bad-infinite", { startTime: Infinity })),
+                negativeBoundary: capture(() => performance.measure("bad-boundary", { start: -1 })),
+                negativeDuration: negative.duration,
+                navigationStartTime: performance.measure("from-navigation", "navigationStart").startTime,
+                pendingTimingStartsAtZero: legacyPendingNames.every(name => performance.timing[name] === 0),
+                clonedDetail: `${cloned.detail.value}:${cloned.detail === sourceDetail}`,
+                navigationEntryIsNotMark: capture(() => performance.measure("entry-name", location.href))
+              });
+            })()
+            "#,
+        )
+        .expect("User Timing boundary probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"reservedMark":"SyntaxError:12","missingMark":"SyntaxError:12","numericLegacyMark":"SyntaxError:12","unavailableTiming":"InvalidAccessError:15","detailOnlyOptions":"TypeError:undefined","overSpecifiedOptions":"TypeError:undefined","negativeMark":"TypeError:undefined","infiniteMark":"TypeError:undefined","negativeBoundary":"TypeError:undefined","negativeDuration":-5,"navigationStartTime":0,"pendingTimingStartsAtZero":true,"clonedDetail":"1:false","navigationEntryIsNotMark":"SyntaxError:12"}"#
+    );
+}
+
+#[test]
 fn performance_entry_to_json_returns_native_base_snapshot() {
     let mut vm = new_storage_test_vm("https://performance-entry-json.test/");
 
