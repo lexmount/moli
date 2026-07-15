@@ -1,6 +1,7 @@
 use super::*;
 use crate::dom::native::DomStringValue;
 use crate::native_bridge::element::{
+    TrustedAttributeSetter, trusted_attribute_string_value,
     set_live_element_attribute_appending_to_current_reaction_queue,
     set_live_element_attribute_ns_appending_to_current_reaction_queue,
 };
@@ -12,6 +13,30 @@ impl<'s> AttrReference<'s> {
             self.store_value(scope, &value);
             return;
         };
+        let original_node = self.owner(scope);
+        let Some(verified_value) = trusted_attribute_string_value(
+            scope,
+            original_node.map(|node| (node.runtime_ptr, node.handle)),
+            self.namespace.as_deref(),
+            &self.local_name,
+            value.as_str_lossy(),
+            TrustedAttributeSetter::AttrValue,
+        ) else {
+            return;
+        };
+        let value = if verified_value == value.as_str_lossy() {
+            value
+        } else {
+            DomStringValue::from(verified_value)
+        };
+        let Some(current_owner) = self.owner_element(scope) else {
+            self.store_value(scope, &value);
+            return;
+        };
+        if !current_owner.strict_equals(owner.into()) {
+            return;
+        }
+        // The policy may adopt the same owner into another native runtime.
         let Some(node) = self.owner(scope) else {
             return;
         };
