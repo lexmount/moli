@@ -1,4 +1,5 @@
 use crate::{
+    context_bootstrap::is_window_event_handler_property,
     document_runtime::EventTargetHandle,
     native_bridge::OwnerDispatchScope,
     util::{
@@ -129,6 +130,22 @@ const DOCUMENT_EVENT_HANDLER_PROPERTIES: &[&str] = &[
     "onresume",
     "onvisibilitychange",
 ];
+
+const ELEMENT_SPECIFIC_EVENT_HANDLER_PROPERTIES: &[&str] = &[
+    "onencrypted",
+    "onwaitingforkey",
+    "onbegin",
+    "onend",
+    "onrepeat",
+];
+
+pub(in crate::native_bridge::element) fn is_element_event_handler_content_attribute_name(
+    name: &str,
+) -> bool {
+    GENERIC_EVENT_HANDLER_PROPERTIES.contains(&name)
+        || is_window_event_handler_property(name)
+        || ELEMENT_SPECIFIC_EVENT_HANDLER_PROPERTIES.contains(&name)
+}
 
 #[derive(Clone, Copy)]
 pub(crate) enum GlobalEventHandlerOwner {
