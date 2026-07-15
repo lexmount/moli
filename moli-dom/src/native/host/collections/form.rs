@@ -131,14 +131,13 @@ impl DomHost {
             return None;
         }
 
-        if let Some(form_id) = element.attribute("form") {
+        if let Some(form_id) = element.attribute("form")
+            && self.is_connected_to_document(handle)
+        {
             if form_id.is_empty() {
                 return None;
             }
             let tree_root = self.root_node_handle(handle)?;
-            if self.is_shadow_root(tree_root) && !self.is_connected(tree_root) {
-                return None;
-            }
             let candidate = self.element_handle_by_id_in_subtree(tree_root, form_id)?;
             let candidate = self.resolve_reference_target_chain(candidate)?;
             return self
