@@ -539,6 +539,13 @@ impl ParserDomMutationConsumer for ChildFrameLiveParserOwner<'_, '_, '_> {
         self.consume_parser_mutation_effects(effects);
     }
 
+    fn maybe_clone_an_option_into_selectedcontent(&mut self, node_id: DomHandle) {
+        let host_ptr = self.host as *mut PageScriptHost;
+        let _ = self
+            .host
+            .sync_selectedcontents_after_parser_option_finished(self.scope, host_ptr, node_id);
+    }
+
     fn attach_declarative_shadow_for_parser(
         &mut self,
         host_id: DomHandle,
@@ -723,6 +730,7 @@ impl PageScriptHost {
             // resources discovered by the outer step before parking it too.
             let discovery_signals = parser.take_discovery_signals();
             self.queue_live_child_parser_discovery_signals(
+                scope,
                 child_handle,
                 document_handle,
                 discovery_signals,
@@ -1068,6 +1076,7 @@ impl PageScriptHost {
             parser.finish(&mut owner)
         };
         self.queue_live_child_parser_discovery_signals(
+            scope,
             child_handle,
             document_handle,
             finish_signals.discovery_signals,
@@ -1111,6 +1120,7 @@ impl PageScriptHost {
 
     fn queue_live_child_parser_discovery_signals(
         &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
         child_handle: DomHandle,
         document_handle: DomHandle,
         discovery_signals: crate::live_document_parser::LiveDocumentParserDiscoverySignals,
@@ -1355,6 +1365,7 @@ impl PageScriptHost {
                 return false;
             }
             self.queue_live_child_parser_discovery_signals(
+                scope,
                 child_handle,
                 document_handle,
                 insertion.take_discovery_signals(),

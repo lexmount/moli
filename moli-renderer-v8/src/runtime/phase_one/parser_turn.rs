@@ -374,6 +374,12 @@ impl ParserDomMutationConsumer for PhaseOneParserOwner<'_> {
         self.consume_parser_mutation_effects(effects);
     }
 
+    fn maybe_clone_an_option_into_selectedcontent(&mut self, node_id: NativeNodeId) {
+        let _ = self
+            .vm
+            .sync_selectedcontents_after_parser_option_finished_in_default_context(node_id);
+    }
+
     fn attach_declarative_shadow_for_parser(
         &mut self,
         host_id: NativeNodeId,
