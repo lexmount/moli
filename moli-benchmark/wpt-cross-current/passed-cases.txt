@@ -6742,6 +6742,7 @@ html/dom/elements/name-content-attribute-and-property.html
 html/dom/elements/the-innertext-and-outertext-properties/dynamic-getter.html
 html/dom/elements/the-innertext-and-outertext-properties/getter-first-letter-marker-multicol.html
 html/dom/elements/the-innertext-and-outertext-properties/innertext-domnoderemoved-crash.html
+html/dom/elements/the-innertext-and-outertext-properties/innertext-setter.html
 html/dom/elements/the-innertext-and-outertext-properties/innertext-whitespace-pre-line.html
 html/dom/elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=normal
 html/dom/elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=normal&contenteditable=plaintext-only
@@ -6755,6 +6756,7 @@ html/dom/elements/the-innertext-and-outertext-properties/innertext-with-white-sp
 html/dom/elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=pre-wrap
 html/dom/elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=pre-wrap&contenteditable=plaintext-only
 html/dom/elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=pre-wrap&contenteditable=true
+html/dom/elements/the-innertext-and-outertext-properties/outertext-setter.html
 html/dom/historical.html
 html/dom/partial-updates/tentative/template-for-innerHTML-outside.html
 html/dom/partial-updates/tentative/template-for-invalid.html

@@ -2558,8 +2558,6 @@ html/dom/documents/dom-tree-accessors/nameditem-names.html
 html/dom/elements/global-attributes/dir-slots-directionality.html
 html/dom/elements/global-attributes/document-dir.html
 html/dom/elements/the-innertext-and-outertext-properties/getter.html
-html/dom/elements/the-innertext-and-outertext-properties/innertext-setter.html
-html/dom/elements/the-innertext-and-outertext-properties/outertext-setter.html
 html/dom/partial-updates/tentative/processing-instruction-attributes.html
 html/dom/partial-updates/tentative/stream-append-has-invalidation.html
 html/dom/partial-updates/tentative/stream-append-positional-pseudo-class-invalidation.html
