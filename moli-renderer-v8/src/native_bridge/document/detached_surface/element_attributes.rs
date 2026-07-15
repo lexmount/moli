@@ -233,11 +233,15 @@ pub(in crate::native_bridge) fn bridge_detached_set_attribute_callback<'a>(
         );
         return;
     }
-    let Some(value) = args
-        .get(2)
-        .to_string(scope)
-        .map(|value| value.to_rust_string_lossy(scope))
-    else {
+    let runtime_and_handle = detached_surface_runtime_and_handle(scope, args.this(), element);
+    let Some(value) = super::super::super::element::trusted_attribute_value_string(
+        scope,
+        runtime_and_handle,
+        None,
+        &normalized,
+        args.get(2),
+        super::super::super::element::TrustedAttributeSetter::SetAttribute,
+    ) else {
         return;
     };
     with_detached_surface_attribute_reaction_scope(scope, args.this(), element, |scope| {
@@ -293,11 +297,15 @@ pub(in crate::native_bridge) fn bridge_detached_set_attribute_ns_callback<'a>(
         );
         return;
     }
-    let Some(value) = args
-        .get(3)
-        .to_string(scope)
-        .map(|value| value.to_rust_string_lossy(scope))
-    else {
+    let runtime_and_handle = detached_surface_runtime_and_handle(scope, args.this(), element);
+    let Some(value) = super::super::super::element::trusted_attribute_value_string(
+        scope,
+        runtime_and_handle,
+        namespace.as_deref(),
+        &local_name,
+        args.get(3),
+        super::super::super::element::TrustedAttributeSetter::SetAttributeNs,
+    ) else {
         return;
     };
     with_detached_surface_attribute_reaction_scope(scope, args.this(), element, |scope| {

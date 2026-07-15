@@ -827,6 +827,235 @@ fn script_src_enforces_trusted_script_url_and_applies_the_default_policy() {
 }
 
 #[test]
+fn event_handler_attribute_writes_enforce_trusted_script_at_the_attribute_boundary() {
+    let mut vm = new_storage_test_vm("https://event-handler-attribute-trusted-types.test/");
+    vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  globalThis.__eventHandlerAttributeRuns = [];
+  const root = document.body ||
+    (document.documentElement || document.appendChild(document.createElement("html")))
+      .appendChild(document.createElement("body"));
+  const policy = trustedTypes.createPolicy("event-handler-script", {
+    createScript: value => value,
+    createHTML: value => value
+  });
+
+  const trusted = document.createElement("button");
+  trusted.setAttribute(
+    "onclick",
+    policy.createScript("globalThis.__eventHandlerAttributeRuns.push('trusted')")
+  );
+  root.appendChild(trusted);
+  trusted.click();
+
+  const trustedNs = document.createElement("button");
+  trustedNs.setAttributeNS(
+    null,
+    "onclick",
+    policy.createScript("globalThis.__eventHandlerAttributeRuns.push('trusted-ns')")
+  );
+  root.appendChild(trustedNs);
+  trustedNs.click();
+
+  const unsuitable = document.createElement("button");
+  let unsuitableRejected = false;
+  try {
+    unsuitable.setAttribute(
+      "onclick",
+      policy.createHTML("globalThis.__eventHandlerAttributeRuns.push('unsuitable')")
+    );
+  } catch (error) {
+    unsuitableRejected = error instanceof TypeError;
+  }
+
+  const plain = document.createElement("button");
+  let plainRejected = false;
+  try {
+    plain.setAttribute(
+      "onclick",
+      "globalThis.__eventHandlerAttributeRuns.push('plain')"
+    );
+  } catch (error) {
+    plainRejected = error instanceof TypeError;
+  }
+
+  const plainNs = document.createElement("button");
+  let plainNsRejected = false;
+  try {
+    plainNs.setAttributeNS(
+      null,
+      "onclick",
+      "globalThis.__eventHandlerAttributeRuns.push('plain-ns')"
+    );
+  } catch (error) {
+    plainNsRejected = error instanceof TypeError;
+  }
+
+  const ordinary = document.createElement("div");
+  ordinary.setAttribute("data-onclick", "plain-data");
+  ordinary.setAttribute("ondoesnotexist", "plain-unknown");
+  ordinary.setAttributeNS("urn:test", "onclick", "plain-namespaced");
+  const uppercaseSvg = document.createElementNS("http://www.w3.org/2000/svg", "g");
+  uppercaseSvg.setAttributeNS(null, "ONCLICK", "plain-uppercase");
+  const elementSpecificRejected = ["onwaitingforkey", "onbegin"].map(name => {
+    try {
+      document.createElement("div").setAttribute(name, "plain-special");
+      return false;
+    } catch (error) {
+      return error instanceof TypeError;
+    }
+  });
+
+  const defaultCalls = [];
+  trustedTypes.createPolicy("default", {
+    createScript: (value, type, sink) => {
+      defaultCalls.push([value, type, sink]);
+      return "globalThis.__eventHandlerAttributeRuns.push('default')";
+    }
+  });
+  const defaulted = document.createElement("button");
+  defaulted.setAttribute("onclick", "default-input");
+  root.appendChild(defaulted);
+  defaulted.click();
+
+  return JSON.stringify({
+    runs: globalThis.__eventHandlerAttributeRuns,
+    unsuitableRejected,
+    unsuitableAttribute: unsuitable.getAttribute("onclick"),
+    plainRejected,
+    plainAttribute: plain.getAttribute("onclick"),
+    plainNsRejected,
+    plainNsAttribute: plainNs.getAttribute("onclick"),
+    ordinary: [
+      ordinary.getAttribute("data-onclick"),
+      ordinary.getAttribute("ondoesnotexist"),
+      ordinary.getAttributeNS("urn:test", "onclick"),
+      uppercaseSvg.getAttribute("ONCLICK")
+    ],
+    elementSpecificRejected,
+    defaultedAttribute: defaulted.getAttribute("onclick"),
+    defaultCalls
+  });
+})()
+"#,
+        )
+        .expect("event handler attribute Trusted Types sink probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"runs":["trusted","trusted-ns","default"],"unsuitableRejected":true,"unsuitableAttribute":null,"plainRejected":true,"plainAttribute":null,"plainNsRejected":true,"plainNsAttribute":null,"ordinary":["plain-data","plain-unknown","plain-namespaced","plain-uppercase"],"elementSpecificRejected":[true,true],"defaultedAttribute":"globalThis.__eventHandlerAttributeRuns.push('default')","defaultCalls":[["default-input","TrustedScript","Element onclick"]]}"#
+    );
+}
+
+#[test]
+fn url_attribute_writes_enforce_the_non_iframe_trusted_script_url_sink_table() {
+    let mut vm = new_storage_test_vm("https://url-attribute-trusted-types.test/");
+    vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const xlink = "http://www.w3.org/1999/xlink";
+  const svg = "http://www.w3.org/2000/svg";
+  const policy = trustedTypes.createPolicy("attribute-url", {
+    createScript: value => value,
+    createScriptURL: value => value
+  });
+  const trusted = value => policy.createScriptURL(value);
+
+  const htmlScript = document.createElement("script");
+  htmlScript.setAttribute("src", trusted("script.js"));
+  const htmlScriptNs = document.createElement("script");
+  htmlScriptNs.setAttributeNS(null, "src", trusted("script-ns.js"));
+  const svgScript = document.createElementNS(svg, "script");
+  svgScript.setAttribute("href", trusted("svg.js"));
+  const svgScriptXlink = document.createElementNS(svg, "script");
+  svgScriptXlink.setAttributeNS(xlink, "xlink:href", trusted("svg-xlink.js"));
+  const embed = document.createElement("embed");
+  embed.setAttribute("src", trusted("embed.js"));
+  const object = document.createElement("object");
+  object.setAttribute("data", trusted("object-data.js"));
+  object.setAttribute("codebase", trusted("object-codebase.js"));
+
+  const rejected = [];
+  for (const [element, setter] of [
+    [document.createElement("script"), element => element.setAttribute("src", "plain")],
+    [document.createElement("script"), element => element.setAttributeNS(null, "src", null)],
+    [document.createElementNS(svg, "script"), element => element.setAttribute("href", "plain")],
+    [document.createElementNS(svg, "script"), element => element.setAttributeNS(xlink, "xlink:href", policy.createScript("wrong"))],
+    [document.createElement("embed"), element => element.setAttribute("src", "plain")],
+    [document.createElement("object"), element => element.setAttribute("data", "plain")],
+    [document.createElement("object"), element => element.setAttribute("codebase", "plain")]
+  ]) {
+    try {
+      setter(element);
+      rejected.push(false);
+    } catch (error) {
+      rejected.push(error instanceof TypeError);
+    }
+  }
+
+  const ordinary = document.createElement("script");
+  ordinary.setAttributeNS("urn:test", "src", "namespaced");
+  const uppercaseSvg = document.createElementNS(svg, "script");
+  uppercaseSvg.setAttributeNS(null, "HREF", "uppercase");
+  const div = document.createElement("div");
+  div.setAttribute("src", "plain-div");
+
+  const defaultCalls = [];
+  trustedTypes.createPolicy("default", {
+    createScriptURL: (value, type, sink) => {
+      defaultCalls.push([value, type, sink]);
+      return `safe-${value}`;
+    }
+  });
+  const defaultHtml = document.createElement("script");
+  defaultHtml.setAttribute("src", "default-html");
+  const defaultSvg = document.createElementNS(svg, "script");
+  defaultSvg.setAttributeNS(xlink, "xlink:href", "default-svg");
+  const defaultObject = document.createElement("object");
+  defaultObject.setAttribute("codebase", "default-object");
+
+  return JSON.stringify({
+    trustedValues: [
+      htmlScript.getAttribute("src"),
+      htmlScriptNs.getAttribute("src"),
+      svgScript.getAttribute("href"),
+      svgScriptXlink.getAttributeNS(xlink, "href"),
+      embed.getAttribute("src"),
+      object.getAttribute("data"),
+      object.getAttribute("codebase")
+    ],
+    rejected,
+    ordinary: [
+      ordinary.getAttributeNS("urn:test", "src"),
+      uppercaseSvg.getAttribute("HREF"),
+      div.getAttribute("src")
+    ],
+    defaultValues: [
+      defaultHtml.getAttribute("src"),
+      defaultSvg.getAttributeNS(xlink, "href"),
+      defaultObject.getAttribute("codebase")
+    ],
+    defaultCalls
+  });
+})()
+"#,
+        )
+        .expect("URL attribute Trusted Types sink table probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"trustedValues":["script.js","script-ns.js","svg.js","svg-xlink.js","embed.js","object-data.js","object-codebase.js"],"rejected":[true,true,true,true,true,true,true],"ordinary":["namespaced","uppercase","plain-div"],"defaultValues":["safe-default-html","safe-default-svg","safe-default-object"],"defaultCalls":[["default-html","TrustedScriptURL","HTMLScriptElement src"],["default-svg","TrustedScriptURL","SVGScriptElement href"],["default-object","TrustedScriptURL","HTMLObjectElement codebase"]]}"#
+    );
+}
+
+#[test]
 fn empty_default_policy_reports_each_rejected_element_sink() {
     let mut vm = new_storage_test_vm("https://empty-default-policy.test/");
     vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
