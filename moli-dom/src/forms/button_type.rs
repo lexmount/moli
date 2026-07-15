@@ -3,9 +3,11 @@
 /// Missing and invalid values select the Auto state. Whether Auto makes the
 /// element a submit button depends on the element's command attributes and
 /// parent node, so callers must not treat it as an alias for Submit.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, strum::EnumString)]
+#[strum(serialize_all = "kebab-case", ascii_case_insensitive)]
 pub enum ButtonTypeState {
     #[default]
+    #[strum(disabled)]
     Auto,
     Submit,
     Reset,
@@ -14,12 +16,9 @@ pub enum ButtonTypeState {
 
 impl ButtonTypeState {
     pub fn from_attribute_value(value: Option<&str>) -> Self {
-        match value {
-            Some(value) if value.eq_ignore_ascii_case("submit") => Self::Submit,
-            Some(value) if value.eq_ignore_ascii_case("reset") => Self::Reset,
-            Some(value) if value.eq_ignore_ascii_case("button") => Self::Button,
-            _ => Self::Auto,
-        }
+        value
+            .and_then(|value| value.parse().ok())
+            .unwrap_or_default()
     }
 
     pub const fn reflected_keyword(self, is_submit_button: bool) -> &'static str {
