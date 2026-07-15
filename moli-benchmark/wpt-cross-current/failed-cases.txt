@@ -115,6 +115,9 @@ css/css-conditional/container-queries/scroll-state/container-type-scroll-state-c
 css/css-conditional/container-queries/scroll-state/container-type-scroll-state-parsing.html
 css/css-conditional/container-queries/style-container-for-shadow-dom.html
 css/css-conditional/container-queries/style-query-registered-custom-rem-change.html
+css/css-counter-styles/counter-style-at-rule/prefix-suffix-syntax.html
+css/css-counter-styles/counter-style-at-rule/speak-as-syntax.html
+css/css-counter-styles/counter-style-at-rule/symbols-syntax.html
 css/css-counter-styles/idlharness.html
 css/css-easing/cubic-bezier-timing-functions-output.html
 css/css-easing/linear-timing-functions-output.html
@@ -2556,6 +2559,7 @@ domparsing/DOMParser-parseFromString-url-base.html
 domparsing/DOMParser-parseFromString-url-moretests.html
 domparsing/DOMParser-parseFromString-url-pushstate.html
 domparsing/DOMParser-parseFromString-url.html
+domparsing/DOMParser-parseFromString-xml-doctype.html
 domparsing/DOMParser-parseFromString-xml-internal-subset.html
 domparsing/DOMParser-parseFromString-xml.html
 domparsing/XMLSerializer-serializeToString.html
@@ -2873,6 +2877,8 @@ html/browsers/windows/nested-browsing-contexts/window-top-null.html
 html/browsers/windows/noreferrer-window-name.html
 html/cross-origin-embedder-policy/coep-on-response-from-service-worker.https.html
 html/cross-origin-embedder-policy/service-worker-cache-storage.https.html
+html/dom/aria-element-reflection-disconnected.html
+html/dom/aria-element-reflection.html
 html/dom/documents/dom-tree-accessors/Document.currentScript.html
 html/dom/documents/dom-tree-accessors/nameditem-01.html
 html/dom/documents/dom-tree-accessors/nameditem-02.html
@@ -2882,6 +2888,8 @@ html/dom/documents/dom-tree-accessors/nameditem-06.html
 html/dom/documents/dom-tree-accessors/nameditem-07.html
 html/dom/documents/dom-tree-accessors/nameditem-08.html
 html/dom/documents/dom-tree-accessors/nameditem-names.html
+html/dom/elements/global-attributes/dir-slots-directionality.html
+html/dom/elements/global-attributes/document-dir.html
 html/dom/elements/the-innertext-and-outertext-properties/dynamic-getter.html
 html/dom/elements/the-innertext-and-outertext-properties/getter.html
 html/dom/elements/the-innertext-and-outertext-properties/innertext-setter.html
@@ -2938,8 +2946,10 @@ html/dom/partial-updates/tentative/template-for-style.html
 html/dom/partial-updates/tentative/template-for-supersedes-invalid-shadowrootmode.html
 html/dom/partial-updates/tentative/template-for-title.html
 html/dom/reflection-embedded.html
+html/dom/reflection-metadata.html
 html/dom/reflection-obsolete.html
-html/editing/dnd/datastore/datatransfer-types.html
+html/dom/reflection-sections.html
+html/dom/reflection-tabular.html
 html/editing/dnd/target-origin/202.html
 html/editing/dnd/the-dropzone-attribute/dropzone_attribute.html
 html/editing/the-hidden-attribute/beforematch-element-fragment-navigation.html
@@ -2969,7 +2979,9 @@ html/interaction/focus/the-autofocus-attribute/supported-elements.html
 html/interaction/focus/the-autofocus-attribute/update-the-rendering.html
 html/links/stylesheet/quirk-origin-check-positive.html
 html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/document-color-01.html
-html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/nothing.html
+html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/document-color-02.html
+html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/document-color-03.html
+html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/document-color-04.html
 html/semantics/document-metadata/the-base-element/base_multiple.html
 html/semantics/document-metadata/the-link-element/link-error-fired-before-scripting-unblocked.html
 html/semantics/document-metadata/the-link-element/link-load-error-events.html
@@ -3067,6 +3079,9 @@ html/semantics/embedded-content/the-object-element/object-in-object-fallback-2.h
 html/semantics/embedded-content/the-object-element/object-javascript-url.html
 html/semantics/embedded-content/the-object-element/usemap-casing.html
 html/semantics/forms/constraints/input-maxlength-emoji.html
+html/semantics/forms/form-control-infrastructure/form_attribute.html
+html/semantics/forms/form-control-infrastructure/form_owner_and_table.html
+html/semantics/forms/form-control-infrastructure/form_owner_and_table_3.html
 html/semantics/forms/form-submission-0/form-data-set-usv.html
 html/semantics/forms/form-submission-0/form-double-submit-preventdefault.html
 html/semantics/forms/form-submission-0/form-double-submit-requestsubmit.html
@@ -3075,6 +3090,12 @@ html/semantics/forms/form-submission-target/rel-button-target.html
 html/semantics/forms/form-submission-target/rel-form-target.html
 html/semantics/forms/form-submission-target/rel-input-target.html
 html/semantics/forms/textfieldselection/selection.html
+html/semantics/forms/the-button-element/button-click-submits-with-commandfor.html
+html/semantics/forms/the-input-element/email-value-idn.html
+html/semantics/forms/the-input-element/email.html
+html/semantics/forms/the-input-element/input-type-change-value.html
+html/semantics/forms/the-input-element/range-2.html
+html/semantics/forms/the-input-element/range.html
 html/semantics/forms/the-input-element/show-picker-cross-origin-iframe.html
 html/semantics/forms/the-select-element/customizable-select/base-appearance-inheritance.html
 html/semantics/forms/the-select-element/customizable-select/option-disabled-optgroup.html
@@ -3720,5 +3741,4 @@ xhr/setrequestheader-header-allowed.htm
 xhr/setrequestheader-header-forbidden.htm
 xhr/status-async.htm
 xhr/status-basic.htm
-xhr/xmlhttprequest-timeout-worker-overridesexpires.html?timeout set to non-expiring value after timeout fires
 xml/xml-prolog-accepted-versions.html

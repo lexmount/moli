@@ -540,10 +540,7 @@ css/css-counter-styles/counter-style-at-rule/fallback.html
 css/css-counter-styles/counter-style-at-rule/name-syntax.html
 css/css-counter-styles/counter-style-at-rule/negative-syntax.html
 css/css-counter-styles/counter-style-at-rule/pad-syntax.html
-css/css-counter-styles/counter-style-at-rule/prefix-suffix-syntax.html
 css/css-counter-styles/counter-style-at-rule/range-syntax.html
-css/css-counter-styles/counter-style-at-rule/speak-as-syntax.html
-css/css-counter-styles/counter-style-at-rule/symbols-syntax.html
 css/css-counter-styles/counter-style-at-rule/system-syntax.html
 css/css-device-adapt/viewport-should-not-affect-devicePixelRatio.html
 css/css-easing/linear-timing-functions-chrome-406926307-crash.html
@@ -1577,7 +1574,6 @@ css/css-flexbox/webkit-box-vertical-writing-mode.html
 css/css-flexbox/whitespace-in-flexitem-001.html
 css/css-flexbox/zero-content-size-with-scrollbar-crash.html
 css/css-font-loading/empty-family-load.html
-css/css-font-loading/font-face-reject.html
 css/css-font-loading/fontface-font-variation-settings-persisted-js-api.html
 css/css-font-loading/fontface-fonts-loading.html
 css/css-font-loading/fontface-invalid-arraybuffer.html
@@ -4102,7 +4098,6 @@ dom/window-extends-event-target.html
 dom/xpath-result-single-node-value-nullable.html
 domparsing/DOMParser-parseFromString-encoding.html
 domparsing/DOMParser-parseFromString-stylesheets.html
-domparsing/DOMParser-parseFromString-xml-doctype.html
 domparsing/DOMParser-parseFromString-xml-parsererror.html
 domparsing/createContextualFragment-in-detached-xml-document-crash.html
 domparsing/createContextualFragment.html
@@ -5832,8 +5827,6 @@ html/cross-origin-embedder-policy/no-secure-context.html
 html/cross-origin-opener-policy/no-https.html
 html/dom/access-key-label.html
 html/dom/aria-attribute-reflection.html
-html/dom/aria-element-reflection-disconnected.html
-html/dom/aria-element-reflection.html
 html/dom/documents/dom-tree-accessors/Document.body.html
 html/dom/documents/dom-tree-accessors/Document.getElementsByClassName-null-undef.html
 html/dom/documents/dom-tree-accessors/Element.getElementsByClassName-null-undef.html
@@ -5882,8 +5875,6 @@ html/dom/elements/global-attributes/dataset-set.html
 html/dom/elements/global-attributes/dataset.html
 html/dom/elements/global-attributes/dir-auto-div-append-child.html
 html/dom/elements/global-attributes/dir-bdi-script.html
-html/dom/elements/global-attributes/dir-slots-directionality.html
-html/dom/elements/global-attributes/document-dir.html
 html/dom/elements/global-attributes/id-attribute.html
 html/dom/elements/global-attributes/id-name-specialcase.html
 html/dom/elements/global-attributes/id-name.html
@@ -5923,14 +5914,12 @@ html/dom/partial-updates/tentative/template-for-superseded-by-shadowrootmode.htm
 html/dom/reflection-forms-weekmonth.html
 html/dom/reflection-forms.html
 html/dom/reflection-grouping.html
-html/dom/reflection-metadata.html
 html/dom/reflection-misc.html
-html/dom/reflection-sections.html
-html/dom/reflection-tabular.html
 html/dom/reflection-text.html
 html/editing/activation/click.html
 html/editing/dnd/crashtests/DataTransfer-getData-RefCell-already-borrowed.html
 html/editing/dnd/datastore/datatransfer-constructor-001.html
+html/editing/dnd/datastore/datatransfer-types.html
 html/editing/dnd/datastore/datatransferitemlist-remove.html
 html/editing/dnd/dom/draggable.html
 html/editing/dnd/dom/events.html
@@ -6002,10 +5991,8 @@ html/links/stylesheet/quirk-origin-check.html
 html/meta/refresh-time.html
 html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/document-all.html
 html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/document-applets.html
-html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/document-color-02.html
-html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/document-color-03.html
-html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/document-color-04.html
 html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/heading-obsolete-attributes-01.html
+html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/nothing.html
 html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/script-IDL-event-htmlfor.html
 html/obsolete/requirements-for-implementations/the-marquee-element-0/crashtests/marquee-with-calc.html
 html/obsolete/requirements-for-implementations/the-marquee-element-0/crashtests/marquee-with-table.html
@@ -6255,7 +6242,6 @@ html/semantics/forms/constraints/form-validation-validity-valueMissing-weekmonth
 html/semantics/forms/constraints/form-validation-validity-valueMissing.html
 html/semantics/forms/constraints/form-validation-willValidate-datalist.html
 html/semantics/forms/constraints/form-validation-willValidate.html
-html/semantics/forms/constraints/input-maxlength-emoji.html
 html/semantics/forms/constraints/input-number-validity-dynamic-value-no-change.html
 html/semantics/forms/constraints/input-pattern-dynamic-value.html
 html/semantics/forms/constraints/inputwillvalidate.html
@@ -6264,10 +6250,7 @@ html/semantics/forms/constraints/radio-group-valueMissing.html
 html/semantics/forms/constraints/radio-valueMissing.html
 html/semantics/forms/constraints/reportValidity-crash.html
 html/semantics/forms/form-control-infrastructure/form.html
-html/semantics/forms/form-control-infrastructure/form_attribute.html
-html/semantics/forms/form-control-infrastructure/form_owner_and_table.html
 html/semantics/forms/form-control-infrastructure/form_owner_and_table_2.html
-html/semantics/forms/form-control-infrastructure/form_owner_and_table_3.html
 html/semantics/forms/form-submission-0/action-encoding.html
 html/semantics/forms/form-submission-0/constructing-form-data-set.html
 html/semantics/forms/form-submission-0/form-double-submit-2.html
@@ -6307,7 +6290,6 @@ html/semantics/forms/textfieldselection/textfieldselection-setSelectionRange.htm
 html/semantics/forms/the-button-element/button-activate.html
 html/semantics/forms/the-button-element/button-checkvalidity.html
 html/semantics/forms/the-button-element/button-click-resets-with-commandfor.html
-html/semantics/forms/the-button-element/button-click-submits-with-commandfor.html
 html/semantics/forms/the-button-element/button-click-submits.html
 html/semantics/forms/the-button-element/button-events.html
 html/semantics/forms/the-button-element/button-labels.html
@@ -6370,8 +6352,6 @@ html/semantics/forms/the-input-element/datetime-local-valueasdate.html
 html/semantics/forms/the-input-element/datetime-local.html
 html/semantics/forms/the-input-element/datetime-weekmonth.html
 html/semantics/forms/the-input-element/datetime.html
-html/semantics/forms/the-input-element/email-value-idn.html
-html/semantics/forms/the-input-element/email.html
 html/semantics/forms/the-input-element/files.html
 html/semantics/forms/the-input-element/focus-dynamic-type-change-on-blur.html
 html/semantics/forms/the-input-element/focus-dynamic-type-change.html
@@ -6391,9 +6371,9 @@ html/semantics/forms/the-input-element/input-stepdown-weekmonth.html
 html/semantics/forms/the-input-element/input-stepdown.html
 html/semantics/forms/the-input-element/input-stepup.html
 html/semantics/forms/the-input-element/input-submit-remove-jssubmit.html
+html/semantics/forms/the-input-element/input-type-button.html
 html/semantics/forms/the-input-element/input-type-change-empty-crash.html
 html/semantics/forms/the-input-element/input-type-change-submit.html
-html/semantics/forms/the-input-element/input-type-change-value.html
 html/semantics/forms/the-input-element/input-type-checkbox.html
 html/semantics/forms/the-input-element/input-type-number-rtl-invalid-crash.html
 html/semantics/forms/the-input-element/input-untrusted-key-event.html
@@ -6427,8 +6407,6 @@ html/semantics/forms/the-input-element/radio-input-cancel.html
 html/semantics/forms/the-input-element/radio-morphed.html
 html/semantics/forms/the-input-element/radio-multiple-selected.html
 html/semantics/forms/the-input-element/radio.html
-html/semantics/forms/the-input-element/range-2.html
-html/semantics/forms/the-input-element/range.html
 html/semantics/forms/the-input-element/required_attribute.html
 html/semantics/forms/the-input-element/reset.html
 html/semantics/forms/the-input-element/search_input.html
@@ -6917,7 +6895,6 @@ html/semantics/scripting-1/the-template-element/template-element/template-descen
 html/semantics/scripting-1/the-template-element/template-element/template-element-clone-into-inactive-document-crash.html
 html/semantics/scripting-1/the-template-element/template-element/template-set-inner-html-in-inactive-document-crash.html
 html/semantics/scripting-1/the-template-element/template-table-crash.html
-html/semantics/sections/headingoffset-and-headingreset.html
 html/semantics/selectors/pseudo-classes/checked-type-change.html
 html/semantics/selectors/pseudo-classes/checked.html
 html/semantics/selectors/pseudo-classes/default.html
@@ -7004,7 +6981,6 @@ html/syntax/parsing-html-fragments/the-input-byte-stream-034.html
 html/syntax/parsing-html-fragments/the-input-byte-stream-037.html
 html/syntax/parsing-html-fragments/the-input-byte-stream-038.html
 html/syntax/parsing-html-fragments/tokenizer-modes-001.html
-html/syntax/parsing/DOMContentLoaded-defer.html
 html/syntax/parsing/Document.getElementsByTagName-foreign-01.html
 html/syntax/parsing/Document.getElementsByTagName-foreign-02.html
 html/syntax/parsing/Element.getElementsByTagName-foreign-01.html
@@ -9510,7 +9486,6 @@ xhr/xmlhttprequest-timeout-worker-twice.html?load fires normally with same timeo
 xhr/xmlhttprequest-timeout-worker-twice.html?timeout fires normally with same timeout set twice
 xhr/xmlhttprequest-unsent.htm
 xml/xml-doc-innerHTML-crash.html
-xml/xml-prolog-accepted-versions.html
 xml/xslt/invalid-output-encoding-crash.html
 xml/xslt/svg/crashtests/xslt-in-img-001.html
 xml/xslt/svg/crashtests/xslt-in-img-002.html
