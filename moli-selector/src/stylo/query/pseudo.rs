@@ -236,25 +236,20 @@ impl<'a> QueryElement<'a> {
         self.is_disableable_element()
             && (self.host.dom().is_disabled_form_control(self.handle)
                 || (matches!(self.element().local_name(), "option" | "optgroup")
-                    && self.disabled_select_ancestor().is_some()))
+                    && self.disabled_associated_select().is_some()))
     }
 
-    pub(super) fn disabled_select_ancestor(self) -> Option<NodeId> {
-        let mut current = self.node().parent_node();
-        while let Some(parent) = current {
-            let Some(element) = self.host.node(parent).and_then(Node::as_element) else {
-                current = self.host.node(parent).and_then(Node::parent_node);
-                continue;
-            };
-            match element.local_name() {
-                "select" if element.has_attribute("disabled") => return Some(parent),
-                "select" | "option" => return None,
-                "optgroup" if self.element().local_name() == "optgroup" => return None,
-                _ => {}
-            }
-            current = self.host.node(parent).and_then(Node::parent_node);
-        }
-        None
+    pub(super) fn disabled_associated_select(self) -> Option<NodeId> {
+        let select = match self.element().local_name() {
+            "option" => self.host.option_nearest_ancestor_select(self.handle),
+            "optgroup" => self.host.optgroup_nearest_ancestor_select(self.handle),
+            _ => None,
+        }?;
+        self.host
+            .node(select)
+            .and_then(Node::as_element)
+            .is_some_and(|element| element.has_attribute("disabled"))
+            .then_some(select)
     }
 
     pub(super) fn can_match_required_pseudo(self) -> bool {

@@ -180,6 +180,14 @@ impl DomHost {
         self.dom.option_nearest_ancestor_select(handle)
     }
 
+    pub fn optgroup_nearest_ancestor_select(&self, handle: DomHandle) -> Option<DomHandle> {
+        self.dom.optgroup_nearest_ancestor_select(handle)
+    }
+
+    pub fn option_is_disabled(&self, handle: DomHandle) -> bool {
+        self.dom.option_is_disabled(handle)
+    }
+
     pub fn radio_group_members(&self, handle: DomHandle) -> Vec<DomHandle> {
         let Some(element) = self.node(handle).and_then(Node::as_element) else {
             return Vec::new();
