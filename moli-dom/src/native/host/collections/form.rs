@@ -1,5 +1,5 @@
 use super::*;
-use crate::forms::{InputType, parse_non_negative_integer_prefix};
+use crate::forms::{ButtonTypeState, InputType, parse_non_negative_integer_prefix};
 
 impl DomHost {
     pub fn option_value(&self, handle: DomHandle) -> Option<String> {
@@ -92,6 +92,26 @@ impl DomHost {
                 self.is_listed_form_control_handle(handle)
                     && self.form_control_owner(handle) == Some(root)
             })
+        }
+    }
+
+    pub fn button_is_submit_button(&self, handle: DomHandle) -> bool {
+        let Some(element) = self.node(handle).and_then(Node::as_element) else {
+            return false;
+        };
+        if !element.is_html_button() {
+            return false;
+        }
+        match element.button_type_state() {
+            ButtonTypeState::Submit => true,
+            ButtonTypeState::Auto => {
+                !element.has_attribute("command")
+                    && !element.has_attribute("commandfor")
+                    && !self
+                        .parent_node(handle)
+                        .is_some_and(|parent| self.is_html_element_named(parent, "select"))
+            }
+            ButtonTypeState::Reset | ButtonTypeState::Button => false,
         }
     }
 
