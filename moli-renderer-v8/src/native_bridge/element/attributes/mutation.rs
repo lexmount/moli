@@ -12,11 +12,12 @@ use super::super::super::{
     throw_dom_exception, validate_attribute_name, validate_qualified_name_and_namespace,
 };
 use super::super::{
-    element_has_attribute, remove_live_element_attribute_appending_to_current_reaction_queue,
+    TrustedAttributeSetter, element_has_attribute,
+    remove_live_element_attribute_appending_to_current_reaction_queue,
     remove_live_element_attribute_ns_appending_to_current_reaction_queue,
     set_live_element_attribute_appending_to_current_reaction_queue,
     set_live_element_attribute_ns_appending_to_current_reaction_queue,
-    update_iframe_snapshot_navigation,
+    trusted_attribute_value_string, update_iframe_snapshot_navigation,
 };
 use super::{
     AttributeNameArgs, AttributeNamespaceNameArgs, SetAttributeArgs, SetAttributeNsArgs,
@@ -88,12 +89,28 @@ pub(in crate::native_bridge) fn node_set_attribute_callback<'s>(
         throw_invalid_attribute_name(scope);
         return;
     }
+    let runtime = unsafe { &*runtime_ptr };
+    let normalized_name = runtime
+        .dom_host()
+        .node(handle)
+        .and_then(Node::as_element)
+        .map(|element| element.normalized_attribute_name(&parsed.name))
+        .unwrap_or_else(|| parsed.name.clone());
+    let Some(value) = trusted_attribute_value_string(
+        scope,
+        Some((runtime_ptr, handle)),
+        None,
+        &normalized_name,
+        parsed.value,
+        TrustedAttributeSetter::SetAttribute,
+    ) else {
+        rv.set_undefined();
+        return;
+    };
     if parsed.name.eq_ignore_ascii_case("src")
-        && unsafe { &*runtime_ptr }
-            .dom_host()
-            .is_html_element_named(handle, "iframe")
+        && runtime.dom_host().is_html_element_named(handle, "iframe")
     {
-        update_iframe_snapshot_navigation(scope, runtime_ptr, handle, &parsed.value);
+        update_iframe_snapshot_navigation(scope, runtime_ptr, handle, &value);
         rv.set_undefined();
         return;
     }
@@ -103,7 +120,7 @@ pub(in crate::native_bridge) fn node_set_attribute_callback<'s>(
             runtime_ptr,
             handle,
             &parsed.name,
-            &parsed.value,
+            &value,
         );
     });
     rv.set_undefined();
@@ -136,6 +153,17 @@ pub(in crate::native_bridge) fn node_set_attribute_ns_callback<'s>(
                 return;
             }
         };
+    let Some(value) = trusted_attribute_value_string(
+        scope,
+        Some((runtime_ptr, handle)),
+        namespace.as_deref(),
+        &local_name,
+        parsed.value,
+        TrustedAttributeSetter::SetAttributeNs,
+    ) else {
+        rv.set_undefined();
+        return;
+    };
     custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
         let _ = set_live_element_attribute_ns_appending_to_current_reaction_queue(
             scope,
@@ -145,7 +173,7 @@ pub(in crate::native_bridge) fn node_set_attribute_ns_callback<'s>(
             prefix.as_deref(),
             &local_name,
             &parsed.qualified_name,
-            &parsed.value,
+            &value,
         );
     });
     rv.set_undefined();
