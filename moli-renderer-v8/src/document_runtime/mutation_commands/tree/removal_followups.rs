@@ -21,6 +21,11 @@ impl DocumentRuntime {
         removal_plan: &TreeRemovalPlan,
         profile: TreeMutationSourceProfile,
     ) {
+        self.queue_selectedcontent_updates_after_tree_removal(
+            scope,
+            host_ptr,
+            &removal_plan.selected_option_owners_before_remove,
+        );
         self.dispatch_tree_removal_pre_reaction_followups_after_change(
             scope,
             host_ptr,

@@ -1818,6 +1818,24 @@ impl DocumentRuntime {
         options: RuntimeMutationOptions,
         prepublished_removals: Vec<devtools_mutations::DevToolsDomPrepublishedRemoval>,
     ) -> bool {
+        let result = self.apply_runtime_mutation_effects_before_runtime_followups(
+            scope,
+            host_ptr,
+            effects,
+            options,
+            prepublished_removals,
+        );
+        finish_runtime_mutation_effects(self, scope, host_ptr, result)
+    }
+
+    pub(super) fn apply_runtime_mutation_effects_before_runtime_followups(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        effects: DomMutationEffects,
+        options: RuntimeMutationOptions,
+        prepublished_removals: Vec<devtools_mutations::DevToolsDomPrepublishedRemoval>,
+    ) -> RuntimeMutationApplyResult {
         let mut result = apply_runtime_mutation_effects_to_dom_host(
             &mut self.mutations,
             &self.document,
@@ -1833,7 +1851,7 @@ impl DocumentRuntime {
             &mut result.devtools_dom_mutations,
             prepublished_removals,
         );
-        finish_runtime_mutation_effects(self, scope, host_ptr, result)
+        result
     }
 }
 
@@ -1848,6 +1866,12 @@ pub(crate) struct RuntimeMutationApplyResult {
     inline_style_attribute_csp_mutations: Vec<InlineStyleAttributeCspMutation>,
     connected_style_csp_roots: Vec<DomHandle>,
     font_face_use_roots: Vec<DomHandle>,
+}
+
+impl RuntimeMutationApplyResult {
+    pub(super) fn did_change(&self) -> bool {
+        self.changed
+    }
 }
 
 #[derive(Clone, Debug)]
