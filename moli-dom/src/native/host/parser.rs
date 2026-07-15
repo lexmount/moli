@@ -255,6 +255,7 @@ impl DomHost {
                 changed |= attribute_changed;
             }
         }
+        changed |= element.resanitize_input_value_after_parser_attributes();
         changed |= element.mark_undefined_custom_element_candidate_from_identity();
 
         if changed {
@@ -310,6 +311,37 @@ mod tests {
         );
 
         assert_eq!(host.get_attribute(element, "id").as_deref(), Some("card"));
+    }
+
+    #[test]
+    fn parser_input_value_sanitization_observes_the_complete_token_attribute_set() {
+        let mut host = test_host();
+        let input = host.create_parser_element_without_attributes(
+            "input".to_owned(),
+            "http://www.w3.org/1999/xhtml".to_owned(),
+            None,
+        );
+        let attribute = |name: &str, value: &str| {
+            Attribute::new(name.to_owned(), String::new(), None, value.to_owned())
+        };
+
+        host.add_attrs_if_missing_for_parser(
+            input,
+            vec![
+                attribute("type", "range"),
+                attribute("id", "range"),
+                attribute("min", "2"),
+                attribute("max", "6"),
+            ],
+        );
+
+        assert_eq!(
+            host.node(input)
+                .and_then(Node::as_element)
+                .map(Element::input_value)
+                .as_deref(),
+            Some("4")
+        );
     }
 
     #[test]

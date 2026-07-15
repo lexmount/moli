@@ -3,6 +3,9 @@ mod numeric;
 mod text;
 mod validity;
 
+pub(crate) use input_type::{
+    InputValueSanitizationContext, sanitize_input_value_for_type_with_context,
+};
 pub use input_type::{
     email_value_type_mismatch, form_control_type_supports_intrinsic_validation,
     input_type_has_value_sanitization, input_type_value_mismatch, is_valid_email_address,

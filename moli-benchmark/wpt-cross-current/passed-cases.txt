@@ -5854,6 +5854,8 @@ html/semantics/forms/the-input-element/radio-input-cancel.html
 html/semantics/forms/the-input-element/radio-morphed.html
 html/semantics/forms/the-input-element/radio-multiple-selected.html
 html/semantics/forms/the-input-element/radio.html
+html/semantics/forms/the-input-element/range-2.html
+html/semantics/forms/the-input-element/range.html
 html/semantics/forms/the-input-element/required_attribute.html
 html/semantics/forms/the-input-element/reset.html
 html/semantics/forms/the-input-element/search_input.html

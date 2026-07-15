@@ -1,7 +1,7 @@
 use std::sync::LazyLock;
 
 use super::{Attribute, CustomElementState, ElementControlState};
-use crate::forms::InputType;
+use crate::forms::{InputType, InputValueSanitizationContext};
 use crate::native::NativeNodeId;
 
 static EMPTY_CONTROL_STATE: LazyLock<ElementControlState> =
@@ -205,8 +205,7 @@ impl ElementRareData {
         namespace: &str,
         local_name: &str,
         input_type: InputType,
-        input_value_attribute: Option<&str>,
-        input_multiple: bool,
+        input_context: InputValueSanitizationContext<'_>,
         attribute_name: &str,
         attribute_value: Option<&str>,
     ) {
@@ -219,8 +218,7 @@ impl ElementRareData {
                 namespace,
                 local_name,
                 input_type,
-                input_value_attribute,
-                input_multiple,
+                input_context,
                 attribute_name,
                 attribute_value,
             );
@@ -240,8 +238,7 @@ impl ElementRareData {
             namespace,
             local_name,
             input_type,
-            input_value_attribute,
-            input_multiple,
+            input_context,
             attribute_name,
             attribute_value,
         );

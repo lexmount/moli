@@ -22,7 +22,8 @@ use super::NativeDom;
 use super::node::{NativeNodeId, Node};
 use crate::custom_elements::is_valid_custom_element_name;
 use crate::forms::{
-    InputType, is_valid_number_input_value, sanitize_input_value_for_type_with_multiple,
+    InputType, InputValueSanitizationContext, is_valid_number_input_value,
+    sanitize_input_value_for_type_with_context,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -575,11 +576,27 @@ impl Element {
     }
 
     fn sanitized_input_value(&self, value: &str) -> String {
-        sanitize_input_value_for_type_with_multiple(
+        sanitize_input_value_for_type_with_context(
             self.input_type(),
             value,
-            self.has_attribute("multiple"),
+            InputValueSanitizationContext {
+                multiple: self.has_attribute("multiple"),
+                min: self.attribute("min"),
+                max: self.attribute("max"),
+                step: self.attribute("step"),
+                value_attribute: self.attribute("value"),
+            },
         )
+    }
+
+    pub(crate) fn resanitize_input_value_after_parser_attributes(&mut self) -> bool {
+        if !self.is_html_input() || self.input_value_dirty() {
+            return false;
+        }
+        let source = self.attribute("value").unwrap_or_default().to_owned();
+        let value = self.sanitized_input_value(&source);
+        self.control_state_mut()
+            .set_input_value_with_dirty(&value, false)
     }
 
     pub fn set_input_value(&mut self, value: &str) -> bool {
@@ -1144,24 +1161,34 @@ impl Element {
     ) {
         let is_html_input =
             self.namespace() == "http://www.w3.org/1999/xhtml" && self.local_name() == "input";
-        let input_value_attribute =
-            if is_html_input && matches!(attribute_name, "type" | "multiple") {
-                self.attribute("value").map(str::to_owned)
-            } else {
-                None
-            };
+        let input_value_attribute = is_html_input
+            .then(|| self.attribute("value").map(str::to_owned))
+            .flatten();
+        let input_min = is_html_input
+            .then(|| self.attribute("min").map(str::to_owned))
+            .flatten();
+        let input_max = is_html_input
+            .then(|| self.attribute("max").map(str::to_owned))
+            .flatten();
+        let input_step = is_html_input
+            .then(|| self.attribute("step").map(str::to_owned))
+            .flatten();
         let input_type = if is_html_input && attribute_name == "type" {
             InputType::from_attribute_value(attribute_value)
         } else {
             self.input_type()
         };
-        let input_multiple = is_html_input && self.has_attribute("multiple");
         self.rare_data.sync_control_state_from_attribute(
             self.namespace.as_ref(),
             self.local_name.as_ref(),
             input_type,
-            input_value_attribute.as_deref(),
-            input_multiple,
+            InputValueSanitizationContext {
+                multiple: is_html_input && self.has_attribute("multiple"),
+                min: input_min.as_deref(),
+                max: input_max.as_deref(),
+                step: input_step.as_deref(),
+                value_attribute: input_value_attribute.as_deref(),
+            },
             attribute_name,
             attribute_value,
         );

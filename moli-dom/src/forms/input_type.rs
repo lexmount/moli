@@ -1,4 +1,4 @@
-use super::numeric::is_valid_number_input_value;
+use super::numeric::{is_valid_number_input_value, number_aligns_to_step};
 use moli_html_input_temporal::{
     datetime_local_input_milliseconds, datetime_local_input_value_from_milliseconds,
     is_valid_date_input_value, is_valid_month_input_value, is_valid_time_input_value,
@@ -33,10 +33,34 @@ pub fn sanitize_input_value_for_type(input_type: InputType, value: &str) -> Stri
     sanitize_input_value_for_type_with_multiple(input_type, value, false)
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct InputValueSanitizationContext<'a> {
+    pub multiple: bool,
+    pub min: Option<&'a str>,
+    pub max: Option<&'a str>,
+    pub step: Option<&'a str>,
+    pub value_attribute: Option<&'a str>,
+}
+
 pub fn sanitize_input_value_for_type_with_multiple(
     input_type: InputType,
     value: &str,
     multiple: bool,
+) -> String {
+    sanitize_input_value_for_type_with_context(
+        input_type,
+        value,
+        InputValueSanitizationContext {
+            multiple,
+            ..InputValueSanitizationContext::default()
+        },
+    )
+}
+
+pub(crate) fn sanitize_input_value_for_type_with_context(
+    input_type: InputType,
+    value: &str,
+    context: InputValueSanitizationContext<'_>,
 ) -> String {
     match input_type {
         // Text-family — strip newlines / CR but leave whitespace runs alone.
@@ -48,7 +72,7 @@ pub fn sanitize_input_value_for_type_with_multiple(
             let stripped = strip_input_value_line_breaks(value);
             stripped.trim_matches(is_ascii_whitespace_char).to_owned()
         }
-        InputType::Email => sanitize_email_input_value(value, multiple),
+        InputType::Email => sanitize_email_input_value(value, context.multiple),
         InputType::Number if !is_valid_number_input_value(value) => String::new(),
         InputType::Date if !is_valid_date_input_value(value) => String::new(),
         InputType::Time if !is_valid_time_input_value(value) => String::new(),
@@ -57,11 +81,7 @@ pub fn sanitize_input_value_for_type_with_multiple(
             .unwrap_or_default(),
         InputType::Month if !is_valid_month_input_value(value) => String::new(),
         InputType::Week if !is_valid_week_input_value(value) => String::new(),
-        // Range — sanitization: parse as float, clamp to [min, max], else
-        // default to "(min+max)/2". Without min/max context here we use the
-        // attribute-less default range 0..=100 (midpoint 50). Callers with
-        // attribute context can override.
-        InputType::Range => sanitize_range_value(value),
+        InputType::Range => sanitize_range_value(value, context),
         // HTML-compatible color inputs accept CSS colors, discard alpha, and
         // expose an opaque lowercase sRGB simple color.
         InputType::Color => sanitize_color_value(value),
@@ -107,22 +127,87 @@ fn is_ascii_whitespace_char(ch: char) -> bool {
     matches!(ch, ' ' | '\t' | '\n' | '\r' | '\x0C')
 }
 
-fn sanitize_range_value(value: &str) -> String {
-    // Default min=0, max=100 per spec — without attribute access here we
-    // can only honour that default; element-aware callers should override
-    // by computing the suggested default themselves.
-    match value.trim_matches(is_ascii_whitespace_char).parse::<f64>() {
-        Ok(parsed) if parsed.is_finite() => {
-            // Clamp to [0, 100]; preserve integer formatting when the result
-            // is an integer to match the HTML serializer for valid floats.
-            let clamped = parsed.clamp(0.0, 100.0);
-            if clamped == clamped.trunc() {
-                (clamped as i64).to_string()
-            } else {
-                clamped.to_string()
-            }
-        }
-        _ => "50".to_owned(),
+fn sanitize_range_value(value: &str, context: InputValueSanitizationContext<'_>) -> String {
+    let minimum = context
+        .min
+        .and_then(parse_valid_range_number)
+        .unwrap_or(0.0);
+    let maximum = context
+        .max
+        .and_then(parse_valid_range_number)
+        .unwrap_or(100.0)
+        .max(minimum);
+    let step_base = context
+        .min
+        .and_then(parse_valid_range_number)
+        .or_else(|| context.value_attribute.and_then(parse_valid_range_number))
+        .unwrap_or(0.0);
+    let step = match context.step {
+        Some(step) if step.eq_ignore_ascii_case("any") => None,
+        Some(step) => Some(
+            parse_valid_range_number(step)
+                .filter(|step| *step > 0.0)
+                .unwrap_or(1.0),
+        ),
+        None => Some(1.0),
+    };
+
+    let clamp = |value| clamp_range_value(value, minimum, maximum, step_base, step);
+    let default_value = clamp(minimum / 2.0 + maximum / 2.0);
+    let value = parse_valid_range_number(value).unwrap_or(default_value);
+    serialize_range_number(clamp(value))
+}
+
+fn parse_valid_range_number(value: &str) -> Option<f64> {
+    if value.is_empty() || !is_valid_number_input_value(value) {
+        return None;
+    }
+    value.parse::<f64>().ok().filter(|value| value.is_finite())
+}
+
+fn clamp_range_value(
+    value: f64,
+    minimum: f64,
+    maximum: f64,
+    step_base: f64,
+    step: Option<f64>,
+) -> f64 {
+    let in_range = value.clamp(minimum, maximum);
+    let Some(step) = step else {
+        return in_range;
+    };
+    if number_aligns_to_step(in_range, step_base, step) {
+        return in_range;
+    }
+
+    let quotient = (in_range - step_base) / step;
+    if !quotient.is_finite() {
+        return in_range;
+    }
+    let lower = quotient.floor();
+    let rounded = if quotient - lower < 0.5 {
+        lower
+    } else {
+        lower + 1.0
+    };
+    let mut candidate = step_base + rounded * step;
+    if candidate > maximum {
+        candidate -= step;
+    } else if candidate < minimum {
+        candidate += step;
+    }
+    if candidate < minimum || candidate > maximum || !candidate.is_finite() {
+        in_range
+    } else {
+        candidate
+    }
+}
+
+fn serialize_range_number(value: f64) -> String {
+    if value == 0.0 {
+        "0".to_owned()
+    } else {
+        value.to_string()
     }
 }
 
@@ -221,7 +306,10 @@ pub fn url_value_type_mismatch(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{sanitize_input_value_for_type, sanitize_input_value_for_type_with_multiple};
+    use super::{
+        InputValueSanitizationContext, sanitize_input_value_for_type,
+        sanitize_input_value_for_type_with_context, sanitize_input_value_for_type_with_multiple,
+    };
     use moli_html_input_type::InputType;
 
     const INITIAL: &str = "  foo\rbar  ";
@@ -309,6 +397,59 @@ mod tests {
             "100"
         );
         assert_eq!(sanitize_input_value_for_type(InputType::Range, "-5"), "0");
+    }
+
+    #[test]
+    fn range_uses_element_limits_and_step_alignment() {
+        let sanitize = |value, min, max, step, value_attribute| {
+            sanitize_input_value_for_type_with_context(
+                InputType::Range,
+                value,
+                InputValueSanitizationContext {
+                    multiple: false,
+                    min,
+                    max,
+                    step,
+                    value_attribute,
+                },
+            )
+        };
+
+        assert_eq!(
+            sanitize("ppp", Some("0"), Some("5"), Some("xyz"), Some("ppp")),
+            "3"
+        );
+        assert_eq!(sanitize("7", Some("0"), Some("5"), None, Some("7")), "5");
+        assert_eq!(sanitize("", Some("2"), Some("6"), None, None), "4");
+        assert_eq!(sanitize("", Some("0"), Some("7"), Some("2"), None), "4");
+        assert_eq!(sanitize("", Some("2"), Some("-3"), None, None), "2");
+        assert_eq!(
+            sanitize("6.7", Some("5"), Some("12.6"), None, Some("6.7")),
+            "7"
+        );
+        assert_eq!(
+            sanitize("6.7", Some("5.3"), Some("12"), None, Some("6.7")),
+            "6.3"
+        );
+        assert_eq!(
+            sanitize("6.7", Some("5.3"), Some("12"), Some("0.5"), Some("6.7")),
+            "6.8"
+        );
+        assert_eq!(sanitize(" 123", None, None, None, Some(" 123")), "50");
+        assert_eq!(
+            sanitize("", Some("0"), Some("100"), Some("20"), Some("40")),
+            "60"
+        );
+        assert_eq!(
+            sanitize("0.6", Some("0"), Some("1"), Some("0.1"), Some("0.2")),
+            "0.6"
+        );
+        assert_eq!(sanitize("2.1", None, None, None, None), "2");
+        assert_eq!(sanitize("2.1", None, None, Some("any"), None), "2.1");
+        assert_eq!(
+            sanitize("-2.5", Some("-10"), Some("10"), Some("1"), None),
+            "-2"
+        );
     }
 
     #[test]
