@@ -1464,7 +1464,7 @@ fn perform_option_click_default_action(
     handle: DomHandle,
 ) -> bool {
     let runtime = unsafe { &*runtime_ptr };
-    let Some(select_handle) = owner_select_for_option(runtime, handle) else {
+    let Some(select_handle) = runtime.dom_host().option_nearest_ancestor_select(handle) else {
         return false;
     };
     if is_disabled_form_control(runtime, handle) || is_disabled_form_control(runtime, select_handle)
@@ -1497,25 +1497,6 @@ fn perform_option_click_default_action(
         }
     }
     true
-}
-
-fn owner_select_for_option(runtime: &JsContextHost, handle: DomHandle) -> Option<DomHandle> {
-    if !is_html_option_element(runtime, handle) {
-        return None;
-    }
-    let mut current = runtime.dom_host().parent_node(handle);
-    while let Some(parent) = current {
-        if runtime
-            .dom_host()
-            .node(parent)
-            .and_then(Node::as_element)
-            .is_some_and(Element::is_html_select)
-        {
-            return Some(parent);
-        }
-        current = runtime.dom_host().parent_node(parent);
-    }
-    None
 }
 
 fn is_html_option_element(runtime: &JsContextHost, handle: DomHandle) -> bool {
