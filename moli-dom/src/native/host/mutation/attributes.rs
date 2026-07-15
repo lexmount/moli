@@ -254,7 +254,7 @@ impl DomHost {
         if !name.eq_ignore_ascii_case("selected") || !self.is_html_element_named(handle, "option") {
             return;
         }
-        let Some(select) = self.owner_select_for_option(handle) else {
+        let Some(select) = self.option_nearest_ancestor_select(handle) else {
             return;
         };
         if self

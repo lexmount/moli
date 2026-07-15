@@ -1,6 +1,7 @@
 mod button_type;
 mod input_type;
 mod numeric;
+mod option;
 mod text;
 mod validity;
 
@@ -33,6 +34,7 @@ pub use numeric::{
     parse_html_floating_point_prefix, parse_input_numeric_value, progress_element_values,
     step_input_value,
 };
+pub use option::{OptionNearestSelectStep, OptionNearestSelectTraversal};
 pub use text::{
     normalize_custom_validation_message, normalize_form_submission_newlines,
     parse_non_negative_integer_prefix, parse_non_negative_length_attribute,

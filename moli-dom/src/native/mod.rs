@@ -1530,6 +1530,65 @@ mod tests {
     }
 
     #[test]
+    fn select_option_list_uses_option_nearest_ancestor_select() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+        let document = host.document_node_id();
+        let parent_select = host.create_element("select");
+        let child_select = host.create_element("select");
+        assert!(host.append_child(document, parent_select));
+        assert!(host.append_child(parent_select, child_select));
+
+        let normal_option = host.create_element("option");
+        let nested_option = host.create_element("option");
+        assert!(host.append_child(child_select, normal_option));
+        assert!(host.append_child(normal_option, nested_option));
+
+        let div = host.create_element("div");
+        let div_option = host.create_element("option");
+        assert!(host.append_child(child_select, div));
+        assert!(host.append_child(div, div_option));
+
+        let hr = host.create_element("hr");
+        let hr_option = host.create_element("option");
+        assert!(host.append_child(child_select, hr));
+        assert!(host.append_child(hr, hr_option));
+
+        let datalist = host.create_element("datalist");
+        let datalist_option = host.create_element("option");
+        assert!(host.append_child(child_select, datalist));
+        assert!(host.append_child(datalist, datalist_option));
+
+        let optgroup = host.create_element("optgroup");
+        let optgroup_option = host.create_element("option");
+        let nested_optgroup = host.create_element("optgroup");
+        let nested_optgroup_option = host.create_element("option");
+        assert!(host.append_child(child_select, optgroup));
+        assert!(host.append_child(optgroup, optgroup_option));
+        assert!(host.append_child(optgroup, nested_optgroup));
+        assert!(host.append_child(nested_optgroup, nested_optgroup_option));
+
+        assert!(host.select_option_elements(parent_select).is_empty());
+        assert_eq!(
+            host.select_option_elements(child_select),
+            vec![normal_option, div_option, optgroup_option]
+        );
+        for option in [normal_option, div_option, optgroup_option] {
+            assert_eq!(
+                host.option_nearest_ancestor_select(option),
+                Some(child_select)
+            );
+        }
+        for option in [
+            nested_option,
+            hr_option,
+            datalist_option,
+            nested_optgroup_option,
+        ] {
+            assert_eq!(host.option_nearest_ancestor_select(option), None);
+        }
+    }
+
+    #[test]
     fn selected_option_insertion_deselects_single_select_peers_without_dirtying_them() {
         let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
         let document = host.document_node_id();

@@ -2,10 +2,11 @@ use super::helpers::{
     effective_option_selected, element_option_value, select_is_multiple, select_option_handles,
 };
 use super::*;
+use crate::dom::forms::{OptionNearestSelectStep, OptionNearestSelectTraversal};
 use crate::native_bridge::{
     document::{
-        detached_element_local_name, detached_form_owner_object, detached_parent_node_object,
-        set_detached_text_replacement_value,
+        detached_element_local_name, detached_element_namespace_uri, detached_form_owner_object,
+        detached_parent_node_object, set_detached_text_replacement_value,
     },
     element::{html_element_getter_receiver, html_element_setter_receiver},
 };
@@ -86,11 +87,19 @@ fn detached_option_form_owner_object<'s>(
     option: v8::Local<'s, v8::Object>,
 ) -> Option<Option<v8::Local<'s, v8::Object>>> {
     let mut current = detached_parent_node_object(scope, option)?;
+    let mut traversal = OptionNearestSelectTraversal::default();
     loop {
-        if detached_element_local_name(scope, current)
-            .is_some_and(|name| name.eq_ignore_ascii_case("select"))
-        {
-            return Some(detached_form_owner_object(scope, current));
+        if let (Some(namespace), Some(local_name)) = (
+            detached_element_namespace_uri(scope, current),
+            detached_element_local_name(scope, current),
+        ) {
+            match traversal.visit_ancestor(&namespace, &local_name) {
+                OptionNearestSelectStep::Continue => {}
+                OptionNearestSelectStep::Select => {
+                    return Some(detached_form_owner_object(scope, current));
+                }
+                OptionNearestSelectStep::Blocked => return Some(None),
+            }
         }
         let Some(parent) = detached_parent_node_object(scope, current) else {
             return Some(None);
@@ -203,19 +212,7 @@ pub(in crate::native_bridge) fn option_selected_setter_function<'s>(
     };
     let selected = args.get(0).boolean_value(scope);
     let runtime = unsafe { &mut *runtime_ptr };
-    let mut owner_select = runtime.dom_host().parent_node(handle);
-    while let Some(parent) = owner_select {
-        if runtime
-            .dom_host()
-            .node(parent)
-            .and_then(Node::as_element)
-            .is_some_and(Element::is_html_select)
-        {
-            owner_select = Some(parent);
-            break;
-        }
-        owner_select = runtime.dom_host().parent_node(parent);
-    }
+    let owner_select = runtime.dom_host().option_nearest_ancestor_select(handle);
     if let Some(select_handle) = owner_select
         && selected
         && !select_is_multiple(runtime, select_handle)
@@ -252,21 +249,11 @@ pub(in crate::native_bridge) fn option_form_getter_function<'s>(
         return;
     }
     let runtime = unsafe { &*runtime_ptr };
-    let mut current = runtime.dom_host().parent_node(handle);
-    while let Some(parent) = current {
-        if runtime
-            .dom_host()
-            .node(parent)
-            .and_then(Node::as_element)
-            .is_some_and(Element::is_html_select)
-        {
-            let form = form_associated_form_owner(runtime, parent);
-            set_wrapped_node_or_null(scope, &mut rv, runtime_ptr, form);
-            return;
-        }
-        current = runtime.dom_host().parent_node(parent);
-    }
-    rv.set_null();
+    let form = runtime
+        .dom_host()
+        .option_nearest_ancestor_select(handle)
+        .and_then(|select| form_associated_form_owner(runtime, select));
+    set_wrapped_node_or_null(scope, &mut rv, runtime_ptr, form);
 }
 
 pub(in crate::native_bridge) fn option_index_getter_function<'s>(
@@ -279,33 +266,16 @@ pub(in crate::native_bridge) fn option_index_getter_function<'s>(
         return;
     };
     let runtime = unsafe { &*runtime_ptr };
-    let mut current = runtime.dom_host().parent_node(handle);
-    while let Some(parent) = current {
-        if runtime
-            .dom_host()
-            .node(parent)
-            .and_then(Node::as_element)
-            .is_some_and(Element::is_html_select)
-        {
-            let index = select_option_handles(runtime, parent)
+    let index = runtime
+        .dom_host()
+        .option_nearest_ancestor_select(handle)
+        .and_then(|select| {
+            select_option_handles(runtime, select)
                 .into_iter()
                 .position(|option| option == handle)
-                .unwrap_or(0) as i32;
-            rv.set_int32(index);
-            return;
-        }
-        if runtime
-            .dom_host()
-            .node(parent)
-            .and_then(Node::as_element)
-            .is_some_and(|element| element.local_name() == "datalist")
-        {
-            rv.set_int32(0);
-            return;
-        }
-        current = runtime.dom_host().parent_node(parent);
-    }
-    rv.set_int32(0);
+        })
+        .unwrap_or(0) as i32;
+    rv.set_int32(index);
 }
 
 pub(in crate::native_bridge) fn option_label_getter_function<'s>(

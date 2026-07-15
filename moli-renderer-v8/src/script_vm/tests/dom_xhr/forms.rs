@@ -564,6 +564,80 @@ fn detached_select_and_option_track_selection_state() {
 }
 
 #[test]
+fn option_nearest_ancestor_select_controls_list_form_index_and_selectedness() {
+    let mut vm = new_storage_test_vm("https://option-nearest-select.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const root = document.documentElement || document.appendChild(document.createElement('html'));
+  const body = document.body || root.appendChild(document.createElement('body'));
+  const form = document.createElement('form');
+  const parentSelect = document.createElement('select');
+  const childSelect = document.createElement('select');
+  form.append(parentSelect);
+  parentSelect.append(childSelect);
+  body.append(form);
+
+  const normalOption = document.createElement('option');
+  childSelect.append(normalOption);
+  const nestedOption = document.createElement('option');
+  normalOption.append(nestedOption);
+
+  const div = document.createElement('div');
+  childSelect.append(div);
+  const divOption = document.createElement('option');
+  div.append(divOption);
+
+  const hr = document.createElement('hr');
+  childSelect.append(hr);
+  const hrOption = document.createElement('option');
+  hr.append(hrOption);
+
+  const datalist = document.createElement('datalist');
+  childSelect.append(datalist);
+  const datalistOption = document.createElement('option');
+  datalist.append(datalistOption);
+
+  const optgroup = document.createElement('optgroup');
+  childSelect.append(optgroup);
+  const optgroupOption = document.createElement('option');
+  optgroup.append(optgroupOption);
+  const nestedOptgroup = document.createElement('optgroup');
+  optgroup.append(nestedOptgroup);
+  const nestedOptgroupOption = document.createElement('option');
+  nestedOptgroup.append(nestedOptgroupOption);
+
+  normalOption.selected = true;
+  datalistOption.selected = true;
+
+  return JSON.stringify({
+    parentLength: parentSelect.length,
+    childLength: childSelect.length,
+    options: Array.from(childSelect.options, option =>
+      option === normalOption ? 'normal' :
+      option === divOption ? 'div' :
+      option === optgroupOption ? 'optgroup' : 'unexpected'),
+    validForms: [normalOption, divOption, optgroupOption].map(option => option.form === form),
+    invalidForms: [nestedOption, hrOption, datalistOption, nestedOptgroupOption]
+      .map(option => option.form === null),
+    indices: [normalOption, divOption, optgroupOption, nestedOption, hrOption,
+      datalistOption, nestedOptgroupOption].map(option => option.index),
+    normalStillSelected: normalOption.selected
+  });
+})()
+"#,
+        )
+        .expect("option nearest ancestor select behavior should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"parentLength":0,"childLength":3,"options":["normal","div","optgroup"],"validForms":[true,true,true],"invalidForms":[true,true,true,true],"indices":[0,1,2,0,0,0,0],"normalStillSelected":true}"#
+    );
+}
+
+#[test]
 fn child_document_select_exposes_detached_mutation_surface() {
     let mut vm = new_storage_test_vm("https://child-select-options-surface.test/");
 

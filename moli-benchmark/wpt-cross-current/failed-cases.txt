@@ -3108,8 +3108,6 @@ html/semantics/forms/textfieldselection/selection.html
 html/semantics/forms/the-input-element/show-picker-cross-origin-iframe.html
 html/semantics/forms/the-select-element/customizable-select/base-appearance-inheritance.html
 html/semantics/forms/the-select-element/customizable-select/option-disabled-optgroup.html
-html/semantics/forms/the-select-element/customizable-select/option-form-ancestor-select.html
-html/semantics/forms/the-select-element/customizable-select/option-list.html
 html/semantics/forms/the-select-element/customizable-select/picker-icon-animation.html
 html/semantics/forms/the-select-element/customizable-select/select-base-appearance-computed-style.html
 html/semantics/forms/the-select-element/customizable-select/select-value-selectedOption.html
