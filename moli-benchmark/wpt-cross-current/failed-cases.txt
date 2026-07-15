@@ -3102,9 +3102,6 @@ html/semantics/embedded-content/the-object-element/object-in-object-fallback-2.h
 html/semantics/embedded-content/the-object-element/object-javascript-url.html
 html/semantics/embedded-content/the-object-element/usemap-casing.html
 html/semantics/forms/constraints/input-maxlength-emoji.html
-html/semantics/forms/form-control-infrastructure/form_attribute.html
-html/semantics/forms/form-control-infrastructure/form_owner_and_table.html
-html/semantics/forms/form-control-infrastructure/form_owner_and_table_3.html
 html/semantics/forms/form-submission-0/form-data-set-usv.html
 html/semantics/forms/form-submission-0/form-double-submit-preventdefault.html
 html/semantics/forms/form-submission-0/form-double-submit-requestsubmit.html

@@ -25,6 +25,40 @@ fn document_compat_mode_reflects_parser_quirks_mode() {
 }
 
 #[test]
+fn disconnected_form_attribute_uses_only_a_nearest_ancestor_form() {
+    let mut vm = new_parsed_test_vm("https://form-owner.test/", "<!doctype html><body></body>");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const root = document.createElement("div");
+              const referencedForm = document.createElement("form");
+              const outside = document.createElement("input");
+              referencedForm.id = "owner";
+              outside.setAttribute("form", "owner");
+              root.append(referencedForm, outside);
+              document.body.append(root);
+              const connected = outside.form === referencedForm;
+              root.remove();
+
+              const ancestorForm = document.createElement("form");
+              const nested = document.createElement("input");
+              nested.setAttribute("form", "missing");
+              ancestorForm.append(nested);
+              document.body.append(ancestorForm);
+              ancestorForm.remove();
+
+              return [connected, outside.form === null, nested.form === ancestorForm].join("|");
+            })()
+            "#,
+        )
+        .expect("disconnected form-owner probe should evaluate");
+
+    assert_eq!(result, "true|true|true");
+}
+
+#[test]
 fn html_element_hidden_reflects_nullable_boolean_number_and_string_union() {
     let mut vm = new_parsed_test_vm(
         "https://hidden-reflection.test/",

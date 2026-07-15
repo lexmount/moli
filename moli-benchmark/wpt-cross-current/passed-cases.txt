@@ -5709,7 +5709,10 @@ html/semantics/forms/constraints/inputwillvalidate.html
 html/semantics/forms/constraints/radio-group-valueMissing.html
 html/semantics/forms/constraints/radio-valueMissing.html
 html/semantics/forms/form-control-infrastructure/form.html
+html/semantics/forms/form-control-infrastructure/form_attribute.html
+html/semantics/forms/form-control-infrastructure/form_owner_and_table.html
 html/semantics/forms/form-control-infrastructure/form_owner_and_table_2.html
+html/semantics/forms/form-control-infrastructure/form_owner_and_table_3.html
 html/semantics/forms/form-submission-0/action-encoding.html
 html/semantics/forms/form-submission-0/constructing-form-data-set.html
 html/semantics/forms/form-submission-0/form-double-submit-2.html

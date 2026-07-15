@@ -99,6 +99,9 @@ impl DomHost {
         value: &str,
         units: Option<Vec<u16>>,
     ) -> DomAttributeMutationOutcome {
+        if name.eq_ignore_ascii_case("form") {
+            self.reset_parser_form_owner_for_form_attribute_mutation(handle);
+        }
         let records_enabled = self.mutation_records_enabled();
         let prior_value = self.get_attribute(handle, name).map(Arc::from);
         let prior_slot_name = if name.eq_ignore_ascii_case("slot") {
@@ -267,6 +270,9 @@ impl DomHost {
         local_name: &str,
         value: &str,
     ) -> DomAttributeMutationOutcome {
+        if namespace.is_none() && local_name.eq_ignore_ascii_case("form") {
+            self.reset_parser_form_owner_for_form_attribute_mutation(handle);
+        }
         let records_enabled = self.mutation_records_enabled();
         let prior_value = self
             .get_attribute_ns(handle, namespace, local_name)
@@ -320,6 +326,9 @@ impl DomHost {
     ) -> DomAttributeMutationOutcome {
         let records_enabled = self.mutation_records_enabled();
         let prior_value = self.get_attribute(handle, name).map(Arc::from);
+        if prior_value.is_some() && name.eq_ignore_ascii_case("form") {
+            self.reset_parser_form_owner_for_form_attribute_mutation(handle);
+        }
         let prior_slot_name = if name.eq_ignore_ascii_case("slot") {
             self.node(handle)
                 .and_then(Node::as_element)
@@ -416,6 +425,9 @@ impl DomHost {
         let prior_value = self
             .get_attribute_ns(handle, namespace, local_name)
             .map(Arc::from);
+        if prior_value.is_some() && namespace.is_none() && local_name.eq_ignore_ascii_case("form") {
+            self.reset_parser_form_owner_for_form_attribute_mutation(handle);
+        }
         let removed = self.dom.remove_attribute_ns(handle, namespace, local_name);
         if removed {
             self.invalidate_shadow_slot_name_index_for_attribute(handle, namespace, local_name);
