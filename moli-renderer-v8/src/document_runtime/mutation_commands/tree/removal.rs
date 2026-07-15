@@ -22,6 +22,7 @@ pub(super) struct TreeRemovalPlan {
     pub(super) node_iterator_plan: Option<NodeIteratorRemovalPlan>,
     pub(super) registry_retargets: Vec<custom_elements::RegistryAssociationRetarget>,
     pub(super) image_relevant_mutation_plan: ImageRelevantMutationPlan,
+    pub(super) selected_option_owners_before_remove: Vec<(DomHandle, DomHandle)>,
 }
 
 impl DocumentRuntime {
@@ -60,6 +61,8 @@ impl DocumentRuntime {
             custom_elements::registry_association_retargets_before_removal(host_ptr, root);
         let image_relevant_mutation_plan =
             self.image_relevant_mutation_plan_before_remove(parent, root);
+        let selected_option_owners_before_remove =
+            self.selected_option_owners_in_subtrees(std::slice::from_ref(&root));
         TreeRemovalPlan {
             parent,
             root,
@@ -71,6 +74,7 @@ impl DocumentRuntime {
             node_iterator_plan,
             registry_retargets,
             image_relevant_mutation_plan,
+            selected_option_owners_before_remove,
         }
     }
 
