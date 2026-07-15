@@ -14,6 +14,13 @@ struct PerformanceMarkArgs {
     name: String,
 }
 
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "PerformanceMark")]
+struct PerformanceMarkConstructorArgs {
+    #[webidl(required)]
+    name: String,
+}
+
 #[derive(Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "PerformanceMarkOptions")]
 struct PerformanceMarkOptions<'s> {

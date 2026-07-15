@@ -672,6 +672,81 @@ fn performance_user_timing_enforces_mark_and_measure_boundaries() {
 }
 
 #[test]
+fn performance_mark_constructor_creates_detached_structured_entries() {
+    let mut vm = new_storage_test_vm("https://performance-mark-constructor.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const capture = callback => {
+                try {
+                  callback();
+                  return "none";
+                } catch (error) {
+                  return `${error.name}:${error.code}`;
+                }
+              };
+              const sourceDetail = { state: "before" };
+              const entry = new PerformanceMark("detached", {
+                startTime: 2,
+                detail: sourceDetail
+              });
+              sourceDetail.state = "after";
+              class DerivedPerformanceMark extends PerformanceMark {}
+              const derived = new DerivedPerformanceMark("derived", { startTime: 3 });
+              return JSON.stringify({
+                shape: [
+                  entry instanceof PerformanceEntry,
+                  entry instanceof PerformanceMark,
+                  Object.prototype.toString.call(entry),
+                  entry.name,
+                  entry.entryType,
+                  entry.startTime,
+                  entry.duration
+                ].join(":"),
+                detail: `${entry.detail.state}:${entry.detail === entry.detail}:${entry.detail === sourceDetail}`,
+                timelineEntries: performance.getEntriesByName("detached", "mark").length,
+                derived: [
+                  derived instanceof DerivedPerformanceMark,
+                  derived instanceof PerformanceMark,
+                  Object.getPrototypeOf(derived) === DerivedPerformanceMark.prototype,
+                  derived.name,
+                  derived.startTime
+                ].join(":"),
+                constructorInheritance:
+                  Object.getPrototypeOf(PerformanceMark) === PerformanceEntry
+                  && Object.getPrototypeOf(PerformanceMeasure) === PerformanceEntry,
+                detailBrand: capture(() =>
+                  Object.getOwnPropertyDescriptor(PerformanceMark.prototype, "detail")
+                    .get.call(PerformanceMark.prototype)),
+                methodBrands: [
+                  performance.mark,
+                  performance.clearMarks,
+                  performance.measure,
+                  performance.clearMeasures
+                ].map(method => capture(() => method.call(null, "unbound"))).join("|"),
+                withoutNew: capture(() => PerformanceMark("call")),
+                missingName: capture(() => new PerformanceMark()),
+                negativeStart: capture(() => new PerformanceMark("negative", { startTime: -1 })),
+                infiniteStart: capture(() => new PerformanceMark("infinite", { startTime: Infinity })),
+                reservedName: capture(() => new PerformanceMark("navigationStart")),
+                cloneError: capture(() => new PerformanceMark("clone", {
+                  detail: { value: Symbol() }
+                }))
+              });
+            })()
+            "#,
+        )
+        .expect("PerformanceMark constructor probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"shape":"true:true:[object PerformanceMark]:detached:mark:2:0","detail":"before:true:false","timelineEntries":0,"derived":"true:true:true:derived:3","constructorInheritance":true,"detailBrand":"TypeError:undefined","methodBrands":"TypeError:undefined|TypeError:undefined|TypeError:undefined|TypeError:undefined","withoutNew":"TypeError:undefined","missingName":"TypeError:undefined","negativeStart":"TypeError:undefined","infiniteStart":"TypeError:undefined","reservedName":"SyntaxError:12","cloneError":"DataCloneError:25"}"#
+    );
+}
+
+#[test]
 fn performance_entry_to_json_returns_native_base_snapshot() {
     let mut vm = new_storage_test_vm("https://performance-entry-json.test/");
 
