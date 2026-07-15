@@ -2,8 +2,9 @@ use super::value::{attr_current_value, attr_owner_document_object, attr_owner_el
 use super::*;
 use crate::custom_elements;
 use crate::native_bridge::element::{
-    set_live_element_attribute_appending_to_current_reaction_queue,
+    TrustedAttributeSetter, set_live_element_attribute_appending_to_current_reaction_queue,
     set_live_element_attribute_ns_appending_to_current_reaction_queue,
+    trusted_attribute_string_value,
 };
 use crate::native_bridge::node_runtime_and_handle_from_object;
 use crate::webidl;
@@ -152,30 +153,87 @@ pub(super) fn attr_instance_value_setter<'a>(
             return;
         }
     };
-    let Some(state) = attr_state_object(scope, args.holder()) else {
+    let attr = args.holder();
+    let Some(state) = attr_state_object(scope, attr) else {
         return;
     };
-    let _ = state.set(
-        scope,
-        v8str(scope, "value").into(),
-        v8_string(scope, &string_value)
-            .map(Into::<v8::Local<'_, v8::Value>>::into)
-            .unwrap_or_else(|| v8::String::empty(scope).into()),
-    );
     let Some(name) = object_string_property(scope, state, "name") else {
         return;
     };
-    if let Some(owner) = object_property_as_object(scope, state, "ownerElement") {
-        if attr_value_setter_wrote_live_native(scope, owner, state, &name, &string_value) {
-            return;
-        }
-        if attr_value_setter_wrote_native(scope, owner, state, &name, &string_value) {
-            return;
-        }
-        let namespace = state
-            .get(scope, v8str(scope, "namespaceURI").into())
-            .unwrap_or_else(|| v8::null(scope).into());
-        if namespace.is_null_or_undefined() && name == name.to_ascii_lowercase() {
+    let Some(original_owner) = object_property_as_object(scope, state, "ownerElement") else {
+        set_attr_state_value(scope, state, &string_value);
+        return;
+    };
+    let namespace = attr_state_nullable_string(scope, state, "namespaceURI");
+    let local_name = object_string_property(scope, state, "localName")
+        .filter(|local_name| !local_name.is_empty())
+        .or_else(|| name.rsplit_once(':').map(|(_, local)| local.to_owned()))
+        .unwrap_or_else(|| name.clone());
+    let runtime_and_handle = node_runtime_and_handle_from_object(scope, original_owner)
+        .ok()
+        .or_else(|| detached_native_element_runtime_and_handle(scope, original_owner));
+    let Some(verified_value) = trusted_attribute_string_value(
+        scope,
+        runtime_and_handle,
+        namespace.as_deref(),
+        &local_name,
+        &string_value,
+        TrustedAttributeSetter::AttrValue,
+    ) else {
+        return;
+    };
+
+    let Some(state) = attr_state_object(scope, attr) else {
+        return;
+    };
+    let Some(owner) = object_property_as_object(scope, state, "ownerElement") else {
+        set_attr_state_value(scope, state, &verified_value);
+        return;
+    };
+    if !owner.strict_equals(original_owner.into()) {
+        return;
+    }
+
+    set_attr_state_value(scope, state, &verified_value);
+    if attr_value_setter_wrote_live_native(scope, owner, state, &name, &verified_value) {
+        return;
+    }
+    if attr_value_setter_wrote_native(scope, owner, state, &name, &verified_value) {
+        return;
+    }
+    let namespace_value = state
+        .get(scope, v8str(scope, "namespaceURI").into())
+        .unwrap_or_else(|| v8::null(scope).into());
+    if namespace_value.is_null_or_undefined() && name == name.to_ascii_lowercase() {
+        let _ = call_object_method(
+            scope,
+            owner,
+            "setAttribute",
+            &[
+                v8_string(scope, &name)
+                    .map(Into::<v8::Local<'_, v8::Value>>::into)
+                    .unwrap_or_else(|| v8::String::empty(scope).into()),
+                v8_string(scope, &verified_value)
+                    .map(Into::<v8::Local<'_, v8::Value>>::into)
+                    .unwrap_or_else(|| v8::String::empty(scope).into()),
+            ],
+        );
+    } else {
+        let set_attribute_ns_result = call_object_method(
+            scope,
+            owner,
+            "setAttributeNS",
+            &[
+                namespace_value,
+                v8_string(scope, &name)
+                    .map(Into::<v8::Local<'_, v8::Value>>::into)
+                    .unwrap_or_else(|| v8::String::empty(scope).into()),
+                v8_string(scope, &verified_value)
+                    .map(Into::<v8::Local<'_, v8::Value>>::into)
+                    .unwrap_or_else(|| v8::String::empty(scope).into()),
+            ],
+        );
+        if set_attribute_ns_result.is_none() {
             let _ = call_object_method(
                 scope,
                 owner,
@@ -184,43 +242,27 @@ pub(super) fn attr_instance_value_setter<'a>(
                     v8_string(scope, &name)
                         .map(Into::<v8::Local<'_, v8::Value>>::into)
                         .unwrap_or_else(|| v8::String::empty(scope).into()),
-                    v8_string(scope, &string_value)
+                    v8_string(scope, &verified_value)
                         .map(Into::<v8::Local<'_, v8::Value>>::into)
                         .unwrap_or_else(|| v8::String::empty(scope).into()),
                 ],
             );
-        } else {
-            let set_attribute_ns_result = call_object_method(
-                scope,
-                owner,
-                "setAttributeNS",
-                &[
-                    namespace,
-                    v8_string(scope, &name)
-                        .map(Into::<v8::Local<'_, v8::Value>>::into)
-                        .unwrap_or_else(|| v8::String::empty(scope).into()),
-                    v8_string(scope, &string_value)
-                        .map(Into::<v8::Local<'_, v8::Value>>::into)
-                        .unwrap_or_else(|| v8::String::empty(scope).into()),
-                ],
-            );
-            if set_attribute_ns_result.is_none() {
-                let _ = call_object_method(
-                    scope,
-                    owner,
-                    "setAttribute",
-                    &[
-                        v8_string(scope, &name)
-                            .map(Into::<v8::Local<'_, v8::Value>>::into)
-                            .unwrap_or_else(|| v8::String::empty(scope).into()),
-                        v8_string(scope, &string_value)
-                            .map(Into::<v8::Local<'_, v8::Value>>::into)
-                            .unwrap_or_else(|| v8::String::empty(scope).into()),
-                    ],
-                );
-            }
         }
     }
+}
+
+fn set_attr_state_value(
+    scope: &mut v8::PinScope<'_, '_>,
+    state: v8::Local<'_, v8::Object>,
+    value: &str,
+) {
+    let _ = state.set(
+        scope,
+        v8str(scope, "value").into(),
+        v8_string(scope, value)
+            .map(Into::<v8::Local<'_, v8::Value>>::into)
+            .unwrap_or_else(|| v8::String::empty(scope).into()),
+    );
 }
 
 fn attr_value_setter_wrote_live_native<'s>(
