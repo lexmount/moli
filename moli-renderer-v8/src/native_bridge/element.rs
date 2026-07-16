@@ -178,8 +178,9 @@ pub(super) use dataset::{build_dom_string_map_wrapper_template, node_dataset_get
 use details_dialog::{
     close_dialog_element, details_open_getter_function, details_open_setter_function,
     dialog_close_callback, dialog_open_getter_function, dialog_open_setter_function,
-    dialog_return_value_getter_function, dialog_return_value_setter_function, dialog_show_callback,
-    dialog_show_modal_callback, perform_summary_click_default_action,
+    dialog_request_close_callback, dialog_return_value_getter_function,
+    dialog_return_value_setter_function, dialog_show_callback, dialog_show_modal_callback,
+    perform_summary_click_default_action,
 };
 pub(crate) use details_dialog::{
     queue_details_toggle_event_for_attribute_change, queue_parser_details_toggle_event,
@@ -4432,6 +4433,8 @@ struct HtmlDialogElementPrototypeDeclaration {
     show_modal: (),
     #[webapi(method, length = 1, callback = dialog_close_callback)]
     close: (),
+    #[webapi(method, length = 1, callback = dialog_request_close_callback)]
+    request_close: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
