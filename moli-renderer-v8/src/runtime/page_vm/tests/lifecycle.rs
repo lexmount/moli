@@ -1218,6 +1218,69 @@ location.href
 }
 
 #[tokio::test]
+async fn javascript_location_navigation_honors_enforced_trusted_types() {
+    run_page_vm_async_test(async move {
+        let mut page_vm = test_page_vm_with_document_url(
+            Url::parse("https://javascript-location-trusted-types.test/start.html").unwrap(),
+        );
+        page_vm
+            .vm_mut()
+            .set_response_content_security_policies(&[
+                "require-trusted-types-for 'script'".to_owned(),
+            ]);
+        let local_executor = page_vm.local_executor.clone();
+
+        let observed = local_executor
+            .run(async move {
+                page_vm.vm_mut().eval(
+                    r#"
+globalThis.__jsUrlRan = false;
+globalThis.__jsUrlViolations = [];
+document.addEventListener("securitypolicyviolation", event => {
+  globalThis.__jsUrlViolations.push({
+    sample: event.sample,
+    disposition: event.disposition,
+  });
+});
+location.href = "javascript:globalThis.__jsUrlRan=true";
+"queued"
+"#,
+                )?;
+                assert!(page_vm.vm().has_pending_location_navigation());
+
+                let mut pending_document_lifecycle_turn = None;
+                let outcome = page_vm
+                    .follow_pending_location_navigation_one_turn_async(
+                        &mut pending_document_lifecycle_turn,
+                        PageVmInitStage::Load,
+                    )
+                    .await?;
+                assert!(matches!(
+                    outcome,
+                    crate::runtime::PageVmFollowNavigationTurnOutcome::Completed
+                ));
+                assert_eq!(
+                    page_vm
+                        .vm_mut()
+                        .drain_pre_domcontentloaded_content_security_policy_violation_tasks_for_test(),
+                    1
+                );
+                page_vm.vm_mut().eval(
+                    "JSON.stringify({ ran: globalThis.__jsUrlRan, violations: globalThis.__jsUrlViolations, href: location.href })",
+                )
+            })
+            .await
+            .expect("Trusted Types javascript location navigation should settle");
+
+        assert_eq!(
+            observed,
+            r#"{"ran":false,"violations":[{"sample":"Location href|globalThis.__jsUrlRan=true","disposition":"enforce"}],"href":"https://javascript-location-trusted-types.test/start.html"}"#
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn javascript_string_completion_restarts_renderer_lifecycle_on_same_document_token() {
     run_page_vm_async_test(async move {
         let page_vm = test_page_vm_with_document_url(
