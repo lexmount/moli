@@ -630,7 +630,7 @@ impl TreeSink for XmlStreamDocumentSink {
         XmlStreamParseHandle::element(
             target
                 .common
-                .create_element(html_name, html_attrs, html_flags),
+                .create_element(html_name, html_attrs, html_flags, None),
             element_name,
         )
     }

@@ -9,7 +9,7 @@ use moli_fetch::FetchPriorityHint;
 use moli_page_types::{ScriptKind, ScriptMode, ScriptSourceKind};
 use moli_script::{
     ScriptElementClassificationInput, ScriptPreparationClassificationInput,
-    ScriptPreparationDisposition, classify_script_preparation,
+    ScriptPreparationDisposition, classify_script_preparation, script_element_nonce_is_nonceable,
 };
 
 pub struct ParserScriptRead {
@@ -45,6 +45,19 @@ fn parser_script_read_from_node(
     // make a harmless `nomodule` suppress execution or make `defer` change the
     // parser lane.
     let is_html_script = element.is_html_script();
+    let nonce = element
+        .cryptographic_nonce()
+        .or_else(|| element.attribute("nonce"));
+    let nonce = script_element_nonce_is_nonceable(
+        nonce,
+        false,
+        element
+            .attributes()
+            .iter()
+            .map(|attribute| (attribute.local_name(), attribute.value())),
+    )
+    .then_some(nonce)
+    .flatten();
     Some(ParserScriptRead {
         parser_inserted: node.flags().parser_created(),
         parser_inserted_for_prepare: element.script_parser_inserted_for_prepare(),
@@ -76,9 +89,7 @@ fn parser_script_read_from_node(
             element.attribute("referrerpolicy"),
             element.attribute("charset"),
             element.attribute("integrity"),
-            element
-                .cryptographic_nonce()
-                .or_else(|| element.attribute("nonce")),
+            nonce,
             element.attribute("fetchpriority"),
         )
         .with_parser_inserted(node.flags().parser_created()),
