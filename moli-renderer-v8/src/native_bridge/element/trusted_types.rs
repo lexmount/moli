@@ -81,15 +81,6 @@ fn trusted_attribute_sink_for_names(
         ("http://www.w3.org/1999/xhtml", "script", None, "src") => {
             Some(TrustedAttributeSink::ScriptUrl("HTMLScriptElement src"))
         }
-        ("http://www.w3.org/1999/xhtml", "embed", None, "src") => {
-            Some(TrustedAttributeSink::ScriptUrl("HTMLEmbedElement src"))
-        }
-        ("http://www.w3.org/1999/xhtml", "object", None, "data") => {
-            Some(TrustedAttributeSink::ScriptUrl("HTMLObjectElement data"))
-        }
-        ("http://www.w3.org/1999/xhtml", "object", None, "codebase") => Some(
-            TrustedAttributeSink::ScriptUrl("HTMLObjectElement codebase"),
-        ),
         (
             "http://www.w3.org/2000/svg",
             "script",
@@ -113,6 +104,24 @@ pub(crate) fn trusted_attribute_type_name_for_names(
         attribute_local_name,
     )
     .map(|sink| sink.type_name())
+}
+
+pub(crate) fn trusted_property_type_name_for_names(
+    element_namespace: &str,
+    element_local_name: &str,
+    property_name: &str,
+) -> Option<&'static str> {
+    if matches!(property_name, "innerHTML" | "outerHTML") {
+        return Some("TrustedHTML");
+    }
+    match (element_namespace, element_local_name, property_name) {
+        ("http://www.w3.org/1999/xhtml", "iframe", "srcdoc") => Some("TrustedHTML"),
+        ("http://www.w3.org/1999/xhtml", "script", "innerText" | "text" | "textContent") => {
+            Some("TrustedScript")
+        }
+        ("http://www.w3.org/1999/xhtml", "script", "src") => Some("TrustedScriptURL"),
+        _ => None,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
