@@ -3333,12 +3333,12 @@ async fn importmap_registered_after_module_load_adds_unresolved_mapping() -> Res
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn dynamic_async_module_does_not_close_multiple_import_map_registration() -> Result<()> {
+async fn dynamic_async_module_allows_late_importmap() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
     let page = browser
-        .fetch(&server.url("/compat/dynamic-async-module-closes-importmap-acquisition"))
+        .fetch(&server.url("/compat/dynamic-async-module-allows-late-importmap"))
         .await?;
     assert_eq!(diagnostic_global(&page, "dynamicAsyncImportMapLoads"), None);
     assert_eq!(
@@ -3347,7 +3347,7 @@ async fn dynamic_async_module_does_not_close_multiple_import_map_registration() 
     );
     assert_eq!(
         diagnostic_global(&page, "dynamicAsyncImportMapErrors"),
-        None
+        Some(&JsValueSnapshot::Number(0.0))
     );
     assert_eq!(
         diagnostic_global(&page, "dynamicAsyncModuleReady"),
@@ -3360,14 +3360,12 @@ async fn dynamic_async_module_does_not_close_multiple_import_map_registration() 
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn parser_owned_module_allows_late_dynamic_map_to_add_unresolved_mapping() -> Result<()> {
+async fn parser_owned_module_allows_late_dynamic_importmap() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
     let page = browser
-        .fetch(
-            &server.url("/compat/importmap-closed-by-parser-owned-module-before-late-dynamic-map"),
-        )
+        .fetch(&server.url("/compat/parser-owned-module-allows-late-dynamic-importmap"))
         .await?;
     assert_eq!(
         diagnostic_global(&page, "parserModuleAcquisitionFirstGreeting"),
@@ -3379,7 +3377,7 @@ async fn parser_owned_module_allows_late_dynamic_map_to_add_unresolved_mapping()
     );
     assert_eq!(
         diagnostic_global(&page, "parserModuleAcquisitionLateErrors"),
-        None
+        Some(&JsValueSnapshot::Number(0.0))
     );
     assert_eq!(
         diagnostic_global(&page, "parserModuleAcquisitionMutationDone"),
@@ -3391,13 +3389,12 @@ async fn parser_owned_module_allows_late_dynamic_map_to_add_unresolved_mapping()
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn parser_owned_importmap_after_dynamic_module_prepare_adds_unresolved_mapping() -> Result<()>
-{
+async fn parser_owned_importmap_applies_after_dynamic_module_prepare() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
     let page = browser
-        .fetch(&server.url("/compat/parser-owned-importmap-blocked-after-dynamic-module-prepare"))
+        .fetch(&server.url("/compat/parser-owned-importmap-applies-after-dynamic-module-prepare"))
         .await?;
     assert_eq!(
         diagnostic_global(&page, "dynamicModulePrepareBarrierInstalled"),
@@ -3413,7 +3410,7 @@ async fn parser_owned_importmap_after_dynamic_module_prepare_adds_unresolved_map
     );
     assert_eq!(
         diagnostic_global(&page, "parserImportMapAfterDynamicModuleErrors"),
-        None
+        Some(&JsValueSnapshot::Number(0.0))
     );
     assert_eq!(
         diagnostic_global(&page, "parserImportMapAfterDynamicModuleDone"),

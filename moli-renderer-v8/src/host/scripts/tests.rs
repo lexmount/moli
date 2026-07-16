@@ -202,7 +202,10 @@ fn draining_dynamic_scripts_keeps_async_and_in_order_lanes_separate() {
 fn dynamic_importmap_registration_does_not_enter_script_batch() {
     let preparation = preparation("https://example.test/", NodeId::new(0));
     let mut scheduler = HostScriptScheduler::default();
-    scheduler.register_dynamic_import_map(&preparation, "{\"imports\":{\"fixture\":\"/mod.js\"}}");
+    scheduler.register_dynamic_import_map(
+        &preparation.base_url,
+        "{\"imports\":{\"fixture\":\"/mod.js\"}}",
+    );
 
     let batch = scheduler.drain_dynamic_scripts();
     assert!(batch.in_order.is_empty());
@@ -251,7 +254,10 @@ fn queueing_dynamic_module_does_not_block_later_import_map_merge() {
             ScriptMode::Async,
         )
         .expect("module script should queue");
-    scheduler.register_dynamic_import_map(&preparation, "{\"imports\":{\"late\":\"/late.mjs\"}}");
+    scheduler.register_dynamic_import_map(
+        &preparation.base_url,
+        "{\"imports\":{\"late\":\"/late.mjs\"}}",
+    );
 
     let batch = scheduler.drain_dynamic_scripts();
     assert_eq!(batch.async_scripts.len(), 1);

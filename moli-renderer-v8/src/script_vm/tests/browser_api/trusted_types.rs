@@ -1072,6 +1072,70 @@ fn trusted_types_default_policy_can_make_changed_empty_script_sources_executable
 }
 
 #[test]
+fn trusted_types_default_policy_prepares_runtime_import_maps_before_registration() {
+    let mut vm = new_storage_test_vm("https://runtime-import-map-trusted-types.test/");
+    vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const root = document.body ||
+    (document.documentElement || document.appendChild(document.createElement("html")))
+      .appendChild(document.createElement("body"));
+  const calls = [];
+  trustedTypes.createPolicy("default", {
+    createScript(value, type, sink) {
+      calls.push([value, type, sink]);
+      const specifier = sink === "SVGScriptElement text" ? "svg-mapped" : "html-mapped";
+      return JSON.stringify({ imports: { [specifier]: `/${specifier}.mjs` } });
+    }
+  });
+
+  const htmlScript = document.createElement("script");
+  htmlScript.type = "importmap";
+  htmlScript.appendChild(document.createTextNode("html-map"));
+  root.appendChild(htmlScript);
+
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  root.appendChild(svg);
+  const svgScript = document.createElementNS("http://www.w3.org/2000/svg", "script");
+  svgScript.setAttribute("type", "importmap");
+  svgScript.appendChild(document.createTextNode("svg-map"));
+  svg.appendChild(svgScript);
+
+  return JSON.stringify(calls);
+})()
+"#,
+        )
+        .expect("runtime import maps should pass through the Trusted Types source gate");
+
+    assert_eq!(
+        result,
+        r#"[["html-map","TrustedScript","HTMLScriptElement text"],["svg-map","TrustedScript","SVGScriptElement text"]]"#
+    );
+    let base_url = vm.document_runtime.document_url().clone();
+    for (specifier, expected) in [
+        (
+            "html-mapped",
+            "https://runtime-import-map-trusted-types.test/html-mapped.mjs",
+        ),
+        (
+            "svg-mapped",
+            "https://runtime-import-map-trusted-types.test/svg-mapped.mjs",
+        ),
+    ] {
+        assert_eq!(
+            vm.document_runtime
+                .resolve_module_specifier(specifier, &base_url)
+                .expect("default-policy import map entry should resolve")
+                .as_str(),
+            expected
+        );
+    }
+}
+
+#[test]
 fn inline_module_graph_roots_use_trusted_types_compliant_source() {
     let mut vm = new_storage_test_vm("https://module-source-trusted-types.test/");
     vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);

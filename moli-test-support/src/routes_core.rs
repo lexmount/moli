@@ -2717,8 +2717,8 @@ pub(super) async fn dynamic_importmap_before_module_page() -> Html<&'static str>
     Html(DYNAMIC_IMPORTMAP_BEFORE_MODULE_HTML)
 }
 
-pub(super) async fn dynamic_async_module_closes_importmap_acquisition_page() -> Html<&'static str> {
-    Html(DYNAMIC_ASYNC_MODULE_CLOSES_IMPORTMAP_ACQUISITION_HTML)
+pub(super) async fn dynamic_async_module_allows_late_importmap_page() -> Html<&'static str> {
+    Html(DYNAMIC_ASYNC_MODULE_ALLOWS_LATE_IMPORTMAP_HTML)
 }
 
 pub(super) async fn dynamic_external_importmap_error_before_module_page() -> Html<&'static str> {
@@ -2765,14 +2765,13 @@ pub(super) async fn importmap_after_module_load_page() -> Html<&'static str> {
     Html(IMPORTMAP_AFTER_MODULE_LOAD_HTML)
 }
 
-pub(super) async fn importmap_closed_by_parser_owned_module_before_late_dynamic_map_page()
--> Html<&'static str> {
-    Html(IMPORTMAP_CLOSED_BY_PARSER_OWNED_MODULE_BEFORE_LATE_DYNAMIC_MAP_HTML)
+pub(super) async fn parser_owned_module_allows_late_dynamic_importmap_page() -> Html<&'static str> {
+    Html(PARSER_OWNED_MODULE_ALLOWS_LATE_DYNAMIC_IMPORTMAP_HTML)
 }
 
-pub(super) async fn parser_owned_importmap_blocked_after_dynamic_module_prepare_page()
+pub(super) async fn parser_owned_importmap_applies_after_dynamic_module_prepare_page()
 -> Html<&'static str> {
-    Html(PARSER_OWNED_IMPORTMAP_BLOCKED_AFTER_DYNAMIC_MODULE_PREPARE_HTML)
+    Html(PARSER_OWNED_IMPORTMAP_APPLIES_AFTER_DYNAMIC_MODULE_PREPARE_HTML)
 }
 
 pub(super) async fn importmap_null_blocks_dynamic_import_page() -> Html<&'static str> {
