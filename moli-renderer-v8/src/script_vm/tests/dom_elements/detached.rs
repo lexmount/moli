@@ -99,6 +99,7 @@ fn detached_document_write_preserves_existing_noscript_text() {
             r#"
 (() => {
   const doc = document.implementation.createHTMLDocument("");
+  doc.open();
   const noscript = doc.createElement("noscript");
   noscript.textContent = "<em>fallback&</em>";
   doc.body.append(noscript);

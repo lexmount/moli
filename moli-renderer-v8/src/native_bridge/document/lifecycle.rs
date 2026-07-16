@@ -20,17 +20,17 @@ use crate::{
     dom::native::{NativeDom, NodeData},
     parser::HtmlParser,
     util::{
-        call_object_method, node_wrapper_from_handle, utf16_replace_units_range_lossy, utf16_units,
-        v8str,
+        call_object_method, get_private_value, node_wrapper_from_handle, set_private_value,
+        utf16_replace_units_range_lossy, utf16_units, v8_string, v8str,
     },
     webidl,
 };
 
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "Document.write")]
-struct DocumentWriteArgs {
-    #[webidl(variadic)]
-    text: Vec<String>,
+const DETACHED_DOCUMENT_WRITE_STREAM_OPEN_SLOT: &str = "__moliDetachedDocumentWriteStreamOpen";
+
+struct DocumentWriteInput {
+    text: String,
+    is_trusted: bool,
 }
 
 pub(in crate::native_bridge) fn node_document_write_callback<'s>(
@@ -64,9 +64,44 @@ fn node_document_write_or_writeln_callback<'s>(
         rv.set_undefined();
         return;
     }
-    let Some(parsed) = webidl::parse_args::<DocumentWriteArgs>(scope, &args) else {
-        return;
+    let api_prefix = if append_newline {
+        "Document.writeln"
+    } else {
+        "Document.write"
     };
+    let input = match document_write_input(scope, &args, api_prefix) {
+        Ok(input) => input,
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            return;
+        }
+    };
+    let sink = if append_newline {
+        "Document writeln"
+    } else {
+        "Document write"
+    };
+    let api_name = if append_newline { "writeln" } else { "write" };
+    let mut html = input.text;
+    if !input.is_trusted {
+        let Some(value) = v8_string(scope, &html) else {
+            return;
+        };
+        let requirements = unsafe { &*runtime_ptr }.trusted_types_for_script_requirements(scope);
+        let Some(compliant) = crate::context_bootstrap::trusted_html_string_or_throw(
+            scope,
+            value.into(),
+            requirements,
+            sink,
+            api_name,
+        ) else {
+            return;
+        };
+        html = compliant;
+    }
+    if append_newline {
+        html.push('\n');
+    }
     if !is_html_document(unsafe { &*runtime_ptr }, handle) {
         throw_dom_exception(
             scope,
@@ -86,11 +121,19 @@ fn node_document_write_or_writeln_callback<'s>(
         return;
     }
     if detached_native_handle_for_runtime(scope, runtime_ptr, args.this()).is_some() {
-        let mut html = parsed.text.concat();
-        if append_newline {
-            html.push('\n');
+        let document = args.this();
+        let stream_was_open = detached_document_write_stream_is_open(scope, document);
+        if !stream_was_open {
+            set_detached_document_write_stream_open(scope, document, true);
         }
-        append_detached_html_document_body_html(scope, runtime_ptr, handle, &html);
+        let wrote = if stream_was_open {
+            append_detached_html_document_body_html(scope, runtime_ptr, handle, &html)
+        } else {
+            set_detached_html_document_body_html(scope, runtime_ptr, handle, &html)
+        };
+        if !wrote && !stream_was_open {
+            set_detached_document_write_stream_open(scope, document, false);
+        }
         rv.set_undefined();
         return;
     }
@@ -107,13 +150,32 @@ fn node_document_write_or_writeln_callback<'s>(
         clear_window_event_handlers(scope);
         runtime.prepare_root_document_replacement(scope, runtime_ptr, handle);
     }
-    for chunk in parsed.text {
-        let _ = runtime.write_html(scope, runtime_ptr, handle, &chunk);
-    }
-    if append_newline {
-        let _ = runtime.write_html(scope, runtime_ptr, handle, "\n");
-    }
+    let _ = runtime.write_html(scope, runtime_ptr, handle, &html);
     rv.set_undefined();
+}
+
+fn document_write_input<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+    api_prefix: &'static str,
+) -> Result<DocumentWriteInput, webidl::WebIdlError> {
+    let mut text = String::new();
+    let mut is_trusted = true;
+    for index in 0..args.length() {
+        let value = args.get(index);
+        if let Some(value) = crate::context_bootstrap::trusted_html_value_string(scope, value) {
+            text.push_str(&value);
+            continue;
+        }
+        is_trusted = false;
+        let value = webidl::convert::<webidl::DomString>(
+            scope,
+            value,
+            webidl::Context::argument(api_prefix, (index + 1) as usize),
+        )?;
+        text.push_str(&value.0);
+    }
+    Ok(DocumentWriteInput { text, is_trusted })
 }
 
 fn current_script_ignores_document_write_without_parser_insertion_point(
@@ -181,7 +243,11 @@ pub(in crate::native_bridge) fn node_document_open_callback<'s>(
             return;
         }
         if detached_native_handle_for_runtime(scope, runtime_ptr, args.this()).is_some() {
-            set_detached_html_document_body_html(scope, runtime_ptr, handle, "");
+            let document = args.this();
+            set_detached_document_write_stream_open(scope, document, true);
+            if !set_detached_html_document_body_html(scope, runtime_ptr, handle, "") {
+                set_detached_document_write_stream_open(scope, document, false);
+            }
             rv.set(args.this().into());
             return;
         }
@@ -300,12 +366,34 @@ pub(in crate::native_bridge) fn node_document_close_callback<'s>(
             return;
         }
         if detached_native_handle_for_runtime(scope, runtime_ptr, args.this()).is_some() {
+            set_detached_document_write_stream_open(scope, args.this(), false);
             rv.set_undefined();
             return;
         }
         unsafe { &mut *runtime_ptr }.close_document(scope, runtime_ptr);
     }
     rv.set_undefined();
+}
+
+fn detached_document_write_stream_is_open<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    document: v8::Local<'s, v8::Object>,
+) -> bool {
+    get_private_value(scope, document, DETACHED_DOCUMENT_WRITE_STREAM_OPEN_SLOT)
+        .is_some_and(|value| value.boolean_value(scope))
+}
+
+fn set_detached_document_write_stream_open(
+    scope: &mut v8::PinScope<'_, '_>,
+    document: v8::Local<'_, v8::Object>,
+    open: bool,
+) {
+    set_private_value(
+        scope,
+        document,
+        DETACHED_DOCUMENT_WRITE_STREAM_OPEN_SLOT,
+        v8::Boolean::new(scope, open).into(),
+    );
 }
 
 fn detached_html_document_body_handle(
@@ -329,6 +417,9 @@ pub(in crate::native_bridge) fn set_detached_html_document_body_html(
         let Some(body) = detached_html_document_body_handle(runtime, document_handle) else {
             return false;
         };
+        if html.is_empty() && runtime.dom_host().child_handles(body).next().is_none() {
+            return true;
+        }
         runtime.set_inner_html(scope, runtime_ptr, body, html)
     })
 }
