@@ -64,7 +64,7 @@ pub(in crate::context_bootstrap) fn font_face_set_load_callback<'s>(
         else {
             continue;
         };
-        let _ = load_font_face(scope, face);
+        start_font_face_load(scope, face);
         failed |= font_face_load_failed(scope, face);
     }
     if failed {
