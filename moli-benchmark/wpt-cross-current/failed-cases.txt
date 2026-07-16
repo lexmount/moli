@@ -3129,7 +3129,6 @@ trusted-types/block-string-assignment-to-Element-setAttribute.html
 trusted-types/block-string-assignment-to-Element-setAttributeNS.html
 trusted-types/block-string-assignment-to-attribute-via-attribute-node.html
 trusted-types/eval-function-constructor-untrusted-arguments-and-applying-default-policy.html
-trusted-types/eval-function-constructor.html
 trusted-types/inheriting-csp-for-local-schemes.html
 trusted-types/legacy-trusted-script-urls.html
 trusted-types/modify-attributes-in-callback.html
