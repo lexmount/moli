@@ -12,7 +12,7 @@ use crate::content_security_policy::{
     content_security_policy_inline_script_element_violation_with_disposition_and_reporting_endpoints,
     content_security_policy_inline_source_violation_with_disposition_and_reporting_endpoints,
     content_security_policy_inline_style_element_violation_with_disposition_and_reporting_endpoints,
-    content_security_policy_non_url_violation_with_disposition_and_reporting_endpoints,
+    content_security_policy_non_url_violation_with_source,
     content_security_policy_report_only_headers,
     content_security_policy_requires_trusted_types_for_script,
     content_security_policy_script_element_url_violation_with_redirect_status_disposition_reporting_endpoints_and_request,
@@ -1024,6 +1024,7 @@ impl DocumentRuntime {
         response_report_only_policies: &[String],
         response_reporting_endpoints: &ContentSecurityPolicyReportingEndpoints,
         kind: ContentSecurityPolicyNonUrlKind,
+        source: Option<&str>,
     ) -> DocumentContentSecurityPolicyCheck {
         let enforced_policies = self
             .document_content_security_policy_strings_for_optional_document(
@@ -1035,6 +1036,7 @@ impl DocumentRuntime {
             enforced_policies,
             document_url,
             kind,
+            source,
             ContentSecurityPolicyDisposition::Enforce,
         );
         let report_only_policies = document_response_content_security_policy_strings(
@@ -1045,6 +1047,7 @@ impl DocumentRuntime {
             report_only_policies,
             document_url,
             kind,
+            source,
             ContentSecurityPolicyDisposition::Report,
         );
         DocumentContentSecurityPolicyCheck {
@@ -1246,6 +1249,7 @@ impl DocumentRuntime {
             policies,
             document_url,
             ContentSecurityPolicyNonUrlKind::DocumentInlineScript,
+            None,
             ContentSecurityPolicyDisposition::Enforce,
         )
     }
@@ -1264,6 +1268,7 @@ impl DocumentRuntime {
             policies,
             document_url,
             ContentSecurityPolicyNonUrlKind::DocumentInlineScript,
+            None,
             ContentSecurityPolicyDisposition::Report,
         )
     }
@@ -1272,6 +1277,7 @@ impl DocumentRuntime {
     pub(crate) fn wasm_eval_csp_violation(&self) -> Option<DocumentContentSecurityPolicyViolation> {
         self.non_url_csp_violation(
             ContentSecurityPolicyNonUrlKind::WasmEval,
+            None,
             ContentSecurityPolicyDisposition::Enforce,
         )
     }
@@ -1280,6 +1286,7 @@ impl DocumentRuntime {
     fn non_url_csp_violation(
         &self,
         kind: ContentSecurityPolicyNonUrlKind,
+        source: Option<&str>,
         disposition: ContentSecurityPolicyDisposition,
     ) -> Option<DocumentContentSecurityPolicyViolation> {
         let document_url = self.document_url();
@@ -1292,6 +1299,7 @@ impl DocumentRuntime {
             policies,
             document_url,
             kind,
+            source,
             disposition,
         )
     }
@@ -1300,6 +1308,7 @@ impl DocumentRuntime {
     fn non_url_csp_report_only_violation(
         &self,
         kind: ContentSecurityPolicyNonUrlKind,
+        source: Option<&str>,
         disposition: ContentSecurityPolicyDisposition,
     ) -> Option<DocumentContentSecurityPolicyViolation> {
         let document_url = self.document_url();
@@ -1313,6 +1322,7 @@ impl DocumentRuntime {
             policies,
             document_url,
             kind,
+            source,
             disposition,
         )
     }
@@ -1323,6 +1333,7 @@ impl DocumentRuntime {
     ) -> Option<DocumentContentSecurityPolicyViolation> {
         self.non_url_csp_report_only_violation(
             ContentSecurityPolicyNonUrlKind::WasmEval,
+            None,
             ContentSecurityPolicyDisposition::Report,
         )
     }
@@ -1967,17 +1978,18 @@ fn document_non_url_policy_violation_from_document_policies(
     policies: Vec<DocumentContentSecurityPolicyString>,
     document_url: &Url,
     kind: ContentSecurityPolicyNonUrlKind,
+    source: Option<&str>,
     disposition: ContentSecurityPolicyDisposition,
 ) -> Option<DocumentContentSecurityPolicyViolation> {
     policies.into_iter().find_map(|policy| {
-        let mut violation =
-            content_security_policy_non_url_violation_with_disposition_and_reporting_endpoints(
-                &policy.policy,
-                document_url,
-                kind,
-                disposition,
-                &policy.reporting_endpoints,
-            )?;
+        let mut violation = content_security_policy_non_url_violation_with_source(
+            &policy.policy,
+            document_url,
+            kind,
+            source,
+            disposition,
+            &policy.reporting_endpoints,
+        )?;
         apply_document_policy_reporting_flags(&mut violation, &policy);
         Some(violation)
     })
