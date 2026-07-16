@@ -56,7 +56,7 @@ pub fn content_security_policy_allows_trusted_type_policy_name(
 ) -> bool {
     policies
         .iter()
-        .all(|policy| policy_allows_trusted_type_policy_name(policy, policy_name))
+        .all(|policy| policy_allows_trusted_type_policy_name(policy, policy_name, false))
 }
 
 pub fn content_security_policy_sandboxes_document_domain(
@@ -590,11 +590,12 @@ fn policy_allows_trusted_types_eval(policy: &ContentSecurityPolicy) -> bool {
 fn policy_allows_trusted_type_policy_name(
     policy: &ContentSecurityPolicy,
     policy_name: &str,
+    is_duplicate: bool,
 ) -> bool {
     let Some(sources) = directive_source_list(policy, TRUSTED_TYPES) else {
         return true;
     };
-    sources.iter().any(|source| {
+    let name_is_allowed = sources.iter().any(|source| {
         let source = *source;
         source == "*"
             || (!source.is_empty()
@@ -603,7 +604,12 @@ fn policy_allows_trusted_type_policy_name(
                     byte.is_ascii_alphanumeric()
                         || matches!(byte, b'-' | b'#' | b'=' | b'_' | b'/' | b'@' | b'.' | b'%')
                 }))
-    })
+    });
+    let duplicate_is_allowed = !is_duplicate
+        || sources
+            .iter()
+            .any(|source| csp_keyword_eq(source.trim(), "allow-duplicates"));
+    name_is_allowed && duplicate_is_allowed
 }
 
 fn policy_sandboxes_document_domain(policy: &ContentSecurityPolicy) -> bool {
@@ -653,7 +659,7 @@ fn sandbox_sources_allow_popups_to_escape(sources: &[&str]) -> bool {
 }
 
 fn trusted_types_sink_violation_sample(sink: &str, sample: &str) -> String {
-    let clipped = sample.chars().take(40).collect::<String>();
+    let clipped = trusted_types_violation_sample(sample);
     format!("{sink}|{clipped}")
 }
 
@@ -1464,3 +1470,42 @@ fn inline_source_matches_hash(source: &str, hash_source: CspHashSourceValue<'_>)
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+
+fn trusted_types_violation_sample(sample: &str) -> String {
+    sample.chars().take(40).collect()
+}
+
+pub fn content_security_policy_trusted_types_policy_violation_with_disposition_and_reporting_endpoints(
+    policies: &[ContentSecurityPolicy],
+    protected_url: &Url,
+    policy_name: &str,
+    is_duplicate: bool,
+    disposition: ContentSecurityPolicyDisposition,
+    reporting_endpoints: &ContentSecurityPolicyReportingEndpoints,
+) -> Option<ContentSecurityPolicyUrlViolation> {
+    policies.iter().find_map(|policy| {
+        if policy_allows_trusted_type_policy_name(policy, policy_name, is_duplicate) {
+            return None;
+        }
+        let document_uri = protected_url.to_string();
+        Some(ContentSecurityPolicyUrlViolation {
+            effective_directive: TRUSTED_TYPES,
+            blocked_uri: "trusted-types-policy".to_owned(),
+            source_file: document_uri.clone(),
+            document_uri,
+            original_policy: policy.as_str().to_owned(),
+            disposition,
+            report_uri_endpoints: content_security_policy_report_uri_endpoints(
+                policy,
+                protected_url,
+            ),
+            report_to_endpoints: content_security_policy_report_to_endpoints(
+                policy,
+                reporting_endpoints,
+            ),
+            sample: trusted_types_violation_sample(policy_name),
+            line_number: 0,
+            column_number: 0,
+        })
+    })
+}

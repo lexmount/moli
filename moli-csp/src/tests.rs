@@ -368,7 +368,8 @@ fn csp_invalid_directives_preserve_fallbacks_and_trusted_types_requirements() {
         ));
         assert!(policy_allows_trusted_type_policy_name(
             &ContentSecurityPolicy::from(policy.as_str()),
-            "unlisted"
+            "unlisted",
+            false
         ));
 
         let policy = format!(
@@ -379,11 +380,13 @@ fn csp_invalid_directives_preserve_fallbacks_and_trusted_types_requirements() {
         ));
         assert!(policy_allows_trusted_type_policy_name(
             &ContentSecurityPolicy::from(policy.as_str()),
-            "allowed"
+            "allowed",
+            false
         ));
         assert!(!policy_allows_trusted_type_policy_name(
             &ContentSecurityPolicy::from(policy.as_str()),
-            "unlisted"
+            "unlisted",
+            false
         ));
         assert!(!allowed(
             &policy,
@@ -424,16 +427,19 @@ fn csp_invalid_first_values_do_not_activate_later_duplicate_directives() {
         let policy = format!("trusted-types *{invalid}; TRUSTED-TYPES allowed");
         assert!(policy_allows_trusted_type_policy_name(
             &ContentSecurityPolicy::from(policy.as_str()),
-            "unlisted"
+            "unlisted",
+            false
         ));
         let policy = format!("trusted-types allowed; TRUSTED-TYPES *{invalid}");
         assert!(policy_allows_trusted_type_policy_name(
             &ContentSecurityPolicy::from(policy.as_str()),
-            "allowed"
+            "allowed",
+            false
         ));
         assert!(!policy_allows_trusted_type_policy_name(
             &ContentSecurityPolicy::from(policy.as_str()),
-            "unlisted"
+            "unlisted",
+            false
         ));
     }
 }
@@ -2500,27 +2506,38 @@ fn non_url_wasm_eval_uses_script_src_or_default_src() {
 
 #[test]
 fn trusted_types_directive_filters_policy_names() {
-    let allowed = |policies: &[&str], name: &str| {
-        content_security_policy_allows_trusted_type_policy_name(
-            &policies
-                .iter()
-                .map(|policy| (*policy).into())
-                .collect::<Vec<_>>(),
-            name,
-        )
+    let allowed = |policies: &[&str], name: &str, is_duplicate: bool| {
+        policies
+            .iter()
+            .all(|policy| policy_allows_trusted_type_policy_name(&ContentSecurityPolicy::from(*policy), name, is_duplicate))
     };
 
-    assert!(allowed(&[], "SomeName"));
-    assert!(allowed(&["default-src 'none'"], "SomeName"));
-    assert!(allowed(&["trusted-types SomeName OtherName"], "SomeName"));
-    assert!(allowed(&["trusted-types * 'aLLow-dUPLIcates'"], "SomeName"));
-    assert!(allowed(&["trusted-types 'none' SomeName"], "SomeName"));
-    assert!(!allowed(&["trusted-types"], "SomeName"));
-    assert!(!allowed(&["trusted-types 'nONe'"], "SomeName"));
-    assert!(!allowed(&["trusted-types SomeName"], "default"));
+    assert!(allowed(&[], "SomeName", false));
+    assert!(allowed(&[], "SomeName", true));
+    assert!(allowed(&["default-src 'none'"], "SomeName", false));
+    assert!(allowed(
+        &["trusted-types SomeName OtherName"],
+        "SomeName",
+        false
+    ));
+    assert!(allowed(
+        &["trusted-types * 'aLLow-dUPLIcates'"],
+        "SomeName",
+        true
+    ));
+    assert!(allowed(
+        &["trusted-types 'none' SomeName"],
+        "SomeName",
+        false
+    ));
+    assert!(!allowed(&["trusted-types"], "SomeName", false));
+    assert!(!allowed(&["trusted-types 'nONe'"], "SomeName", false));
+    assert!(!allowed(&["trusted-types SomeName"], "SomeName", true));
+    assert!(!allowed(&["trusted-types SomeName"], "default", false));
     assert!(!allowed(
         &["trusted-types SomeName", "trusted-types OtherName"],
-        "SomeName"
+        "SomeName",
+        false
     ));
 }
 
@@ -2539,7 +2556,8 @@ fn trusted_types_csp_name_grammar_matches_only_valid_tokens() {
         assert_eq!(
             policy_allows_trusted_type_policy_name(
                 &ContentSecurityPolicy::from(policy.as_str()),
-                &name
+                &name,
+                false
             ),
             expected,
             "invalid tt-policy-name byte {byte:#04x} must not match literally",
@@ -2548,21 +2566,25 @@ fn trusted_types_csp_name_grammar_matches_only_valid_tokens() {
     for name in ["none", "allow-duplicates", "A-z_09#=/@.%"] {
         assert!(policy_allows_trusted_type_policy_name(
             &format!("trusted-types {name}").into(),
-            name
+            name,
+            false
         ));
     }
     assert!(policy_allows_trusted_type_policy_name(
         &ContentSecurityPolicy::from("trusted-types valid policy*name"),
-        "valid"
+        "valid",
+        false
     ));
     assert!(!policy_allows_trusted_type_policy_name(
         &ContentSecurityPolicy::from("trusted-types valid policy*name"),
-        "policy*name"
+        "policy*name",
+        false
     ));
     for wildcard in ["policy*", "**"] {
         assert!(!policy_allows_trusted_type_policy_name(
             &format!("trusted-types {wildcard}").into(),
-            "valid"
+            "valid",
+            false
         ));
     }
 }
@@ -2580,7 +2602,8 @@ fn trusted_types_csp_name_grammar_does_not_restrict_unlisted_or_wildcard_names()
         for policy in ["", "trusted-types *"] {
             assert!(policy_allows_trusted_type_policy_name(
                 &ContentSecurityPolicy::from(policy),
-                name
+                name,
+                false
             ));
         }
     }
