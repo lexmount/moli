@@ -24,7 +24,30 @@ impl JsContextHost {
         node: crate::document_runtime::DomHandle,
         host_script_handle: &str,
     ) -> std::result::Result<Option<CommittedInlineClassicScript>, String> {
-        let runtime = unsafe { &mut *self.runtime };
+        let requires_trusted_types = self.requires_trusted_types_for_script(scope);
+        let host_ptr: *mut JsContextHost = self;
+        let runtime_ptr = self.runtime;
+        if requires_trusted_types {
+            let Some(reservation) = (unsafe { &mut *runtime_ptr })
+                .begin_runtime_script_text_preparation(node, host_script_handle)
+            else {
+                return Ok(None);
+            };
+            let source = unsafe { &*runtime_ptr }
+                .dom_host()
+                .dom()
+                .direct_text_content(node)
+                .unwrap_or_default();
+            let prepared = crate::native_bridge::element::prepare_trusted_script_text(
+                scope, host_ptr, node, &source,
+            );
+            unsafe { &mut *runtime_ptr }.release_runtime_script_text_preparation(reservation);
+            if prepared.is_none() {
+                return Ok(None);
+            }
+        }
+
+        let runtime = unsafe { &mut *runtime_ptr };
         let Some(plan) = runtime.host_plan_script_start(node, host_script_handle) else {
             return Ok(None);
         };

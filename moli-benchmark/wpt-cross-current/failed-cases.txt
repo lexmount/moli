@@ -3665,8 +3665,6 @@ trusted-types/eval-function-constructor-untrusted-arguments-and-applying-default
 trusted-types/inheriting-csp-for-local-schemes.html
 trusted-types/modify-attributes-in-callback.html
 trusted-types/require-trusted-types-for-TypeError-belongs-to-the-global-object-realm.html
-trusted-types/script-enforcement-010.html
-trusted-types/script-enforcement-011.html
 trusted-types/set-attributes-require-trusted-types-default-policy.html
 trusted-types/set-attributes-require-trusted-types-no-default-policy-error-cases.html
 trusted-types/set-attributes-require-trusted-types-no-default-policy.html

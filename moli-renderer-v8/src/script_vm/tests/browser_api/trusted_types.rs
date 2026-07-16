@@ -1136,6 +1136,63 @@ fn trusted_types_default_policy_prepares_runtime_import_maps_before_registration
 }
 
 #[test]
+fn trusted_types_default_policy_type_mutation_precedes_script_classification() {
+    let mut vm = new_storage_test_vm("https://script-type-trusted-types.test/");
+    vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const html = document.documentElement ||
+    document.appendChild(document.createElement("html"));
+  const body = document.body || html.appendChild(document.createElement("body"));
+  const svg = body.appendChild(
+    document.createElementNS("http://www.w3.org/2000/svg", "svg")
+  );
+  const source = `globalThis.__trustedTypeScriptKinds.push("CLASSIC");`;
+  globalThis.__trustedTypeScriptKinds = [];
+  const defaultCalls = [];
+  let script;
+  trustedTypes.createPolicy("default", {
+    createScript(value, type, sink) {
+      defaultCalls.push([type, sink]);
+      if (script.hasAttribute("type")) {
+        script.removeAttribute("type");
+      } else {
+        script.setAttribute("type", "text/plain");
+      }
+      return value;
+    }
+  });
+
+  for (const [namespace, parent] of [
+    ["http://www.w3.org/1999/xhtml", body],
+    ["http://www.w3.org/2000/svg", svg]
+  ]) {
+    script = document.createElementNS(namespace, "script");
+    script.appendChild(document.createTextNode(source));
+    script.setAttribute("type", "module");
+    parent.appendChild(script);
+
+    script = document.createElementNS(namespace, "script");
+    script.appendChild(document.createTextNode(source));
+    parent.appendChild(script);
+  }
+
+  return JSON.stringify({ defaultCalls, runs: globalThis.__trustedTypeScriptKinds });
+})()
+"#,
+        )
+        .expect("Trusted Types script type mutation probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"defaultCalls":[["TrustedScript","HTMLScriptElement text"],["TrustedScript","HTMLScriptElement text"],["TrustedScript","SVGScriptElement text"],["TrustedScript","SVGScriptElement text"]],"runs":["CLASSIC","CLASSIC"]}"#
+    );
+}
+
+#[test]
 fn inline_module_graph_roots_use_trusted_types_compliant_source() {
     let mut vm = new_storage_test_vm("https://module-source-trusted-types.test/");
     vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
@@ -2158,7 +2215,6 @@ fn script_execution_violation_outside_javascript_stack_avoids_v8_frame_probe() {
   const script = document.createElement("script");
   script.id = "untrusted-script-source";
   script.type = "application/json";
-  script.appendChild(document.createTextNode("untrusted-source"));
   const root = document.body ||
     (document.documentElement || document.appendChild(document.createElement("html")))
       .appendChild(document.createElement("body"));

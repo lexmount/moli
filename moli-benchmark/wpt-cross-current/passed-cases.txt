@@ -7914,6 +7914,8 @@ trusted-types/script-enforcement-004.html
 trusted-types/script-enforcement-005.html
 trusted-types/script-enforcement-006.html
 trusted-types/script-enforcement-007.html
+trusted-types/script-enforcement-010.html
+trusted-types/script-enforcement-011.html
 trusted-types/script-enforcement-012.html
 trusted-types/script-enforcement-013.html
 trusted-types/script-enforcement-014.html

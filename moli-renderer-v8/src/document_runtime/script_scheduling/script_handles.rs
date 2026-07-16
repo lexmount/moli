@@ -1,9 +1,10 @@
 use super::*;
 use crate::host::{
     ModuleFailurePolicy, PreparedRuntimeScriptStartCommit, RuntimeScriptAdmission,
-    RuntimeScriptStartPlan, RuntimeScriptStartReservation, ScriptEventKind, ScriptEventTask,
-    ScriptHandleSource, cancel_runtime_script_start_admission, dispatch_script_event,
-    finish_runtime_script_start_admission, plan_script_start, prepare_runtime_script_start_commit,
+    RuntimeScriptStartPlan, RuntimeScriptStartReservation, RuntimeScriptTextPreparationReservation,
+    ScriptEventKind, ScriptEventTask, ScriptHandleSource, cancel_runtime_script_start_admission,
+    dispatch_script_event, finish_runtime_script_start_admission, plan_script_start,
+    prepare_runtime_script_start_commit,
 };
 use crate::page_task_queue::PostParseLifecycleWork;
 use crate::planning::PreparedScript;
@@ -17,7 +18,7 @@ impl DocumentRuntime {
         host_script_handle: &str,
     ) -> Option<RuntimeScriptStartPlan> {
         let options = crate::host::ScriptElementLoaderOptions {
-            prepare_changed_empty_inline_source: self.requires_trusted_types_for_script(),
+            use_prepared_script_text: self.requires_trusted_types_for_script(),
             ..crate::host::ScriptElementLoaderOptions::with_scripting_enabled(
                 self.document_scripting_enabled(),
             )
@@ -29,6 +30,26 @@ impl DocumentRuntime {
             host_script_handle,
             options,
         )
+    }
+
+    pub(crate) fn begin_runtime_script_text_preparation(
+        &mut self,
+        node: DomHandle,
+        host_script_handle: &str,
+    ) -> Option<RuntimeScriptTextPreparationReservation> {
+        RuntimeScriptTextPreparationReservation::begin(
+            &self.dom_host,
+            self.script_lifecycle.scripts_mut(),
+            node,
+            host_script_handle,
+        )
+    }
+
+    pub(crate) fn release_runtime_script_text_preparation(
+        &mut self,
+        reservation: RuntimeScriptTextPreparationReservation,
+    ) {
+        reservation.release(self.script_lifecycle.scripts_mut());
     }
 
     pub(crate) fn prepare_runtime_script_start_commit(
