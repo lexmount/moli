@@ -1129,29 +1129,6 @@ pub(super) struct HtmlUListElementPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Object", enumerable)]
-pub(super) struct HtmlBodyOrFrameSetEventHandlersPrototypeDeclaration {
-    #[webapi(
-        accessor_property,
-        getter = body_onload_getter_function,
-        setter = body_onload_setter_function
-    )]
-    onload: (),
-    #[webapi(
-        accessor_property,
-        getter = body_onmessageerror_getter_function,
-        setter = body_onmessageerror_setter_function
-    )]
-    onmessageerror: (),
-    #[webapi(
-        accessor_property,
-        getter = body_onerror_getter_function,
-        setter = body_onerror_setter_function
-    )]
-    onerror: (),
-}
-
-#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::HTMLBodyElement, enumerable, receiver)]
 pub(super) struct HtmlBodyElementLegacyPrototypeDeclaration {
     #[webapi(
