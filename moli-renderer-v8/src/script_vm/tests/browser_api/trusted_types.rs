@@ -581,6 +581,87 @@ fn document_parse_html_unsafe_gates_converted_union_source() {
 }
 
 #[test]
+fn dom_parser_gates_converted_union_source_after_webidl_argument_conversion() {
+    let mut vm = new_storage_test_vm("https://dom-parser-trusted-types.test/");
+    vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const errorName = callback => {
+    try {
+      callback();
+      return "none";
+    } catch (error) {
+      return error && error.name;
+    }
+  };
+  const parser = new DOMParser();
+  const custom = trustedTypes.createPolicy("dom-parser-custom", {
+    createHTML: value => value
+  });
+  const blocked = [
+    errorName(() => parser.parseFromString("<p>blocked</p>", "text/html")),
+    errorName(() => parser.parseFromString(null, "text/html")),
+    errorName(() => parser.parseFromString("<root/>", "application/xml"))
+  ];
+  const accepted = [
+    parser.parseFromString(
+      custom.createHTML("<main>trusted</main>"),
+      "text/html"
+    ).body.innerText,
+    parser.parseFromString(
+      custom.createHTML("<root/>"),
+      "application/xml"
+    ).documentElement.tagName
+  ];
+
+  let sourceConversions = 0;
+  const defaultCalls = [];
+  trustedTypes.createPolicy("default", {
+    createHTML: (value, type, sink) => {
+      defaultCalls.push([value, type, sink]);
+      return value === "source" ? "<p>default</p>" : value;
+    }
+  });
+  const source = {
+    toString() {
+      sourceConversions += 1;
+      return "source";
+    }
+  };
+  const defaultValues = [
+    parser.parseFromString(source, "text/html").body.innerText,
+    parser.parseFromString(null, "text/html").body.innerText,
+    parser.parseFromString("<root/>", "application/xml").documentElement.tagName
+  ];
+  const callsBeforeInvalidType = defaultCalls.length;
+  const invalidType = errorName(() => parser.parseFromString(source, "TEXT/html"));
+  const invalidTypeSkippedPolicy = defaultCalls.length === callsBeforeInvalidType;
+
+  return JSON.stringify({
+    blocked,
+    accepted,
+    defaultValues,
+    sourceConversions,
+    invalidType,
+    invalidTypeSkippedPolicy,
+    symbolSource: errorName(() => parser.parseFromString(Symbol(), "text/html")),
+    defaultCalls
+  });
+})()
+"#,
+        )
+        .expect("DOMParser TrustedHTML union probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"blocked":["TypeError","TypeError","TypeError"],"accepted":["trusted","root"],"defaultValues":["default","null","root"],"sourceConversions":2,"invalidType":"TypeError","invalidTypeSkippedPolicy":true,"symbolSource":"TypeError","defaultCalls":[["source","TrustedHTML","DOMParser parseFromString"],["null","TrustedHTML","DOMParser parseFromString"],["<root/>","TrustedHTML","DOMParser parseFromString"]]}"#
+    );
+}
+
+#[test]
 fn document_write_gates_concatenated_union_values_before_writeln_newline() {
     let mut vm = new_storage_test_vm("https://document-write-trusted-types.test/");
     vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
@@ -600,7 +681,7 @@ fn document_write_gates_concatenated_union_values_before_writeln_newline() {
   const custom = trustedTypes.createPolicy("document-write-custom", {
     createHTML: value => `(${value})`
   });
-  const doc = new DOMParser().parseFromString("<body></body>", "text/html");
+  const doc = new DOMParser().parseFromString(trustedTypes.emptyHTML, "text/html");
   const replacementDoc = new DOMParser().parseFromString(
     custom.createHTML("seed"),
     "text/html"
