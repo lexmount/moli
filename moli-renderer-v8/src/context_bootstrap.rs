@@ -236,10 +236,10 @@ pub(crate) use self::css_stylesheet_runtime::{
 pub(crate) use self::dom_rect::build_dom_rect_object;
 pub(crate) use self::events::{
     EVENT_DISPATCHING_SLOT, EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT,
-    EVENT_STOP_PROPAGATION_SLOT, clear_event_composed_path, event_initialized,
-    event_internal_bool_flag, event_is_dispatching, event_is_error_event, event_is_mouse_event,
-    initialize_event_object, mark_event_trusted, set_event_composed_path, set_event_internal_flag,
-    set_event_trusted,
+    EVENT_STOP_PROPAGATION_SLOT, EventHandlerType, apply_event_handler_return_value,
+    clear_event_composed_path, event_initialized, event_internal_bool_flag, event_is_dispatching,
+    event_is_error_event, event_is_mouse_event, initialize_event_object, mark_event_trusted,
+    set_event_composed_path, set_event_internal_flag, set_event_trusted,
 };
 pub(crate) use self::file_api::{
     DataTransferStringCallbackTask, DataTransferStringCallbackTaskEffect,

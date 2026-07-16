@@ -1711,6 +1711,31 @@ fn synthetic_error_event_uses_normal_window_event_handler_arguments() {
 }
 
 #[test]
+fn window_error_handler_only_boolean_true_cancels() {
+    let mut vm = new_storage_test_vm("https://window-error-return-value.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const run = returned => {
+                window.onerror = () => returned;
+                const event = new ErrorEvent("error", { cancelable: true });
+                return [window.dispatchEvent(event), event.defaultPrevented];
+              };
+              return JSON.stringify([run(true), run(1), run(false), run(0)]);
+            })()
+            "#,
+        )
+        .expect("window error handler return-value probe should evaluate");
+
+    assert_eq!(
+        result,
+        "[[false,true],[true,false],[true,false],[true,false]]"
+    );
+}
+
+#[test]
 fn window_onerror_null_assignment_supersedes_uncompiled_body_attribute() {
     let mut vm = new_storage_test_vm("https://window-onerror-null-override.test/");
     vm.eval(

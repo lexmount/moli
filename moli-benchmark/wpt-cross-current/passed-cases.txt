@@ -6710,6 +6710,7 @@ html/webappapis/scripting/events/event-handler-processing-algorithm-error/synthe
 html/webappapis/scripting/events/event-handler-processing-algorithm-error/window-runtime-error.html
 html/webappapis/scripting/events/event-handler-processing-algorithm-error/window-synthetic-errorevent.html
 html/webappapis/scripting/events/event-handler-processing-algorithm-error/window-synthetic-event.html
+html/webappapis/scripting/events/event-handler-processing-algorithm-error/worker.html
 html/webappapis/scripting/events/event-handler-processing-algorithm.html
 html/webappapis/scripting/events/event-handler-sourcetext.html
 html/webappapis/scripting/events/eventhandler-cancellation.html

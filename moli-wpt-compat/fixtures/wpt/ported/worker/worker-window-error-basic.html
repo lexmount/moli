@@ -97,17 +97,20 @@ async function assert_worker_error_prevent_default_suppresses_window() {
   }
 }
 
-async function assert_truthy_worker_onerror_suppresses_window() {
+async function assert_non_boolean_truthy_worker_onerror_propagates_to_window() {
   const previousOnerror = window.onerror;
   let worker = null;
   let windowErrorCalled = false;
   let handlerSeen = false;
 
   try {
-    window.onerror = function () {
-      windowErrorCalled = true;
-      return true;
-    };
+    const windowSeen = new Promise(function (resolve) {
+      window.onerror = function () {
+        windowErrorCalled = true;
+        resolve();
+        return true;
+      };
+    });
 
     worker = new Worker(worker_error_url());
     worker.onerror = function () {
@@ -125,12 +128,19 @@ async function assert_truthy_worker_onerror_suppresses_window() {
           { once: true },
         );
       }),
-      "worker error listener after truthy onerror",
+      "worker error listener after non-boolean truthy onerror",
     );
+    await wait_for(windowSeen, "window.onerror after non-boolean truthy worker.onerror");
 
     assert_true(handlerSeen, "worker.onerror should run before the later listener");
-    assert_true(listenerDefaultPrevented, "truthy worker.onerror should mark the worker error handled");
-    assert_false(windowErrorCalled, "truthy worker.onerror should suppress window.onerror");
+    assert_false(
+      listenerDefaultPrevented,
+      "a non-boolean truthy worker.onerror return should not mark the worker error handled",
+    );
+    assert_true(
+      windowErrorCalled,
+      "a non-boolean truthy worker.onerror return should propagate to window.onerror",
+    );
   } finally {
     window.onerror = previousOnerror;
     if (worker) {
@@ -142,6 +152,6 @@ async function assert_truthy_worker_onerror_suppresses_window() {
 promise_test(async function () {
   await assert_unhandled_worker_error_propagates_to_window();
   await assert_worker_error_prevent_default_suppresses_window();
-  await assert_truthy_worker_onerror_suppresses_window();
+  await assert_non_boolean_truthy_worker_onerror_propagates_to_window();
 }, "Dedicated worker runtime errors propagate to page window.onerror unless handled");
 </script>

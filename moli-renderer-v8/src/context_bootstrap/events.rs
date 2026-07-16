@@ -340,6 +340,7 @@ pub(super) use base::{
     set_event_initialized,
 };
 pub(super) use kind::EventSubclassKind;
+pub(crate) use methods::{EventHandlerType, apply_event_handler_return_value};
 pub(super) use methods::{
     event_cancel_bubble_getter_function, event_cancel_bubble_setter_function,
     event_composed_path_callback, event_prevent_default_callback,
