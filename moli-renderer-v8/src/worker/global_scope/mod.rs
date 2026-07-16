@@ -6170,14 +6170,18 @@ pub(crate) fn worker_current_script_url(scope: &mut v8::PinScope<'_, '_>) -> Opt
     get_worker_state(scope)?.borrow().current_script_url.clone()
 }
 
-pub(crate) fn worker_allows_trusted_type_policy_name(
+pub(crate) fn worker_allows_trusted_type_policy_name_by_csp(
     scope: &mut v8::PinScope<'_, '_>,
     name: &str,
+    is_duplicate: bool,
 ) -> Option<bool> {
+    let state = get_worker_state(scope)?;
     Some(
-        crate::content_security_policy::content_security_policy_allows_trusted_type_policy_name(
-            &get_worker_state(scope)?.borrow().content_security_policies,
+        content_security_policy::allows_worker_trusted_type_policy_name_for_state(
+            scope,
+            &state,
             name,
+            is_duplicate,
         ),
     )
 }

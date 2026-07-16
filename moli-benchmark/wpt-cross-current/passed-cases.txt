@@ -7853,7 +7853,9 @@ trusted-types/TrustedTypePolicyFactory-createPolicy-cspTests-noNamesGiven.html
 trusted-types/TrustedTypePolicyFactory-createPolicy-cspTests-none-none-name.html
 trusted-types/TrustedTypePolicyFactory-createPolicy-cspTests-none-none.html
 trusted-types/TrustedTypePolicyFactory-createPolicy-cspTests-none-skip.html
+trusted-types/TrustedTypePolicyFactory-createPolicy-cspTests-none.html
 trusted-types/TrustedTypePolicyFactory-createPolicy-cspTests-wildcard.html
+trusted-types/TrustedTypePolicyFactory-createPolicy-cspTests.html
 trusted-types/TrustedTypePolicyFactory-createPolicy-non-tt-policy-name.html
 trusted-types/TrustedTypePolicyFactory-createPolicy-unenforced.html
 trusted-types/TrustedTypePolicyFactory-defaultPolicy.html
@@ -7915,7 +7917,13 @@ trusted-types/script-enforcement-017.html
 trusted-types/set-attributes-no-require-trusted-types.html
 trusted-types/should-sink-type-mismatch-violation-be-blocked-by-csp-001.html
 trusted-types/should-sink-type-mismatch-violation-be-blocked-by-csp-003.html
+trusted-types/should-trusted-type-policy-creation-be-blocked-by-csp-005.html
 trusted-types/trusted-types-duplicate-names-list-report-only.html
+trusted-types/trusted-types-duplicate-names-list.html
+trusted-types/trusted-types-duplicate-names-without-enforcement.html
+trusted-types/trusted-types-duplicate-names.html
+trusted-types/trusted-types-reporting-check-report-DedicatedWorker-create-policy.html
+trusted-types/trusted-types-reporting-clipping-of-sample.html
 trusted-types/trusted-types-reporting-for-DOMParser-parseFromString.html
 trusted-types/trusted-types-reporting-for-DedicatedWorker-DedicatedWorker-constructor.html
 trusted-types/trusted-types-reporting-for-DedicatedWorker-eval.html

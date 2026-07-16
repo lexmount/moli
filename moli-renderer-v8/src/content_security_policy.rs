@@ -317,15 +317,6 @@ pub(crate) fn content_security_policy_allows_trusted_types_eval(policies: &[Stri
             .any(|policy| policy_allows_trusted_types_eval(policy))
 }
 
-pub(crate) fn content_security_policy_allows_trusted_type_policy_name(
-    policies: &[String],
-    policy_name: &str,
-) -> bool {
-    policies
-        .iter()
-        .all(|policy| policy_allows_trusted_type_policy_name(policy, policy_name))
-}
-
 pub(crate) fn content_security_policy_sandboxes_document_domain(policies: &[String]) -> bool {
     policies
         .iter()
@@ -973,6 +964,41 @@ pub(crate) fn content_security_policy_trusted_types_sink_violation_with_disposit
     })
 }
 
+pub(crate) fn content_security_policy_trusted_types_policy_violation_with_disposition_and_reporting_endpoints(
+    policies: &[String],
+    protected_url: &Url,
+    policy_name: &str,
+    is_duplicate: bool,
+    disposition: ContentSecurityPolicyDisposition,
+    reporting_endpoints: &ContentSecurityPolicyReportingEndpoints,
+) -> Option<ContentSecurityPolicyUrlViolation> {
+    policies.iter().find_map(|policy| {
+        if policy_allows_trusted_type_policy_name(policy, policy_name, is_duplicate) {
+            return None;
+        }
+        let document_uri = protected_url.to_string();
+        Some(ContentSecurityPolicyUrlViolation {
+            effective_directive: TRUSTED_TYPES,
+            blocked_uri: "trusted-types-policy".to_owned(),
+            source_file: document_uri.clone(),
+            document_uri,
+            original_policy: policy.clone(),
+            disposition,
+            report_uri_endpoints: content_security_policy_report_uri_endpoints(
+                policy,
+                protected_url,
+            ),
+            report_to_endpoints: content_security_policy_report_to_endpoints(
+                policy,
+                reporting_endpoints,
+            ),
+            sample: trusted_types_violation_sample(policy_name),
+            line_number: 0,
+            column_number: 0,
+        })
+    })
+}
+
 pub(crate) fn content_security_policy_non_url_violation_with_disposition_and_reporting_endpoints(
     policy: &str,
     protected_url: &Url,
@@ -1147,12 +1173,16 @@ fn policy_allows_trusted_types_eval(policy: &str) -> bool {
         })
 }
 
-fn policy_allows_trusted_type_policy_name(policy: &str, policy_name: &str) -> bool {
+fn policy_allows_trusted_type_policy_name(
+    policy: &str,
+    policy_name: &str,
+    is_duplicate: bool,
+) -> bool {
     let directives = parsed_directives(policy);
     let Some(sources) = directive_source_list(&directives, TRUSTED_TYPES) else {
         return true;
     };
-    sources.iter().any(|source| {
+    let name_is_allowed = sources.iter().any(|source| {
         let source = *source;
         source == "*"
             || (!source.is_empty()
@@ -1161,7 +1191,12 @@ fn policy_allows_trusted_type_policy_name(policy: &str, policy_name: &str) -> bo
                     byte.is_ascii_alphanumeric()
                         || matches!(byte, b'-' | b'#' | b'=' | b'_' | b'/' | b'@' | b'.' | b'%')
                 }))
-    })
+    });
+    let duplicate_is_allowed = !is_duplicate
+        || sources
+            .iter()
+            .any(|source| csp_keyword_eq(source.trim(), "allow-duplicates"));
+    name_is_allowed && duplicate_is_allowed
 }
 
 fn policy_sandboxes_document_domain(policy: &str) -> bool {
@@ -1215,8 +1250,12 @@ fn sandbox_sources_allow_popups_to_escape(sources: &[&str]) -> bool {
 }
 
 fn trusted_types_sink_violation_sample(sink: &str, sample: &str) -> String {
-    let clipped = sample.chars().take(40).collect::<String>();
+    let clipped = trusted_types_violation_sample(sample);
     format!("{sink}|{clipped}")
+}
+
+fn trusted_types_violation_sample(sample: &str) -> String {
+    sample.chars().take(40).collect()
 }
 
 fn effective_source_list_with_directive(
@@ -3305,27 +3344,38 @@ mod tests {
 
     #[test]
     fn trusted_types_directive_filters_policy_names() {
-        let allowed = |policies: &[&str], name: &str| {
-            content_security_policy_allows_trusted_type_policy_name(
-                &policies
-                    .iter()
-                    .map(|policy| policy.to_string())
-                    .collect::<Vec<_>>(),
-                name,
-            )
+        let allowed = |policies: &[&str], name: &str, is_duplicate: bool| {
+            policies
+                .iter()
+                .all(|policy| policy_allows_trusted_type_policy_name(policy, name, is_duplicate))
         };
 
-        assert!(allowed(&[], "SomeName"));
-        assert!(allowed(&["default-src 'none'"], "SomeName"));
-        assert!(allowed(&["trusted-types SomeName OtherName"], "SomeName"));
-        assert!(allowed(&["trusted-types * 'aLLow-dUPLIcates'"], "SomeName"));
-        assert!(allowed(&["trusted-types 'none' SomeName"], "SomeName"));
-        assert!(!allowed(&["trusted-types"], "SomeName"));
-        assert!(!allowed(&["trusted-types 'nONe'"], "SomeName"));
-        assert!(!allowed(&["trusted-types SomeName"], "default"));
+        assert!(allowed(&[], "SomeName", false));
+        assert!(allowed(&[], "SomeName", true));
+        assert!(allowed(&["default-src 'none'"], "SomeName", false));
+        assert!(allowed(
+            &["trusted-types SomeName OtherName"],
+            "SomeName",
+            false
+        ));
+        assert!(allowed(
+            &["trusted-types * 'aLLow-dUPLIcates'"],
+            "SomeName",
+            true
+        ));
+        assert!(allowed(
+            &["trusted-types 'none' SomeName"],
+            "SomeName",
+            false
+        ));
+        assert!(!allowed(&["trusted-types"], "SomeName", false));
+        assert!(!allowed(&["trusted-types 'nONe'"], "SomeName", false));
+        assert!(!allowed(&["trusted-types SomeName"], "SomeName", true));
+        assert!(!allowed(&["trusted-types SomeName"], "default", false));
         assert!(!allowed(
             &["trusted-types SomeName", "trusted-types OtherName"],
-            "SomeName"
+            "SomeName",
+            false
         ));
     }
 
