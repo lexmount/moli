@@ -6556,6 +6556,7 @@ html/semantics/interactive-elements/the-dialog-element/dialog-requestclose-3-cra
 html/semantics/interactive-elements/the-dialog-element/dialog-requestclose-4-crash.html
 html/semantics/interactive-elements/the-dialog-element/dialog-requestclose-5-crash.html
 html/semantics/interactive-elements/the-dialog-element/dialog-requestclose-crash.html
+html/semantics/interactive-elements/the-dialog-element/dialog-requestclose-recurse.html
 html/semantics/interactive-elements/the-dialog-element/dialog-return-value.html
 html/semantics/interactive-elements/the-dialog-element/dialog-setup-cleanup-crash.html
 html/semantics/interactive-elements/the-dialog-element/dialog-showModal-inert-crash.html
