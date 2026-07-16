@@ -17,12 +17,14 @@ use crate::{
     custom_elements,
     document_runtime::DomHandle,
     util::{
-        call_object_method, node_wrapper_from_handle, utf16_next_scalar_boundary,
-        utf16_previous_scalar_boundary, utf16_replace_units_range_lossy,
-        utf16_scalar_boundary_at_or_after, utf16_units, v8str,
+        call_object_method, get_private_value, node_wrapper_from_handle, set_private_value,
+        utf16_next_scalar_boundary, utf16_previous_scalar_boundary,
+        utf16_replace_units_range_lossy, utf16_scalar_boundary_at_or_after, utf16_units, v8str,
     },
     webidl,
 };
+
+const DETACHED_DOCUMENT_WRITE_STREAM_OPEN_SLOT: &str = "__moliDetachedDocumentWriteStreamOpen";
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Document.write")]
@@ -88,7 +90,19 @@ fn node_document_write_or_writeln_callback<'s>(
         if append_newline {
             html.push('\n');
         }
-        append_detached_html_document_body_html(scope, runtime_ptr, handle, &html);
+        let document = args.this();
+        let stream_was_open = detached_document_write_stream_is_open(scope, document);
+        if !stream_was_open {
+            set_detached_document_write_stream_open(scope, document, true);
+        }
+        let wrote = if stream_was_open {
+            append_detached_html_document_body_html(scope, runtime_ptr, handle, &html)
+        } else {
+            set_detached_html_document_body_html(scope, runtime_ptr, handle, &html)
+        };
+        if !wrote && !stream_was_open {
+            set_detached_document_write_stream_open(scope, document, false);
+        }
         rv.set_undefined();
         return;
     }
@@ -178,7 +192,11 @@ pub(in crate::native_bridge) fn node_document_open_callback<'s>(
             return;
         }
         if detached_native_handle_for_runtime(scope, runtime_ptr, args.this()).is_some() {
-            set_detached_html_document_body_html(scope, runtime_ptr, handle, "");
+            let document = args.this();
+            set_detached_document_write_stream_open(scope, document, true);
+            if !set_detached_html_document_body_html(scope, runtime_ptr, handle, "") {
+                set_detached_document_write_stream_open(scope, document, false);
+            }
             rv.set(args.this().into());
             return;
         }
@@ -294,12 +312,34 @@ pub(in crate::native_bridge) fn node_document_close_callback<'s>(
             return;
         }
         if detached_native_handle_for_runtime(scope, runtime_ptr, args.this()).is_some() {
+            set_detached_document_write_stream_open(scope, args.this(), false);
             rv.set_undefined();
             return;
         }
         unsafe { &mut *runtime_ptr }.close_document(scope, runtime_ptr);
     }
     rv.set_undefined();
+}
+
+fn detached_document_write_stream_is_open<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    document: v8::Local<'s, v8::Object>,
+) -> bool {
+    get_private_value(scope, document, DETACHED_DOCUMENT_WRITE_STREAM_OPEN_SLOT)
+        .is_some_and(|value| value.boolean_value(scope))
+}
+
+fn set_detached_document_write_stream_open(
+    scope: &mut v8::PinScope<'_, '_>,
+    document: v8::Local<'_, v8::Object>,
+    open: bool,
+) {
+    set_private_value(
+        scope,
+        document,
+        DETACHED_DOCUMENT_WRITE_STREAM_OPEN_SLOT,
+        v8::Boolean::new(scope, open).into(),
+    );
 }
 
 fn detached_html_document_body_handle(
@@ -323,6 +363,9 @@ pub(in crate::native_bridge) fn set_detached_html_document_body_html(
         let Some(body) = detached_html_document_body_handle(runtime, document_handle) else {
             return false;
         };
+        if html.is_empty() && runtime.dom_host().child_handles(body).next().is_none() {
+            return true;
+        }
         runtime.set_inner_html(scope, runtime_ptr, body, html)
     })
 }

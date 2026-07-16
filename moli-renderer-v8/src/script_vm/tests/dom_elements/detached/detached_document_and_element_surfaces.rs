@@ -111,6 +111,7 @@ fn detached_document_write_preserves_existing_noscript_text() {
             r#"
 (() => {
   const doc = document.implementation.createHTMLDocument("");
+  doc.open();
   const noscript = doc.createElement("noscript");
   noscript.textContent = "<em>fallback&</em>";
   doc.body.append(noscript);
@@ -1734,4 +1735,26 @@ fn domparser_html_preserves_quirks_mode_and_parses_with_scripting_disabled() {
         result,
         r#"{"quirks":"BackCompat","standards":"CSS1Compat","noscriptChildren":["first","second"]}"#
     );
+}
+
+#[test]
+fn detached_document_write_reopens_and_replaces_completed_streams() {
+    let mut vm = new_storage_test_vm("https://detached-document-stream.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const doc = document.implementation.createHTMLDocument("");
+  doc.body.innerHTML = "<p>seed</p>";
+  doc.write("<span>first</span>");
+  doc.writeln("<b>second</b>");
+  const initialStream = doc.body.textContent;
+  doc.close();
+  doc.write("<div>next</div>");
+  return JSON.stringify([initialStream, doc.body.textContent]);
+})()
+"#,
+        )
+        .expect("detached Document input stream should evaluate");
+    assert_eq!(result, r#"["firstsecond\n","next"]"#);
 }
