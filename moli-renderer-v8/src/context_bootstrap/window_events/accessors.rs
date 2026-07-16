@@ -36,14 +36,15 @@ fn window_event_handler_value<'s>(
 ) -> Option<v8::Local<'s, v8::Value>> {
     let host_ptr = context_host_ptr_from_window_object(scope, receiver)
         .or_else(|| context_host_ptr_from_global_bridge(scope))?;
-    let host = unsafe { &*host_ptr };
     match window_child_context_handle(scope, receiver) {
-        Some(handle) => {
-            host.child_window_event_handler_property_value(scope, handle, property_name)
-        }
-        None => host.registered_event_handler_property_value(
+        Some(handle) => unsafe { &*host_ptr }.child_window_event_handler_property_value(
             scope,
-            EventTargetHandle::Window,
+            handle,
+            property_name,
+        ),
+        None => crate::native_bridge::element::resolve_window_event_handler_content_attribute(
+            scope,
+            host_ptr,
             property_name.strip_prefix("on").unwrap_or(property_name),
         ),
     }
