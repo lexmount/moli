@@ -70,6 +70,120 @@ async fn dialog_toggle_events_cancel_opening_and_coalesce_state_changes() {
     );
 }
 
+#[tokio::test]
+async fn dialog_request_close_ignores_recursive_cancel_and_queues_close() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://dialog-request-close-recursive.test/",
+        &loader,
+    );
+
+    let before_close = vm
+        .eval(
+            r#"
+(() => {
+  const host = document.body || document.documentElement || document;
+  const dialog = document.createElement('dialog');
+  host.appendChild(dialog);
+  globalThis.__dialogRequestCloseEvents = [];
+  let cancelCount = 0;
+  dialog.addEventListener('cancel', event => {
+    cancelCount += 1;
+    __dialogRequestCloseEvents.push(`${event.type}:${event.bubbles}:${event.cancelable}`);
+    dialog.requestClose('nested');
+  });
+  dialog.addEventListener('close', event => {
+    __dialogRequestCloseEvents.push(`${event.type}:${event.bubbles}:${event.cancelable}`);
+  });
+
+  dialog.showModal();
+  dialog.requestClose('outer');
+  return JSON.stringify({
+    length: dialog.requestClose.length,
+    cancelCount,
+    open: dialog.open,
+    returnValue: dialog.returnValue,
+    events: __dialogRequestCloseEvents
+  });
+})()
+"#,
+        )
+        .expect("recursive dialog requestClose setup should evaluate");
+
+    assert_eq!(
+        before_close,
+        r#"{"length":1,"cancelCount":1,"open":false,"returnValue":"outer","events":["cancel:false:true"]}"#
+    );
+
+    assert!(
+        !vm.has_ready_timeout(),
+        "dialog requestClose must not create synthetic Page timers"
+    );
+    assert!(
+        vm.run_one_dom_manipulation_task_executor_turn(
+            PageDomManipulationTestFamily::ElementToggle,
+            &loader,
+        )
+        .await
+        .expect("coalesced dialog toggle event should run")
+    );
+    assert!(
+        vm.run_one_user_interaction_executor_turn(&loader)
+            .await
+            .expect("queued dialog close event should run")
+    );
+    let after_close = vm
+        .eval("JSON.stringify(__dialogRequestCloseEvents)")
+        .expect("dialog requestClose event log should evaluate");
+    assert_eq!(after_close, r#"["cancel:false:true","close:false:false"]"#);
+}
+
+#[test]
+fn dialog_request_close_honors_cancellation_and_active_document() {
+    let mut vm = new_storage_test_vm("https://dialog-request-close-state.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const host = document.body || document.documentElement || document;
+  const dialog = document.createElement('dialog');
+  host.appendChild(dialog);
+  dialog.returnValue = 'seed';
+  dialog.show();
+  dialog.addEventListener('cancel', event => event.preventDefault(), { once: true });
+  dialog.requestClose('blocked');
+  const canceled = [dialog.open, dialog.returnValue];
+  dialog.requestClose('accepted');
+  const accepted = [dialog.open, dialog.returnValue];
+
+  const disconnected = document.createElement('dialog');
+  disconnected.open = true;
+  disconnected.requestClose('disconnected');
+
+  const inactiveDocument = document.implementation.createHTMLDocument('');
+  const inactive = inactiveDocument.createElement('dialog');
+  inactiveDocument.body.appendChild(inactive);
+  inactive.open = true;
+  inactive.requestClose('inactive');
+
+  return JSON.stringify({
+    canceled,
+    accepted,
+    disconnected: [disconnected.open, disconnected.returnValue],
+    inactive: [inactive.open, inactive.returnValue]
+  });
+})()
+"#,
+        )
+        .expect("dialog requestClose state probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"canceled":[true,"seed"],"accepted":[false,"accepted"],"disconnected":[true,""],"inactive":[true,""]}"#
+    );
+}
+
 #[test]
 fn dialog_show_methods_enforce_requested_state_and_active_document() {
     let mut vm = new_storage_test_vm("https://dialog-requested-state.test/");
