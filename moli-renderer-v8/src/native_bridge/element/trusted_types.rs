@@ -126,7 +126,7 @@ pub(in crate::native_bridge::element) fn trusted_script_url_sink_string<'s>(
     )
 }
 
-pub(crate) fn trusted_script_source_for_execution(
+pub(crate) fn prepare_trusted_script_text(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
@@ -152,9 +152,13 @@ pub(crate) fn trusted_script_source_for_execution(
     if source == trusted_source {
         return Some(source.to_owned());
     }
-    crate::context_bootstrap::trusted_script_string_for_script_element_execution(
+    let source = crate::context_bootstrap::trusted_script_string_for_script_element_execution(
         scope, source, sink,
-    )
+    )?;
+    let _ = unsafe { &mut *runtime_ptr }
+        .dom_host_mut()
+        .set_script_text_internal_slot(handle, &source);
+    Some(source)
 }
 
 fn svg_animated_string_attribute_namespace(
