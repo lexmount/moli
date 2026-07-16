@@ -7859,6 +7859,8 @@ trusted-types/TrustedTypePolicyFactory-createPolicy-cspTests.html
 trusted-types/TrustedTypePolicyFactory-createPolicy-non-tt-policy-name.html
 trusted-types/TrustedTypePolicyFactory-createPolicy-unenforced.html
 trusted-types/TrustedTypePolicyFactory-defaultPolicy.html
+trusted-types/TrustedTypePolicyFactory-getAttributeType-namespace.html
+trusted-types/TrustedTypePolicyFactory-getAttributeType-svg.html
 trusted-types/TrustedTypePolicyFactory-isXXX.html
 trusted-types/Window-block-eval-function-constructor.html
 trusted-types/Window-setTimeout-setInterval.html
