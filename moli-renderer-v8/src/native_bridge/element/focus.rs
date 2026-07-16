@@ -11,6 +11,7 @@ use super::styles::{StyleMode, style_property_value};
 use super::{
     construct_click_event, construct_focus_event, construct_interest_event,
     dispatch_popover_show_events, dispatch_public_event,
+    resolved_reflected_element_attribute_handle,
 };
 use super::{
     element_attribute, element_has_attribute, label_control_handle,
@@ -18,9 +19,7 @@ use super::{
 };
 use crate::document_runtime::{DomHandle, EventTargetHandle};
 use crate::runtime::RendererDomFocusOutcome;
-use crate::util::{get_private_value, node_wrapper_from_handle, v8_string, v8str};
-
-const BUTTON_INTEREST_FOR_ELEMENT_SLOT: &str = "__moliButtonInterestForElement";
+use crate::util::{node_wrapper_from_handle, v8_string, v8str};
 
 struct SequentialFocusEntry {
     tab_index: i32,
@@ -554,7 +553,7 @@ fn dispatch_interest_event_if_needed(
     source_handle: DomHandle,
     event_type: &str,
 ) -> Option<DomHandle> {
-    let target = interest_for_element_target(scope, runtime_ptr, source_handle)?;
+    let target = interest_for_element_target(runtime_ptr, source_handle)?;
     let source = node_wrapper_from_handle(scope, source_handle)?;
     let event = construct_interest_event(scope, event_type, source.into())?;
     let _ = dispatch_public_event(scope, runtime_ptr, target, event);
@@ -1216,52 +1215,10 @@ fn show_interest_popover_if_needed(
 }
 
 fn interest_for_element_target(
-    scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
 ) -> Option<DomHandle> {
-    if let Some(target) =
-        unsafe { &*runtime_ptr }.button_element_target(handle, BUTTON_INTEREST_FOR_ELEMENT_SLOT)
-    {
-        return unsafe { &*runtime_ptr }
-            .dom_host()
-            .resolve_reference_target_chain(target);
-    }
-    if let Some(wrapper) = node_wrapper_from_handle(scope, handle)
-        && let Some(value) = get_private_value(scope, wrapper, BUTTON_INTEREST_FOR_ELEMENT_SLOT)
-        && !value.is_null_or_undefined()
-    {
-        if let Ok(big) = v8::Local::<v8::BigInt>::try_from(value) {
-            let (index, lossless) = big.u64_value();
-            if lossless {
-                let target = DomHandle::new(index as usize);
-                if unsafe { &*runtime_ptr }.dom_host().node(target).is_some() {
-                    return unsafe { &*runtime_ptr }
-                        .dom_host()
-                        .resolve_reference_target_chain(target);
-                }
-            }
-        } else if let Some(index) = value.uint32_value(scope) {
-            let target = DomHandle::new(index as usize);
-            if unsafe { &*runtime_ptr }.dom_host().node(target).is_some() {
-                return unsafe { &*runtime_ptr }
-                    .dom_host()
-                    .resolve_reference_target_chain(target);
-            }
-        }
-    }
-    let runtime = unsafe { &*runtime_ptr };
-    let interest_for = runtime
-        .dom_host()
-        .node(handle)
-        .and_then(Node::as_element)
-        .and_then(|element| element.attribute("interestfor"))
-        .filter(|value| !value.is_empty())?;
-    let root = runtime.dom_host().root_node_handle(handle)?;
-    let candidate = runtime
-        .dom_host()
-        .element_handle_by_id_in_subtree(root, interest_for)?;
-    runtime.dom_host().resolve_reference_target_chain(candidate)
+    resolved_reflected_element_attribute_handle(unsafe { &*runtime_ptr }, handle, "interestfor")
 }
 
 pub(crate) fn focus_element(
