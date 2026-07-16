@@ -590,7 +590,7 @@ async fn worker_runtime_error_promise_reaction_can_prevent_window_propagation() 
 }
 
 #[tokio::test]
-async fn worker_runtime_error_return_truthy_still_reaches_window_onerror() {
+async fn worker_runtime_error_return_non_boolean_truthy_propagates_to_window_onerror() {
     run_page_vm_async_test(async move {
             let (base_url, server) = spawn_single_response_http_server(
                 "HTTP/1.1 200 OK",
@@ -627,8 +627,8 @@ async fn worker_runtime_error_return_truthy_still_reaches_window_onerror() {
                     )?;
                     drive_websocket_until_done(
                         &mut page_vm,
-                        "String(globalThis.__workerDone === true)",
-                        "truthy worker onerror must not cancel window error propagation",
+                        "String(globalThis.__workerDone === true && globalThis.__windowErrorCalled === true)",
+                        "non-boolean truthy worker onerror should propagate to window.onerror",
                     )
                     .await?;
                     page_vm.vm_mut().eval(
@@ -636,11 +636,11 @@ async fn worker_runtime_error_return_truthy_still_reaches_window_onerror() {
                     )
                 })
                 .await
-                .expect("worker truthy onerror propagation test should run on owner lane");
+                .expect("worker non-boolean truthy onerror propagation test should run on owner lane");
 
             server
                 .await
-                .expect("worker truthy onerror propagation server should finish");
+                .expect("worker non-boolean truthy onerror propagation server should finish");
             assert_eq!(
                 result,
                 r#"{"windowErrorCalled":true,"listenerSawDefaultPrevented":false}"#
