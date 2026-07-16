@@ -448,8 +448,9 @@ pub(crate) use self::webassembly_runtime::{
 };
 pub(crate) use self::websocket::{WebSocketDispatchResult, dispatch_websocket_event};
 pub(crate) use self::window_events::{
-    WINDOW_EVENT_HANDLER_PROPERTIES, dispatch_window_error_event_with_details,
-    dispatch_window_promise_rejection_event, dispatch_window_report_error_message,
+    BODY_OR_FRAMESET_WINDOW_EVENT_HANDLER_PROPERTIES, WINDOW_EVENT_HANDLER_PROPERTIES,
+    dispatch_window_error_event_with_details, dispatch_window_promise_rejection_event,
+    dispatch_window_report_error_message,
 };
 #[cfg(test)]
 pub(crate) use self::window_lazy_surface::window_lazy_surface_diagnostics;

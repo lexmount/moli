@@ -3495,6 +3495,7 @@ dom/collections/HTMLCollection-supported-property-names.html
 dom/collections/domstringmap-supported-property-names.html
 dom/collections/namednodemap-supported-property-names.html
 dom/eventPathRemoved.html
+dom/events/Body-FrameSet-Event-Handlers.html
 dom/events/CustomEvent.html
 dom/events/Event-cancelBubble.html
 dom/events/Event-constants.html
@@ -6689,9 +6690,16 @@ html/webappapis/scripting/event-loops/update-the-rendering-resize-autofocus.html
 html/webappapis/scripting/events/body-onload.html
 html/webappapis/scripting/events/compile-event-handler-lexical-scopes.html
 html/webappapis/scripting/events/compile-event-handler-symbol-unscopables.html
+html/webappapis/scripting/events/event-handler-all-global-events.html
+html/webappapis/scripting/events/event-handler-attributes-body-alt.html
+html/webappapis/scripting/events/event-handler-attributes-body-window.html
+html/webappapis/scripting/events/event-handler-attributes-window.html
+html/webappapis/scripting/events/event-handler-attributes-windowless-body.html
 html/webappapis/scripting/events/event-handler-handleEvent-ignored.html
 html/webappapis/scripting/events/event-handler-javascript.html
 html/webappapis/scripting/events/event-handler-non-content-document-idl-attributes.html
+html/webappapis/scripting/events/event-handler-onresize.html
+html/webappapis/scripting/events/event-handler-processing-algorithm-error/body-element-synthetic-errorevent.html
 html/webappapis/scripting/events/event-handler-processing-algorithm-error/body-element-synthetic-event.html
 html/webappapis/scripting/events/event-handler-processing-algorithm-error/document-synthetic-errorevent.html
 html/webappapis/scripting/events/event-handler-processing-algorithm-error/document-synthetic-event.html

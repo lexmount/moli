@@ -2538,7 +2538,6 @@ density-size-correction/density-corrected-image-in-canvas.html
 density-size-correction/density-corrected-natural-size.html
 document-policy/reporting/sync-xhr-report-only.html
 document-policy/reporting/sync-xhr-reporting.html
-dom/events/Body-FrameSet-Event-Handlers.html
 dom/events/Event-dispatch-throwing-multiple-globals.html
 dom/events/event-global-is-still-set-when-coercing-beforeunload-result.html
 dom/events/event-global-is-still-set-when-reporting-exception-onerror.html
@@ -3257,16 +3256,9 @@ html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLU
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/setHTMLUnsafe-xml.html
 html/webappapis/scripting/event-loops/microtask_before_prepare_the_script_element-01.html
 html/webappapis/scripting/events/compile-event-handler-lexical-scopes-form-owner.html
-html/webappapis/scripting/events/event-handler-all-global-events.html
-html/webappapis/scripting/events/event-handler-attributes-body-alt.html
-html/webappapis/scripting/events/event-handler-attributes-body-window.html
 html/webappapis/scripting/events/event-handler-attributes-frameset-alt.html
 html/webappapis/scripting/events/event-handler-attributes-frameset-window.html
 html/webappapis/scripting/events/event-handler-attributes-window-frameset.html
-html/webappapis/scripting/events/event-handler-attributes-window.html
-html/webappapis/scripting/events/event-handler-attributes-windowless-body.html
-html/webappapis/scripting/events/event-handler-onresize.html
-html/webappapis/scripting/events/event-handler-processing-algorithm-error/body-element-synthetic-errorevent.html
 html/webappapis/scripting/events/event-handler-processing-algorithm-error/frameset-element-synthetic-errorevent.html
 html/webappapis/scripting/events/event-handler-processing-algorithm-error/worker.html
 html/webappapis/scripting/processing-model-2/compile-error-cross-origin.html

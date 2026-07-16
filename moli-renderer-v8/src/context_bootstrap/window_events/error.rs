@@ -30,46 +30,12 @@ struct ErrorEventDetailsDeclaration<'scope> {
     error: v8::Local<'scope, v8::Value>,
 }
 
-const BODY_ONERROR_RESOLUTION_GUARD_SLOT: &str = "__moliBodyOnerrorResolutionGuard";
-
 pub(super) fn ensure_window_reflecting_body_onerror_handler(scope: &mut v8::PinScope<'_, '_>) {
-    let global = scope.get_current_context().global(scope);
-    if context_host_ptr_from_global_bridge(scope)
-        .and_then(|host_ptr| {
-            unsafe { &*host_ptr }.registered_event_handler_property_value(
-                scope,
-                EventTargetHandle::Window,
-                "error",
-            )
-        })
-        .is_some_and(|handler| handler.is_function())
-    {
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
-    }
-    if get_private_value(scope, global, BODY_ONERROR_RESOLUTION_GUARD_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
-    {
-        return;
-    }
-    set_private_value(
-        scope,
-        global,
-        BODY_ONERROR_RESOLUTION_GUARD_SLOT,
-        v8::Boolean::new(scope, true).into(),
-    );
-    let body = global
-        .get(scope, v8str(scope, "document").into())
-        .and_then(|document| v8::Local::<v8::Object>::try_from(document).ok())
-        .and_then(|document| document.get(scope, v8str(scope, "body").into()))
-        .and_then(|body| v8::Local::<v8::Object>::try_from(body).ok());
-    if let Some(body) = body {
-        let _ = body.get(scope, v8str(scope, "onerror").into());
-    }
-    set_private_value(
-        scope,
-        global,
-        BODY_ONERROR_RESOLUTION_GUARD_SLOT,
-        v8::Boolean::new(scope, false).into(),
+    };
+    let _ = crate::native_bridge::element::resolve_window_event_handler_content_attribute(
+        scope, host_ptr, "error",
     );
 }
 

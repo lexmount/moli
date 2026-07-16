@@ -186,16 +186,14 @@ pub(crate) use details_dialog::{
     queue_details_toggle_event_for_attribute_change, queue_parser_details_toggle_event,
     queue_parser_details_toggle_events_in_subtree,
 };
+use event_handlers::install_body_or_frameset_window_event_handler_accessors;
 use event_handlers::install_global_event_handler_template_bindings as install_global_event_handler_templates_for_owner;
 pub(crate) use event_handlers::{
-    EventAttributeHandlerScope, GlobalEventHandlerOwner, compile_event_attribute_handler_for_owner,
-    compile_window_body_onload_attribute, compile_window_body_onmessageerror_attribute,
+    EventAttributeHandlerScope, GlobalEventHandlerOwner,
+    body_or_frameset_reflects_window_event_type, canonical_event_handler_event_type,
+    compile_event_attribute_handler_for_owner, event_handler_content_attribute_name,
     initialize_parser_inserted_body_window_event_handlers,
-};
-use event_handlers::{
-    body_onerror_getter_function, body_onerror_setter_function, body_onload_getter_function,
-    body_onload_setter_function, body_onmessageerror_getter_function,
-    body_onmessageerror_setter_function,
+    resolve_window_event_handler_content_attribute,
 };
 pub(in crate::native_bridge::element) use events::construct_event;
 pub(crate) use events::{
@@ -1758,29 +1756,6 @@ struct HtmlUListElementPrototypeDeclaration {
         setter_data = DomStringReflection::UlType
     )]
     r#type: (),
-}
-
-#[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Object", enumerable)]
-struct HtmlBodyOrFrameSetEventHandlersPrototypeDeclaration {
-    #[webapi(
-        accessor_property,
-        getter = body_onload_getter_function,
-        setter = body_onload_setter_function
-    )]
-    onload: (),
-    #[webapi(
-        accessor_property,
-        getter = body_onmessageerror_getter_function,
-        setter = body_onmessageerror_setter_function
-    )]
-    onmessageerror: (),
-    #[webapi(
-        accessor_property,
-        getter = body_onerror_getter_function,
-        setter = body_onerror_setter_function
-    )]
-    onerror: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -7283,12 +7258,12 @@ pub(crate) fn install_element_template_bindings<'s>(
         "HTMLLIElement" => install!(HtmlLiElementValuePrototypeDeclaration),
         "HTMLOListElement" => install!(HtmlOListElementPrototypeDeclaration),
         "HTMLUListElement" => install!(HtmlUListElementPrototypeDeclaration),
-        "HTMLBodyElement" => install!(
-            HtmlBodyOrFrameSetEventHandlersPrototypeDeclaration,
-            HtmlBodyElementLegacyPrototypeDeclaration,
-        ),
+        "HTMLBodyElement" => {
+            install_body_or_frameset_window_event_handler_accessors(scope, prototype);
+            install!(HtmlBodyElementLegacyPrototypeDeclaration);
+        }
         "HTMLFrameSetElement" => {
-            install!(HtmlBodyOrFrameSetEventHandlersPrototypeDeclaration)
+            install_body_or_frameset_window_event_handler_accessors(scope, prototype);
         }
         "HTMLHRElement" => install!(HtmlHrElementLegacyPrototypeDeclaration),
         "HTMLFontElement" => install!(HtmlFontElementLegacyPrototypeDeclaration),

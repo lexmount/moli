@@ -73,9 +73,15 @@ pub(crate) const GENERIC_EVENT_HANDLER_PROPERTIES: &[&str] = &[
     "ontransitionrun",
     "ontransitioncancel",
     "onwheel",
+    "onbeforeinput",
+    "onbeforematch",
     "onbeforetoggle",
     "ontoggle",
+    "oncommand",
+    "oncontextlost",
     "oncontextmenu",
+    "oncontextrestored",
+    "oncuechange",
     "onselect",
     "onselectionchange",
     "onabort",
@@ -101,6 +107,12 @@ pub(crate) const GENERIC_EVENT_HANDLER_PROPERTIES: &[&str] = &[
     "onloadeddata",
     "onloadedmetadata",
     "onratechange",
+    "onformdata",
+    "onsecuritypolicyviolation",
+    "onwebkitanimationend",
+    "onwebkitanimationiteration",
+    "onwebkitanimationstart",
+    "onwebkittransitionend",
 ];
 
 const DOCUMENT_EVENT_HANDLER_PROPERTIES: &[&str] = &[
@@ -484,4 +496,26 @@ fn event_handler_name_from_data<'s>(
 fn event_handler_event_type(name: &str) -> Option<&str> {
     name.strip_prefix("on")
         .filter(|event_type| !event_type.is_empty())
+        .map(canonical_event_handler_event_type)
+}
+
+pub(crate) fn canonical_event_handler_event_type(event_type: &str) -> &str {
+    match event_type {
+        "webkitanimationend" => "webkitAnimationEnd",
+        "webkitanimationiteration" => "webkitAnimationIteration",
+        "webkitanimationstart" => "webkitAnimationStart",
+        "webkittransitionend" => "webkitTransitionEnd",
+        event_type => event_type,
+    }
+}
+
+pub(crate) fn event_handler_content_attribute_name(event_type: &str) -> String {
+    let event_type = match event_type {
+        "webkitAnimationEnd" => "webkitanimationend",
+        "webkitAnimationIteration" => "webkitanimationiteration",
+        "webkitAnimationStart" => "webkitanimationstart",
+        "webkitTransitionEnd" => "webkittransitionend",
+        event_type => event_type,
+    };
+    format!("on{event_type}")
 }

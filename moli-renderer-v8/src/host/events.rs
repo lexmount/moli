@@ -95,7 +95,7 @@ impl EventListenerRegistration {
 
 #[derive(Clone, Copy)]
 enum EventHandlerPropertyState {
-    Uncompiled,
+    Uncompiled(DomHandle),
     Callback(crate::native_bridge::EventCallbackId),
     Null,
 }
@@ -111,7 +111,7 @@ fn event_handler_callback_id(
 ) -> Option<crate::native_bridge::EventCallbackId> {
     match entry.state {
         EventHandlerPropertyState::Callback(callback_id) => Some(callback_id),
-        EventHandlerPropertyState::Uncompiled | EventHandlerPropertyState::Null => None,
+        EventHandlerPropertyState::Uncompiled(_) | EventHandlerPropertyState::Null => None,
     }
 }
 
@@ -147,46 +147,43 @@ impl EventDispatchEntry {
     }
 }
 
-fn body_or_frameset_reflects_event_type(event_type: &str) -> bool {
-    matches!(event_type, "load" | "error" | "messageerror")
-}
-
-pub(crate) fn event_handler_content_attribute_present(
+pub(crate) fn event_handler_content_attribute_owner(
     runtime: &DocumentRuntime,
     target: EventTargetHandle,
     event_type: &str,
-) -> bool {
-    let attribute_name = format!("on{event_type}");
+) -> Option<DomHandle> {
+    let attribute_name =
+        crate::native_bridge::element::event_handler_content_attribute_name(event_type);
     let handle = match target {
         EventTargetHandle::Node(handle) => {
-            if body_or_frameset_reflects_event_type(event_type)
-                && runtime.dom_host().node(handle).is_some_and(|node| {
-                    node.is_html_element_named("body") || node.is_html_element_named("frameset")
-                })
-            {
-                return false;
+            if crate::native_bridge::element::body_or_frameset_reflects_window_event_type(
+                event_type,
+            ) && runtime.dom_host().node(handle).is_some_and(|node| {
+                node.is_html_element_named("body") || node.is_html_element_named("frameset")
+            }) {
+                return None;
             }
             handle
         }
-        EventTargetHandle::Window if body_or_frameset_reflects_event_type(event_type) => {
+        EventTargetHandle::Window
+            if crate::native_bridge::element::body_or_frameset_reflects_window_event_type(
+                event_type,
+            ) =>
+        {
             let document_handle = runtime.document_handle();
             let dom = runtime.dom_host().dom();
-            let Some(handle) = dom
-                .node(document_handle)
+            dom.node(document_handle)
                 .and_then(crate::dom::native::Node::as_document)
-                .and_then(|document| document.body_or_frameset_handle(dom, document_handle))
-            else {
-                return false;
-            };
-            handle
+                .and_then(|document| document.body_or_frameset_handle(dom, document_handle))?
         }
-        EventTargetHandle::ChildWindow(_) => return false,
-        EventTargetHandle::Window => return false,
+        EventTargetHandle::ChildWindow(_) => return None,
+        EventTargetHandle::Window => return None,
     };
     runtime
         .dom_host()
         .get_attribute(handle, &attribute_name)
         .is_some()
+        .then_some(handle)
 }
 
 pub(crate) struct HostEventTargetRegistry {
@@ -338,7 +335,8 @@ fn invoke_event_handler_property<'s>(
     event_type: &str,
     event: v8::Local<'s, v8::Object>,
 ) {
-    let handler_name = format!("on{event_type}");
+    let handler_name =
+        crate::native_bridge::element::event_handler_content_attribute_name(event_type);
     let callback_id = match registry.event_handler_property_value(target, event_type) {
         Some(EventHandlerPropertyValue::Callback(callback_id)) => callback_id,
         Some(EventHandlerPropertyValue::Null) => {
@@ -370,42 +368,6 @@ fn invoke_event_handler_property<'s>(
             }
             let handler = match handler {
                 Some(handler) => handler,
-                None if target == EventTargetHandle::Window && event_type == "load" => {
-                    let Some(handler) =
-                        crate::native_bridge::element::compile_window_body_onload_attribute(
-                            scope, host_ptr,
-                        )
-                    else {
-                        let previous = registry.set_compiled_event_handler_property(
-                            EventTargetHandle::Window,
-                            event_type,
-                            None,
-                        );
-                        if let Some(previous) = previous {
-                            unsafe { &mut *host_ptr }.release_event_callback(previous);
-                        }
-                        return;
-                    };
-                    handler
-                }
-                None if target == EventTargetHandle::Window && event_type == "messageerror" => {
-                    let handler =
-                        crate::native_bridge::element::compile_window_body_onmessageerror_attribute(
-                            scope, host_ptr,
-                        );
-                    let Some(handler) = handler else {
-                        let previous = registry.set_compiled_event_handler_property(
-                            EventTargetHandle::Window,
-                            event_type,
-                            None,
-                        );
-                        if let Some(previous) = previous {
-                            unsafe { &mut *host_ptr }.release_event_callback(previous);
-                        }
-                        return;
-                    };
-                    handler
-                }
                 None => return,
             };
             let callback = v8::Local::<v8::Object>::from(handler);
@@ -861,9 +823,9 @@ impl HostEventTargetRegistry {
         &mut self,
         target: EventTargetHandle,
         event_type: &str,
-        present: bool,
+        owner: Option<DomHandle>,
     ) -> Option<crate::native_bridge::EventCallbackId> {
-        if !present {
+        let Some(owner) = owner else {
             let removed = self
                 .handler_properties
                 .get_mut(&target)
@@ -878,7 +840,7 @@ impl HostEventTargetRegistry {
             let callback_id = removed.and_then(event_handler_callback_id);
             self.remove_event_type_registration_id_if_unused(target, event_type);
             return callback_id;
-        }
+        };
         let listener_id = self
             .handler_properties
             .get(&target)
@@ -890,7 +852,7 @@ impl HostEventTargetRegistry {
             event_type.to_owned(),
             EventHandlerPropertyEntry {
                 listener_id: Some(listener_id),
-                state: EventHandlerPropertyState::Uncompiled,
+                state: EventHandlerPropertyState::Uncompiled(owner),
             },
         );
         previous.and_then(event_handler_callback_id)
@@ -910,16 +872,32 @@ impl HostEventTargetRegistry {
         &mut self,
         target: EventTargetHandle,
         event_type: &str,
-        present: bool,
+        owner: Option<DomHandle>,
     ) {
-        if present
+        if let Some(owner) = owner
             && self
                 .handler_properties
                 .get(&target)
                 .and_then(|handlers| handlers.get(event_type))
                 .is_none()
         {
-            let _ = self.set_event_handler_content_attribute(target, event_type, true);
+            let _ = self.set_event_handler_content_attribute(target, event_type, Some(owner));
+        }
+    }
+
+    pub(crate) fn uncompiled_event_handler_content_attribute_owner(
+        &self,
+        target: EventTargetHandle,
+        event_type: &str,
+    ) -> Option<DomHandle> {
+        match &self
+            .handler_properties
+            .get(&target)
+            .and_then(|target_handlers| target_handlers.get(event_type))?
+            .state
+        {
+            EventHandlerPropertyState::Uncompiled(owner) => Some(*owner),
+            EventHandlerPropertyState::Callback(_) | EventHandlerPropertyState::Null => None,
         }
     }
 
@@ -934,7 +912,7 @@ impl HostEventTargetRegistry {
             .and_then(|target_handlers| target_handlers.get(event_type))?
             .state
         {
-            EventHandlerPropertyState::Uncompiled => None,
+            EventHandlerPropertyState::Uncompiled(_) => None,
             EventHandlerPropertyState::Callback(callback_id) => {
                 Some(EventHandlerPropertyValue::Callback(*callback_id))
             }
@@ -953,7 +931,7 @@ impl HostEventTargetRegistry {
             .and_then(|target_handlers| target_handlers.get(event_type))?
             .state
         {
-            EventHandlerPropertyState::Uncompiled => None,
+            EventHandlerPropertyState::Uncompiled(_) => None,
             EventHandlerPropertyState::Callback(callback_id) => Some(Some(*callback_id)),
             EventHandlerPropertyState::Null => Some(None),
         }
@@ -1240,12 +1218,12 @@ impl HostEventTargetRegistry {
         at_target: bool,
     ) -> std::result::Result<DispatchStatus, String> {
         if !self.has_event_handler_property_entry(target, event_type) {
-            let content_attribute_present =
-                event_handler_content_attribute_present(unsafe { &*host_ptr }, target, event_type);
+            let content_attribute_owner =
+                event_handler_content_attribute_owner(unsafe { &*host_ptr }, target, event_type);
             self.ensure_event_handler_content_attribute(
                 target,
                 event_type,
-                content_attribute_present,
+                content_attribute_owner,
             );
         }
 
