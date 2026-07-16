@@ -7,6 +7,7 @@ pub(in crate::native_bridge) enum TrustedAttributeSetter {
     SetAttributeNs,
     SetAttributeNode,
     AttrValue,
+    SvgAnimatedStringBaseVal,
 }
 
 impl TrustedAttributeSetter {
@@ -16,6 +17,7 @@ impl TrustedAttributeSetter {
             Self::SetAttributeNs => "setAttributeNS",
             Self::SetAttributeNode => "setAttributeNode",
             Self::AttrValue => "value",
+            Self::SvgAnimatedStringBaseVal => "baseVal",
         }
     }
 
@@ -27,6 +29,9 @@ impl TrustedAttributeSetter {
                 crate::webidl::Context::argument("Element setAttributeNode", 1)
             }
             Self::AttrValue => crate::webidl::Context::member("Attr", "value"),
+            Self::SvgAnimatedStringBaseVal => {
+                crate::webidl::Context::member("SVGAnimatedString", "baseVal")
+            }
         }
     }
 }
@@ -274,6 +279,27 @@ pub(in crate::native_bridge) fn trusted_attribute_string_value<'s>(
         value.into(),
         setter,
     )
+}
+
+pub(crate) fn set_svg_animated_string_base_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    attribute: &str,
+    value: v8::Local<'s, v8::Value>,
+) -> Option<String> {
+    let (runtime_ptr, handle) =
+        crate::native_bridge::node_runtime_and_handle_from_object(scope, owner).ok()?;
+    let value = trusted_attribute_value_string(
+        scope,
+        Some((runtime_ptr, handle)),
+        None,
+        attribute,
+        value,
+        TrustedAttributeSetter::SvgAnimatedStringBaseVal,
+    )?;
+    let _ =
+        unsafe { &mut *runtime_ptr }.set_attribute(scope, runtime_ptr, handle, attribute, &value);
+    Some(value)
 }
 
 pub(crate) fn trusted_script_source_for_execution(
