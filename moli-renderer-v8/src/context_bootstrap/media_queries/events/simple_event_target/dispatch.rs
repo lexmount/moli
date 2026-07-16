@@ -6,6 +6,7 @@ use crate::{
         clear_event_dispatch_fields, event_internal_bool_flag, set_event_composed_path,
         set_event_dispatch_fields, set_event_internal_flag,
     },
+    context_bootstrap::{EventHandlerType, apply_event_handler_return_value},
     exception_reporting::CallbackExceptionLogLevel,
     host::report_event_callback_exception,
     util::{context_host_ptr_from_global_bridge, serialize_v8_array},
@@ -78,7 +79,7 @@ pub(crate) fn dispatch_simple_event_target_event<'s>(
                 .get_creation_context(scope)
                 .unwrap_or(current_context);
             let incumbent_context = scope.get_incumbent_context().unwrap_or(current_context);
-            let _ = invoke_simple_event_callback(
+            let returned = invoke_simple_event_callback(
                 scope,
                 event_type,
                 &format!("simple event target {handler_name}"),
@@ -90,6 +91,14 @@ pub(crate) fn dispatch_simple_event_target_event<'s>(
                 &[event.into()],
                 event,
             );
+            if let Some(returned) = returned {
+                apply_event_handler_return_value(
+                    scope,
+                    event,
+                    v8::Local::new(scope, &returned),
+                    EventHandlerType::EventHandler,
+                );
+            }
         }
     }
 
@@ -122,7 +131,7 @@ pub(crate) fn dispatch_simple_event_target_event<'s>(
                     );
                 }
                 set_event_internal_flag(scope, event, EVENT_PASSIVE_SLOT, listener.passive);
-                let _ = invoke_simple_event_listener(
+                let returned = invoke_simple_event_listener(
                     scope,
                     event_type,
                     &format!("simple event target {event_type} listener"),
@@ -131,6 +140,16 @@ pub(crate) fn dispatch_simple_event_target_event<'s>(
                     &[event.into()],
                     event,
                 );
+                if listener.handler_slot.is_some()
+                    && let Some(returned) = returned
+                {
+                    apply_event_handler_return_value(
+                        scope,
+                        event,
+                        v8::Local::new(scope, &returned),
+                        EventHandlerType::EventHandler,
+                    );
+                }
                 set_event_internal_flag(scope, event, EVENT_PASSIVE_SLOT, false);
                 if event_stop_immediate_propagation(scope, event) {
                     break 'phases;
