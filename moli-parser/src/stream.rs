@@ -26,8 +26,8 @@ use super::{
     },
     live_target::{ParserRuntimeDomSinks, ParserStreamHtmlTreeSinkTarget},
     session::{
-        HtmlParserSession, HtmlParserSessionResult, new_fragment_html_tree_sink_session,
-        new_html_tree_sink_session,
+        HtmlParserSession, HtmlParserSessionResult, HtmlTreeSinkSession,
+        new_fragment_html_tree_sink_session, new_html_tree_sink_session,
     },
 };
 
@@ -425,17 +425,20 @@ pub(crate) fn prepare_parser_script_handoff_for_static_document(
 }
 
 impl HtmlTreeSinkStream {
-    pub(super) fn from_target_with_scripting(
-        target: ParserStreamHtmlTreeSinkTarget,
-        scripting_enabled: bool,
-    ) -> Self {
-        let session = new_html_tree_sink_session(target, scripting_enabled);
+    fn from_session(session: HtmlTreeSinkSession) -> Self {
         Self {
             parser: session.parser,
             script_input: session.script_input,
             parser_script_positions: HashMap::new(),
             next_parser_script_position: 0,
         }
+    }
+
+    pub(super) fn from_target_with_scripting(
+        target: ParserStreamHtmlTreeSinkTarget,
+        scripting_enabled: bool,
+    ) -> Self {
+        Self::from_session(new_html_tree_sink_session(target, scripting_enabled))
     }
 
     pub(super) fn from_fragment_target(
@@ -452,12 +455,7 @@ impl HtmlTreeSinkStream {
             context_local_name,
             scripting_enabled,
         );
-        Self {
-            parser: session.parser,
-            script_input: session.script_input,
-            parser_script_positions: HashMap::new(),
-            next_parser_script_position: 0,
-        }
+        Self::from_session(session)
     }
 
     fn parser_script_position(&mut self, node_id: NativeNodeId) -> usize {
@@ -1704,7 +1702,7 @@ mod tests {
     #[test]
     fn parser_script_handoff_only_exposes_nonceable_nonces() {
         fn handoff_nonce(markup: &str) -> Option<String> {
-            let mut stream = DocumentStream::new_parser_stream_for_testing(
+            let mut stream = DocumentStream::new_scripting_enabled_parser_stream_for_testing(
                 Url::parse("https://example.test/page.html").expect("test url"),
             );
             let outcome = stream.pump_parser_step(markup);
