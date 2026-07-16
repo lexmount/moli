@@ -367,12 +367,12 @@ impl DocumentRuntime {
             .events
             .has_event_handler_property_entry(target, event_type)
         {
-            let content_attribute_present =
-                crate::host::event_handler_content_attribute_present(self, target, event_type);
+            let content_attribute_owner =
+                crate::host::event_handler_content_attribute_owner(self, target, event_type);
             self.events.ensure_event_handler_content_attribute(
                 target,
                 event_type,
-                content_attribute_present,
+                content_attribute_owner,
             );
         }
         self.events
@@ -421,10 +421,10 @@ impl DocumentRuntime {
         &mut self,
         target: EventTargetHandle,
         event_type: &str,
-        present: bool,
+        owner: Option<DomHandle>,
     ) -> Option<crate::native_bridge::EventCallbackId> {
         self.events
-            .set_event_handler_content_attribute(target, event_type, present)
+            .set_event_handler_content_attribute(target, event_type, owner)
     }
 
     pub(crate) fn sync_event_handler_content_attribute(
@@ -441,16 +441,34 @@ impl DocumentRuntime {
         let event_type = normalized_name
             .strip_prefix("on")
             .filter(|event_type| !event_type.is_empty())?;
-        let reflects_to_window = matches!(event_type, "load" | "error" | "messageerror")
-            && self.dom_host().node(handle).is_some_and(|node| {
-                node.is_html_element_named("body") || node.is_html_element_named("frameset")
-            });
-        let target = if reflects_to_window {
-            EventTargetHandle::Window
-        } else {
-            EventTargetHandle::Node(handle)
+        let event_type =
+            crate::native_bridge::element::canonical_event_handler_event_type(event_type);
+        let is_body_or_frameset = self.dom_host().node(handle).is_some_and(|node| {
+            node.is_html_element_named("body") || node.is_html_element_named("frameset")
+        });
+        let target = match (
+            is_body_or_frameset,
+            crate::native_bridge::element::body_or_frameset_reflects_window_event_type(event_type),
+        ) {
+            (true, true)
+                if self.dom_host().owner_document_handle(handle)
+                    == Some(self.document_handle()) =>
+            {
+                EventTargetHandle::Window
+            }
+            (true, true) => return None,
+            _ => EventTargetHandle::Node(handle),
         };
-        self.set_event_handler_content_attribute(target, event_type, present)
+        self.set_event_handler_content_attribute(target, event_type, present.then_some(handle))
+    }
+
+    pub(crate) fn uncompiled_event_handler_content_attribute_owner(
+        &self,
+        target: EventTargetHandle,
+        event_type: &str,
+    ) -> Option<DomHandle> {
+        self.events
+            .uncompiled_event_handler_content_attribute_owner(target, event_type)
     }
 
     pub(crate) fn event_handler_property_callback_id(
