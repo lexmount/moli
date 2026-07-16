@@ -21,6 +21,7 @@ pub(super) const FONT_FACE_DISPLAY_SLOT: &str = "__moliFontFaceDisplay";
 pub(super) const FONT_FACE_STATUS_SLOT: &str = "__moliFontFaceStatus";
 pub(super) const FONT_FACE_LOADED_SLOT: &str = "__moliFontFaceLoaded";
 pub(super) const FONT_FACE_LOADED_RESOLVER_SLOT: &str = "__moliFontFaceLoadedResolver";
+pub(super) const FONT_FACE_ERROR_SLOT: &str = "__moliFontFaceError";
 pub(super) const FONT_FACE_SET_OWNERS_SLOT: &str = "__moliFontFaceSetOwners";
 pub(super) const FONT_FACE_LOAD_NOTIFICATION_SENT_SLOT: &str = "__moliFontFaceLoadNotificationSent";
 pub(super) const FONT_FACE_SET_MANUAL_FACES_SLOT: &str = "__moliFontFaceSetManualFaces";
