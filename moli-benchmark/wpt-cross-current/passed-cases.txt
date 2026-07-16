@@ -6569,6 +6569,7 @@ html/semantics/interactive-elements/the-dialog-element/showmodal-in-shadow-crash
 html/semantics/interactive-elements/the-dialog-element/showmodal-shadow-sibling-frame-crash.html
 html/semantics/interactive-elements/the-dialog-element/submit-dialog-close-event.html
 html/semantics/interactive-elements/the-dialog-element/synthetic-click-inert.html
+html/semantics/interactive-elements/the-dialog-element/toggle-events.html
 html/semantics/interactive-elements/the-dialog-element/top-layer-position.html
 html/semantics/interactive-elements/the-summary-element/activation-behavior.html
 html/semantics/interactive-elements/the-summary-element/anchor-with-inline-element.html
