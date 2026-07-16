@@ -103,6 +103,29 @@ impl JsContextHost {
         true
     }
 
+    pub(crate) fn cancel_element_toggle_event(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        kind: RendererPageElementToggleEventKind,
+        element: DomHandle,
+    ) -> bool {
+        let Some(target) = self.window_document_task_target_for_node(scope, element) else {
+            return false;
+        };
+        let Some(index) = self
+            .element_toggle_events
+            .find_slot_index(target, kind, |pending| pending.element == element)
+        else {
+            return false;
+        };
+        self.element_toggle_events
+            .remove_at(index)
+            .into_payload()
+            .cancellation
+            .cancel();
+        true
+    }
+
     pub(crate) fn current_pending_element_toggle_event_task(
         &self,
         task_id: RendererPageElementToggleEventTaskId,
