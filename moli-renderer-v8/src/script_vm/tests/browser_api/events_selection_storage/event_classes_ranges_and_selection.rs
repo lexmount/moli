@@ -1697,3 +1697,28 @@ const rect = range.getBoundingClientRect();
         r#"{"descriptors":["setStart:true:function:setStart:2:true:true:true:false:true:true","setEnd:true:function:setEnd:2:true:true:true:false:true:true","selectNodeContents:true:function:selectNodeContents:1:true:true:true:false:true:true","cloneContents:true:function:cloneContents:0:true:true:true:false:true:true","collapse:true:function:collapse:0:true:true:true:false:true:true","selectNode:true:function:selectNode:1:true:true:true:false:true:true","setStartBefore:true:function:setStartBefore:1:true:true:true:false:true:true","setStartAfter:true:function:setStartAfter:1:true:true:true:false:true:true","setEndBefore:true:function:setEndBefore:1:true:true:true:false:true:true","setEndAfter:true:function:setEndAfter:1:true:true:true:false:true:true","cloneRange:true:function:cloneRange:0:true:true:true:false:true:true","toString:true:function:toString:0:true:true:true:false:true:true","comparePoint:true:function:comparePoint:2:true:true:true:false:true:true","isPointInRange:true:function:isPointInRange:2:true:true:true:false:true:true","intersectsNode:true:function:intersectsNode:1:true:true:true:false:true:true","compareBoundaryPoints:true:function:compareBoundaryPoints:2:true:true:true:false:true:true","insertNode:true:function:insertNode:1:true:true:true:false:true:true","createContextualFragment:true:function:createContextualFragment:1:true:true:true:false:true:true","deleteContents:true:function:deleteContents:0:true:true:true:false:true:true","extractContents:true:function:extractContents:0:true:true:true:false:true:true","surroundContents:true:function:surroundContents:1:true:true:true:false:true:true","getBoundingClientRect:true:function:getBoundingClientRect:0:true:true:true:false:true:true","getClientRects:true:function:getClientRects:0:true:true:true:false:true:true","detach:true:function:detach:0:true:true:true:false:true:true"],"enumerableMethods":"setStart,setEnd,selectNodeContents,cloneContents,collapse,selectNode,setStartBefore,setStartAfter,setEndBefore,setEndAfter,cloneRange,toString,comparePoint,isPointInRange,intersectsNode,compareBoundaryPoints,insertNode,createContextualFragment,deleteContents,extractContents,surroundContents,getBoundingClientRect,getClientRects,detach","behavior":"bcd:bcd:0:true:true:DOMRect:1","afterCollapse":"true:true:1:true:1"}"#
     );
 }
+
+#[test]
+fn window_error_handler_only_boolean_true_cancels() {
+    let mut vm = new_storage_test_vm("https://window-error-return-value.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const run = returned => {
+                window.onerror = () => returned;
+                const event = new ErrorEvent("error", { cancelable: true });
+                return [window.dispatchEvent(event), event.defaultPrevented];
+              };
+              return JSON.stringify([run(true), run(1), run(false), run(0)]);
+            })()
+            "#,
+        )
+        .expect("window error handler return-value probe should evaluate");
+
+    assert_eq!(
+        result,
+        "[[false,true],[true,false],[true,false],[true,false]]"
+    );
+}
