@@ -199,7 +199,7 @@ fn trusted_type_factory_interface_exposes_stable_branded_empty_values() {
 }
 
 #[test]
-fn trusted_type_factory_get_attribute_type_reuses_attribute_sink_classification() {
+fn trusted_type_factory_introspection_reuses_current_sink_classification() {
     let mut vm = new_storage_test_vm("https://trusted-type-attribute-types.test/");
 
     let result = vm
@@ -212,6 +212,7 @@ fn trusted_type_factory_get_attribute_type_reuses_attribute_sink_classification(
   const XLINK = "http://www.w3.org/1999/xlink";
   const OTHER = "https://example.test/namespace";
   const type = (...args) => trustedTypes.getAttributeType(...args);
+  const propertyType = (...args) => trustedTypes.getPropertyType(...args);
   const errorName = callback => {
     try {
       callback();
@@ -220,19 +221,28 @@ fn trusted_type_factory_get_attribute_type_reuses_attribute_sink_classification(
       return error.constructor.name;
     }
   };
-  const descriptor = Object.getOwnPropertyDescriptor(
+  const attributeDescriptor = Object.getOwnPropertyDescriptor(
     TrustedTypePolicyFactory.prototype,
     "getAttributeType"
   );
+  const propertyDescriptor = Object.getOwnPropertyDescriptor(
+    TrustedTypePolicyFactory.prototype,
+    "getPropertyType"
+  );
+  const describe = descriptor => [
+    typeof descriptor.value,
+    descriptor.value.name,
+    descriptor.value.length,
+    descriptor.enumerable,
+    descriptor.configurable
+  ];
 
   return JSON.stringify({
     interface: [
-      typeof descriptor.value,
-      descriptor.value.name,
-      descriptor.value.length,
-      descriptor.enumerable,
-      descriptor.configurable,
-      Object.hasOwn(trustedTypes, "getAttributeType")
+      describe(attributeDescriptor),
+      describe(propertyDescriptor),
+      Object.hasOwn(trustedTypes, "getAttributeType"),
+      Object.hasOwn(trustedTypes, "getPropertyType")
     ],
     htmlDefaults: [
       type("script", "src"),
@@ -253,6 +263,17 @@ fn trusted_type_factory_get_attribute_type_reuses_attribute_sink_classification(
       type("script", "href", SVG, OTHER),
       type("script", "href", SVG.toUpperCase())
     ],
+    properties: [
+      propertyType("script", "text"),
+      propertyType("SCRIPT", "src"),
+      propertyType("script", "sRc"),
+      propertyType("div", "innerHTML"),
+      propertyType("foo", "outerHTML", OTHER),
+      propertyType("script", "src", SVG),
+      propertyType("embed", "src"),
+      propertyType("object", "data"),
+      propertyType("object", "codeBase")
+    ],
     handlers: [
       type("div", "onclick"),
       type("g", "ondblclick", SVG),
@@ -264,17 +285,20 @@ fn trusted_type_factory_get_attribute_type_reuses_attribute_sink_classification(
     errors: [
       errorName(() => type()),
       errorName(() => type("script")),
-      errorName(() => descriptor.value.call({}, "script", "src"))
+      errorName(() => attributeDescriptor.value.call({}, "script", "src")),
+      errorName(() => propertyType()),
+      errorName(() => propertyType("script")),
+      errorName(() => propertyDescriptor.value.call({}, "script", "src"))
     ]
   });
 })()
 "#,
         )
-        .expect("TrustedTypePolicyFactory getAttributeType probe should evaluate");
+        .expect("TrustedTypePolicyFactory introspection probe should evaluate");
 
     assert_eq!(
         result,
-        r#"{"interface":["function","getAttributeType",2,true,true,false],"htmlDefaults":["TrustedScriptURL","TrustedScriptURL","TrustedScriptURL","TrustedScriptURL","TrustedScriptURL",null,null],"urls":["TrustedScriptURL","TrustedScriptURL","TrustedScriptURL",null,"TrustedScriptURL","TrustedScriptURL",null,null],"handlers":["TrustedScript","TrustedScript","TrustedScript",null,null,null],"errors":["TypeError","TypeError","TypeError"]}"#
+        r#"{"interface":[["function","getAttributeType",2,true,true],["function","getPropertyType",2,true,true],false,false],"htmlDefaults":["TrustedScriptURL","TrustedScriptURL","TrustedScriptURL","TrustedScriptURL","TrustedScriptURL",null,null],"urls":[null,null,null,null,"TrustedScriptURL","TrustedScriptURL",null,null],"properties":["TrustedScript","TrustedScriptURL",null,"TrustedHTML","TrustedHTML",null,null,null,null],"handlers":["TrustedScript","TrustedScript","TrustedScript",null,null,null],"errors":["TypeError","TypeError","TypeError","TypeError","TypeError","TypeError"]}"#
     );
 }
 
@@ -1338,7 +1362,7 @@ fn event_handler_attribute_writes_enforce_trusted_script_at_the_attribute_bounda
 }
 
 #[test]
-fn url_attribute_writes_enforce_the_non_iframe_trusted_script_url_sink_table() {
+fn url_attribute_writes_enforce_only_the_current_non_iframe_script_url_sinks() {
     let mut vm = new_storage_test_vm("https://url-attribute-trusted-types.test/");
     vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
 
@@ -1373,10 +1397,7 @@ fn url_attribute_writes_enforce_the_non_iframe_trusted_script_url_sink_table() {
     [document.createElement("script"), element => element.setAttribute("src", "plain")],
     [document.createElement("script"), element => element.setAttributeNS(null, "src", null)],
     [document.createElementNS(svg, "script"), element => element.setAttribute("href", "plain")],
-    [document.createElementNS(svg, "script"), element => element.setAttributeNS(xlink, "xlink:href", policy.createScript("wrong"))],
-    [document.createElement("embed"), element => element.setAttribute("src", "plain")],
-    [document.createElement("object"), element => element.setAttribute("data", "plain")],
-    [document.createElement("object"), element => element.setAttribute("codebase", "plain")]
+    [document.createElementNS(svg, "script"), element => element.setAttributeNS(xlink, "xlink:href", policy.createScript("wrong"))]
   ]) {
     try {
       setter(element);
@@ -1392,6 +1413,11 @@ fn url_attribute_writes_enforce_the_non_iframe_trusted_script_url_sink_table() {
   uppercaseSvg.setAttributeNS(null, "HREF", "uppercase");
   const div = document.createElement("div");
   div.setAttribute("src", "plain-div");
+  const legacyEmbed = document.createElement("embed");
+  legacyEmbed.setAttribute("src", "plain-embed");
+  const legacyObject = document.createElement("object");
+  legacyObject.setAttribute("data", "plain-object-data");
+  legacyObject.setAttribute("codebase", "plain-object-codebase");
 
   const defaultCalls = [];
   trustedTypes.createPolicy("default", {
@@ -1421,7 +1447,10 @@ fn url_attribute_writes_enforce_the_non_iframe_trusted_script_url_sink_table() {
     ordinary: [
       ordinary.getAttributeNS("urn:test", "src"),
       uppercaseSvg.getAttribute("HREF"),
-      div.getAttribute("src")
+      div.getAttribute("src"),
+      legacyEmbed.getAttribute("src"),
+      legacyObject.getAttribute("data"),
+      legacyObject.getAttribute("codebase")
     ],
     defaultValues: [
       defaultHtml.getAttribute("src"),
@@ -1437,7 +1466,7 @@ fn url_attribute_writes_enforce_the_non_iframe_trusted_script_url_sink_table() {
 
     assert_eq!(
         result,
-        r#"{"trustedValues":["script.js","script-ns.js","svg.js","svg-xlink.js","embed.js","object-data.js","object-codebase.js"],"rejected":[true,true,true,true,true,true,true],"ordinary":["namespaced","uppercase","plain-div"],"defaultValues":["safe-default-html","safe-default-svg","safe-default-object"],"defaultCalls":[["default-html","TrustedScriptURL","HTMLScriptElement src"],["default-svg","TrustedScriptURL","SVGScriptElement href"],["default-object","TrustedScriptURL","HTMLObjectElement codebase"]]}"#
+        r#"{"trustedValues":["script.js","script-ns.js","svg.js","svg-xlink.js","embed.js","object-data.js","object-codebase.js"],"rejected":[true,true,true,true],"ordinary":["namespaced","uppercase","plain-div","plain-embed","plain-object-data","plain-object-codebase"],"defaultValues":["safe-default-html","safe-default-svg","default-object"],"defaultCalls":[["default-html","TrustedScriptURL","HTMLScriptElement src"],["default-svg","TrustedScriptURL","SVGScriptElement href"]]}"#
     );
 }
 

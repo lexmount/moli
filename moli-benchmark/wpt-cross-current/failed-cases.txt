@@ -3663,7 +3663,6 @@ trusted-types/block-string-assignment-to-HTMLIFrameElement-srcdoc.html
 trusted-types/block-string-assignment-to-attribute-via-attribute-node.html
 trusted-types/eval-function-constructor-untrusted-arguments-and-applying-default-policy.html
 trusted-types/inheriting-csp-for-local-schemes.html
-trusted-types/legacy-trusted-script-urls.html
 trusted-types/modify-attributes-in-callback.html
 trusted-types/require-trusted-types-for-TypeError-belongs-to-the-global-object-realm.html
 trusted-types/script-enforcement-006.html

@@ -7894,6 +7894,7 @@ trusted-types/eval-no-csp-no-tt.html
 trusted-types/eval-with-non-trusted-script-object.html
 trusted-types/eval-with-permissive-csp.html
 trusted-types/get-trusted-types-compliant-attribute-value.html
+trusted-types/legacy-trusted-script-urls.html
 trusted-types/legacy-trusted-scripts.html
 trusted-types/navigate-to-javascript-url-001.html
 trusted-types/navigate-to-javascript-url-002.html
