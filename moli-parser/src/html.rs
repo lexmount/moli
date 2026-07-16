@@ -370,6 +370,7 @@ pub(super) struct DocumentSink {
     // lines from the original document tail, so location fidelity only
     // degrades and never recovers for this parser session.
     source_positions_known: Cell<bool>,
+    current_script_nonceable: Cell<Option<bool>>,
     html4_empty_system_id_quirks_override_pending: Cell<bool>,
 }
 
@@ -1443,8 +1444,13 @@ impl DocumentSink {
         Self {
             target: RefCell::new(target),
             source_positions_known: Cell::new(true),
+            current_script_nonceable: Cell::new(None),
             html4_empty_system_id_quirks_override_pending: Cell::new(false),
         }
+    }
+
+    pub(super) fn replace_current_script_nonceable(&self, nonceable: Option<bool>) -> Option<bool> {
+        self.current_script_nonceable.replace(nonceable)
     }
 
     pub(super) fn snapshot_parser_stream_document(&self) -> NativeDom {
@@ -1667,7 +1673,12 @@ impl TreeSink for DocumentSink {
         attrs: Vec<Attribute>,
         flags: ElementFlags,
     ) -> Self::Handle {
-        self.target.borrow_mut().create_element(name, attrs, flags)
+        self.target.borrow_mut().create_element(
+            name,
+            attrs,
+            flags,
+            self.current_script_nonceable.get(),
+        )
     }
 
     fn create_comment(&self, text: StrTendril) -> Self::Handle {

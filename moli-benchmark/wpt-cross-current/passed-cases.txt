@@ -149,6 +149,7 @@ content-security-policy/script-src/hash-always-converted-to-utf-8/iso-8859-9.htm
 content-security-policy/script-src/hash-always-converted-to-utf-8/utf-8-lone-surrogate.html
 content-security-policy/script-src/hash-always-converted-to-utf-8/utf-8.html
 content-security-policy/script-src/javascript-window-open-blocked.html
+content-security-policy/script-src/non-nonceable-elements.html
 content-security-policy/script-src/script-src-1_1.html
 content-security-policy/script-src/script-src-1_10_1.html
 content-security-policy/script-src/script-src-1_2.html

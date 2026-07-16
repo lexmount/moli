@@ -12,6 +12,7 @@ use html5ever::{
 };
 use url::Url;
 
+use moli_script::script_element_nonce_is_nonceable;
 use parking_lot::Mutex;
 
 use crate::network::ResourceRequestClient;
@@ -1320,13 +1321,23 @@ impl HtmlPreloadScannerSink {
         if url.scheme() == "data" {
             return;
         }
+        let nonce = html_attr_value(&tag.attrs, "nonce");
+        let nonce = script_element_nonce_is_nonceable(
+            nonce.as_deref(),
+            tag.had_duplicate_attributes,
+            tag.attrs
+                .iter()
+                .map(|attribute| (attribute.name.local.as_ref(), attribute.value.as_ref())),
+        )
+        .then_some(nonce.as_deref())
+        .flatten();
         let mut requests = self.requests.borrow_mut();
         let fetch_metadata = crate::planning::ScriptFetchMetadata::from_script_attributes(
             html_attr_value(&tag.attrs, "crossorigin").as_deref(),
             html_attr_value(&tag.attrs, "referrerpolicy").as_deref(),
             html_attr_value(&tag.attrs, "charset").as_deref(),
             html_attr_value(&tag.attrs, "integrity").as_deref(),
-            html_attr_value(&tag.attrs, "nonce").as_deref(),
+            nonce,
             html_attr_value(&tag.attrs, "fetchpriority").as_deref(),
         );
         let Some(key) = BufferedScriptPreloadKey::new(url.clone(), kind_hint, &fetch_metadata)

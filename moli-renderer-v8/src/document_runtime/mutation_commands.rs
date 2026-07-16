@@ -2079,16 +2079,8 @@ fn execute_committed_inline_classic_script(
     committed: crate::host::CommittedInlineClassicScript,
 ) {
     let (node, host_script_handle, source) = committed.into_parts();
-    let nonce = runtime
-        .dom_host
-        .node(node)
-        .and_then(Node::as_element)
-        .and_then(|element| {
-            element
-                .cryptographic_nonce()
-                .or_else(|| element.attribute("nonce"))
-        })
-        .map(str::to_owned);
+    let nonce =
+        crate::host::script_element_nonce_for_csp(&runtime.dom_host, node).map(str::to_owned);
     let request = crate::content_security_policy::ContentSecurityPolicyScriptElementRequest {
         nonce: nonce.as_deref(),
         integrity: None,

@@ -47,6 +47,7 @@ pub(super) use self::scripts::{
     begin_prepared_document_write_script_start, build_runtime_prepared_script,
     cancel_runtime_script_start_admission, dispatch_script_event,
     finish_runtime_script_start_admission, plan_script_start, prepare_runtime_script_start_commit,
+    script_element_nonce_for_csp,
 };
 #[cfg(test)]
 pub(super) use self::scripts::{

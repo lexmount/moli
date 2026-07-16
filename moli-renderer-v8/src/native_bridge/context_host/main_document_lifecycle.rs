@@ -113,15 +113,7 @@ impl JsContextHost {
                 source,
             } => {
                 debug_assert!(load_delay_binding.is_none());
-                let nonce = runtime
-                    .dom_host()
-                    .node(node)
-                    .and_then(crate::dom::native::Node::as_element)
-                    .and_then(|element| {
-                        element
-                            .cryptographic_nonce()
-                            .or_else(|| element.attribute("nonce"))
-                    })
+                let nonce = crate::host::script_element_nonce_for_csp(runtime.dom_host(), node)
                     .map(str::to_owned);
                 let request =
                     crate::content_security_policy::ContentSecurityPolicyScriptElementRequest {

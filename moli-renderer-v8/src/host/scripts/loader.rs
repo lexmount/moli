@@ -10,7 +10,7 @@ use crate::{
         },
     },
 };
-use moli_script::ScriptPreparationDisposition;
+use moli_script::{ScriptPreparationDisposition, script_element_nonce_is_nonceable};
 use url::Url;
 
 #[derive(Debug, Clone)]
@@ -27,10 +27,7 @@ impl RuntimeScriptPreparationContext {
         node: NativeNodeId,
     ) -> RuntimeScriptPreparationContext {
         let script_element = dom_host.node(node).and_then(Node::as_element);
-        let nonce = script_element
-            .and_then(|element| element.cryptographic_nonce())
-            .map(str::to_owned)
-            .or_else(|| dom_host.get_attribute(node, "nonce"));
+        let nonce = script_element_nonce_for_csp(dom_host, node).map(str::to_owned);
         let parser_inserted =
             script_element.is_some_and(|element| element.script_parser_inserted_for_prepare());
         let owner_document = dom_host.owner_document_handle(node);
@@ -54,6 +51,23 @@ impl RuntimeScriptPreparationContext {
             .with_parser_inserted(parser_inserted),
         }
     }
+}
+
+pub(crate) fn script_element_nonce_for_csp(dom_host: &DomHost, node: NativeNodeId) -> Option<&str> {
+    let element = dom_host.node(node).and_then(Node::as_element)?;
+    let nonce = element
+        .cryptographic_nonce()
+        .or_else(|| element.attribute("nonce"));
+    script_element_nonce_is_nonceable(
+        nonce,
+        false,
+        element
+            .attributes()
+            .iter()
+            .map(|attribute| (attribute.local_name(), attribute.value())),
+    )
+    .then_some(nonce)
+    .flatten()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1702,6 +1702,42 @@ mod tests {
     }
 
     #[test]
+    fn parser_script_handoff_only_exposes_nonceable_nonces() {
+        fn handoff_nonce(markup: &str) -> Option<String> {
+            let mut stream = DocumentStream::new_parser_stream_for_testing(
+                Url::parse("https://example.test/page.html").expect("test url"),
+            );
+            let outcome = stream.pump_parser_step(markup);
+            let ParserPumpStep::Yield(ParserYield::Script(handoff)) = outcome.result else {
+                panic!("expected parser script handoff for {markup:?}");
+            };
+            let ParserScriptHandoff::BlockingClassic { script, .. } = *handoff else {
+                panic!("expected blocking classic script for {markup:?}");
+            };
+            script.fetch_metadata.nonce
+        }
+
+        assert_eq!(
+            handoff_nonce("<script nonce=abc>safe()</script>"),
+            Some("abc".to_owned()),
+            "ordinary parser script nonce should remain usable"
+        );
+        for markup in [
+            "<script attribute<script nonce=abc>blocked()</script>",
+            "<script data-marker='value<StYlE' nonce=abc>blocked()</script>",
+            "<script data-marker='value<LiNk' nonce=abc>blocked()</script>",
+            "<script duplicate duplicate nonce=abc>blocked()</script>",
+            "<svg><script duplicate duplicate nonce=abc>blocked()</script></svg>",
+        ] {
+            assert_eq!(
+                handoff_nonce(markup),
+                None,
+                "nonnonceable parser script must not expose its nonce: {markup:?}"
+            );
+        }
+    }
+
+    #[test]
     fn parser_script_handoff_uses_html5ever_line_with_unknown_column_across_input_chunks() {
         let mut stream = DocumentStream::new_scripting_enabled_parser_stream_for_testing(
             Url::parse("https://example.test/page.html").expect("test url"),

@@ -29,7 +29,6 @@ content-security-policy/resource-hints/prefetch-generate-directives.html
 content-security-policy/resource-hints/prefetch-no-csp.html
 content-security-policy/sandbox/autoplay-disabled-by-csp.html
 content-security-policy/sandbox/window-reuse-sandboxed.html
-content-security-policy/script-src/non-nonceable-elements.html
 content-security-policy/script-src/nonce-enforce-blocked.html
 content-security-policy/script-src/script-src-trusted_types_eval_DedicatedWorker.html
 content-security-policy/securitypolicyviolation/blockeduri-inline.html

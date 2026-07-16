@@ -11,6 +11,7 @@ use html5ever::{
 };
 use markup5ever::TokenizerResult;
 use moli_dom::native::NativeNodeId;
+use moli_script::script_element_nonce_is_nonceable;
 
 use super::{
     html::{DocumentSink, ParseHandle, ParserFinishDiscoverySignals, ParserInputQueue},
@@ -63,6 +64,27 @@ impl TokenSink for EmbedderPausingTreeBuilder {
     type Handle = ParseHandle;
 
     fn process_token(&self, token: Token, line_number: u64) -> TokenSinkResult<Self::Handle> {
+        let current_script_nonceable = match &token {
+            Token::TagToken(tag)
+                if tag.kind == TagKind::StartTag && tag.name.as_ref() == "script" =>
+            {
+                let nonce = tag
+                    .attrs
+                    .iter()
+                    .find(|attribute| {
+                        attribute.name.ns.is_empty() && attribute.name.local.as_ref() == "nonce"
+                    })
+                    .map(|attribute| attribute.value.as_ref());
+                Some(script_element_nonce_is_nonceable(
+                    nonce,
+                    tag.had_duplicate_attributes,
+                    tag.attrs
+                        .iter()
+                        .map(|attribute| (attribute.name.local.as_ref(), attribute.value.as_ref())),
+                ))
+            }
+            _ => None,
+        };
         let in_foreign_content = self
             .inner
             .adjusted_current_node_present_but_not_in_html_namespace();
@@ -80,7 +102,14 @@ impl TokenSink for EmbedderPausingTreeBuilder {
             }
             _ => None,
         };
+        let previous_script_nonceable = self
+            .inner
+            .sink
+            .replace_current_script_nonceable(current_script_nonceable);
         let result = self.inner.process_token(token, line_number);
+        self.inner
+            .sink
+            .replace_current_script_nonceable(previous_script_nonceable);
         if !matches!(result, TokenSinkResult::Continue) {
             return result;
         }

@@ -834,6 +834,38 @@ fn runtime_preparation_capture_uses_live_document_base_url() {
 }
 
 #[test]
+fn runtime_preparation_only_captures_nonceable_script_nonces() {
+    let url = Url::parse("https://example.test/").expect("test url should parse");
+    let document = HtmlParser.parse(
+        url.clone(),
+        "<!doctype html><html><head></head><body></body></html>".to_owned(),
+    );
+    let mut dom_host = DomHost::from_dom(document);
+    let document_state = HostDocumentState::new(url);
+
+    let safe_script = dom_host.create_element("script");
+    assert!(dom_host.set_attribute(safe_script, "nonce", "abc"));
+    assert_eq!(
+        RuntimeScriptPreparationContext::capture(&dom_host, &document_state, safe_script)
+            .fetch_metadata
+            .nonce
+            .as_deref(),
+        Some("abc")
+    );
+
+    let nonnonceable_script = dom_host.create_element("script");
+    assert!(dom_host.set_attribute(nonnonceable_script, "nonce", "abc"));
+    assert!(dom_host.set_attribute(nonnonceable_script, "data-marker", "value<ScRiPt"));
+    assert_eq!(
+        RuntimeScriptPreparationContext::capture(&dom_host, &document_state, nonnonceable_script,)
+            .fetch_metadata
+            .nonce,
+        None,
+        "markup-shaped attributes must make a dynamic script nonce nonnonceable"
+    );
+}
+
+#[test]
 fn connected_datablock_type_mutation_alone_does_not_prepare() {
     let url = Url::parse("https://example.test/").expect("test url should parse");
     let document = HtmlParser::SCRIPTING_ENABLED.parse(
