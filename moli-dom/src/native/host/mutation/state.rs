@@ -92,6 +92,13 @@ impl DomHost {
         &mut self,
         handle: DomHandle,
     ) {
+        if !self
+            .node(handle)
+            .and_then(Node::as_element)
+            .is_some_and(is_builtin_reassociateable_form_associated_element)
+        {
+            return;
+        }
         self.clear_parser_associated_form_owner(handle);
     }
 
