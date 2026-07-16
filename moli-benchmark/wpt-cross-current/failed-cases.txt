@@ -3651,10 +3651,8 @@ trusted-types/ServiceWorkerContainer-register-from-DedicatedWorker.https.html
 trusted-types/ServiceWorkerContainer-register-from-ServiceWorker.https.html
 trusted-types/ServiceWorkerContainer-register-from-SharedWorker.https.html
 trusted-types/TrustedType-AttributeNodes.html
-trusted-types/TrustedTypePolicyFactory-constants.html
 trusted-types/TrustedTypePolicyFactory-createPolicy-cspTests-none.html
 trusted-types/TrustedTypePolicyFactory-createPolicy-cspTests.html
-trusted-types/TrustedTypePolicyFactory-defaultPolicy.html
 trusted-types/TrustedTypePolicyFactory-getAttributeType-namespace.html
 trusted-types/TrustedTypePolicyFactory-getAttributeType-svg.html
 trusted-types/TrustedTypePolicyFactory-getAttributeType.html
