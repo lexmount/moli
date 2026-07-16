@@ -16,7 +16,7 @@ use super::super::{
     node::{
         append_child_in_reaction_scope, append_child_to_current_reaction_queue,
         current_or_live_delegate_node_arg_handle, insert_before_in_reaction_scope,
-        insert_before_to_current_reaction_queue, node_or_foreign_arg_handle,
+        insert_before_to_current_reaction_queue, node_is_element, node_or_foreign_arg_handle,
         node_or_foreign_arg_handle_allow_detached, node_runtime_and_handle_from_args,
         node_runtime_and_handle_from_args_or_detached, node_runtime_and_handle_from_object,
         node_runtime_and_handle_from_object_or_detached, remove_child_in_reaction_scope,
@@ -32,9 +32,9 @@ use super::{
     element_has_attribute, html_element_getter_receiver, html_element_setter_receiver,
     navigate_form_target_browsing_context, parse_non_negative_dimension, property_usv_string_value,
     queue_deferred_named_iframe_target_navigation_from_document,
-    queue_deferred_named_iframe_target_request, resolve_url_like_attribute,
-    set_attribute_property_on_object_or_detached, set_reflected_attribute,
-    set_reflected_boolean_attribute, update_focus,
+    queue_deferred_named_iframe_target_request, reflected_element_attribute_handle,
+    resolve_url_like_attribute, set_attribute_property_on_object_or_detached,
+    set_reflected_attribute, set_reflected_boolean_attribute, update_focus,
 };
 use std::str::FromStr;
 

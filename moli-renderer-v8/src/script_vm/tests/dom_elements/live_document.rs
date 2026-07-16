@@ -3352,6 +3352,68 @@ fn button_and_textarea_accessors_live_on_owner_prototypes() {
 }
 
 #[test]
+fn button_element_reflections_track_content_attribute_mutations() {
+    let mut vm = new_parsed_test_vm(
+        "https://button-element-reflection.test/",
+        r#"<!doctype html><button id="button" popovertarget="target"></button><div id="target"></div>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const assert = (condition, message) => {
+    if (!condition) throw new Error(message);
+  };
+  const button = document.getElementById("button");
+  const target = document.getElementById("target");
+
+  assert(button.popoverTargetElement === target, "content attribute target");
+  button.popoverTargetElement = null;
+  assert(!button.hasAttribute("popovertarget"), "null removes content attribute");
+  assert(button.popoverTargetElement === null, "null clears explicit target");
+
+  for (const [property, attribute] of [
+    ["commandForElement", "commandfor"],
+    ["interestForElement", "interestfor"],
+    ["popoverTargetElement", "popovertarget"]
+  ]) {
+    button[property] = target;
+    assert(button.getAttribute(attribute) === "", `${property} writes empty content attribute`);
+    assert(button[property] === target, `${property} retains explicit target`);
+
+    button.setAttribute(attribute, "missing");
+    assert(button[property] === null, `${attribute} mutation clears explicit target`);
+
+    button[property] = target;
+    button.setAttribute(attribute, "");
+    assert(button[property] === null, `${attribute} same-value mutation clears explicit target`);
+
+    button.setAttribute(attribute, "target");
+    assert(button[property] === target, `${property} falls back to ID lookup`);
+
+    let threw = false;
+    try {
+      button[property] = {};
+    } catch (error) {
+      threw = error instanceof TypeError;
+    }
+    assert(threw, `${property} rejects non-Element values`);
+    assert(button.getAttribute(attribute) === "target", `${property} conversion precedes mutation`);
+
+    button.removeAttribute(attribute);
+    assert(button[property] === null, `${attribute} removal clears target`);
+  }
+  return "ok";
+})()
+"#,
+        )
+        .expect("button element reflections should remain synchronized with their attributes");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn button_submitter_override_accessors_reject_incompatible_receivers() {
     let mut vm = new_parsed_test_vm(
         "https://button-submit-overrides-brand.test/base/page.html",

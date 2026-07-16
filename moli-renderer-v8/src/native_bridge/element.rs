@@ -7549,7 +7549,7 @@ fn aria_element_reference_handle_for_owner(
         .or_else(|| (reference.runtime_ptr == owner_runtime_ptr).then_some(reference.handle))
 }
 
-fn aria_element_reference_is_in_valid_scope(
+fn element_reference_is_in_valid_scope(
     runtime: &JsContextHost,
     owner: DomHandle,
     candidate: DomHandle,
@@ -7580,7 +7580,7 @@ fn aria_element_reference_is_in_valid_scope(
     }
 }
 
-fn aria_element_by_id_including_disconnected(
+fn element_by_id_including_disconnected(
     runtime: &JsContextHost,
     owner: DomHandle,
     id: &str,
@@ -7604,6 +7604,39 @@ fn aria_element_by_id_including_disconnected(
     None
 }
 
+pub(in crate::native_bridge::element) fn reflected_element_attribute_handle(
+    runtime: &JsContextHost,
+    owner: DomHandle,
+    attribute: &str,
+) -> Option<DomHandle> {
+    let candidate = match runtime
+        .dom_host()
+        .explicit_element_references(owner, attribute)
+    {
+        Some(references) => references.into_iter().next()?,
+        None => {
+            let id = runtime.dom_host().get_attribute(owner, attribute)?;
+            element_by_id_including_disconnected(runtime, owner, &id)?
+        }
+    };
+    if !element_reference_is_in_valid_scope(runtime, owner, candidate) {
+        return None;
+    }
+    runtime
+        .dom_host()
+        .resolve_reference_target_chain(candidate)
+        .map(|_| candidate)
+}
+
+pub(in crate::native_bridge::element) fn resolved_reflected_element_attribute_handle(
+    runtime: &JsContextHost,
+    owner: DomHandle,
+    attribute: &str,
+) -> Option<DomHandle> {
+    reflected_element_attribute_handle(runtime, owner, attribute)
+        .and_then(|candidate| runtime.dom_host().resolve_reference_target_chain(candidate))
+}
+
 fn aria_element_reference_content_handles(
     runtime: &JsContextHost,
     owner: DomHandle,
@@ -7612,7 +7645,7 @@ fn aria_element_reference_content_handles(
     let value = runtime.dom_host().get_attribute(owner, attribute)?;
     if aria_element_reference_is_singular(attribute) {
         return Some(
-            aria_element_by_id_including_disconnected(runtime, owner, &value)
+            element_by_id_including_disconnected(runtime, owner, &value)
                 .into_iter()
                 .collect(),
         );
@@ -7621,7 +7654,7 @@ fn aria_element_reference_content_handles(
         value
             .split([' ', '\t', '\n', '\r', '\u{000c}'])
             .filter(|token| !token.is_empty())
-            .filter_map(|token| aria_element_by_id_including_disconnected(runtime, owner, token))
+            .filter_map(|token| element_by_id_including_disconnected(runtime, owner, token))
             .collect(),
     )
 }
@@ -7633,14 +7666,12 @@ fn aria_element_reference_handles(
 ) -> Option<Vec<DomHandle>> {
     match runtime
         .dom_host()
-        .explicit_aria_element_references(owner, attribute)
+        .explicit_element_references(owner, attribute)
     {
         Some(references) => Some(
             references
                 .into_iter()
-                .filter(|candidate| {
-                    aria_element_reference_is_in_valid_scope(runtime, owner, *candidate)
-                })
+                .filter(|candidate| element_reference_is_in_valid_scope(runtime, owner, *candidate))
                 .collect(),
         ),
         None => aria_element_reference_content_handles(runtime, owner, attribute),
@@ -7761,7 +7792,7 @@ fn set_explicit_aria_element_references(
         );
         let _ = unsafe { &mut *runtime_ptr }
             .dom_host_mut()
-            .set_explicit_aria_element_references(owner, attribute, handles);
+            .set_explicit_element_references(owner, attribute, handles);
     });
 }
 

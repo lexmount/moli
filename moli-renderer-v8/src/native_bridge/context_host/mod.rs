@@ -990,7 +990,6 @@ pub(crate) struct JsContextHost {
         HashMap<DomHandle, moli_storage_key::OpaqueOriginNonce>,
     broadcast_channel_wrappers: HashMap<BroadcastChannelId, BroadcastChannelWrapperEntry>,
     form_past_named_items: HashMap<(DomHandle, String), DomHandle>,
-    button_element_targets: HashMap<(DomHandle, String), DomHandle>,
     constructing_form_data_forms: Vec<DomHandle>,
     active_form_submission_forms: Vec<DomHandle>,
     active_dialog_request_closes: HashSet<DomHandle>,

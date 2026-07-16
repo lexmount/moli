@@ -384,7 +384,6 @@ impl JsContextHost {
             child_web_storage_opaque_context_nonces: HashMap::new(),
             broadcast_channel_wrappers: HashMap::new(),
             form_past_named_items: HashMap::new(),
-            button_element_targets: HashMap::new(),
             constructing_form_data_forms: Vec::new(),
             active_form_submission_forms: Vec::new(),
             active_dialog_request_closes: HashSet::new(),
@@ -1424,36 +1423,6 @@ impl JsContextHost {
             .form_control_elements(form_handle)
             .contains(&item_handle)
             .then_some(item_handle)
-    }
-
-    pub(in crate::native_bridge) fn remember_button_element_target(
-        &mut self,
-        source_handle: DomHandle,
-        slot: &str,
-        target_handle: DomHandle,
-    ) {
-        self.button_element_targets
-            .insert((source_handle, slot.to_owned()), target_handle);
-    }
-
-    pub(in crate::native_bridge) fn clear_button_element_target(
-        &mut self,
-        source_handle: DomHandle,
-        slot: &str,
-    ) {
-        self.button_element_targets
-            .remove(&(source_handle, slot.to_owned()));
-    }
-
-    pub(in crate::native_bridge) fn button_element_target(
-        &self,
-        source_handle: DomHandle,
-        slot: &str,
-    ) -> Option<DomHandle> {
-        self.button_element_targets
-            .get(&(source_handle, slot.to_owned()))
-            .copied()
-            .filter(|handle| self.dom_host().node(*handle).is_some())
     }
 
     pub(in crate::native_bridge) fn replace_active_image_submitter_coordinate(

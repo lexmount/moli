@@ -59,7 +59,7 @@ fn initial_custom_element_state_for_identity(
     }
 }
 
-fn is_aria_element_reference_attribute(name: &str) -> bool {
+fn is_element_reference_attribute(name: &str) -> bool {
     matches!(
         name,
         "aria-activedescendant"
@@ -70,6 +70,9 @@ fn is_aria_element_reference_attribute(name: &str) -> bool {
             | "aria-flowto"
             | "aria-labelledby"
             | "aria-owns"
+            | "commandfor"
+            | "interestfor"
+            | "popovertarget"
     )
 }
 
@@ -181,24 +184,22 @@ impl Element {
         self.prefix.as_ref().map(AsRef::as_ref)
     }
 
-    pub fn explicit_aria_element_references(&self, attribute: &str) -> Option<&[NativeNodeId]> {
-        self.control_state()
-            .explicit_aria_element_references(attribute)
+    pub fn explicit_element_references(&self, attribute: &str) -> Option<&[NativeNodeId]> {
+        self.control_state().explicit_element_references(attribute)
     }
 
-    pub fn set_explicit_aria_element_references(
+    pub fn set_explicit_element_references(
         &mut self,
         attribute: &str,
         references: Vec<NativeNodeId>,
     ) {
         self.control_state_mut()
-            .set_explicit_aria_element_references(attribute, references);
+            .set_explicit_element_references(attribute, references);
     }
 
-    fn synchronize_aria_element_reference_attribute(&mut self, namespace: &str, local_name: &str) {
-        if namespace.is_empty() && is_aria_element_reference_attribute(local_name) {
-            self.rare_data
-                .clear_explicit_aria_element_references(local_name);
+    fn synchronize_element_reference_attribute(&mut self, namespace: &str, local_name: &str) {
+        if namespace.is_empty() && is_element_reference_attribute(local_name) {
+            self.rare_data.clear_explicit_element_references(local_name);
         }
     }
 
@@ -1240,7 +1241,7 @@ impl Element {
         prefix: Option<String>,
         value: String,
     ) -> bool {
-        self.synchronize_aria_element_reference_attribute(&namespace, &local_name);
+        self.synchronize_element_reference_attribute(&namespace, &local_name);
         let next_value = value.clone();
         if let Some(index) = self
             .attributes
@@ -1290,7 +1291,7 @@ impl Element {
         value: String,
         units: Vec<u16>,
     ) -> bool {
-        self.synchronize_aria_element_reference_attribute(&namespace, &local_name);
+        self.synchronize_element_reference_attribute(&namespace, &local_name);
         let next_value = value.clone();
         let value_utf16_units =
             utf16_units_contain_unpaired_surrogate(&units).then(|| units.into_boxed_slice());
@@ -1342,7 +1343,7 @@ impl Element {
         prefix: Option<String>,
         value: String,
     ) -> bool {
-        self.synchronize_aria_element_reference_attribute(&namespace, &local_name);
+        self.synchronize_element_reference_attribute(&namespace, &local_name);
         let next_value = value.clone();
         if let Some(index) = self.attributes.iter().position(|attribute| {
             attribute.local_name() == local_name && attribute.namespace() == namespace
@@ -1375,7 +1376,7 @@ impl Element {
     }
 
     pub fn remove_attribute(&mut self, name: &str) -> bool {
-        self.synchronize_aria_element_reference_attribute("", name);
+        self.synchronize_element_reference_attribute("", name);
         let Some(index) = self
             .attributes
             .iter()
@@ -1392,7 +1393,7 @@ impl Element {
     }
 
     pub fn remove_attribute_ns(&mut self, namespace: &str, local_name: &str) -> bool {
-        self.synchronize_aria_element_reference_attribute(namespace, local_name);
+        self.synchronize_element_reference_attribute(namespace, local_name);
         let Some(index) = self.attributes.iter().position(|attribute| {
             attribute.namespace() == namespace && attribute.local_name() == local_name
         }) else {

@@ -7,8 +7,8 @@ use crate::dom::{
     native::{Element, Node, SelectedFile},
 };
 use crate::util::{
-    call_object_method, get_private_value, node_wrapper_from_handle, object_bool_property,
-    object_number_property, object_property_as_object, utf16_len, v8_string, v8str,
+    call_object_method, node_wrapper_from_handle, object_bool_property, object_number_property,
+    object_property_as_object, utf16_len, v8_string, v8str,
 };
 use crate::{
     RendererInputDispatchOutcome, RendererPendingDownloadActivation,
@@ -30,7 +30,8 @@ use super::super::{
     is_disabled_form_control, is_focusable, is_valid_submit_button,
     label_activation_control_handle, observable_bounding_client_rect,
     perform_popover_invoker_default_action, perform_summary_click_default_action,
-    replace_text_control_selection, resolve_url_like_attribute, scroll_node_into_view_at_start,
+    replace_text_control_selection, resolve_url_like_attribute,
+    resolved_reflected_element_attribute_handle, scroll_node_into_view_at_start,
     submit_form_with_submit_event, update_focus,
 };
 use super::targets::{
@@ -38,9 +39,6 @@ use super::targets::{
     navigate_hyperlink_source_browsing_context, navigate_hyperlink_target_browsing_context,
     navigate_target_browsing_context,
 };
-
-const BUTTON_COMMAND_FOR_ELEMENT_SLOT: &str = "__moliButtonCommandForElement";
-const BUTTON_POPOVER_TARGET_ELEMENT_SLOT: &str = "__moliButtonPopoverTargetElement";
 
 fn array_like_length(scope: &mut v8::PinScope<'_, '_>, object: v8::Local<'_, v8::Object>) -> u32 {
     object
@@ -1534,7 +1532,7 @@ fn dispatch_button_command_event_if_needed(
     else {
         return;
     };
-    let Some(target) = command_for_element_target(scope, runtime_ptr, handle) else {
+    let Some(target) = command_for_element_target(runtime_ptr, handle) else {
         return;
     };
     let Some(source) = node_wrapper_from_handle(scope, handle) else {
@@ -1559,7 +1557,7 @@ fn dispatch_button_popover_toggle_events_if_needed(
     if !runtime.dom_host().is_html_element_named(handle, "button") {
         return false;
     }
-    let Some(target) = popover_target_element_target(scope, runtime_ptr, handle) else {
+    let Some(target) = popover_target_element_target(runtime_ptr, handle) else {
         return false;
     };
     dispatch_popover_toggle_events(scope, runtime_ptr, target, handle);
@@ -1567,97 +1565,17 @@ fn dispatch_button_popover_toggle_events_if_needed(
 }
 
 fn popover_target_element_target(
-    scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
 ) -> Option<DomHandle> {
-    if let Some(target) =
-        unsafe { &*runtime_ptr }.button_element_target(handle, BUTTON_POPOVER_TARGET_ELEMENT_SLOT)
-    {
-        return unsafe { &*runtime_ptr }
-            .dom_host()
-            .resolve_reference_target_chain(target);
-    }
-    if let Some(wrapper) = node_wrapper_from_handle(scope, handle)
-        && let Some(value) = get_private_value(scope, wrapper, BUTTON_POPOVER_TARGET_ELEMENT_SLOT)
-        && !value.is_null_or_undefined()
-    {
-        if let Ok(big) = v8::Local::<v8::BigInt>::try_from(value) {
-            let (index, lossless) = big.u64_value();
-            if lossless {
-                let target = DomHandle::new(index as usize);
-                if unsafe { &*runtime_ptr }.dom_host().node(target).is_some() {
-                    return unsafe { &*runtime_ptr }
-                        .dom_host()
-                        .resolve_reference_target_chain(target);
-                }
-            }
-        } else if let Some(index) = value.uint32_value(scope) {
-            let target = DomHandle::new(index as usize);
-            if unsafe { &*runtime_ptr }.dom_host().node(target).is_some() {
-                return unsafe { &*runtime_ptr }
-                    .dom_host()
-                    .resolve_reference_target_chain(target);
-            }
-        }
-    }
-    let runtime = unsafe { &*runtime_ptr };
-    let popover_target = element_attribute(runtime, handle, "popovertarget")?;
-    if popover_target.is_empty() {
-        return None;
-    }
-    reference_target_for_id(runtime, handle, &popover_target)
+    resolved_reflected_element_attribute_handle(unsafe { &*runtime_ptr }, handle, "popovertarget")
 }
 
 fn command_for_element_target(
-    scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
 ) -> Option<DomHandle> {
-    if let Some(target) =
-        unsafe { &*runtime_ptr }.button_element_target(handle, BUTTON_COMMAND_FOR_ELEMENT_SLOT)
-    {
-        return unsafe { &*runtime_ptr }
-            .dom_host()
-            .resolve_reference_target_chain(target);
-    }
-    if let Some(wrapper) = node_wrapper_from_handle(scope, handle)
-        && let Some(value) = get_private_value(scope, wrapper, BUTTON_COMMAND_FOR_ELEMENT_SLOT)
-        && !value.is_null_or_undefined()
-    {
-        if let Ok(big) = v8::Local::<v8::BigInt>::try_from(value) {
-            let (index, lossless) = big.u64_value();
-            if lossless {
-                let target = DomHandle::new(index as usize);
-                if unsafe { &*runtime_ptr }.dom_host().node(target).is_some() {
-                    return Some(target);
-                }
-            }
-        } else if let Some(index) = value.uint32_value(scope) {
-            let target = DomHandle::new(index as usize);
-            if unsafe { &*runtime_ptr }.dom_host().node(target).is_some() {
-                return Some(target);
-            }
-        }
-    }
-    let runtime = unsafe { &*runtime_ptr };
-    let command_for = element_attribute(runtime, handle, "commandfor")?;
-    if command_for.is_empty() {
-        return None;
-    }
-    reference_target_for_id(runtime, handle, &command_for)
-}
-
-fn reference_target_for_id(
-    runtime: &JsContextHost,
-    handle: DomHandle,
-    id: &str,
-) -> Option<DomHandle> {
-    let root = runtime.dom_host().root_node_handle(handle)?;
-    let candidate = runtime
-        .dom_host()
-        .element_handle_by_id_in_subtree(root, id)?;
-    runtime.dom_host().resolve_reference_target_chain(candidate)
+    resolved_reflected_element_attribute_handle(unsafe { &*runtime_ptr }, handle, "commandfor")
 }
 
 fn is_valid_reset_button(runtime: &JsContextHost, handle: DomHandle) -> bool {

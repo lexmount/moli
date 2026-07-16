@@ -6015,6 +6015,7 @@ html/semantics/popovers/popover-shadowhost-focus.html
 html/semantics/popovers/popover-toggle-source.html
 html/semantics/popovers/popover-types.html
 html/semantics/popovers/popovertarget-disabled-fieldset.html
+html/semantics/popovers/popovertarget-reflection.html
 html/semantics/popovers/togglePopover.html
 html/semantics/popovers/toggleevent-interface.html
 html/semantics/rellist-feature-detection.html

@@ -126,7 +126,7 @@ impl ScriptElementState {
 }
 
 #[derive(Debug, Clone, Default)]
-struct ExplicitAriaElementReferenceState {
+struct ExplicitElementReferenceState {
     references_by_attribute: HashMap<String, Vec<NativeNodeId>>,
 }
 
@@ -171,36 +171,36 @@ pub struct ElementControlState {
     dialog_modal: bool,
     dialog_return_value: String,
     custom_states: IndexSet<String>,
-    explicit_aria_element_references: Option<Box<ExplicitAriaElementReferenceState>>,
+    explicit_element_references: Option<Box<ExplicitElementReferenceState>>,
 }
 
 impl ElementControlState {
-    pub fn explicit_aria_element_references(&self, attribute: &str) -> Option<&[NativeNodeId]> {
-        self.explicit_aria_element_references
+    pub fn explicit_element_references(&self, attribute: &str) -> Option<&[NativeNodeId]> {
+        self.explicit_element_references
             .as_deref()?
             .references_by_attribute
             .get(attribute)
             .map(Vec::as_slice)
     }
 
-    pub fn set_explicit_aria_element_references(
+    pub fn set_explicit_element_references(
         &mut self,
         attribute: &str,
         references: Vec<NativeNodeId>,
     ) {
-        self.explicit_aria_element_references
+        self.explicit_element_references
             .get_or_insert_with(Default::default)
             .references_by_attribute
             .insert(attribute.to_owned(), references);
     }
 
-    pub fn clear_explicit_aria_element_references(&mut self, attribute: &str) {
-        let Some(references) = self.explicit_aria_element_references.as_mut() else {
+    pub fn clear_explicit_element_references(&mut self, attribute: &str) {
+        let Some(references) = self.explicit_element_references.as_mut() else {
             return;
         };
         references.references_by_attribute.remove(attribute);
         if references.references_by_attribute.is_empty() {
-            self.explicit_aria_element_references = None;
+            self.explicit_element_references = None;
         }
     }
 
