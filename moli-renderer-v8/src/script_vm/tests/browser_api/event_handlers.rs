@@ -141,6 +141,161 @@ fn body_and_frameset_onerror_handlers_use_window_handler_source_text() {
 }
 
 #[test]
+fn body_and_frameset_window_event_handlers_share_owner_and_content_sources() {
+    let mut vm = new_parsed_test_vm(
+        "https://body-window-event-handler-owner.test/",
+        "<!doctype html><html><head></head><body></body></html>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const reflectedGlobalHandlers = [
+    "onblur", "onerror", "onfocus", "onload", "onresize", "onscroll"
+  ];
+  const windowEventHandlers = [
+    "onafterprint", "onbeforeprint", "onbeforeunload", "onhashchange",
+    "onlanguagechange", "onmessage", "onmessageerror", "onoffline",
+    "ononline", "onpagehide", "onpagereveal", "onpageshow", "onpageswap",
+    "onpopstate", "onrejectionhandled", "onstorage",
+    "onunhandledrejection", "onunload"
+  ];
+  const nonReflectedGlobalHandlers = [
+    "onbeforeinput", "onbeforematch", "oncommand", "oncontextlost",
+    "oncontextrestored", "oncuechange", "onformdata",
+    "onsecuritypolicyviolation", "onwebkitanimationend",
+    "onwebkitanimationiteration", "onwebkitanimationstart",
+    "onwebkittransitionend"
+  ];
+  const handlers = [...reflectedGlobalHandlers, ...windowEventHandlers];
+  const body = document.createElement("body");
+  const frameset = document.createElement("frameset");
+
+  const idlReflection = handlers.every(name => {
+    const handler = () => name;
+    window[name] = null;
+    body[name] = handler;
+    const bodyToWindow = window[name] === handler && frameset[name] === handler;
+    window[name] = null;
+    frameset[name] = handler;
+    const framesetToWindow = window[name] === handler && body[name] === handler;
+    window[name] = null;
+    return bodyToWindow && framesetToWindow;
+  });
+
+  const contentReflection = handlers.every(name => {
+    window[name] = null;
+    body.setAttribute(name, "return 1");
+    const bodyHandler = window[name];
+    const bodyReflected =
+      typeof bodyHandler === "function" && body[name] === bodyHandler;
+    frameset.setAttribute(name, "return 2");
+    const framesetHandler = window[name];
+    const framesetReflected =
+      typeof framesetHandler === "function" &&
+      frameset[name] === framesetHandler &&
+      framesetHandler !== bodyHandler;
+    frameset.removeAttribute(name);
+    const removalReflected = window[name] === null && body[name] === null;
+    body.removeAttribute(name);
+    return bodyReflected && framesetReflected && removalReflected;
+  });
+
+  let resizeCurrentTargetIsWindow = false;
+  body.onresize = event => {
+    resizeCurrentTargetIsWindow = event.currentTarget === window;
+  };
+  window.dispatchEvent(new Event("resize"));
+  window.onresize = null;
+
+  const nonReflectedGlobalHandler = nonReflectedGlobalHandlers.every(name => {
+    const handler = () => name;
+    window[name] = null;
+    body[name] = handler;
+    const staysOnBody =
+      body[name] === handler && frameset[name] === null && window[name] === null;
+    body[name] = null;
+    window[name] = handler;
+    const staysOnWindow =
+      window[name] === handler && body[name] === null && frameset[name] === null;
+    window[name] = null;
+    return staysOnBody && staysOnWindow;
+  });
+
+  const prefixedEventTypes = new Map([
+    ["onwebkitanimationend", "webkitAnimationEnd"],
+    ["onwebkitanimationiteration", "webkitAnimationIteration"],
+    ["onwebkitanimationstart", "webkitAnimationStart"],
+    ["onwebkittransitionend", "webkitTransitionEnd"]
+  ]);
+  globalThis.__prefixedEventAttributeRuns = 0;
+  const prefixedEventResults = [...prefixedEventTypes].map(([name, type]) => {
+    const element = document.createElement("meta");
+    let propertyRuns = 0;
+    element[name] = () => { propertyRuns++; };
+    const propertyEvent = new Event(type);
+    element.dispatchEvent(propertyEvent);
+    const attributeRunsBefore = globalThis.__prefixedEventAttributeRuns;
+    element.setAttribute(name, "globalThis.__prefixedEventAttributeRuns++");
+    const attributeEvent = new Event(type);
+    element.dispatchEvent(attributeEvent);
+    return [
+      name,
+      propertyEvent.type,
+      attributeEvent.type,
+      propertyRuns,
+      globalThis.__prefixedEventAttributeRuns - attributeRunsBefore
+    ];
+  });
+  const prefixedEventTypeMapping = prefixedEventResults.every(result =>
+    result[3] === 1 && result[4] === 1
+  );
+
+  const windowlessDocument = new DOMParser().parseFromString("", "text/html");
+  const windowlessBody = windowlessDocument.createElement("body");
+  const windowlessFrameset = windowlessDocument.createElement("frameset");
+  const windowlessHandlersStayNull = handlers.every(name => {
+    const windowHandler = () => name;
+    window[name] = windowHandler;
+    const initiallyNull =
+      windowlessBody[name] === null && windowlessFrameset[name] === null;
+    windowlessBody[name] = () => "body";
+    windowlessFrameset[name] = () => "frameset";
+    const settersIgnored =
+      window[name] === windowHandler &&
+      windowlessBody[name] === null &&
+      windowlessFrameset[name] === null;
+    window[name] = null;
+    return initiallyNull && settersIgnored;
+  });
+
+  return JSON.stringify({
+    idlReflection,
+    contentReflection,
+    resizeCurrentTargetIsWindow,
+    nonReflectedGlobalHandler,
+    prefixedEventTypeMapping,
+    windowlessHandlersStayNull,
+    bodyOwnAccessors: handlers.every(name =>
+      Object.hasOwn(HTMLBodyElement.prototype, name)
+    ),
+    framesetOwnAccessors: handlers.every(name =>
+      Object.hasOwn(HTMLFrameSetElement.prototype, name)
+    )
+  });
+})()
+"#,
+        )
+        .expect("body and frameset Window event handler owner probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"idlReflection":true,"contentReflection":true,"resizeCurrentTargetIsWindow":true,"nonReflectedGlobalHandler":true,"prefixedEventTypeMapping":true,"windowlessHandlersStayNull":true,"bodyOwnAccessors":true,"framesetOwnAccessors":true}"#,
+    );
+}
+
+#[test]
 fn inline_event_handlers_retain_listener_registration_order() {
     let mut vm = new_parsed_test_vm(
         "https://inline-event-handler-order.test/",
