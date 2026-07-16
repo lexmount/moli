@@ -1456,15 +1456,11 @@ impl HostScriptScheduler {
         )
     }
 
-    fn register_dynamic_import_map(
-        &mut self,
-        preparation: &RuntimeScriptPreparationContext,
-        source: &str,
-    ) {
-        if let Err(message) = self.register_import_map(source, &preparation.base_url) {
+    pub(crate) fn register_dynamic_import_map(&mut self, base_url: &Url, source: &str) {
+        if let Err(message) = self.register_import_map(source, base_url) {
             let work = self.plan_window_script_failure_report_lifecycle_work(
                 &message,
-                Some(preparation.base_url.as_str()),
+                Some(base_url.as_str()),
                 None,
             );
             self.enqueue_post_parse_lifecycle_work(work);

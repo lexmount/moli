@@ -2057,7 +2057,7 @@ pub(super) fn finish_runtime_script_start_candidate(
     let Some(plan) = runtime.host_plan_script_start(node, &host_script_handle) else {
         return;
     };
-    match unsafe { &mut *host_ptr }.commit_current_main_runtime_script_start(runtime, plan) {
+    match unsafe { &mut *host_ptr }.commit_current_main_runtime_script_start(scope, runtime, plan) {
         Ok(Some(committed)) => {
             execute_committed_inline_classic_script(runtime, scope, host_ptr, committed);
         }

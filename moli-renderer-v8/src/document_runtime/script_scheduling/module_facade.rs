@@ -78,6 +78,16 @@ impl DocumentRuntime {
             .register_import_map(source, base_url)
     }
 
+    pub(crate) fn register_runtime_owned_import_map_source(
+        &mut self,
+        source: &str,
+        base_url: &Url,
+    ) {
+        self.script_lifecycle
+            .scripts_mut()
+            .register_dynamic_import_map(base_url, source);
+    }
+
     pub(crate) fn resolve_module_specifier(
         &mut self,
         specifier: &str,

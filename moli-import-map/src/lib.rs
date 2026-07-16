@@ -63,13 +63,23 @@ mod tests {
         assert_eq!(first.as_str(), "https://example.test/app/mod.mjs");
 
         registry
-            .register_import_map(r#"{"imports":{"./mod.mjs":"/replacement.mjs"}}"#, &base_url)
+            .register_import_map(
+                r#"{"imports":{"./mod.mjs":"/replacement.mjs","new":"/new.mjs"}}"#,
+                &base_url,
+            )
             .expect("later import map should merge");
 
         let second = registry
             .resolve_module_specifier("./mod.mjs", &base_url)
             .expect("previously resolved module should keep original resolution");
         assert_eq!(second.as_str(), "https://example.test/app/mod.mjs");
+        assert_eq!(
+            registry
+                .resolve_module_specifier("new", &base_url)
+                .expect("late import map should add unresolved specifiers")
+                .as_str(),
+            "https://example.test/new.mjs"
+        );
     }
 
     #[test]
