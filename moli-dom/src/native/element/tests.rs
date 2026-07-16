@@ -155,7 +155,7 @@ fn template_contents_uses_and_releases_rare_data() {
 }
 
 #[test]
-fn aria_element_reference_state_is_owned_by_the_content_attribute() {
+fn element_reference_state_is_owned_by_the_content_attribute() {
     let mut element = Element::new_html("div");
     assert!(element.set_attribute(
         "aria-controls".to_owned(),
@@ -163,7 +163,7 @@ fn aria_element_reference_state_is_owned_by_the_content_attribute() {
         None,
         String::new(),
     ));
-    element.set_explicit_aria_element_references("aria-controls", vec![NativeNodeId::new(7)]);
+    element.set_explicit_element_references("aria-controls", vec![NativeNodeId::new(7)]);
 
     assert!(!element.set_attribute(
         "aria-controls".to_owned(),
@@ -171,12 +171,9 @@ fn aria_element_reference_state_is_owned_by_the_content_attribute() {
         None,
         String::new(),
     ));
-    assert_eq!(
-        element.explicit_aria_element_references("aria-controls"),
-        None
-    );
+    assert_eq!(element.explicit_element_references("aria-controls"), None);
 
-    element.set_explicit_aria_element_references("aria-controls", vec![NativeNodeId::new(8)]);
+    element.set_explicit_element_references("aria-controls", vec![NativeNodeId::new(8)]);
     assert!(element.set_attribute_ns(
         "aria-controls".to_owned(),
         "urn:example".to_owned(),
@@ -184,15 +181,27 @@ fn aria_element_reference_state_is_owned_by_the_content_attribute() {
         "foreign".to_owned(),
     ));
     assert_eq!(
-        element.explicit_aria_element_references("aria-controls"),
+        element.explicit_element_references("aria-controls"),
         Some([NativeNodeId::new(8)].as_slice())
     );
 
     assert!(element.remove_attribute("aria-controls"));
-    assert_eq!(
-        element.explicit_aria_element_references("aria-controls"),
-        None
-    );
+    assert_eq!(element.explicit_element_references("aria-controls"), None);
+
+    assert!(element.set_attribute(
+        "popovertarget".to_owned(),
+        String::new(),
+        None,
+        String::new(),
+    ));
+    element.set_explicit_element_references("popovertarget", vec![NativeNodeId::new(9)]);
+    assert!(!element.set_attribute(
+        "popovertarget".to_owned(),
+        String::new(),
+        None,
+        String::new(),
+    ));
+    assert_eq!(element.explicit_element_references("popovertarget"), None);
 }
 
 #[test]

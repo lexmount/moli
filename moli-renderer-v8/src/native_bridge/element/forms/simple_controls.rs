@@ -4,7 +4,6 @@ use crate::native_bridge::document::{
     detached_native_object_for_handle, detached_parent_node_object,
 };
 use crate::native_bridge::element::{html_element_getter_receiver, html_element_setter_receiver};
-use crate::util::{get_private_value, node_wrapper_from_handle, set_private_value};
 use moli_dom::forms::{
     MeterElementValues, ProgressElementValues, meter_element_values, progress_element_values,
 };
@@ -747,10 +746,6 @@ fn set_number_return(
     rv.set(v8::Number::new(scope, value).into());
 }
 
-const BUTTON_COMMAND_FOR_ELEMENT_SLOT: &str = "__moliButtonCommandForElement";
-const BUTTON_INTEREST_FOR_ELEMENT_SLOT: &str = "__moliButtonInterestForElement";
-const BUTTON_POPOVER_TARGET_ELEMENT_SLOT: &str = "__moliButtonPopoverTargetElement";
-
 pub(in crate::native_bridge) fn button_disabled_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -1006,66 +1001,100 @@ pub(in crate::native_bridge) fn button_type_setter_function<'s>(
     rv.set_undefined();
 }
 
-fn private_command_for_element_handle<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
+struct ElementReflectionValue<'s> {
     object: v8::Local<'s, v8::Object>,
-) -> Option<DomHandle> {
-    private_button_element_handle(scope, object, BUTTON_COMMAND_FOR_ELEMENT_SLOT)
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
 }
 
-fn private_interest_for_element_handle<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-) -> Option<DomHandle> {
-    private_button_element_handle(scope, object, BUTTON_INTEREST_FOR_ELEMENT_SLOT)
+impl<'s> webidl::WebIdlConverter<'s> for ElementReflectionValue<'s> {
+    type Options = ();
+
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        _context: webidl::Context,
+        _options: &Self::Options,
+    ) -> std::result::Result<Self, webidl::WebIdlError> {
+        let object = v8::Local::<v8::Object>::try_from(value).map_err(|_| {
+            webidl::WebIdlError::custom_message("Element reflection values must be Elements.")
+        })?;
+        let (runtime_ptr, handle) = node_runtime_and_handle_from_object_or_detached(scope, object)
+            .map_err(|_| {
+                webidl::WebIdlError::custom_message("Element reflection values must be Elements.")
+            })?;
+        if !node_is_element(unsafe { &*runtime_ptr }, handle) {
+            return Err(webidl::WebIdlError::custom_message(
+                "Element reflection values must be Elements.",
+            ));
+        }
+        Ok(Self {
+            object,
+            runtime_ptr,
+            handle,
+        })
+    }
 }
 
-fn private_popover_target_element_handle<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
+fn element_reflection_handle_for_owner(
+    scope: &mut v8::PinScope<'_, '_>,
+    owner_runtime_ptr: *mut JsContextHost,
+    reference: ElementReflectionValue<'_>,
 ) -> Option<DomHandle> {
-    private_button_element_handle(scope, object, BUTTON_POPOVER_TARGET_ELEMENT_SLOT)
+    current_or_live_delegate_node_arg_handle(scope, owner_runtime_ptr, reference.object.into())
+        .filter(|handle| node_is_element(unsafe { &*owner_runtime_ptr }, *handle))
+        .or_else(|| (reference.runtime_ptr == owner_runtime_ptr).then_some(reference.handle))
 }
 
-fn private_button_element_handle<'s>(
+fn set_button_element_reflection<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    slot: &str,
-) -> Option<DomHandle> {
-    let value = get_private_value(scope, object, slot)?;
+    source: v8::Local<'s, v8::Object>,
+    value: v8::Local<'s, v8::Value>,
+    property: &'static str,
+    attribute: &'static str,
+) {
+    let Some((runtime_ptr, owner)) = button_setter_receiver(scope, source, property) else {
+        return;
+    };
     if value.is_null_or_undefined() {
-        return None;
+        custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
+            let _ = unsafe { &mut *runtime_ptr }
+                .remove_attribute_appending_to_current_reaction_queue(
+                    scope,
+                    runtime_ptr,
+                    owner,
+                    attribute,
+                );
+        });
+        return;
     }
-    if let Ok(big) = v8::Local::<v8::BigInt>::try_from(value) {
-        let (index, lossless) = big.u64_value();
-        return lossless.then(|| DomHandle::new(index as usize));
-    }
-    value
-        .uint32_value(scope)
-        .map(|index| DomHandle::new(index as usize))
-}
-
-fn reflected_reference_target_handle(
-    runtime: &JsContextHost,
-    candidate: DomHandle,
-) -> Option<DomHandle> {
-    runtime
-        .dom_host()
-        .resolve_reference_target_chain(candidate)
-        .map(|_| candidate)
-}
-
-fn reflected_attribute_target(
-    runtime: &JsContextHost,
-    source_handle: DomHandle,
-    attribute: &str,
-) -> Option<DomHandle> {
-    let id = element_attribute(runtime, source_handle, attribute)?;
-    let root = runtime.dom_host().root_node_handle(source_handle)?;
-    let candidate = runtime
-        .dom_host()
-        .element_handle_by_id_in_subtree(root, &id)?;
-    reflected_reference_target_handle(runtime, candidate)
+    let reference = match webidl::convert::<ElementReflectionValue<'_>>(
+        scope,
+        value,
+        webidl::Context::member("HTMLButtonElement", property),
+    ) {
+        Ok(reference) => reference,
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            return;
+        }
+    };
+    let target = element_reflection_handle_for_owner(scope, runtime_ptr, reference);
+    custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
+        let runtime = unsafe { &mut *runtime_ptr };
+        let _ = runtime.set_attribute_appending_to_current_reaction_queue(
+            scope,
+            runtime_ptr,
+            owner,
+            attribute,
+            "",
+        );
+        let _ = runtime.dom_host_mut().set_explicit_element_references(
+            owner,
+            attribute,
+            target.into_iter().collect(),
+        );
+    });
 }
 
 fn set_wrapped_button_element_or_null<'s>(
@@ -1100,18 +1129,14 @@ pub(in crate::native_bridge) fn button_interest_for_element_getter_function<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let source = args.this();
-    let Ok((runtime_ptr, source_handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, source)
+    let Some((runtime_ptr, source_handle)) =
+        button_getter_receiver(scope, source, "interestForElement")
     else {
         rv.set_null();
         return;
     };
     let runtime = unsafe { &mut *runtime_ptr };
-    let target = runtime
-        .button_element_target(source_handle, BUTTON_INTEREST_FOR_ELEMENT_SLOT)
-        .or_else(|| private_interest_for_element_handle(scope, source))
-        .and_then(|candidate| reflected_reference_target_handle(runtime, candidate))
-        .or_else(|| reflected_attribute_target(runtime, source_handle, "interestfor"));
+    let target = reflected_element_attribute_handle(runtime, source_handle, "interestfor");
     set_wrapped_button_element_or_null(scope, &mut rv, runtime_ptr, source, target);
 }
 
@@ -1120,11 +1145,12 @@ pub(in crate::native_bridge) fn button_interest_for_element_setter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    set_private_button_element_handle(
+    set_button_element_reflection(
         scope,
         args.this(),
         args.get(0),
-        BUTTON_INTEREST_FOR_ELEMENT_SLOT,
+        "interestForElement",
+        "interestfor",
     );
     rv.set_undefined();
 }
@@ -1135,18 +1161,14 @@ pub(in crate::native_bridge) fn button_popover_target_element_getter_function<'s
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let source = args.this();
-    let Ok((runtime_ptr, source_handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, source)
+    let Some((runtime_ptr, source_handle)) =
+        button_getter_receiver(scope, source, "popoverTargetElement")
     else {
         rv.set_null();
         return;
     };
     let runtime = unsafe { &mut *runtime_ptr };
-    let target = runtime
-        .button_element_target(source_handle, BUTTON_POPOVER_TARGET_ELEMENT_SLOT)
-        .or_else(|| private_popover_target_element_handle(scope, source))
-        .and_then(|candidate| reflected_reference_target_handle(runtime, candidate))
-        .or_else(|| reflected_attribute_target(runtime, source_handle, "popovertarget"));
+    let target = reflected_element_attribute_handle(runtime, source_handle, "popovertarget");
     set_wrapped_button_element_or_null(scope, &mut rv, runtime_ptr, source, target);
 }
 
@@ -1155,11 +1177,12 @@ pub(in crate::native_bridge) fn button_popover_target_element_setter_function<'s
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    set_private_button_element_handle(
+    set_button_element_reflection(
         scope,
         args.this(),
         args.get(0),
-        BUTTON_POPOVER_TARGET_ELEMENT_SLOT,
+        "popoverTargetElement",
+        "popovertarget",
     );
     rv.set_undefined();
 }
@@ -1215,18 +1238,14 @@ pub(in crate::native_bridge) fn button_command_for_element_getter_function<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let source = args.this();
-    let Ok((runtime_ptr, source_handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, source)
+    let Some((runtime_ptr, source_handle)) =
+        button_getter_receiver(scope, source, "commandForElement")
     else {
         rv.set_null();
         return;
     };
     let runtime = unsafe { &mut *runtime_ptr };
-    let target = runtime
-        .button_element_target(source_handle, BUTTON_COMMAND_FOR_ELEMENT_SLOT)
-        .or_else(|| private_command_for_element_handle(scope, source))
-        .and_then(|candidate| reflected_reference_target_handle(runtime, candidate))
-        .or_else(|| reflected_attribute_target(runtime, source_handle, "commandfor"));
+    let target = reflected_element_attribute_handle(runtime, source_handle, "commandfor");
     set_wrapped_button_element_or_null(scope, &mut rv, runtime_ptr, source, target);
 }
 
@@ -1235,84 +1254,12 @@ pub(in crate::native_bridge) fn button_command_for_element_setter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    set_private_button_element_handle(
+    set_button_element_reflection(
         scope,
         args.this(),
         args.get(0),
-        BUTTON_COMMAND_FOR_ELEMENT_SLOT,
+        "commandForElement",
+        "commandfor",
     );
     rv.set_undefined();
-}
-
-fn set_private_button_element_handle<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    source: v8::Local<'s, v8::Object>,
-    value: v8::Local<'s, v8::Value>,
-    slot: &str,
-) {
-    let source_handle = node_runtime_and_handle_from_object_or_detached(scope, source)
-        .ok()
-        .map(|(_, handle)| handle);
-    if value.is_null_or_undefined() {
-        if let Ok((runtime_ptr, source_handle)) =
-            node_runtime_and_handle_from_object_or_detached(scope, source)
-        {
-            unsafe { &mut *runtime_ptr }.clear_button_element_target(source_handle, slot);
-        }
-        set_private_value(scope, source, slot, v8::null(scope).into());
-        if let Some(source_handle) = source_handle
-            && let Some(wrapper) = node_wrapper_from_handle(scope, source_handle)
-        {
-            set_private_value(scope, wrapper, slot, v8::null(scope).into());
-        }
-        return;
-    }
-    let Ok(object) = v8::Local::<v8::Object>::try_from(value) else {
-        if let Ok((runtime_ptr, source_handle)) =
-            node_runtime_and_handle_from_object_or_detached(scope, source)
-        {
-            unsafe { &mut *runtime_ptr }.clear_button_element_target(source_handle, slot);
-        }
-        set_private_value(scope, source, slot, v8::null(scope).into());
-        if let Some(source_handle) = source_handle
-            && let Some(wrapper) = node_wrapper_from_handle(scope, source_handle)
-        {
-            set_private_value(scope, wrapper, slot, v8::null(scope).into());
-        }
-        return;
-    };
-    let Ok((source_runtime_ptr, source_handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, source)
-    else {
-        return;
-    };
-    let Ok((target_runtime_ptr, target_handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, object)
-    else {
-        unsafe { &mut *source_runtime_ptr }.clear_button_element_target(source_handle, slot);
-        set_private_value(scope, source, slot, v8::null(scope).into());
-        if let Some(wrapper) = node_wrapper_from_handle(scope, source_handle) {
-            set_private_value(scope, wrapper, slot, v8::null(scope).into());
-        }
-        return;
-    };
-    if source_runtime_ptr != target_runtime_ptr {
-        unsafe { &mut *source_runtime_ptr }.clear_button_element_target(source_handle, slot);
-        set_private_value(scope, source, slot, v8::null(scope).into());
-        if let Some(wrapper) = node_wrapper_from_handle(scope, source_handle) {
-            set_private_value(scope, wrapper, slot, v8::null(scope).into());
-        }
-        return;
-    }
-    unsafe { &mut *source_runtime_ptr }.remember_button_element_target(
-        source_handle,
-        slot,
-        target_handle,
-    );
-    let handle_value = v8::BigInt::new_from_u64(scope, target_handle.index() as u64);
-    set_private_value(scope, source, slot, handle_value.into());
-    if let Some(wrapper) = node_wrapper_from_handle(scope, source_handle) {
-        let handle_value = v8::BigInt::new_from_u64(scope, target_handle.index() as u64);
-        set_private_value(scope, wrapper, slot, handle_value.into());
-    }
 }
