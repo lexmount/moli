@@ -114,12 +114,7 @@ impl DomHost {
         else {
             return false;
         };
-        if element.namespace() != "http://www.w3.org/1999/xhtml"
-            || !matches!(
-                element.local_name(),
-                "button" | "fieldset" | "input" | "object" | "output" | "select" | "textarea"
-            )
-        {
+        if !is_parser_form_association_candidate(element) {
             return false;
         }
         element.set_parser_associated_form_owner(Some(form))

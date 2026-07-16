@@ -10,12 +10,9 @@ pub(crate) fn form_associated_form_owner(
     if is_form_associated_custom_element_handle(runtime, handle) {
         return custom_element_form_owner(runtime, handle, element);
     }
-    if !is_builtin_form_associated_element(element) {
-        return None;
-    }
     runtime
         .dom_host()
-        .form_control_owner(handle)
+        .builtin_form_associated_owner(handle)
         .filter(|candidate| {
             runtime
                 .dom_host()
@@ -59,7 +56,7 @@ fn custom_element_form_owner(
     None
 }
 
-fn is_builtin_form_associated_element(element: &crate::dom::native::Element) -> bool {
+fn has_reflected_builtin_form_owner(element: &crate::dom::native::Element) -> bool {
     element.namespace() == "http://www.w3.org/1999/xhtml"
         && matches!(
             element.local_name(),
@@ -72,7 +69,7 @@ fn form_associated_reflected_form_owner(
     handle: DomHandle,
 ) -> Option<DomHandle> {
     let element = runtime.dom_host().node(handle).and_then(Node::as_element)?;
-    if !is_builtin_form_associated_element(element) {
+    if !has_reflected_builtin_form_owner(element) {
         return None;
     }
     if let Some(form_id) = element.attribute("form")
