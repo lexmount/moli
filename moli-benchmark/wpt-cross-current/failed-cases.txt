@@ -3643,7 +3643,6 @@ svg/types/scripted/SVGLengthList-basics.html
 svg/types/scripted/SVGList-parse-invalid-clears-items.html
 svg/types/scripted/SVGMatrix-tentative.html
 svg/types/scripted/SVGPoint.html
-trusted-types/Document-write-appending-line-feed.html
 trusted-types/Document-write.html
 trusted-types/Element-setAttribute-respects-Elements-node-documents-globals-CSP-after-adoption-from-TT-realm.html
 trusted-types/Element-setAttribute-respects-Elements-node-documents-globals-CSP-after-adoption-from-non-TT-realm.html

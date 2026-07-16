@@ -7822,6 +7822,7 @@ trusted-types/DedicatedWorker-eval.html
 trusted-types/DedicatedWorker-importScripts.html
 trusted-types/DedicatedWorker-setTimeout-setInterval.html
 trusted-types/Document-execCommand.html
+trusted-types/Document-write-appending-line-feed.html
 trusted-types/Element-insertAdjacentHTML.html
 trusted-types/Element-outerHTML.html
 trusted-types/Element-setAttribute.html
