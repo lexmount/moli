@@ -3659,9 +3659,7 @@ trusted-types/trusted-types-reporting-for-Element-setAttribute.html
 trusted-types/trusted-types-reporting-for-HTMLIFrameElement-srcdoc.html
 trusted-types/trusted-types-reporting-for-ServiceWorker-ServiceWorkerContainer-register.https.html
 trusted-types/trusted-types-reporting-for-SharedWorker-ServiceWorkerContainer-register.https.html
-trusted-types/trusted-types-reporting.html
 trusted-types/trusted-types-secondary-document.html
-trusted-types/trusted-types-svg-script-set-href.html
 uievents/interface/click-event.htm
 uievents/order-of-events/focus-events/focus-automated-blink-webkit.html
 url/a-element.html?exclude=(file|javascript|mailto)
