@@ -2,9 +2,9 @@
 <html>
   <head>
     <script>
+      window.dynamicAsyncImportMapErrors = 0;
       window.addEventListener("error", () => {
-        window.dynamicAsyncImportMapErrors =
-          (window.dynamicAsyncImportMapErrors || 0) + 1;
+        window.dynamicAsyncImportMapErrors += 1;
       });
 
       const firstModule = document.createElement("script");

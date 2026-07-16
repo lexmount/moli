@@ -973,8 +973,8 @@ const DYNAMIC_SCRIPT_PREPARATION_CONTEXT_STAYS_IN_OLD_DOCUMENT_HTML: &str = incl
 );
 const DYNAMIC_IMPORTMAP_BEFORE_MODULE_HTML: &str =
     include_str!("../../moli-core/tests/fixtures/runtime/dynamic_importmap_before_module.html");
-const DYNAMIC_ASYNC_MODULE_CLOSES_IMPORTMAP_ACQUISITION_HTML: &str = include_str!(
-    "../../moli-core/tests/fixtures/runtime/dynamic_async_module_closes_importmap_acquisition.html"
+const DYNAMIC_ASYNC_MODULE_ALLOWS_LATE_IMPORTMAP_HTML: &str = include_str!(
+    "../../moli-core/tests/fixtures/runtime/dynamic_async_module_allows_late_importmap.html"
 );
 const DYNAMIC_EXTERNAL_IMPORTMAP_ERROR_BEFORE_MODULE_HTML: &str = include_str!(
     "../../moli-core/tests/fixtures/runtime/dynamic_external_importmap_error_before_module.html"
@@ -997,11 +997,11 @@ const IMPORTMAP_URL_LIKE_NORMALIZATION_HTML: &str =
     include_str!("../../moli-core/tests/fixtures/runtime/importmap_url_like_normalization.html");
 const IMPORTMAP_AFTER_MODULE_LOAD_HTML: &str =
     include_str!("../../moli-core/tests/fixtures/runtime/importmap_after_module_load.html");
-const IMPORTMAP_CLOSED_BY_PARSER_OWNED_MODULE_BEFORE_LATE_DYNAMIC_MAP_HTML: &str = include_str!(
-    "../../moli-core/tests/fixtures/runtime/importmap_closed_by_parser_owned_module_before_late_dynamic_map.html"
+const PARSER_OWNED_MODULE_ALLOWS_LATE_DYNAMIC_IMPORTMAP_HTML: &str = include_str!(
+    "../../moli-core/tests/fixtures/runtime/parser_owned_module_allows_late_dynamic_importmap.html"
 );
-const PARSER_OWNED_IMPORTMAP_BLOCKED_AFTER_DYNAMIC_MODULE_PREPARE_HTML: &str = include_str!(
-    "../../moli-core/tests/fixtures/runtime/parser_owned_importmap_blocked_after_dynamic_module_prepare.html"
+const PARSER_OWNED_IMPORTMAP_APPLIES_AFTER_DYNAMIC_MODULE_PREPARE_HTML: &str = include_str!(
+    "../../moli-core/tests/fixtures/runtime/parser_owned_importmap_applies_after_dynamic_module_prepare.html"
 );
 const IMPORTMAP_NULL_BLOCKS_DYNAMIC_IMPORT_HTML: &str = include_str!(
     "../../moli-core/tests/fixtures/runtime/importmap_null_blocks_dynamic_import.html"

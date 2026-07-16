@@ -1525,8 +1525,8 @@ pub(super) fn build_router() -> Router {
             get(dynamic_importmap_before_module_page),
         )
         .route(
-            "/compat/dynamic-async-module-closes-importmap-acquisition",
-            get(dynamic_async_module_closes_importmap_acquisition_page),
+            "/compat/dynamic-async-module-allows-late-importmap",
+            get(dynamic_async_module_allows_late_importmap_page),
         )
         .route(
             "/compat/dynamic-external-importmap-error-before-module",
@@ -1585,12 +1585,12 @@ pub(super) fn build_router() -> Router {
             get(importmap_after_module_load_page),
         )
         .route(
-            "/compat/importmap-closed-by-parser-owned-module-before-late-dynamic-map",
-            get(importmap_closed_by_parser_owned_module_before_late_dynamic_map_page),
+            "/compat/parser-owned-module-allows-late-dynamic-importmap",
+            get(parser_owned_module_allows_late_dynamic_importmap_page),
         )
         .route(
-            "/compat/parser-owned-importmap-blocked-after-dynamic-module-prepare",
-            get(parser_owned_importmap_blocked_after_dynamic_module_prepare_page),
+            "/compat/parser-owned-importmap-applies-after-dynamic-module-prepare",
+            get(parser_owned_importmap_applies_after_dynamic_module_prepare_page),
         )
         .route(
             "/compat/importmap-null-blocks-dynamic-import",
