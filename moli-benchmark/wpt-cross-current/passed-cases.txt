@@ -6688,6 +6688,7 @@ html/webappapis/scripting/event-loops/microtask_after_script.html
 html/webappapis/scripting/event-loops/task_microtask_ordering.html
 html/webappapis/scripting/event-loops/update-the-rendering-resize-autofocus.html
 html/webappapis/scripting/events/body-onload.html
+html/webappapis/scripting/events/compile-event-handler-lexical-scopes-form-owner.html
 html/webappapis/scripting/events/compile-event-handler-lexical-scopes.html
 html/webappapis/scripting/events/compile-event-handler-symbol-unscopables.html
 html/webappapis/scripting/events/event-handler-all-global-events.html

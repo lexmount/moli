@@ -1428,6 +1428,45 @@ mod tests {
     }
 
     #[test]
+    fn image_form_owner_tracks_parser_and_ancestor_without_becoming_listed() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+        host.reset_html_document_shell();
+        let body = host.document_body_handle().expect("document body");
+        let parser_form = host.create_element("form");
+        let ancestor_form = host.create_element("form");
+        let image = host.create_parser_element_without_attributes(
+            "img".to_owned(),
+            "http://www.w3.org/1999/xhtml".to_owned(),
+            None,
+        );
+
+        assert!(host.set_attribute(ancestor_form, "id", "attribute-owner"));
+        assert!(host.append_child(body, parser_form));
+        assert!(host.append_child(body, ancestor_form));
+        assert!(host.associate_parser_form_owner(image, parser_form));
+        assert!(host.append_child(body, image));
+        assert_eq!(host.builtin_form_associated_owner(image), Some(parser_form));
+        assert_eq!(host.form_control_owner(image), None);
+        assert!(host.form_control_elements(parser_form).is_empty());
+
+        assert!(host.set_attribute(image, "form", "attribute-owner"));
+        assert_eq!(host.builtin_form_associated_owner(image), Some(parser_form));
+
+        assert!(host.append_child(ancestor_form, image));
+        assert_eq!(
+            host.builtin_form_associated_owner(image),
+            Some(ancestor_form)
+        );
+        assert_eq!(
+            host.node(image)
+                .and_then(Node::as_element)
+                .and_then(Element::parser_associated_form_owner),
+            None
+        );
+        assert!(host.form_control_elements(ancestor_form).is_empty());
+    }
+
+    #[test]
     fn secondary_document_form_attribute_remains_authoritative() {
         let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
         let document = host.create_detached_html_document();
