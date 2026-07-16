@@ -522,13 +522,22 @@ fn event_handler_name_from_data<'s>(
 fn event_handler_event_type(name: &str) -> Option<&str> {
     name.strip_prefix("on")
         .filter(|event_type| !event_type.is_empty())
-        .map(|event_type| match event_type {
-            "begin" => "beginEvent",
-            "end" => "endEvent",
-            "repeat" => "repeatEvent",
-            event_type => event_type,
-        })
+        .map(canonical_event_handler_event_type)
 }
+
+pub(crate) fn canonical_event_handler_event_type(event_type: &str) -> &str {
+    match event_type {
+        "begin" => "beginEvent",
+        "end" => "endEvent",
+        "repeat" => "repeatEvent",
+        "webkitanimationend" => "webkitAnimationEnd",
+        "webkitanimationiteration" => "webkitAnimationIteration",
+        "webkitanimationstart" => "webkitAnimationStart",
+        "webkittransitionend" => "webkitTransitionEnd",
+        event_type => event_type,
+    }
+}
+
 
 fn legacy_lenient_this_event_handler(name: &str) -> bool {
     matches!(name, "onmouseenter" | "onmouseleave" | "onreadystatechange")
@@ -552,6 +561,10 @@ pub(crate) fn event_handler_content_attribute_name(event_type: &str) -> Option<S
         "beginEvent" => "begin",
         "endEvent" => "end",
         "repeatEvent" => "repeat",
+        "webkitAnimationEnd" => "webkitanimationend",
+        "webkitAnimationIteration" => "webkitanimationiteration",
+        "webkitAnimationStart" => "webkitanimationstart",
+        "webkitTransitionEnd" => "webkittransitionend",
         event_type => event_type,
     };
     Some(format!("on{event_type}"))
