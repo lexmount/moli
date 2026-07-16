@@ -882,6 +882,39 @@ async fn worker_trusted_script_eval_is_unwrapped_with_trusted_types_eval_keyword
 }
 
 #[tokio::test]
+async fn worker_trusted_script_code_like_brand_drives_function_constructor() {
+    ensure_v8();
+    let mut handle = spawn_test_worker_with_options(
+        WorkerSpawnOptions::new(
+            r#"
+            const policy = trustedTypes.createPolicy("function-brand", {
+                createScript: value => value
+            });
+            const source = ["a", "b", "return a + b;"];
+            const trusted = source.map(value => policy.createScript(value));
+            let mixedBlocked = false;
+            try {
+                new Function(trusted[0], "b", trusted[2]);
+            } catch (error) {
+                mixedBlocked = error instanceof EvalError;
+            }
+            const constructed = new Function(...trusted);
+            postMessage({ mixedBlocked, value: constructed(20, 22) });
+            "#
+            .to_owned(),
+            "https://app.test/worker/main.js".to_owned(),
+        )
+        .with_content_security_policies(vec!["require-trusted-types-for 'script'".to_owned()]),
+    );
+
+    let msg = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("timed out")
+        .expect("channel closed");
+    assert_eq!(expect_post_json(msg), r#"{"mixedBlocked":true,"value":42}"#);
+}
+
+#[tokio::test]
 async fn worker_module_static_imports_resolve_http_dependencies_against_module_url() {
     ensure_v8();
     let (base_url, server) = spawn_path_response_http_server(vec![
