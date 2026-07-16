@@ -117,7 +117,7 @@ impl PageScriptHost {
                 let mut policy_container =
                     self.child_browsing_context_policy_container_snapshot(handle)?;
                 policy_container.response_content_security_policies =
-                    self.child_effective_response_content_security_policies(handle);
+                    self.child_effective_enforced_content_security_policies(handle);
                 policy_container.response_content_security_report_only_policies =
                     self.child_effective_response_content_security_report_only_policies(handle);
                 policy_container.content_security_reporting_endpoints =
@@ -457,12 +457,12 @@ impl PageScriptHost {
             )
             .into_violations();
         let host_ptr: *mut Self = self;
-        if let Some(violation) = report_only {
+        if let Some(violation) = report_only.into_iter().next() {
             self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
                 scope, host_ptr, owner, &violation,
             );
         }
-        let Some(violation) = enforced else {
+        let Some(violation) = enforced.into_iter().next() else {
             return DocumentCspOutcome::Allowed;
         };
         self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
@@ -484,18 +484,20 @@ impl PageScriptHost {
             .document_subresource_csp_check(request_url, kind)
             .into_violations();
         let host_ptr: *mut PageScriptHost = self;
-        if let Some(violation) = report_only_violation {
+        for violation in report_only_violation {
             self.dispatch_content_security_policy_violation_event_best_effort(
                 scope, host_ptr, &violation,
             );
         }
-        let Some(violation) = enforced_violation else {
+        let Some(first_violation) = enforced_violation.first().cloned() else {
             return DocumentCspOutcome::Allowed;
         };
-        self.dispatch_content_security_policy_violation_event_best_effort(
-            scope, host_ptr, &violation,
-        );
-        DocumentCspOutcome::Blocked(violation)
+        for violation in enforced_violation {
+            self.dispatch_content_security_policy_violation_event_best_effort(
+                scope, host_ptr, &violation,
+            );
+        }
+        DocumentCspOutcome::Blocked(first_violation)
     }
 
     pub(crate) fn check_element_subresource_csp<'s>(
@@ -524,18 +526,20 @@ impl PageScriptHost {
             )
             .into_violations();
         let host_ptr: *mut PageScriptHost = self;
-        if let Some(violation) = report_only_violation {
+        for violation in report_only_violation {
             self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
                 scope, host_ptr, owner, &violation,
             );
         }
-        let Some(violation) = enforced_violation else {
+        let Some(first_violation) = enforced_violation.first().cloned() else {
             return DocumentCspOutcome::Allowed;
         };
-        self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
-            scope, host_ptr, owner, &violation,
-        );
-        DocumentCspOutcome::Blocked(violation)
+        for violation in enforced_violation {
+            self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
+                scope, host_ptr, owner, &violation,
+            );
+        }
+        DocumentCspOutcome::Blocked(first_violation)
     }
 
     pub(crate) fn owner_dispatch_scope_for_node(
@@ -660,8 +664,7 @@ impl PageScriptHost {
         owner: OwnerDispatchScope,
         kind: ContentSecurityPolicyNonUrlKind,
         source: &str,
-    ) -> Option<DocumentContentSecurityPolicyCheck<Vec<DocumentContentSecurityPolicyViolation>>>
-    {
+    ) -> Option<DocumentContentSecurityPolicyCheck> {
         let snapshot = self.owner_document_policy_snapshot(owner)?;
         // SAFETY: PageScriptHost is owned by the ScriptVm that owns this DocumentRuntime.
         Some(
@@ -686,8 +689,7 @@ impl PageScriptHost {
         owner: OwnerDispatchScope,
         source: &str,
         request: ContentSecurityPolicyScriptElementRequest<'_>,
-    ) -> Option<DocumentContentSecurityPolicyCheck<Vec<DocumentContentSecurityPolicyViolation>>>
-    {
+    ) -> Option<DocumentContentSecurityPolicyCheck> {
         let snapshot = self.owner_document_policy_snapshot(owner)?;
         // SAFETY: PageScriptHost is owned by the ScriptVm that owns this DocumentRuntime.
         Some(
@@ -712,8 +714,7 @@ impl PageScriptHost {
         owner: OwnerDispatchScope,
         source: &str,
         request: ContentSecurityPolicyStyleElementRequest<'_>,
-    ) -> Option<DocumentContentSecurityPolicyCheck<Vec<DocumentContentSecurityPolicyViolation>>>
-    {
+    ) -> Option<DocumentContentSecurityPolicyCheck> {
         let snapshot = self.owner_document_policy_snapshot(owner)?;
         Some(
             unsafe { &*self.document_runtime }.inline_style_element_csp_check_for_document(
@@ -802,18 +803,20 @@ impl PageScriptHost {
         };
         let (report_only_violation, enforced_violation) = check.into_violations();
         let host_ptr: *mut PageScriptHost = self;
-        if let Some(violation) = report_only_violation {
+        for violation in report_only_violation {
             self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
                 scope, host_ptr, owner, &violation,
             );
         }
-        let Some(violation) = enforced_violation else {
+        let Some(first_violation) = enforced_violation.first().cloned() else {
             return DocumentCspOutcome::Allowed;
         };
-        self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
-            scope, host_ptr, owner, &violation,
-        );
-        DocumentCspOutcome::Blocked(violation)
+        for violation in enforced_violation {
+            self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
+                scope, host_ptr, owner, &violation,
+            );
+        }
+        DocumentCspOutcome::Blocked(first_violation)
     }
 
     fn document_connect_csp_check_for_owner_with_redirect_status(
@@ -870,7 +873,7 @@ impl PageScriptHost {
             request_url,
             ContentSecurityPolicyRedirectStatus::NoRedirect,
         )
-        .map(|check| check.into_violations().1.is_none())
+        .map(|check| check.into_violations().1.is_empty())
         .unwrap_or(true)
     }
 
@@ -1112,7 +1115,7 @@ impl PageScriptHost {
         include_call_location: bool,
     ) -> bool {
         let (mut report_only_violation, mut enforced_violation) = check.into_violations();
-        if report_only_violation.is_none() && enforced_violation.is_none() {
+        if report_only_violation.is_empty() && enforced_violation.is_empty() {
             return true;
         }
         if include_call_location
@@ -1129,17 +1132,19 @@ impl PageScriptHost {
             }
         }
         let host_ptr: *mut PageScriptHost = self;
-        if let Some(violation) = report_only_violation {
+        for violation in report_only_violation {
             self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
                 scope, host_ptr, owner, &violation,
             );
         }
-        let Some(violation) = enforced_violation else {
+        if enforced_violation.is_empty() {
             return true;
-        };
-        self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
-            scope, host_ptr, owner, &violation,
-        );
+        }
+        for violation in enforced_violation {
+            self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
+                scope, host_ptr, owner, &violation,
+            );
+        }
         false
     }
 
@@ -1154,27 +1159,71 @@ impl PageScriptHost {
         )?
         .into_violations()
         .1
+        .into_iter()
+        .next()
     }
 
-    pub(crate) fn allows_trusted_type_policy_name(
-        &self,
-        scope: &mut v8::PinScope<'_, '_>,
+    pub(crate) fn allows_trusted_type_policy_name_by_csp<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
         policy_name: &str,
+        is_duplicate: bool,
     ) -> bool {
-        let Some(snapshot) =
-            self.owner_document_policy_snapshot(policy_owner_dispatch_scope(scope))
-        else {
+        let owner = policy_owner_dispatch_scope(scope);
+        let Some(snapshot) = self.owner_document_policy_snapshot(owner) else {
+            // A context between documents has no policy owner to report
+            // against; applying another document's CSP would enforce the
+            // wrong policy.
             return true;
         };
         // SAFETY: PageScriptHost is owned by the ScriptVm that owns this DocumentRuntime.
-        unsafe { &*self.document_runtime }.allows_trusted_type_policy_name_for_document(
-            snapshot.document_handle,
-            &snapshot.policy_container.response_content_security_policies,
-            &snapshot
-                .policy_container
-                .content_security_reporting_endpoints,
-            policy_name,
-        )
+        let check = unsafe { &*self.document_runtime }
+            .trusted_type_policy_name_csp_check_for_document(
+                snapshot.document_handle,
+                &snapshot.document_url,
+                &snapshot.policy_container.response_content_security_policies,
+                &snapshot
+                    .policy_container
+                    .response_content_security_report_only_policies,
+                &snapshot
+                    .policy_container
+                    .content_security_reporting_endpoints,
+                policy_name,
+                is_duplicate,
+            );
+        let (report_only_violations, enforced_violations) = check.into_violations();
+        let mut report_only_violation = report_only_violations.into_iter().next();
+        let mut enforced_violation = enforced_violations.into_iter().next();
+        if !self.active_inspector_dispatch
+            && let Some((source_file, line_number, column_number)) =
+                crate::content_security_policy::current_script_violation_location(scope)
+        {
+            for violation in [&mut enforced_violation, &mut report_only_violation]
+                .into_iter()
+                .flatten()
+            {
+                violation.source_file.clone_from(&source_file);
+                violation.line_number = line_number;
+                violation.column_number = column_number;
+            }
+        }
+
+        let host_ptr: *mut PageScriptHost = self;
+        let allowed = enforced_violation.is_none();
+        // Policy creation reports expose CSP list ordering. Response policy
+        // state is partitioned by disposition, with enforce policies modeled
+        // before report-only policies, so preserve that order here.
+        if let Some(violation) = enforced_violation {
+            self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
+                scope, host_ptr, owner, &violation,
+            );
+        }
+        if let Some(violation) = report_only_violation {
+            self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
+                scope, host_ptr, owner, &violation,
+            );
+        }
+        allowed
     }
 
     pub(crate) fn requires_trusted_types_for_script(
@@ -1269,31 +1318,14 @@ impl PageScriptHost {
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         host_ptr: *mut PageScriptHost,
+
         sink: &str,
         sample: &str,
         capture_current_script_location: bool,
     ) {
         let source_location = (capture_current_script_location && !self.active_inspector_dispatch)
-            .then(|| v8::StackTrace::current_stack_trace(scope, 1))
-            .flatten()
-            .and_then(|stack| stack.get_frame(scope, 0))
-            .map(|frame| {
-                let source_file = frame
-                    .get_script_name_or_source_url(scope)
-                    .map(|source| source.to_rust_string_lossy(scope))
-                    .map(|source| {
-                        crate::content_security_policy::content_security_policy_source_file_for_report(
-                            &source,
-                        )
-                    })
-                    .unwrap_or_default();
-                let line_number = i32::try_from(frame.get_line_number())
-                    .unwrap_or_default()
-                    .max(0);
-                let column_number =
-                    i32::try_from(frame.get_column()).unwrap_or_default().max(0);
-                (source_file, line_number, column_number)
-            });
+            .then(|| crate::content_security_policy::current_script_violation_location(scope))
+            .flatten();
         let owner = policy_owner_dispatch_scope(scope);
         for mut violation in self.trusted_types_sink_csp_violations_for_owner(owner, sink, sample) {
             if let Some((source_file, line_number, column_number)) = &source_location {

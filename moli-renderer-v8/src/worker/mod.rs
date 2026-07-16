@@ -28,7 +28,6 @@ pub(crate) use file_reading_tasks::{
     queue_worker_file_reading_task, take_worker_file_reading_task,
 };
 pub(crate) use networking_tasks::queue_worker_networking_task;
-pub(crate) use thread::perform_callback_cleanup_checkpoint_if_worker;
 
 pub(crate) use data_url::decode_data_url_script_source;
 pub(crate) use global_scope::{
@@ -47,7 +46,7 @@ pub(crate) use global_scope::{
     send_worker_websocket_blob, send_worker_websocket_text, service_worker_runtime_identity,
     try_worker_xhr_abort_callback, try_worker_xhr_reschedule_timeout_after_timeout_change,
     try_worker_xhr_send_callback, worker_allows_eval_code_generation_by_csp,
-    worker_allows_trusted_type_policy_name, worker_allows_trusted_types_eval,
+    worker_allows_trusted_type_policy_name_by_csp, worker_allows_trusted_types_eval,
     worker_allows_wasm_code_generation_by_csp, worker_broadcast_channel_registry,
     worker_broadcast_channel_storage_key, worker_broadcast_channel_wake_sender,
     worker_broadcast_channel_wrapper, worker_current_script_url, worker_global_is_closed,
