@@ -268,10 +268,14 @@ pub(in crate::native_bridge) fn bridge_detached_document_character_set_callback<
 
 pub(in crate::native_bridge) fn bridge_detached_document_compat_mode_callback<'a>(
     scope: &mut v8::PinScope<'a, '_>,
-    _args: v8::FunctionCallbackArguments<'a>,
+    args: v8::FunctionCallbackArguments<'a>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    set_string_return_value(scope, &mut rv, "CSS1Compat");
+    let compat_mode = v8::Local::<v8::Object>::try_from(args.get(0))
+        .ok()
+        .map(|document| detached_document_state_string(scope, document, "compatMode", "CSS1Compat"))
+        .unwrap_or_else(|| "CSS1Compat".to_owned());
+    set_string_return_value(scope, &mut rv, &compat_mode);
 }
 
 pub(in crate::native_bridge) fn bridge_detached_document_referrer_callback<'a>(
