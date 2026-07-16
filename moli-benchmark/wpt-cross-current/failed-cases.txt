@@ -3646,7 +3646,6 @@ svg/types/scripted/SVGPoint.html
 trusted-types/Document-write.html
 trusted-types/Element-setAttribute-respects-Elements-node-documents-globals-CSP-after-adoption-from-TT-realm.html
 trusted-types/Element-setAttribute-respects-Elements-node-documents-globals-CSP-after-adoption-from-non-TT-realm.html
-trusted-types/GlobalEventHandlers-onclick.html
 trusted-types/HTMLElement-generic.html
 trusted-types/ServiceWorkerContainer-register-from-DedicatedWorker.https.html
 trusted-types/ServiceWorkerContainer-register-from-ServiceWorker.https.html

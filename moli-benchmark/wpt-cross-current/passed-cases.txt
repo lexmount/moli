@@ -7828,6 +7828,7 @@ trusted-types/Element-outerHTML.html
 trusted-types/Element-setAttribute.html
 trusted-types/Element-setAttributeNS.html
 trusted-types/Element-toggleAttribute.html
+trusted-types/GlobalEventHandlers-onclick.html
 trusted-types/HTMLScriptElement-internal-slot.html
 trusted-types/Node-multiple-arguments-tt-enforced.html
 trusted-types/Node-multiple-arguments.html
