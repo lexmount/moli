@@ -7957,9 +7957,11 @@ trusted-types/trusted-types-reporting-for-Window-SharedWorker-constructor.html
 trusted-types/trusted-types-reporting-for-Window-eval.html
 trusted-types/trusted-types-reporting-for-Window-function-constructor.html
 trusted-types/trusted-types-reporting-for-Window-setTimeout-setInterval.html
+trusted-types/trusted-types-reporting.html
 trusted-types/trusted-types-sandbox-allow-scripts.html
 trusted-types/trusted-types-sandbox-no-allow-scripts.html
 trusted-types/trusted-types-source-file-path.html
+trusted-types/trusted-types-svg-script-set-href.html
 trusted-types/trusted-types-tojson.html
 trusted-types/tt-block-eval.html
 uievents/constructors/inputevent-constructor.html

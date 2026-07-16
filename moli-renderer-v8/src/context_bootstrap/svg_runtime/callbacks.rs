@@ -48,6 +48,42 @@ fn require_svg_receiver<'s>(
     false
 }
 
+pub(super) fn svg_element_class_name_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    svg_animated_string_attribute_getter(scope, args, rv, SVG_ELEMENT_CLASS_NAME_SLOT, "class");
+}
+
+pub(super) fn svg_uri_href_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    svg_animated_string_attribute_getter(scope, args, rv, SVG_URI_HREF_SLOT, "href");
+}
+
+fn svg_animated_string_attribute_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+    slot: &str,
+    attribute: &str,
+) {
+    let owner = args.this();
+    if let Some(value) = get_private_value(scope, owner, slot) {
+        if let Ok(animated) = v8::Local::<v8::Object>::try_from(value) {
+            sync_svg_animated_string_from_owner_attribute(scope, animated);
+        }
+        rv.set(value);
+        return;
+    }
+    let value = build_svg_animated_string_for_attribute(scope, owner, attribute);
+    set_private_value(scope, owner, slot, value.into());
+    rv.set(value.into());
+}
+
 pub(super) fn svg_rect_animated_length_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -282,6 +318,83 @@ pub(super) fn svg_text_positioning_list_getter<'s>(
     let value = build_svg_animated_value_list_for_attribute(scope, receiver, name, kind);
     set_private_value(scope, receiver, slot, value);
     rv.set(value);
+}
+
+pub(super) fn svg_animated_string_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(name) = callback_data_item(
+        scope,
+        &args,
+        SVG_ANIMATED_ACCESSOR_NAMES,
+        "SVGAnimatedString attributes",
+    ) else {
+        rv.set_undefined();
+        return;
+    };
+    if !require_svg_receiver(
+        scope,
+        args.this(),
+        SVG_ANIMATED_STRING_BASE_VAL_SLOT,
+        "SVGAnimatedString",
+        &format!("{name} getter"),
+    ) {
+        return;
+    }
+    let slot = match name {
+        "baseVal" => SVG_ANIMATED_STRING_BASE_VAL_SLOT,
+        "animVal" => SVG_ANIMATED_STRING_ANIM_VAL_SLOT,
+        _ => {
+            rv.set_undefined();
+            return;
+        }
+    };
+    let animated = args.this();
+    sync_svg_animated_string_from_owner_attribute(scope, animated);
+    rv.set(
+        get_private_value(scope, animated, slot).unwrap_or_else(|| v8::String::empty(scope).into()),
+    );
+}
+
+pub(super) fn svg_animated_string_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_svg_receiver(
+        scope,
+        args.this(),
+        SVG_ANIMATED_STRING_BASE_VAL_SLOT,
+        "SVGAnimatedString",
+        "baseVal setter",
+    ) {
+        return;
+    }
+    let animated = args.this();
+    let Some(owner) = get_private_value(scope, animated, SVG_ANIMATED_STRING_OWNER_ELEMENT_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    else {
+        return;
+    };
+    let Some(attribute) =
+        get_private_value(scope, animated, SVG_ANIMATED_STRING_OWNER_ATTRIBUTE_SLOT)
+            .and_then(|value| value.to_string(scope))
+            .map(|value| value.to_rust_string_lossy(scope))
+            .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    let Some(value) = crate::native_bridge::element::set_svg_animated_string_base_value(
+        scope,
+        owner,
+        &attribute,
+        args.get(0),
+    ) else {
+        return;
+    };
+    set_svg_animated_string_values(scope, animated, &value);
 }
 
 pub(super) fn svg_animated_length_getter<'s>(

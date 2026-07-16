@@ -6,6 +6,18 @@ use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
 #[webapi(
+    interface = web_api_interfaces::SVGAnimatedString,
+    own_to_string_tag = "SVGAnimatedString"
+)]
+struct SvgAnimatedStringObjectDeclaration {
+    #[webapi(slot = SVG_ANIMATED_STRING_BASE_VAL_SLOT)]
+    base_val: String,
+    #[webapi(slot = SVG_ANIMATED_STRING_ANIM_VAL_SLOT)]
+    anim_val: String,
+}
+
+#[derive(WebApiObject)]
+#[webapi(
     interface = web_api_interfaces::SVGAnimatedNumber,
     own_to_string_tag = "SVGAnimatedNumber"
 )]
@@ -249,6 +261,19 @@ struct SvgTransformObjectDeclaration<'scope> {
     set_skew_x: (),
     #[webapi(method, callback = svg_transform_set_skew_y_callback, length = 1)]
     set_skew_y: (),
+}
+
+pub(super) fn build_svg_animated_string_for_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    attribute: &str,
+) -> v8::Local<'s, v8::Object> {
+    let value = svg_owner_attribute_value(scope, owner, attribute).unwrap_or_default();
+    let object = SvgAnimatedStringObjectDeclaration::new(value.clone(), value)
+        .bind(scope)
+        .expect("SVGAnimatedString declaration should bind");
+    set_svg_animated_string_owner_attribute(scope, object, owner, attribute);
+    object
 }
 
 pub(super) fn build_svg_animated_length_list<'s>(
@@ -1786,6 +1811,69 @@ pub(super) fn sync_svg_animated_length_from_owner_attribute<'s>(
     {
         set_svg_length_parsed_value(scope, anim_val, parsed);
     }
+}
+
+pub(super) fn set_svg_animated_string_owner_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    animated: v8::Local<'s, v8::Object>,
+    owner: v8::Local<'s, v8::Object>,
+    attribute: &str,
+) {
+    set_private_value(
+        scope,
+        animated,
+        SVG_ANIMATED_STRING_OWNER_ELEMENT_SLOT,
+        owner.into(),
+    );
+    set_private_value(
+        scope,
+        animated,
+        SVG_ANIMATED_STRING_OWNER_ATTRIBUTE_SLOT,
+        v8_string(scope, attribute)
+            .unwrap_or_else(|| v8str(scope, ""))
+            .into(),
+    );
+}
+
+pub(super) fn sync_svg_animated_string_from_owner_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    animated: v8::Local<'s, v8::Object>,
+) {
+    let Some(owner) = get_private_value(scope, animated, SVG_ANIMATED_STRING_OWNER_ELEMENT_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    else {
+        return;
+    };
+    let Some(attribute) =
+        get_private_value(scope, animated, SVG_ANIMATED_STRING_OWNER_ATTRIBUTE_SLOT)
+            .and_then(|value| value.to_string(scope))
+            .map(|value| value.to_rust_string_lossy(scope))
+            .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    let value = svg_owner_attribute_value(scope, owner, &attribute).unwrap_or_default();
+    set_svg_animated_string_values(scope, animated, &value);
+}
+
+pub(super) fn set_svg_animated_string_values(
+    scope: &mut v8::PinScope<'_, '_>,
+    animated: v8::Local<'_, v8::Object>,
+    value: &str,
+) {
+    let value = v8_string(scope, value).unwrap_or_else(|| v8str(scope, ""));
+    set_private_value(
+        scope,
+        animated,
+        SVG_ANIMATED_STRING_BASE_VAL_SLOT,
+        value.into(),
+    );
+    set_private_value(
+        scope,
+        animated,
+        SVG_ANIMATED_STRING_ANIM_VAL_SLOT,
+        value.into(),
+    );
 }
 
 pub(super) fn set_svg_animated_number_owner_attribute<'s>(

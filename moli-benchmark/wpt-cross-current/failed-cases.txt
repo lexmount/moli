@@ -3696,7 +3696,6 @@ trusted-types/trusted-types-reporting-for-ServiceWorker-ServiceWorkerContainer-r
 trusted-types/trusted-types-reporting-for-SharedWorker-ServiceWorkerContainer-register.https.html
 trusted-types/trusted-types-reporting.html
 trusted-types/trusted-types-secondary-document.html
-trusted-types/trusted-types-svg-script-set-href.html
 uievents/order-of-events/focus-events/focus-automated-blink-webkit.html
 url/a-element.html?exclude=(file|javascript|mailto)
 url/a-element.html?include=file

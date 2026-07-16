@@ -1202,6 +1202,117 @@ fn url_attribute_writes_enforce_the_non_iframe_trusted_script_url_sink_table() {
 }
 
 #[test]
+fn svg_script_href_base_val_uses_the_owner_reflected_trusted_script_url_sink() {
+    let mut vm = new_storage_test_vm("https://svg-script-href-trusted-types.test/");
+    vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const violations = [];
+  document.addEventListener("securitypolicyviolation", event => {
+    violations.push({
+      blockedURI: event.blockedURI,
+      effectiveDirective: event.effectiveDirective,
+      sample: event.sample
+    });
+  });
+  globalThis.__svgScriptHrefViolations = violations;
+
+  const svgScript = document.createElementNS("http://www.w3.org/2000/svg", "script");
+  const href = svgScript.href;
+  let illegalConstructor = false;
+  try {
+    new SVGAnimatedString();
+  } catch (error) {
+    illegalConstructor = error instanceof TypeError;
+  }
+  let plainRejected = false;
+  try {
+    href.baseVal = "plain.js";
+  } catch (error) {
+    plainRejected = error instanceof TypeError;
+  }
+  const rejectedAttribute = svgScript.getAttribute("href");
+
+  const explicit = trustedTypes.createPolicy("svg-script-href", {
+    createScriptURL: value => value
+  });
+  href.baseVal = explicit.createScriptURL("trusted.js");
+  const trustedValues = [
+    svgScript.getAttribute("href"),
+    href.baseVal,
+    href.animVal
+  ];
+  svgScript.setAttribute("href", explicit.createScriptURL("attribute.js"));
+  const externallySynced = [href.baseVal, href.animVal];
+  const className = svgScript.className;
+  className.baseVal = explicit.createScriptURL("trusted-class");
+  const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+  const useHref = use.href;
+  useHref.baseVal = explicit.createScriptURL("trusted-use");
+
+  const defaultCalls = [];
+  trustedTypes.createPolicy("default", {
+    createScriptURL: (value, type, sink) => {
+      defaultCalls.push([value, type, sink]);
+      return `safe-${value}`;
+    }
+  });
+  href.baseVal = "default-input";
+  className.baseVal = "plain-class";
+  useHref.baseVal = "plain-use";
+
+  return JSON.stringify({
+    shape: [
+      href instanceof SVGAnimatedString,
+      Object.prototype.toString.call(href),
+      svgScript.href === href,
+      illegalConstructor
+    ],
+    plainRejected,
+    rejectedAttribute,
+    trustedValues,
+    externallySynced,
+    ordinaryAnimatedStrings: [
+      className instanceof SVGAnimatedString,
+      svgScript.className === className,
+      className.baseVal,
+      className.animVal,
+      svgScript.getAttribute("class"),
+      useHref instanceof SVGAnimatedString,
+      use.href === useHref,
+      useHref.baseVal,
+      useHref.animVal,
+      use.getAttribute("href")
+    ],
+    defaulted: [svgScript.getAttribute("href"), href.baseVal, href.animVal],
+    defaultCalls,
+    violations
+  });
+})()
+"#,
+        )
+        .expect("SVGScriptElement href Trusted Types sink probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"shape":[true,"[object SVGAnimatedString]",true,true],"plainRejected":true,"rejectedAttribute":null,"trustedValues":["trusted.js","trusted.js","trusted.js"],"externallySynced":["attribute.js","attribute.js"],"ordinaryAnimatedStrings":[true,true,"plain-class","plain-class","plain-class",true,true,"plain-use","plain-use","plain-use"],"defaulted":["safe-default-input","safe-default-input","safe-default-input"],"defaultCalls":[["default-input","TrustedScriptURL","SVGScriptElement href"]],"violations":[]}"#
+    );
+
+    assert_eq!(
+        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        1
+    );
+    assert_eq!(
+        vm.eval("JSON.stringify(globalThis.__svgScriptHrefViolations)")
+            .expect("queued SVGScriptElement href violation should be observable"),
+        r#"[{"blockedURI":"trusted-types-sink","effectiveDirective":"require-trusted-types-for","sample":"SVGScriptElement href|plain.js"}]"#
+    );
+}
+
+#[test]
 fn attached_attribute_mutations_recheck_trusted_types_after_domstring_conversion() {
     let mut vm = new_storage_test_vm("https://attached-attribute-trusted-types.test/");
     vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);

@@ -54,6 +54,7 @@ mod trusted_types;
 pub(crate) use script_execution::{
     inline_script_source_for_execution, prepare_inline_classic_frame_script_job_for_execution,
 };
+pub(crate) use trusted_types::set_svg_animated_string_base_value;
 pub(in crate::native_bridge) use trusted_types::{
     TrustedAttributeSetter, trusted_attribute_string_value, trusted_attribute_value_string,
 };
