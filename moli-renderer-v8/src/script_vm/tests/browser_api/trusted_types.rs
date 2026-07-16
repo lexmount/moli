@@ -319,6 +319,79 @@ fn document_parse_html_unsafe_gates_converted_union_source() {
 }
 
 #[test]
+fn document_write_gates_concatenated_union_values_before_writeln_newline() {
+    let mut vm = new_storage_test_vm("https://document-write-trusted-types.test/");
+    vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const errorName = callback => {
+    try {
+      callback();
+      return "none";
+    } catch (error) {
+      return error && error.name;
+    }
+  };
+  const custom = trustedTypes.createPolicy("document-write-custom", {
+    createHTML: value => `(${value})`
+  });
+  const doc = document.implementation.createHTMLDocument("");
+  const empty = trustedTypes.createPolicy("document-write-empty", {createHTML: () => ""}).createHTML("");
+  const reset = () => { doc.body.innerHTML = empty; };
+  const blocked = errorName(() => doc.write("blocked"));
+
+  doc.write(custom.createHTML("1"), custom.createHTML("2"));
+  const allTrusted = doc.body.innerHTML;
+  reset();
+
+  const defaultCalls = [];
+  trustedTypes.createPolicy("default", {
+    createHTML: (value, type, sink) => {
+      defaultCalls.push([value, type, sink]);
+      return `[${value}]`;
+    }
+  });
+
+  doc.write("1", "2");
+  const strings = doc.body.innerHTML;
+  reset();
+  doc.write(custom.createHTML("1"), "2");
+  const mixed = doc.body.innerHTML;
+  reset();
+  doc.writeln("3", "4");
+  const stringLine = doc.body.innerHTML;
+  reset();
+  doc.writeln(custom.createHTML("3"), custom.createHTML("4"));
+  const trustedLine = doc.body.innerHTML;
+  reset();
+  doc.writeln();
+  const emptyLine = doc.body.innerHTML;
+
+  return JSON.stringify({
+    blocked,
+    allTrusted,
+    strings,
+    mixed,
+    stringLine,
+    trustedLine,
+    emptyLine,
+    defaultCalls
+  });
+})()
+"#,
+        )
+        .expect("Document.write TrustedHTML union probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"blocked":"TypeError","allTrusted":"(1)(2)","strings":"[12]","mixed":"[(1)2]","stringLine":"[34]\n","trustedLine":"(3)(4)\n","emptyLine":"\n","defaultCalls":[["12","TrustedHTML","Document write"],["(1)2","TrustedHTML","Document write"],["34","TrustedHTML","Document writeln"]]}"#
+    );
+}
+
+#[test]
 fn script_elements_preserve_only_parser_or_trusted_script_source() {
     let mut vm = new_storage_test_vm("https://script-source-trusted-types.test/");
     vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
