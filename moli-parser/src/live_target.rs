@@ -3078,6 +3078,7 @@ impl ParserStreamHtmlTreeSinkTarget {
         name: QualName,
         attrs: Vec<Attribute>,
         flags: ElementFlags,
+        script_nonceable: Option<bool>,
     ) -> ParseHandle {
         let parser_flags = ParserElementFlags::from_html5ever(&flags);
         let template_contents_insertion = self.take_template_contents_insertion_hint();
@@ -3154,6 +3155,7 @@ impl ParserStreamHtmlTreeSinkTarget {
                     &attributes,
                     has_null_custom_element_registry_attribute,
                     parser_flags,
+                    script_nonceable,
                 );
             }
         }
@@ -3179,6 +3181,7 @@ impl ParserStreamHtmlTreeSinkTarget {
             &token_attributes,
             has_null_custom_element_registry_attribute,
             parser_flags,
+            script_nonceable,
         )
     }
 
@@ -3193,12 +3196,16 @@ impl ParserStreamHtmlTreeSinkTarget {
         token_attributes: &[NativeAttribute],
         has_null_custom_element_registry_attribute: bool,
         parser_flags: ParserElementFlags,
+        script_nonceable: Option<bool>,
     ) -> ParseHandle {
         if has_null_custom_element_registry_attribute {
             self.pending_null_custom_element_registry_elements
                 .push(node_id);
         }
         if is_script {
+            if script_nonceable == Some(false) {
+                self.state.non_nonceable_parser_scripts.insert(node_id);
+            }
             self.state
                 .script_start_positions
                 .insert(node_id, self.state.current_position);
@@ -3571,7 +3578,11 @@ pub(super) fn new_live_fragment_root_html_tree_sink_stream(
 
 impl ParserPlanningReadView for ParserStreamHtmlTreeSinkTarget {
     fn parser_script_read(&self, node_id: NativeNodeId) -> Option<ParserScriptRead> {
-        self.read_parser_script(node_id)
+        let mut script = self.read_parser_script(node_id)?;
+        if self.state.non_nonceable_parser_scripts.contains(&node_id) {
+            script.fetch_metadata.nonce = None;
+        }
+        Some(script)
     }
 
     fn script_handles(&self) -> Vec<NativeNodeId> {
