@@ -1757,6 +1757,61 @@ fn empty_default_policy_report_only_allows_and_reports_each_element_sink() {
 }
 
 #[test]
+fn report_only_trusted_types_eval_runs_reports_and_applies_the_default_policy() {
+    let mut vm = new_storage_test_vm("https://trusted-types-eval-report-only.test/");
+    vm.set_response_content_security_policies(&["script-src 'unsafe-eval'".to_owned()]);
+    vm.set_response_content_security_report_only_policies(&[
+        "require-trusted-types-for 'script'".to_owned()
+    ]);
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const violations = [];
+  const defaultPolicyCalls = [];
+  document.addEventListener("securitypolicyviolation", event => {
+    if (event.blockedURI === "trusted-types-sink") {
+      violations.push({ sample: event.sample, disposition: event.disposition });
+    }
+  });
+  globalThis.__reportOnlyEvalViolations = violations;
+
+  eval("globalThis.__reportOnlyEval = 1");
+  const explicit = trustedTypes.createPolicy("explicit-report-only-eval", {
+    createScript: value => value
+  });
+  eval(explicit.createScript("globalThis.__reportOnlyEval = 2"));
+  trustedTypes.createPolicy("default", {
+    createScript: (...args) => {
+      defaultPolicyCalls.push(args);
+      return args[0];
+    }
+  });
+  eval("globalThis.__reportOnlyEval = 3");
+
+  return JSON.stringify({ value: globalThis.__reportOnlyEval, defaultPolicyCalls, violations });
+})()
+"#,
+        )
+        .expect("report-only Trusted Types eval probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"value":3,"defaultPolicyCalls":[["globalThis.__reportOnlyEval = 3","TrustedScript","eval"]],"violations":[]}"#
+    );
+    assert_eq!(
+        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        1
+    );
+    assert_eq!(
+        vm.eval("JSON.stringify(globalThis.__reportOnlyEvalViolations)")
+            .expect("queued report-only eval violation should be observable"),
+        r#"[{"sample":"eval|globalThis.__reportOnlyEval = 1","disposition":"report"}]"#
+    );
+}
+
+#[test]
 fn report_only_default_policy_transforms_or_preserves_by_callback_outcome() {
     let mut vm = new_storage_test_vm("https://default-policy-report-only.test/");
     vm.set_response_content_security_report_only_policies(&[

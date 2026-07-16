@@ -152,9 +152,9 @@ pub(super) fn string_code_generation_check_callback<'s>(
     if crate::context_bootstrap::consume_internal_javascript_url_eval(scope) {
         return code_generation_result(true, None);
     }
-    let requires_trusted_types_for_script =
-        unsafe { &*host_ptr }.requires_trusted_types_for_script(scope);
-    let action = if requires_trusted_types_for_script {
+    let trusted_types_requirements =
+        unsafe { &*host_ptr }.trusted_types_for_script_requirements(scope);
+    let action = if trusted_types_requirements.requires_conversion() {
         if unsafe { &*host_ptr }.allows_trusted_types_eval(scope) {
             // The keyword relaxes Trusted Types conversion, but it does not
             // override another CSP policy. The per-policy CSP gate still runs.
@@ -165,7 +165,12 @@ pub(super) fn string_code_generation_check_callback<'s>(
                     modified_source: None,
                 }
             } else {
-                match trusted_types_code_generation_check(scope, source, is_code_like) {
+                match trusted_types_code_generation_check(
+                    scope,
+                    source,
+                    is_code_like,
+                    trusted_types_requirements,
+                ) {
                     TrustedTypesCodeGenerationCheck::AllowModified(source) => {
                         StringCodeGenerationPolicyAction::CheckCsp {
                             allow_trusted_types_eval: true,
@@ -182,11 +187,21 @@ pub(super) fn string_code_generation_check_callback<'s>(
                 }
             }
         } else {
-            let check = trusted_types_code_generation_check(scope, source, is_code_like);
+            let check = trusted_types_code_generation_check(
+                scope,
+                source,
+                is_code_like,
+                trusted_types_requirements,
+            );
             code_generation_action_from_trusted_types_check(check)
         }
     } else if is_code_like || !source.is_string() {
-        let check = trusted_types_code_generation_check(scope, source, is_code_like);
+        let check = trusted_types_code_generation_check(
+            scope,
+            source,
+            is_code_like,
+            trusted_types_requirements,
+        );
         code_generation_action_from_trusted_types_check(check)
     } else {
         match non_trusted_types_code_generation_source(source, is_code_like) {
@@ -199,7 +214,12 @@ pub(super) fn string_code_generation_check_callback<'s>(
             }
             NonTrustedTypesCodeGenerationSource::CodeLikeObject
             | NonTrustedTypesCodeGenerationSource::PassThroughObject => {
-                match trusted_types_code_generation_check(scope, source, is_code_like) {
+                match trusted_types_code_generation_check(
+                    scope,
+                    source,
+                    is_code_like,
+                    trusted_types_requirements,
+                ) {
                     TrustedTypesCodeGenerationCheck::AllowModified(source) => {
                         StringCodeGenerationPolicyAction::CheckCsp {
                             allow_trusted_types_eval: false,
