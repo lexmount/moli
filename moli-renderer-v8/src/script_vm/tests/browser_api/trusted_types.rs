@@ -473,13 +473,19 @@ fn document_write_gates_concatenated_union_values_before_writeln_newline() {
   const custom = trustedTypes.createPolicy("document-write-custom", {
     createHTML: value => `(${value})`
   });
-  const doc = document.implementation.createHTMLDocument("");
-  const empty = trustedTypes.createPolicy("document-write-empty", {createHTML: () => ""}).createHTML("");
-  const reset = () => { doc.body.innerHTML = empty; };
+  const doc = new DOMParser().parseFromString(trustedTypes.emptyHTML, "text/html");
+  const replacementDoc = new DOMParser().parseFromString(
+    custom.createHTML("seed"),
+    "text/html"
+  );
+  const reset = () => { doc.body.innerHTML = trustedTypes.emptyHTML; };
   const blocked = errorName(() => doc.write("blocked"));
 
   doc.write(custom.createHTML("1"), custom.createHTML("2"));
   const allTrusted = doc.body.innerHTML;
+  replacementDoc.write(custom.createHTML("replacement"));
+  replacementDoc.writeln(custom.createHTML("tail"));
+  const replacesDetachedContent = replacementDoc.body.innerHTML;
   reset();
 
   const defaultCalls = [];
@@ -508,6 +514,7 @@ fn document_write_gates_concatenated_union_values_before_writeln_newline() {
   return JSON.stringify({
     blocked,
     allTrusted,
+    replacesDetachedContent,
     strings,
     mixed,
     stringLine,
@@ -522,7 +529,7 @@ fn document_write_gates_concatenated_union_values_before_writeln_newline() {
 
     assert_eq!(
         result,
-        r#"{"blocked":"TypeError","allTrusted":"(1)(2)","strings":"[12]","mixed":"[(1)2]","stringLine":"[34]\n","trustedLine":"(3)(4)\n","emptyLine":"\n","defaultCalls":[["12","TrustedHTML","Document write"],["(1)2","TrustedHTML","Document write"],["34","TrustedHTML","Document writeln"]]}"#
+        r#"{"blocked":"TypeError","allTrusted":"(1)(2)","replacesDetachedContent":"(replacement)(tail)\n","strings":"[12]","mixed":"[(1)2]","stringLine":"[34]\n","trustedLine":"(3)(4)\n","emptyLine":"\n","defaultCalls":[["12","TrustedHTML","Document write"],["(1)2","TrustedHTML","Document write"],["34","TrustedHTML","Document writeln"]]}"#
     );
 }
 
