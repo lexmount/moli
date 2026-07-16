@@ -1529,6 +1529,69 @@ fn font_face_declared_slots_ignore_prototype_spoofing() {
 }
 
 #[test]
+fn invalid_font_face_defers_loaded_rejection_until_promise_is_observed() {
+    let mut vm = new_storage_test_vm("https://font-face-lazy-loaded-promise.test/");
+
+    let initial = vm
+        .eval(
+            r#"
+(() => {
+  globalThis.__fontFaceUnhandled = [];
+  window.addEventListener('unhandledrejection', event => {
+    __fontFaceUnhandled.push(event.reason && event.reason.name);
+    event.preventDefault();
+  });
+  globalThis.__invalidLazyFontFace = new FontFace(
+    'InvalidLazyFace',
+    'not a font source'
+  );
+  return JSON.stringify({
+    status: __invalidLazyFontFace.status,
+    unhandled: __fontFaceUnhandled
+  });
+})()
+"#,
+        )
+        .expect("invalid FontFace construction should not throw");
+    assert_eq!(initial, r#"{"status":"error","unhandled":[]}"#);
+
+    for _ in 0..4 {
+        vm.eval("JSON.stringify(__fontFaceUnhandled)")
+            .expect("unobserved FontFace rejection checkpoints should drain");
+    }
+    assert_eq!(
+        vm.eval("JSON.stringify(__fontFaceUnhandled)")
+            .expect("unobserved FontFace rejection result should evaluate"),
+        "[]",
+    );
+
+    let observed = vm
+        .eval(
+            r#"
+(() => {
+  const first = __invalidLazyFontFace.loaded;
+  const second = __invalidLazyFontFace.loaded;
+  globalThis.__invalidLazyFontFaceRejection = 'pending';
+  first.catch(error => {
+    __invalidLazyFontFaceRejection = error.name;
+  });
+  return JSON.stringify({
+    stable: first === second,
+    loadReturnsLoaded: __invalidLazyFontFace.load() === first
+  });
+})()
+"#,
+        )
+        .expect("observed invalid FontFace loaded promise should evaluate");
+    assert_eq!(observed, r#"{"stable":true,"loadReturnsLoaded":true}"#,);
+    assert_eq!(
+        vm.eval("__invalidLazyFontFaceRejection")
+            .expect("invalid FontFace loaded rejection should settle"),
+        "SyntaxError",
+    );
+}
+
+#[test]
 fn font_face_string_sources_follow_load_state_and_connected_style_use() {
     let mut vm = new_storage_test_vm("https://font-face-string-source-state.test/");
 

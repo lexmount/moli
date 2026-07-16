@@ -1,4 +1,4 @@
-use super::font_face::{font_face_load_failed, load_font_face};
+use super::font_face::{font_face_load_failed, start_font_face_load};
 use super::query::{
     font_face_set_matching_faces_array, font_load_query_contains_css_wide_keyword,
     make_rejected_dom_exception_promise,
