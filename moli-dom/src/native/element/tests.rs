@@ -211,10 +211,7 @@ fn aria_element_reference_state_is_owned_by_the_content_attribute() {
         None,
         String::new(),
     ));
-    assert_eq!(
-        element.explicit_element_references("aria-controls"),
-        None
-    );
+    assert_eq!(element.explicit_element_references("aria-controls"), None);
 
     element.set_explicit_element_references("aria-controls", vec![NativeNodeId::new(8)]);
     assert!(element.set_attribute_ns(
@@ -229,10 +226,7 @@ fn aria_element_reference_state_is_owned_by_the_content_attribute() {
     );
 
     assert!(element.remove_attribute("aria-controls"));
-    assert_eq!(
-        element.explicit_element_references("aria-controls"),
-        None
-    );
+    assert_eq!(element.explicit_element_references("aria-controls"), None);
 }
 
 #[test]

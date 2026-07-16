@@ -73,6 +73,9 @@ fn is_element_reference_attribute(name: &str) -> bool {
             | "aria-flowto"
             | "aria-labelledby"
             | "aria-owns"
+            | "commandfor"
+            | "interestfor"
+            | "popovertarget"
     )
 }
 
