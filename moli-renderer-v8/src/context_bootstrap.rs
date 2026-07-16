@@ -282,7 +282,8 @@ pub(crate) use self::dom_rect::{
 pub(crate) use self::dom_rect_list::build_dom_rect_list_object;
 pub(crate) use self::events::{
     EVENT_DISPATCHING_SLOT, EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT,
-    EVENT_STOP_PROPAGATION_SLOT, clear_event_composed_path, construct_original_error_event,
+    EVENT_STOP_PROPAGATION_SLOT, EventHandlerType, apply_event_handler_return_value,
+    clear_event_composed_path, construct_original_error_event,
     construct_original_message_event, event_attribute, event_backing, event_bool_attribute,
     event_callback_values, event_initialized, event_internal_bool_flag, event_is_dispatching,
     event_is_error_event, event_is_mouse_event, event_private_value, initialize_event_object,
