@@ -2441,6 +2441,8 @@ pub(super) struct HtmlDialogElementPrototypeDeclaration {
     show_modal: (),
     #[webapi(method, length = 1, callback = dialog_close_callback)]
     close: (),
+    #[webapi(method, length = 1, callback = dialog_request_close_callback)]
+    request_close: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
