@@ -307,11 +307,13 @@ pub(in crate::worker) fn dispatch_worker_csp_violation_event<'s>(
 pub(crate) fn worker_allows_trusted_type_policy_name(
     scope: &mut v8::PinScope<'_, '_>,
     name: &str,
+    is_duplicate: bool,
 ) -> Option<bool> {
     Some(
-        crate::content_security_policy::content_security_policy_allows_trusted_type_policy_name(
+        crate::content_security_policy::content_security_policy_allows_trusted_type_policy_creation(
             &get_worker_state(scope)?.borrow().content_security_policies,
             name,
+            is_duplicate,
         ),
     )
 }
