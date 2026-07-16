@@ -6828,14 +6828,25 @@ fn detached_body_legacy_accessors_use_owner_prototype() {
   }
 
   const detachedDoc = document.implementation.createHTMLDocument("");
-  for (const [body, label] of [[detachedDoc.body, "detached"], [document.createElement("body"), "created"]]) {
+  for (const [body, label, usesWindow] of [
+    [detachedDoc.body, "windowless", false],
+    [document.createElement("body"), "created", true]
+  ]) {
     for (const name of names) {
       assert(!own(body, name), `${label}.${name} should not be own before set`);
     }
     const handler = () => `${label}-load`;
+    const priorWindowHandler = () => `${label}-prior-window-load`;
+    window.onload = priorWindowHandler;
     body.onload = handler;
-    assert(window.onload === handler, `${label}.onload setter syncs window.onload`);
-    assert(body.onload === handler, `${label}.onload getter reads window.onload`);
+    assert(
+      window.onload === (usesWindow ? handler : priorWindowHandler),
+      `${label}.onload setter follows owner browsing context`
+    );
+    assert(
+      body.onload === (usesWindow ? handler : null),
+      `${label}.onload getter follows owner browsing context`
+    );
     body.text = `${label}-text`;
     body.link = `${label}-link`;
     body.vLink = `${label}-vlink`;
@@ -6857,7 +6868,7 @@ fn detached_body_legacy_accessors_use_owner_prototype() {
       assert(delete body[name], `${label}.${name} delete`);
       assert(!own(body, name), `${label}.${name} should stay inherited`);
     }
-    assert(body.onload === handler, `${label}.onload after delete`);
+    assert(body.onload === (usesWindow ? handler : null), `${label}.onload after delete`);
     assert(body.text === "", `${label}.text after delete`);
   }
   for (const name of ["text", "link", "vLink", "aLink"]) {
