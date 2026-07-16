@@ -1962,6 +1962,121 @@ fn report_only_trusted_types_eval_runs_reports_and_applies_the_default_policy() 
 }
 
 #[test]
+fn javascript_url_navigation_default_policy_is_silent_and_disposition_aware() {
+    let policy = "require-trusted-types-for 'script'".to_owned();
+
+    let mut rewritten = new_storage_test_vm("https://javascript-url-rewritten.test/");
+    rewritten.set_response_content_security_policies(std::slice::from_ref(&policy));
+    rewritten
+        .eval(
+            r#"
+globalThis.__javascriptUrlOriginal = 0;
+globalThis.__javascriptUrlModified = 0;
+globalThis.__javascriptUrlDefaultCalls = [];
+trustedTypes.createPolicy("default", {
+  createScript: (...args) => {
+    globalThis.__javascriptUrlDefaultCalls.push(args);
+    return args[0].replace("Original", "Modified");
+  }
+});
+"ready"
+"#,
+        )
+        .expect("install javascript URL rewriting default policy");
+    assert_eq!(
+        rewritten
+            .eval_javascript_url_runtime_turn(
+                "globalThis.__javascriptUrlOriginal++",
+                &Url::parse("https://javascript-url-rewritten.test/").expect("test URL"),
+            )
+            .expect("rewritten javascript URL should execute"),
+        None
+    );
+    assert_eq!(
+        rewritten
+            .eval(
+                "JSON.stringify({ original: __javascriptUrlOriginal, modified: __javascriptUrlModified, calls: __javascriptUrlDefaultCalls })"
+            )
+            .expect("read rewritten javascript URL result"),
+        r#"{"original":0,"modified":1,"calls":[["globalThis.__javascriptUrlOriginal++","TrustedScript","Location href"]]}"#
+    );
+    assert_eq!(
+        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut rewritten),
+        0
+    );
+
+    for (name, callback, report_only, expected_runs, expected_disposition) in [
+        (
+            "throw-enforce",
+            "throw new RangeError('default policy failure')",
+            false,
+            0,
+            "enforce",
+        ),
+        (
+            "invalid-enforce",
+            "return '//make:invalid/'",
+            false,
+            0,
+            "enforce",
+        ),
+        (
+            "throw-report",
+            "throw new RangeError('default policy failure')",
+            true,
+            1,
+            "report",
+        ),
+    ] {
+        let base_url =
+            Url::parse(&format!("https://javascript-url-{name}.test/")).expect("test URL");
+        let mut vm = new_storage_test_vm(base_url.as_str());
+        if report_only {
+            vm.set_response_content_security_report_only_policies(std::slice::from_ref(&policy));
+        } else {
+            vm.set_response_content_security_policies(std::slice::from_ref(&policy));
+        }
+        vm.eval(&format!(
+            r#"
+globalThis.__javascriptUrlRuns = 0;
+globalThis.__javascriptUrlViolations = [];
+document.addEventListener("securitypolicyviolation", event => {{
+  globalThis.__javascriptUrlViolations.push({{
+    sample: event.sample,
+    disposition: event.disposition,
+  }});
+}});
+trustedTypes.createPolicy("default", {{
+  createScript: () => {{ {callback} }}
+}});
+"ready"
+"#
+        ))
+        .expect("install failing javascript URL default policy");
+
+        assert_eq!(
+            vm.eval_javascript_url_runtime_turn("globalThis.__javascriptUrlRuns++", &base_url)
+                .expect("default policy failure must not escape the navigation turn"),
+            None
+        );
+        assert_eq!(
+            drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+            1
+        );
+        assert_eq!(
+            vm.eval(
+                "JSON.stringify({ runs: __javascriptUrlRuns, violations: __javascriptUrlViolations })"
+            )
+            .expect("read javascript URL failure result"),
+            format!(
+                r#"{{"runs":{expected_runs},"violations":[{{"sample":"Location href|globalThis.__javascriptUrlRuns++","disposition":"{expected_disposition}"}}]}}"#
+            ),
+            "case {name}"
+        );
+    }
+}
+
+#[test]
 fn report_only_default_policy_transforms_or_preserves_by_callback_outcome() {
     let mut vm = new_storage_test_vm("https://default-policy-report-only.test/");
     vm.set_response_content_security_report_only_policies(&[
