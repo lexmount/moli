@@ -214,6 +214,7 @@ fn build_and_cache_trusted_types_state<'s>(
     let factory = TrustedTypesFactoryObjectDeclaration {
         empty_html,
         empty_script,
+        created_policy_names: v8::Array::new(scope, 0),
     }
     .bind(scope)
     .map_err(|error| anyhow!("failed to bind TrustedTypePolicyFactory object: {error}"))?;

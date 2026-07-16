@@ -257,6 +257,72 @@ fn trusted_type_factory_default_policy_getter_tracks_the_branded_policy() {
 }
 
 #[test]
+fn trusted_type_policy_creation_reports_name_and_duplicate_csp_violations() {
+    let mut vm = new_storage_test_vm("https://trusted-type-policy-csp.test/");
+    vm.set_response_content_security_policies(&[
+        "trusted-types allowed reportOnly duplicate".to_owned()
+    ]);
+    vm.set_response_content_security_report_only_policies(&[
+        "trusted-types allowed duplicate".to_owned()
+    ]);
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const violations = [];
+  document.addEventListener("securitypolicyviolation", event => {
+    violations.push({
+      blockedURI: event.blockedURI,
+      effectiveDirective: event.effectiveDirective,
+      originalPolicy: event.originalPolicy,
+      disposition: event.disposition,
+      sample: event.sample
+    });
+  });
+  globalThis.__trustedTypePolicyCspViolations = violations;
+  const errorName = callback => {
+    try {
+      callback();
+      return "none";
+    } catch (error) {
+      return error.name;
+    }
+  };
+
+  const allowed = trustedTypes.createPolicy("allowed", {});
+  const reportOnly = trustedTypes.createPolicy("reportOnly", {});
+  const duplicate = trustedTypes.createPolicy("duplicate", {});
+  const duplicateError = errorName(() => trustedTypes.createPolicy("duplicate", {}));
+  const blockedError = errorName(() => trustedTypes.createPolicy("blocked", {}));
+
+  return JSON.stringify({
+    names: [allowed.name, reportOnly.name, duplicate.name],
+    duplicateError,
+    blockedError,
+    violations
+  });
+})()
+"#,
+        )
+        .expect("TrustedTypePolicy CSP creation probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"names":["allowed","reportOnly","duplicate"],"duplicateError":"TypeError","blockedError":"TypeError","violations":[]}"#
+    );
+    assert_eq!(
+        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        5
+    );
+    assert_eq!(
+        vm.eval("JSON.stringify(globalThis.__trustedTypePolicyCspViolations)")
+            .expect("queued TrustedTypePolicy CSP violations should be observable"),
+        r#"[{"blockedURI":"trusted-types-policy","effectiveDirective":"trusted-types","originalPolicy":"trusted-types allowed duplicate","disposition":"report","sample":"reportOnly"},{"blockedURI":"trusted-types-policy","effectiveDirective":"trusted-types","originalPolicy":"trusted-types allowed reportOnly duplicate","disposition":"enforce","sample":"duplicate"},{"blockedURI":"trusted-types-policy","effectiveDirective":"trusted-types","originalPolicy":"trusted-types allowed duplicate","disposition":"report","sample":"duplicate"},{"blockedURI":"trusted-types-policy","effectiveDirective":"trusted-types","originalPolicy":"trusted-types allowed reportOnly duplicate","disposition":"enforce","sample":"blocked"},{"blockedURI":"trusted-types-policy","effectiveDirective":"trusted-types","originalPolicy":"trusted-types allowed duplicate","disposition":"report","sample":"blocked"}]"#
+    );
+}
+
+#[test]
 fn element_markup_sinks_enforce_trusted_html_and_standard_sink_names() {
     let mut vm = new_storage_test_vm("https://element-markup-trusted-types.test/");
     vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
