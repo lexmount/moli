@@ -31,6 +31,7 @@ const TRUSTED_TYPES_CREATE_HTML_SLOT: &str = "__moliTrustedTypesCreateHTML";
 const TRUSTED_TYPES_CREATE_SCRIPT_SLOT: &str = "__moliTrustedTypesCreateScript";
 const TRUSTED_TYPES_CREATE_SCRIPT_URL_SLOT: &str = "__moliTrustedTypesCreateScriptURL";
 const TRUSTED_TYPES_POLICY_NAME_SLOT: &str = "__moliTrustedTypesPolicyName";
+const TRUSTED_TYPES_CREATED_POLICY_NAMES_SLOT: &str = "__moliTrustedTypesCreatedPolicyNames";
 const TRUSTED_TYPES_EMPTY_HTML_SLOT: &str = "__moliTrustedTypesEmptyHTML";
 const TRUSTED_TYPES_EMPTY_SCRIPT_SLOT: &str = "__moliTrustedTypesEmptyScript";
 const TRUSTED_TYPES_EMPTY_VALUE_SLOTS: [&str; 2] = [
@@ -104,6 +105,8 @@ struct TrustedTypesFactoryObjectDeclaration<'scope> {
     empty_html: v8::Local<'scope, v8::Object>,
     #[webapi(slot = TRUSTED_TYPES_EMPTY_SCRIPT_SLOT)]
     empty_script: v8::Local<'scope, v8::Object>,
+    #[webapi(slot = TRUSTED_TYPES_CREATED_POLICY_NAMES_SLOT)]
+    created_policy_names: v8::Local<'scope, v8::Array>,
 }
 
 #[derive(WebApiObject)]
@@ -849,7 +852,8 @@ fn trusted_types_create_policy_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !trusted_types_factory_receiver_is_valid(scope, args.this()) {
+    let factory = args.this();
+    if !trusted_types_factory_receiver_is_valid(scope, factory) {
         return;
     }
     let Some(name) = webidl::required_argument::<webidl::DomString>(
@@ -866,10 +870,18 @@ fn trusted_types_create_policy_callback<'s>(
         return;
     };
 
-    if !trusted_types_policy_name_allowed(scope, &name) {
+    let is_duplicate = trusted_types_policy_name_was_created(scope, factory, &name);
+    if !trusted_types_policy_name_allowed(scope, &name, is_duplicate) {
         throw_type_error(
             scope,
             "Failed to execute 'createPolicy' on 'TrustedTypePolicyFactory': Content Security Policy disallows creating a policy with the given name.",
+        );
+        return;
+    }
+    if name == "default" && is_duplicate {
+        throw_type_error(
+            scope,
+            "Failed to execute 'createPolicy' on 'TrustedTypePolicyFactory': Policy with name \"default\" already exists.",
         );
         return;
     }
@@ -893,17 +905,62 @@ fn trusted_types_create_policy_callback<'s>(
             policy.into(),
         );
     }
+    trusted_types_record_created_policy_name(scope, factory, &name, is_duplicate);
     rv.set(policy.into());
 }
 
-fn trusted_types_policy_name_allowed(scope: &mut v8::PinScope<'_, '_>, name: &str) -> bool {
-    if let Some(allowed) = crate::worker::worker_allows_trusted_type_policy_name(scope, name) {
+fn trusted_types_policy_name_was_created<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    factory: v8::Local<'s, v8::Object>,
+    name: &str,
+) -> bool {
+    let Some(names) = get_private_value(scope, factory, TRUSTED_TYPES_CREATED_POLICY_NAMES_SLOT)
+        .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
+    else {
+        return false;
+    };
+    (0..names.length()).any(|index| {
+        names
+            .get_index(scope, index)
+            .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
+            .is_some_and(|value| value.to_rust_string_lossy(scope) == name)
+    })
+}
+
+fn trusted_types_record_created_policy_name<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    factory: v8::Local<'s, v8::Object>,
+    name: &str,
+    was_duplicate: bool,
+) {
+    if was_duplicate {
+        return;
+    }
+    let Some(names) = get_private_value(scope, factory, TRUSTED_TYPES_CREATED_POLICY_NAMES_SLOT)
+        .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
+    else {
+        return;
+    };
+    let Some(name) = v8_string(scope, name) else {
+        return;
+    };
+    let _ = names.set_index(scope, names.length(), name.into());
+}
+
+fn trusted_types_policy_name_allowed(
+    scope: &mut v8::PinScope<'_, '_>,
+    name: &str,
+    is_duplicate: bool,
+) -> bool {
+    if let Some(allowed) =
+        crate::worker::worker_allows_trusted_type_policy_name_by_csp(scope, name, is_duplicate)
+    {
         return allowed;
     }
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return true;
     };
-    unsafe { &*host_ptr }.allows_trusted_type_policy_name(scope, name)
+    unsafe { &mut *host_ptr }.allows_trusted_type_policy_name_by_csp(scope, name, is_duplicate)
 }
 
 fn trusted_type_policy_name_getter_callback<'s>(
@@ -1181,7 +1238,7 @@ fn prepare_function_constructor_arguments<'s>(
     let original = (0..arguments.length())
         .map(|index| arguments.get_index(scope, index))
         .collect::<Option<Vec<_>>>()?;
-    if !trusted_types_for_script_is_required(scope) || trusted_types_eval_is_allowed(scope) {
+    if !trusted_types_for_script_requires_conversion(scope) || trusted_types_eval_is_allowed(scope) {
         return Some(original);
     }
 
@@ -1214,14 +1271,16 @@ fn prepare_function_constructor_arguments<'s>(
         .collect()
 }
 
-fn trusted_types_for_script_is_required(scope: &mut v8::PinScope<'_, '_>) -> bool {
-    if let Some(required) = crate::worker::worker_requires_trusted_types_for_script(scope) {
-        return required;
+fn trusted_types_for_script_requires_conversion(scope: &mut v8::PinScope<'_, '_>) -> bool {
+    if let Some(requirements) = crate::worker::worker_trusted_types_for_script_requirements(scope) {
+        return requirements.requires_conversion();
     }
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return false;
     };
-    unsafe { &*host_ptr }.requires_trusted_types_for_script(scope)
+    unsafe { &*host_ptr }
+        .trusted_types_for_script_requirements(scope)
+        .requires_conversion()
 }
 
 fn trusted_types_eval_is_allowed(scope: &mut v8::PinScope<'_, '_>) -> bool {
