@@ -151,10 +151,6 @@ pub(in crate::worker) fn install_worker_global_scope<'s>(
         secure_context,
     )?;
     crate::context_bootstrap::install_trusted_types_runtime_state(scope, global)?;
-    let require_trusted_types_for_script =
-        crate::content_security_policy::content_security_policy_requires_trusted_types_for_script(
-            &state.borrow().content_security_policies,
-        );
     // V8 bypasses the callback for primitive strings unless this fast path is disabled.
     let has_string_code_generation_policy = {
         let state = state.borrow();
@@ -165,9 +161,6 @@ pub(in crate::worker) fn install_worker_global_scope<'s>(
         scope
             .get_current_context()
             .set_allow_generation_from_strings(false);
-    }
-    if require_trusted_types_for_script {
-        crate::context_bootstrap::install_trusted_types_eval_runtime_state(scope, global)?;
     }
     crate::context_bootstrap::install_webassembly_runtime_state(scope, global)?;
     if matches!(
