@@ -299,6 +299,43 @@ fn domparser_html_preserves_quirks_mode_and_parses_with_scripting_disabled() {
 }
 
 #[test]
+fn domparser_xml_preserves_requested_content_type_for_success_and_error_documents() {
+    let mut vm = new_storage_test_vm("https://domparser-xml-content-type.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const parser = new DOMParser();
+  return JSON.stringify([
+    "text/xml",
+    "application/xml",
+    "application/xhtml+xml",
+    "image/svg+xml"
+  ].map(contentType => {
+    const valid = parser.parseFromString("<root/>", contentType);
+    const invalid = parser.parseFromString(
+      '<span x:test="testing">1</span>',
+      contentType
+    );
+    return [
+      valid.contentType,
+      invalid.contentType,
+      invalid.documentElement.localName
+    ];
+  }));
+})()
+"#,
+        )
+        .expect("DOMParser XML content type probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"[["text/xml","text/xml","html"],["application/xml","application/xml","html"],["application/xhtml+xml","application/xhtml+xml","html"],["image/svg+xml","image/svg+xml","html"]]"#
+    );
+}
+
+#[test]
 fn detached_query_brand_checks_accept_standard_prototype_methods() {
     let mut vm = new_storage_test_vm("https://detached-query-brand-check.test/");
 
