@@ -21,3 +21,12 @@ pub(super) fn queue_element_toggle_event(
     let _ = unsafe { &mut *runtime_ptr }
         .queue_element_toggle_event(scope, kind, handle, old_state, new_state, source);
 }
+
+pub(super) fn cancel_element_toggle_event(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    kind: RendererPageElementToggleEventKind,
+    handle: DomHandle,
+) {
+    let _ = unsafe { &mut *runtime_ptr }.cancel_element_toggle_event(scope, kind, handle);
+}
