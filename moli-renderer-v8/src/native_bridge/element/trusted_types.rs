@@ -41,6 +41,80 @@ enum TrustedAttributeSink {
     ScriptUrl(&'static str),
 }
 
+impl TrustedAttributeSink {
+    fn type_name(&self) -> &'static str {
+        match self {
+            Self::Script(_) => "TrustedScript",
+            Self::ScriptUrl(_) => "TrustedScriptURL",
+        }
+    }
+}
+
+fn trusted_attribute_sink_for_names(
+    element_namespace: &str,
+    element_local_name: &str,
+    attribute_namespace: Option<&str>,
+    attribute_local_name: &str,
+) -> Option<TrustedAttributeSink> {
+    if attribute_namespace.is_none()
+        && matches!(
+            element_namespace,
+            "http://www.w3.org/1999/xhtml"
+                | "http://www.w3.org/2000/svg"
+                | "http://www.w3.org/1998/Math/MathML"
+        )
+        && super::event_handlers::is_element_event_handler_content_attribute_name(
+            attribute_local_name,
+        )
+    {
+        return Some(TrustedAttributeSink::Script(format!(
+            "Element {attribute_local_name}"
+        )));
+    }
+
+    match (
+        element_namespace,
+        element_local_name,
+        attribute_namespace,
+        attribute_local_name,
+    ) {
+        ("http://www.w3.org/1999/xhtml", "script", None, "src") => {
+            Some(TrustedAttributeSink::ScriptUrl("HTMLScriptElement src"))
+        }
+        ("http://www.w3.org/1999/xhtml", "embed", None, "src") => {
+            Some(TrustedAttributeSink::ScriptUrl("HTMLEmbedElement src"))
+        }
+        ("http://www.w3.org/1999/xhtml", "object", None, "data") => {
+            Some(TrustedAttributeSink::ScriptUrl("HTMLObjectElement data"))
+        }
+        ("http://www.w3.org/1999/xhtml", "object", None, "codebase") => Some(
+            TrustedAttributeSink::ScriptUrl("HTMLObjectElement codebase"),
+        ),
+        (
+            "http://www.w3.org/2000/svg",
+            "script",
+            None | Some("http://www.w3.org/1999/xlink"),
+            "href",
+        ) => Some(TrustedAttributeSink::ScriptUrl("SVGScriptElement href")),
+        _ => None,
+    }
+}
+
+pub(crate) fn trusted_attribute_type_name_for_names(
+    element_namespace: &str,
+    element_local_name: &str,
+    attribute_namespace: Option<&str>,
+    attribute_local_name: &str,
+) -> Option<&'static str> {
+    trusted_attribute_sink_for_names(
+        element_namespace,
+        element_local_name,
+        attribute_namespace,
+        attribute_local_name,
+    )
+    .map(|sink| sink.type_name())
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::native_bridge::element) enum TrustedHtmlSink {
     ElementInnerHtml,
@@ -179,49 +253,12 @@ pub(in crate::native_bridge) fn trusted_attribute_value_string<'s>(
             .dom_host()
             .node(handle)
             .and_then(|node| node.as_element())?;
-        let element_namespace = element.namespace();
-
-        if attribute_namespace.is_none()
-            && matches!(
-                element_namespace,
-                "http://www.w3.org/1999/xhtml"
-                    | "http://www.w3.org/2000/svg"
-                    | "http://www.w3.org/1998/Math/MathML"
-            )
-            && super::event_handlers::is_element_event_handler_content_attribute_name(local_name)
-        {
-            return Some((
-                runtime_ptr,
-                TrustedAttributeSink::Script(format!("Element {local_name}")),
-            ));
-        }
-
-        let sink = match (
-            element_namespace,
+        let sink = trusted_attribute_sink_for_names(
+            element.namespace(),
             element.local_name(),
             attribute_namespace,
             local_name,
-        ) {
-            ("http://www.w3.org/1999/xhtml", "script", None, "src") => {
-                Some(TrustedAttributeSink::ScriptUrl("HTMLScriptElement src"))
-            }
-            ("http://www.w3.org/1999/xhtml", "embed", None, "src") => {
-                Some(TrustedAttributeSink::ScriptUrl("HTMLEmbedElement src"))
-            }
-            ("http://www.w3.org/1999/xhtml", "object", None, "data") => {
-                Some(TrustedAttributeSink::ScriptUrl("HTMLObjectElement data"))
-            }
-            ("http://www.w3.org/1999/xhtml", "object", None, "codebase") => Some(
-                TrustedAttributeSink::ScriptUrl("HTMLObjectElement codebase"),
-            ),
-            (
-                "http://www.w3.org/2000/svg",
-                "script",
-                None | Some("http://www.w3.org/1999/xlink"),
-                "href",
-            ) => Some(TrustedAttributeSink::ScriptUrl("SVGScriptElement href")),
-            _ => None,
-        }?;
+        )?;
         Some((runtime_ptr, sink))
     });
 

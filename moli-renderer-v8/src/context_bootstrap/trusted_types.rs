@@ -91,6 +91,13 @@ struct TrustedTypePolicyFactoryInterfaceDeclaration {
     )]
     empty_script: (),
     #[webapi(
+        method = "getAttributeType",
+        callback = trusted_types_get_attribute_type_callback,
+        length = 2,
+        enumerable
+    )]
+    get_attribute_type: (),
+    #[webapi(
         accessor_property = "defaultPolicy",
         getter = trusted_types_default_policy_getter_callback,
         enumerable
@@ -107,6 +114,19 @@ struct TrustedTypesFactoryObjectDeclaration<'scope> {
     empty_script: v8::Local<'scope, v8::Object>,
     #[webapi(slot = TRUSTED_TYPES_CREATED_POLICY_NAMES_SLOT)]
     created_policy_names: v8::Local<'scope, v8::Array>,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "TrustedTypePolicyFactory.getAttributeType")]
+struct TrustedTypesGetAttributeTypeArgs {
+    #[webidl(required)]
+    tag_name: String,
+    #[webidl(required)]
+    attribute: String,
+    #[webidl(nullable)]
+    element_namespace: Option<String>,
+    #[webidl(nullable)]
+    attribute_namespace: Option<String>,
 }
 
 #[derive(WebApiObject)]
@@ -1076,6 +1096,41 @@ fn trusted_types_is_script_url_callback<'s>(
         return;
     }
     rv.set_bool(trusted_type_string(scope, args.get(0), TrustedTypeKind::ScriptUrl).is_some());
+}
+
+fn trusted_types_get_attribute_type_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !trusted_types_factory_receiver_is_valid(scope, args.this()) {
+        return;
+    }
+    let Some(parsed) = webidl::parse_args::<TrustedTypesGetAttributeTypeArgs>(scope, &args) else {
+        return;
+    };
+    let element_namespace = parsed
+        .element_namespace
+        .filter(|namespace| !namespace.is_empty())
+        .unwrap_or_else(|| crate::native_bridge::document::XHTML_NS.to_owned());
+    let attribute_namespace = parsed
+        .attribute_namespace
+        .filter(|namespace| !namespace.is_empty());
+    let tag_name = parsed.tag_name.to_ascii_lowercase();
+    let attribute = parsed.attribute.to_ascii_lowercase();
+    let Some(type_name) = crate::native_bridge::element::trusted_attribute_type_name_for_names(
+        &element_namespace,
+        &tag_name,
+        attribute_namespace.as_deref(),
+        &attribute,
+    ) else {
+        rv.set_null();
+        return;
+    };
+    let Some(type_name) = v8_string(scope, type_name) else {
+        return;
+    };
+    rv.set(type_name.into());
 }
 
 #[derive(Clone, Copy)]
