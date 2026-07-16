@@ -6231,6 +6231,156 @@ async fn popover_toggle_events_coalesce_within_one_task() {
     assert_eq!(after, "closed->open");
 }
 
+#[tokio::test]
+async fn removing_popover_attribute_cancels_pending_toggle_event() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://popover-attribute-removal-toggle.test/",
+        &loader,
+    );
+
+    let before = vm
+        .eval(
+            r#"
+            (() => {
+              const popover = document.createElement("div");
+              popover.popover = "auto";
+              const html = document.appendChild(document.createElement("html"));
+              html.appendChild(document.createElement("body")).appendChild(popover);
+              globalThis.__lmPopoverAttributeRemovalEvents = [];
+              for (const type of ["beforetoggle", "toggle"]) {
+                popover.addEventListener(type, event => {
+                  globalThis.__lmPopoverAttributeRemovalEvents.push(
+                    `${event.type}:${event.oldState}->${event.newState}`
+                  );
+                });
+              }
+              popover.showPopover();
+              popover.hidePopover();
+              popover.removeAttribute("popover");
+              return JSON.stringify({
+                events: globalThis.__lmPopoverAttributeRemovalEvents,
+                open: popover.matches(":popover-open"),
+                hasAttribute: popover.hasAttribute("popover")
+              });
+            })()
+            "#,
+        )
+        .expect("popover attribute removal setup should evaluate");
+
+    assert_eq!(
+        before,
+        r#"{"events":["beforetoggle:closed->open","beforetoggle:open->closed"],"open":false,"hasAttribute":false}"#
+    );
+
+    assert!(
+        !vm.has_ready_timeout(),
+        "popover toggle events must not create synthetic Page timers"
+    );
+    assert!(
+        !vm.run_one_dom_manipulation_task_executor_turn(
+            PageDomManipulationTestFamily::ElementToggle,
+            &loader,
+        )
+        .await
+        .expect("canceled popover toggle tasks should drain")
+    );
+
+    let after = vm
+        .eval("JSON.stringify(__lmPopoverAttributeRemovalEvents)")
+        .expect("popover attribute removal event log should evaluate");
+    assert_eq!(
+        after,
+        r#"["beforetoggle:closed->open","beforetoggle:open->closed"]"#
+    );
+}
+
+#[test]
+fn popover_show_rejects_owner_document_changes_during_toggle_steps() {
+    let mut vm = new_storage_test_vm("https://popover-owner-document.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const root = document.documentElement || document.appendChild(
+                document.createElement("html")
+              );
+              const body = document.body || root.appendChild(document.createElement("body"));
+              const frame = document.createElement("iframe");
+              body.appendChild(frame);
+              const childDocument = frame.contentDocument;
+              const childRoot = childDocument.documentElement || childDocument.appendChild(
+                childDocument.createElement("html")
+              );
+              const childBody = childDocument.body || childRoot.appendChild(
+                childDocument.createElement("body")
+              );
+              const invalidState = callback => {
+                try {
+                  callback();
+                  return false;
+                } catch (error) {
+                  return error.name === "InvalidStateError";
+                }
+              };
+
+              const movedWhileShowing = document.createElement("div");
+              movedWhileShowing.popover = "auto";
+              body.appendChild(movedWhileShowing);
+              movedWhileShowing.addEventListener("beforetoggle", () => {
+                childBody.appendChild(movedWhileShowing);
+              }, { once: true });
+              const showRejected = invalidState(() => movedWhileShowing.showPopover());
+
+              const movedWhileHiding = document.createElement("div");
+              movedWhileHiding.popover = "auto";
+              body.appendChild(movedWhileHiding);
+              movedWhileHiding.showPopover();
+              movedWhileHiding.addEventListener("beforetoggle", event => {
+                if (event.newState === "closed") childBody.appendChild(movedWhileHiding);
+              }, { once: true });
+              let hideThrew = false;
+              try {
+                movedWhileHiding.hidePopover();
+              } catch (_) {
+                hideThrew = true;
+              }
+
+              const parent = document.createElement("div");
+              const openChild = document.createElement("div");
+              const movedByDismiss = document.createElement("div");
+              for (const popover of [parent, openChild, movedByDismiss]) {
+                popover.popover = "auto";
+              }
+              parent.append(openChild, movedByDismiss);
+              body.appendChild(parent);
+              parent.showPopover();
+              openChild.showPopover();
+              openChild.addEventListener("beforetoggle", event => {
+                if (event.newState === "closed") childBody.appendChild(movedByDismiss);
+              });
+              const dismissRejected = invalidState(() => movedByDismiss.showPopover());
+
+              return JSON.stringify({
+                showRejected,
+                showStayedClosed: !movedWhileShowing.matches(":popover-open"),
+                hideThrew,
+                hideClosed: !movedWhileHiding.matches(":popover-open"),
+                dismissRejected,
+                dismissStayedClosed: !movedByDismiss.matches(":popover-open")
+              });
+            })()
+            "#,
+        )
+        .expect("popover owner-document reentrancy should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"showRejected":true,"showStayedClosed":true,"hideThrew":false,"hideClosed":true,"dismissRejected":true,"dismissStayedClosed":true}"#
+    );
+}
+
 #[test]
 fn window_name_default_and_assignment_match_browser_expectation() {
     let mut vm = new_storage_test_vm("https://example.com/");

@@ -3135,7 +3135,6 @@ html/semantics/interactive-elements/the-dialog-element/modal-dialog-in-visibilit
 html/semantics/interactive-elements/the-dialog-element/modal-dialog-scroll-height.html
 html/semantics/interactive-elements/the-dialog-element/multiple-centered-dialogs.html
 html/semantics/interactive-elements/the-dialog-element/non-modal-dialog-layout.html
-html/semantics/interactive-elements/the-dialog-element/toggle-events.html
 html/semantics/interactive-elements/the-dialog-element/top-layer-position.html
 html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_noopener.html
 html/semantics/links/links-created-by-a-and-area-elements/target_blank_implicit_noopener.html

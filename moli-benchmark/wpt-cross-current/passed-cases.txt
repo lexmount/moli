@@ -5988,6 +5988,7 @@ html/semantics/interactive-elements/the-dialog-element/inert-does-not-match-disa
 html/semantics/interactive-elements/the-dialog-element/inert-node-is-unselectable.html
 html/semantics/interactive-elements/the-dialog-element/submit-dialog-close-event.html
 html/semantics/interactive-elements/the-dialog-element/synthetic-click-inert.html
+html/semantics/interactive-elements/the-dialog-element/toggle-events.html
 html/semantics/interactive-elements/the-summary-element/activation-behavior.html
 html/semantics/interactive-elements/the-summary-element/anchor-with-inline-element.html
 html/semantics/interactive-elements/the-summary-element/anchor-without-link.html
