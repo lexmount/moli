@@ -6,7 +6,6 @@ use crate::content_security_policy::{
     ContentSecurityPolicyResourceKind, ContentSecurityPolicyScriptElementRequest,
     ContentSecurityPolicyStyleElementRequest, ContentSecurityPolicyUrlViolation,
     ContentSecurityPolicyViolationEventFields, TrustedTypesForScriptRequirements,
-    content_security_policy_allows_trusted_type_policy_name,
     content_security_policy_allows_trusted_types_eval,
     content_security_policy_frame_ancestors_violation_with_disposition_and_reporting_endpoints,
     content_security_policy_headers,
@@ -18,6 +17,7 @@ use crate::content_security_policy::{
     content_security_policy_requires_trusted_types_for_script,
     content_security_policy_script_element_url_violation_with_redirect_status_disposition_reporting_endpoints_and_request,
     content_security_policy_style_element_url_violation_with_redirect_status_disposition_reporting_endpoints_and_request,
+    content_security_policy_trusted_types_policy_violation_with_disposition_and_reporting_endpoints,
     content_security_policy_trusted_types_sink_violation_with_disposition_and_reporting_endpoints,
     content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints,
     create_security_policy_violation_event,
@@ -1450,19 +1450,43 @@ impl DocumentRuntime {
         document_policies_allow_trusted_types_eval(&policies)
     }
 
-    pub(crate) fn allows_trusted_type_policy_name_for_document(
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn trusted_type_policy_name_csp_check_for_document(
         &self,
         document_handle: Option<DomHandle>,
+        document_url: &Url,
         response_policies: &[String],
+        response_report_only_policies: &[String],
         response_reporting_endpoints: &ContentSecurityPolicyReportingEndpoints,
         policy_name: &str,
-    ) -> bool {
-        let policies = self.document_content_security_policy_strings_for_optional_document(
-            document_handle,
-            response_policies,
+        is_duplicate: bool,
+    ) -> DocumentContentSecurityPolicyCheck {
+        let enforced_policies = self
+            .document_content_security_policy_strings_for_optional_document(
+                document_handle,
+                response_policies,
+                response_reporting_endpoints,
+            );
+        let report_only_policies = document_response_content_security_policy_strings(
+            response_report_only_policies,
             response_reporting_endpoints,
         );
-        document_policies_allow_trusted_type_policy_name(policies, policy_name)
+        DocumentContentSecurityPolicyCheck {
+            report_only_violation: document_trusted_types_policy_violation_from_document_policies(
+                report_only_policies,
+                document_url,
+                policy_name,
+                is_duplicate,
+                ContentSecurityPolicyDisposition::Report,
+            ),
+            enforced_violation: document_trusted_types_policy_violation_from_document_policies(
+                enforced_policies,
+                document_url,
+                policy_name,
+                is_duplicate,
+                ContentSecurityPolicyDisposition::Enforce,
+            ),
+        }
     }
 
     pub(crate) fn queue_content_security_policy_violation_event_best_effort<'s>(
@@ -2063,12 +2087,26 @@ fn iter_document_trusted_types_sink_policy_violations<'a>(
     })
 }
 
-fn document_policies_allow_trusted_type_policy_name(
+fn document_trusted_types_policy_violation_from_document_policies(
     policies: Vec<DocumentContentSecurityPolicyString>,
+    document_url: &Url,
     policy_name: &str,
-) -> bool {
-    policies.into_iter().all(|policy| {
-        content_security_policy_allows_trusted_type_policy_name(&[policy.policy], policy_name)
+    is_duplicate: bool,
+    disposition: ContentSecurityPolicyDisposition,
+) -> Option<DocumentContentSecurityPolicyViolation> {
+    policies.into_iter().find_map(|policy| {
+        let single_policy = [policy.policy.clone()];
+        let mut violation =
+            content_security_policy_trusted_types_policy_violation_with_disposition_and_reporting_endpoints(
+                &single_policy,
+                document_url,
+                policy_name,
+                is_duplicate,
+                disposition,
+                &policy.reporting_endpoints,
+            )?;
+        apply_document_policy_reporting_flags(&mut violation, &policy);
+        Some(violation)
     })
 }
 
