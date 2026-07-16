@@ -3374,7 +3374,6 @@ svg/types/scripted/SVGLength-rem.html
 svg/types/scripted/SVGLength-rlh.html
 svg/types/scripted/SVGLength-viewport.html
 svg/types/scripted/SVGMatrix-tentative.html
-trusted-types/Document-write-appending-line-feed.html
 trusted-types/Document-write.html
 trusted-types/Element-setAttribute-respects-Elements-node-documents-globals-CSP-after-adoption-from-non-TT-realm.html
 trusted-types/GlobalEventHandlers-onclick.html
