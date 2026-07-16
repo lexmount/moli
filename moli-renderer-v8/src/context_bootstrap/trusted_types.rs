@@ -98,6 +98,13 @@ struct TrustedTypePolicyFactoryInterfaceDeclaration {
     )]
     get_attribute_type: (),
     #[webapi(
+        method = "getPropertyType",
+        callback = trusted_types_get_property_type_callback,
+        length = 2,
+        enumerable
+    )]
+    get_property_type: (),
+    #[webapi(
         accessor_property = "defaultPolicy",
         getter = trusted_types_default_policy_getter_callback,
         enumerable
@@ -127,6 +134,17 @@ struct TrustedTypesGetAttributeTypeArgs {
     element_namespace: Option<String>,
     #[webidl(nullable)]
     attribute_namespace: Option<String>,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "TrustedTypePolicyFactory.getPropertyType")]
+struct TrustedTypesGetPropertyTypeArgs {
+    #[webidl(required)]
+    tag_name: String,
+    #[webidl(required)]
+    property: String,
+    #[webidl(nullable)]
+    element_namespace: Option<String>,
 }
 
 #[derive(WebApiObject)]
@@ -1140,6 +1158,36 @@ fn trusted_types_get_attribute_type_callback<'s>(
         &tag_name,
         attribute_namespace.as_deref(),
         &attribute,
+    ) else {
+        rv.set_null();
+        return;
+    };
+    let Some(type_name) = v8_string(scope, type_name) else {
+        return;
+    };
+    rv.set(type_name.into());
+}
+
+fn trusted_types_get_property_type_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !trusted_types_factory_receiver_is_valid(scope, args.this()) {
+        return;
+    }
+    let Some(parsed) = webidl::parse_args::<TrustedTypesGetPropertyTypeArgs>(scope, &args) else {
+        return;
+    };
+    let element_namespace = parsed
+        .element_namespace
+        .filter(|namespace| !namespace.is_empty())
+        .unwrap_or_else(|| crate::native_bridge::document::XHTML_NS.to_owned());
+    let tag_name = parsed.tag_name.to_ascii_lowercase();
+    let Some(type_name) = crate::native_bridge::element::trusted_property_type_name_for_names(
+        &element_namespace,
+        &tag_name,
+        &parsed.property,
     ) else {
         rv.set_null();
         return;
