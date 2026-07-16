@@ -2,9 +2,9 @@
 <html>
   <body>
     <script>
+      window.parserImportMapAfterDynamicModuleErrors = 0;
       window.addEventListener("error", () => {
-        window.parserImportMapAfterDynamicModuleErrors =
-          (window.parserImportMapAfterDynamicModuleErrors || 0) + 1;
+        window.parserImportMapAfterDynamicModuleErrors += 1;
       });
 
       const dynamicModule = document.createElement('script');
