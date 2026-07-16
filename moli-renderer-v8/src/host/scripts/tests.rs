@@ -836,7 +836,7 @@ fn runtime_preparation_capture_uses_live_document_base_url() {
 #[test]
 fn runtime_preparation_only_captures_nonceable_script_nonces() {
     let url = Url::parse("https://example.test/").expect("test url should parse");
-    let document = HtmlParser.parse(
+    let document = HtmlParser::SCRIPTING_ENABLED.parse(
         url.clone(),
         "<!doctype html><html><head></head><body></body></html>".to_owned(),
     );
