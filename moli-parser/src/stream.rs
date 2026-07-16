@@ -29,8 +29,8 @@ use super::{
     },
     live_target::{ParserRuntimeDomSinks, ParserStreamHtmlTreeSinkTarget},
     session::{
-        HtmlParserSession, HtmlParserSessionResult, new_fragment_html_tree_sink_session,
-        new_html_tree_sink_session,
+        HtmlParserSession, HtmlParserSessionResult, HtmlTreeSinkSession,
+        new_fragment_html_tree_sink_session, new_html_tree_sink_session,
     },
 };
 
@@ -433,6 +433,15 @@ impl HtmlTreeSinkStream {
         self.parser.initialize_text_document();
     }
 
+    fn from_session(session: HtmlTreeSinkSession) -> Self {
+        Self {
+            parser: session.parser,
+            script_input: session.script_input,
+            parser_script_positions: RefCell::default(),
+            next_parser_script_position: Cell::new(0),
+        }
+    }
+
     pub(super) fn from_target_with_scripting(
         target: ParserStreamHtmlTreeSinkTarget,
         scripting_enabled: bool,
@@ -447,13 +456,7 @@ impl HtmlTreeSinkStream {
         target: ParserStreamHtmlTreeSinkTarget,
         options: html5ever::ParseOpts,
     ) -> Self {
-        let session = new_html_tree_sink_session(target, options);
-        Self {
-            parser: session.parser,
-            script_input: session.script_input,
-            parser_script_positions: RefCell::default(),
-            next_parser_script_position: Cell::new(0),
-        }
+        Self::from_session(new_html_tree_sink_session(target, options))
     }
 
     pub(super) fn from_fragment_target(
@@ -470,12 +473,7 @@ impl HtmlTreeSinkStream {
             context_local_name,
             scripting_enabled,
         );
-        Self {
-            parser: session.parser,
-            script_input: session.script_input,
-            parser_script_positions: RefCell::default(),
-            next_parser_script_position: Cell::new(0),
-        }
+        Self::from_session(session)
     }
 
     fn parser_script_position(&self, node_id: NativeNodeId) -> usize {
