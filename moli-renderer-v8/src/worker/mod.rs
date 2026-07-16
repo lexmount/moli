@@ -36,7 +36,7 @@ pub(crate) use global_scope::{
     send_worker_websocket_binary, send_worker_websocket_text, service_worker_runtime_identity,
     try_worker_xhr_abort_callback, try_worker_xhr_reschedule_timeout_after_timeout_change,
     try_worker_xhr_send_callback, worker_allows_eval_code_generation_by_csp,
-    worker_allows_trusted_type_policy_name, worker_allows_trusted_types_eval,
+    worker_allows_trusted_type_policy_name_by_csp, worker_allows_trusted_types_eval,
     worker_broadcast_channel_registry, worker_broadcast_channel_storage_key,
     worker_broadcast_channel_wake_sender, worker_broadcast_channel_wrapper,
     worker_current_script_url, worker_global_is_closed, worker_global_origin,
