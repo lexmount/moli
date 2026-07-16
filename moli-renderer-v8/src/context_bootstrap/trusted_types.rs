@@ -430,8 +430,9 @@ pub(crate) fn trusted_types_code_generation_check_callback<'s>(
             modified_source: None,
         };
     }
+    let requirements = trusted_types_for_script_requirements(scope);
     let (codegen_allowed, modified_source) =
-        match trusted_types_code_generation_check(scope, source, is_code_like) {
+        match trusted_types_code_generation_check(scope, source, is_code_like, requirements) {
             TrustedTypesCodeGenerationCheck::AllowOriginal => (true, None),
             TrustedTypesCodeGenerationCheck::AllowModified(source) => {
                 let source = v8_string(scope, &source);
@@ -449,6 +450,7 @@ pub(crate) fn trusted_types_code_generation_check<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     source: v8::Local<'s, v8::Value>,
     is_code_like: bool,
+    requirements: TrustedTypesForScriptRequirements,
 ) -> TrustedTypesCodeGenerationCheck {
     if let Some(value) = trusted_type_string(scope, source, TrustedTypeKind::Script) {
         return TrustedTypesCodeGenerationCheck::AllowModified(value);
@@ -464,7 +466,10 @@ pub(crate) fn trusted_types_code_generation_check<'s>(
     let Some(original) = js_value_to_string(scope, source) else {
         return TrustedTypesCodeGenerationCheck::Block;
     };
-    trusted_script_string_for_code_generation(scope, &original)
+    if !requirements.requires_conversion() {
+        return TrustedTypesCodeGenerationCheck::AllowModified(original);
+    }
+    trusted_script_string_for_code_generation(scope, &original, requirements)
         .map(TrustedTypesCodeGenerationCheck::AllowModified)
         .unwrap_or(TrustedTypesCodeGenerationCheck::Block)
 }
@@ -472,44 +477,20 @@ pub(crate) fn trusted_types_code_generation_check<'s>(
 fn trusted_script_string_for_code_generation(
     scope: &mut v8::PinScope<'_, '_>,
     original: &str,
+    requirements: TrustedTypesForScriptRequirements,
 ) -> Option<String> {
     let Some(function_source) = function_constructor_code_generation_source(original) else {
-        return trusted_script_string_for_eval_source(scope, original);
+        return trusted_script_string_for_eval_source(scope, original, requirements);
     };
-    if let Some(default_value) = apply_default_trusted_type_policy(
+    trusted_script_string_for_code_generation_sink(
         scope,
+        original,
         function_source.default_policy_input,
-        TrustedTypeKind::Script,
-        "Function",
-        TrustedTypeErrorKind::Eval,
-    ) {
-        if default_value == function_source.default_policy_input {
-            return Some(original.to_owned());
-        }
-        dispatch_trusted_types_sink_violation_event(
-            scope,
-            "Function",
-            function_source.violation_sample,
-        );
-        throw_eval_error(
-            scope,
-            "Trusted Types default policy must not transform strings passed to Function.",
-        );
-        return None;
-    }
-    dispatch_trusted_types_sink_violation_event(
-        scope,
         "Function",
         function_source.violation_sample,
-    );
-    throw_trusted_type_error(
-        scope,
-        TrustedTypeErrorKind::Eval,
-        "Function",
-        TrustedTypeKind::Script,
-        "Function",
-    );
-    None
+        requirements,
+        "Trusted Types default policy must not transform strings passed to Function.",
+    )
 }
 
 struct FunctionConstructorCodeGenerationSource<'a> {
@@ -540,33 +521,69 @@ fn function_constructor_code_generation_source(
 fn trusted_script_string_for_eval_source(
     scope: &mut v8::PinScope<'_, '_>,
     original: &str,
+    requirements: TrustedTypesForScriptRequirements,
 ) -> Option<String> {
-    if let Some(default_value) = apply_default_trusted_type_policy(
+    trusted_script_string_for_code_generation_sink(
         scope,
         original,
-        TrustedTypeKind::Script,
+        original,
         "eval",
-        TrustedTypeErrorKind::Eval,
-    ) {
-        if default_value == original {
-            return Some(default_value);
-        }
-        dispatch_trusted_types_sink_violation_event(scope, "eval", original);
-        throw_eval_error(
-            scope,
-            "Trusted Types default policy must not transform strings passed to eval.",
-        );
-        return None;
-    }
-    dispatch_trusted_types_sink_violation_event(scope, "eval", original);
-    throw_trusted_type_error(
+        original,
+        requirements,
+        "Trusted Types default policy must not transform strings passed to eval.",
+    )
+}
+
+fn trusted_script_string_for_code_generation_sink(
+    scope: &mut v8::PinScope<'_, '_>,
+    original: &str,
+    default_policy_input: &str,
+    sink: &'static str,
+    violation_sample: &str,
+    requirements: TrustedTypesForScriptRequirements,
+    transformed_value_error: &'static str,
+) -> Option<String> {
+    let outcome = apply_default_trusted_type_policy_outcome(
         scope,
-        TrustedTypeErrorKind::Eval,
-        "eval",
+        default_policy_input,
         TrustedTypeKind::Script,
-        "eval",
+        sink,
     );
-    None
+    match outcome {
+        DefaultTrustedTypePolicyOutcome::Value(value) if value == default_policy_input => {
+            Some(original.to_owned())
+        }
+        DefaultTrustedTypePolicyOutcome::Value(_) => {
+            dispatch_trusted_types_sink_violation_event(scope, sink, violation_sample);
+            throw_eval_error(scope, transformed_value_error);
+            None
+        }
+        DefaultTrustedTypePolicyOutcome::Exception => None,
+        outcome @ (DefaultTrustedTypePolicyOutcome::Unavailable
+        | DefaultTrustedTypePolicyOutcome::Rejected) => {
+            dispatch_trusted_types_sink_violation_event(scope, sink, violation_sample);
+            if requirements.is_enforced() {
+                if matches!(outcome, DefaultTrustedTypePolicyOutcome::Rejected) {
+                    throw_trusted_type_policy_result_error(
+                        scope,
+                        TrustedTypeErrorKind::Eval,
+                        TrustedTypeKind::Script,
+                    );
+                } else {
+                    throw_trusted_type_error(
+                        scope,
+                        TrustedTypeErrorKind::Eval,
+                        sink,
+                        TrustedTypeKind::Script,
+                        sink,
+                    );
+                }
+                None
+            } else {
+                Some(original.to_owned())
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1344,6 +1361,18 @@ fn trusted_types_for_script_is_required(scope: &mut v8::PinScope<'_, '_>) -> boo
         return false;
     };
     unsafe { &*host_ptr }.requires_trusted_types_for_script(scope)
+}
+
+fn trusted_types_for_script_requirements(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> TrustedTypesForScriptRequirements {
+    if let Some(required) = crate::worker::worker_requires_trusted_types_for_script(scope) {
+        return TrustedTypesForScriptRequirements::enforced_only(required);
+    }
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return TrustedTypesForScriptRequirements::default();
+    };
+    unsafe { &*host_ptr }.trusted_types_for_script_requirements(scope)
 }
 
 fn trusted_types_eval_is_allowed(scope: &mut v8::PinScope<'_, '_>) -> bool {
