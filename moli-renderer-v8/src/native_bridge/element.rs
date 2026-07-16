@@ -62,6 +62,7 @@ use trusted_types::{
 };
 pub(crate) use trusted_types::{
     set_svg_animated_string_base_value, trusted_attribute_type_name_for_names,
+    trusted_property_type_name_for_names,
 };
 
 pub(crate) use forms::{
