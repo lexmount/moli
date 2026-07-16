@@ -7864,6 +7864,7 @@ trusted-types/TrustedTypePolicyFactory-getAttributeType-svg.html
 trusted-types/TrustedTypePolicyFactory-isXXX.html
 trusted-types/Window-block-eval-function-constructor.html
 trusted-types/Window-setTimeout-setInterval.html
+trusted-types/block-Document-execCommand.html
 trusted-types/block-string-assignment-to-DOMParser-parseFromString.html
 trusted-types/block-string-assignment-to-DedicatedWorker-setTimeout-setInterval.html
 trusted-types/block-string-assignment-to-Document-parseHTMLUnsafe.html
@@ -7932,6 +7933,7 @@ trusted-types/trusted-types-reporting-for-DedicatedWorker-eval.html
 trusted-types/trusted-types-reporting-for-DedicatedWorker-function-constructor.html
 trusted-types/trusted-types-reporting-for-DedicatedWorker-importScripts.html
 trusted-types/trusted-types-reporting-for-DedicatedWorker-setTimeout-setInterval.html
+trusted-types/trusted-types-reporting-for-Document-execCommand.html
 trusted-types/trusted-types-reporting-for-Document-parseHTMLUnsafe.html
 trusted-types/trusted-types-reporting-for-Element-innerHTML.html
 trusted-types/trusted-types-reporting-for-Element-insertAdjacentHTML.html

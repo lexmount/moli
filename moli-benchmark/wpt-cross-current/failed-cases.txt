@@ -3653,7 +3653,6 @@ trusted-types/ServiceWorkerContainer-register-from-SharedWorker.https.html
 trusted-types/TrustedType-AttributeNodes.html
 trusted-types/TrustedTypePolicyFactory-getAttributeType.html
 trusted-types/Window-TrustedTypes.html
-trusted-types/block-Document-execCommand.html
 trusted-types/block-string-assignment-to-Document-write.html
 trusted-types/block-string-assignment-to-Element-outerHTML.html
 trusted-types/block-string-assignment-to-Element-setAttribute.html
@@ -3686,7 +3685,6 @@ trusted-types/trusted-types-event-handlers.html
 trusted-types/trusted-types-report-only.html
 trusted-types/trusted-types-reporting-check-report-DedicatedWorker-sink-mismatch.html
 trusted-types/trusted-types-reporting-for-DedicatedWorker-ServiceWorkerContainer-register.https.html
-trusted-types/trusted-types-reporting-for-Document-execCommand.html
 trusted-types/trusted-types-reporting-for-Document-write.html
 trusted-types/trusted-types-reporting-for-Element-setAttribute.html
 trusted-types/trusted-types-reporting-for-HTMLIFrameElement-srcdoc.html

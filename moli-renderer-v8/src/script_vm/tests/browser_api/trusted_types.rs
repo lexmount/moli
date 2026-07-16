@@ -662,6 +662,85 @@ fn dom_parser_gates_converted_union_source_after_webidl_argument_conversion() {
 }
 
 #[test]
+fn document_exec_command_gates_only_insert_html_values() {
+    let mut vm = new_storage_test_vm("https://exec-command-trusted-types.test/");
+    vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const errorName = callback => {
+    try {
+      callback();
+      return "none";
+    } catch (error) {
+      return error && error.name;
+    }
+  };
+  const root = document.documentElement || document.appendChild(document.createElement("html"));
+  const body = document.body || root.appendChild(document.createElement("body"));
+  const input = document.createElement("input");
+  body.append(input);
+  input.focus();
+
+  const blocked = [
+    errorName(() => document.execCommand("insertHTML", false, "<b>blocked</b>")),
+    errorName(() => document.execCommand("InSeRtHtMl", false, null))
+  ];
+  const unprotected = [
+    errorName(() => document.execCommand("insertHTML")),
+    errorName(() => document.execCommand("insertHTML", false, undefined)),
+    errorName(() => document.execCommand("paste", false, "<b>plain</b>")),
+    errorName(() => document.execCommand("insertText", false, "plain"))
+  ];
+
+  input.value = "";
+  const custom = trustedTypes.createPolicy("exec-command-custom", {
+    createHTML: value => value
+  });
+  const trustedReturned = document.execCommand(
+    "insertHTML",
+    false,
+    custom.createHTML("<b>trusted</b>")
+  );
+  const trustedValue = input.value;
+
+  let sourceConversions = 0;
+  const defaultCalls = [];
+  trustedTypes.createPolicy("default", {
+    createHTML: (value, type, sink) => {
+      defaultCalls.push([value, type, sink]);
+      return "<b>default</b>";
+    }
+  });
+  input.value = "";
+  const defaultReturned = document.execCommand("insertHTML", false, {
+    toString() {
+      sourceConversions += 1;
+      return "<i>original</i>";
+    }
+  });
+
+  return JSON.stringify({
+    blocked,
+    unprotected,
+    trusted: [trustedReturned, trustedValue],
+    defaulted: [defaultReturned, input.value, sourceConversions],
+    defaultCalls
+  });
+})()
+"#,
+        )
+        .expect("Document.execCommand TrustedHTML sink probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"blocked":["TypeError","TypeError"],"unprotected":["none","none","none","none"],"trusted":[true,"trusted"],"defaulted":[true,"default",1],"defaultCalls":[["<i>original</i>","TrustedHTML","Document execCommand"]]}"#
+    );
+}
+
+#[test]
 fn document_write_gates_concatenated_union_values_before_writeln_newline() {
     let mut vm = new_storage_test_vm("https://document-write-trusted-types.test/");
     vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
