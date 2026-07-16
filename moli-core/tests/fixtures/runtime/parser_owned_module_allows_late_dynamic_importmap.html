@@ -13,9 +13,9 @@
       window.parserModuleAcquisitionFirstGreeting = greeting;
     </script>
     <script>
+      window.parserModuleAcquisitionLateErrors = 0;
       window.addEventListener("error", () => {
-        window.parserModuleAcquisitionLateErrors =
-          (window.parserModuleAcquisitionLateErrors || 0) + 1;
+        window.parserModuleAcquisitionLateErrors += 1;
       });
 
       const lateMap = document.createElement("script");
