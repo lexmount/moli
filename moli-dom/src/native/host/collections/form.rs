@@ -121,13 +121,20 @@ impl DomHost {
             .is_some_and(is_listed_form_control_element)
     }
 
+    pub fn builtin_form_associated_owner(&self, handle: DomHandle) -> Option<DomHandle> {
+        let element = self.node(handle).and_then(Node::as_element)?;
+        if !is_parser_form_association_candidate(element) {
+            return None;
+        }
+        if is_builtin_reassociateable_form_associated_element(element) {
+            return self.form_control_owner(handle);
+        }
+        self.parser_or_ancestor_form_owner(handle)
+    }
+
     pub fn form_control_owner(&self, handle: DomHandle) -> Option<DomHandle> {
         let element = self.node(handle).and_then(Node::as_element)?;
-        if !matches!(
-            element.local_name(),
-            "button" | "fieldset" | "input" | "object" | "output" | "select" | "textarea"
-        ) || element.namespace() != "http://www.w3.org/1999/xhtml"
-        {
+        if !is_builtin_reassociateable_form_associated_element(element) {
             return None;
         }
 
@@ -145,7 +152,14 @@ impl DomHost {
                 .then_some(candidate);
         }
 
-        if let Some(owner) = element.parser_associated_form_owner()
+        self.parser_or_ancestor_form_owner(handle)
+    }
+
+    fn parser_or_ancestor_form_owner(&self, handle: DomHandle) -> Option<DomHandle> {
+        if let Some(owner) = self
+            .node(handle)
+            .and_then(Node::as_element)
+            .and_then(Element::parser_associated_form_owner)
             && self.is_html_element_named(owner, "form")
             && self.root_node_handle(handle) == self.root_node_handle(owner)
         {
