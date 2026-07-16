@@ -230,4 +230,55 @@ mod tests {
             })
         );
     }
+
+    #[test]
+    fn html_serializers_apply_attribute_serialized_name_rules() {
+        let mut dom = NativeDom::new_html(test_url());
+        let container = dom.create_element("section");
+        let element = dom
+            .create_element_ns(Some("urn:element"), "div")
+            .expect("namespaced element");
+        assert!(dom.set_attribute_ns(
+            element,
+            Some("http://www.w3.org/XML/1998/namespace"),
+            Some("alternate"),
+            "lang",
+            "en-us",
+        ));
+        assert!(dom.set_attribute_ns(
+            element,
+            Some("http://www.w3.org/2000/xmlns/"),
+            None,
+            "binding",
+            "urn:binding",
+        ));
+        assert!(dom.set_attribute_ns(
+            element,
+            Some("http://www.w3.org/2000/xmlns/"),
+            None,
+            "xmlns",
+            "urn:default",
+        ));
+        assert!(dom.set_attribute_ns(
+            element,
+            Some("http://www.w3.org/1999/xlink"),
+            Some("alternate"),
+            "href",
+            "target",
+        ));
+        assert!(dom.set_attribute_ns(element, Some("urn:custom"), Some("p"), "attr", "value",));
+        assert!(dom.append_child(container, element));
+
+        let expected = concat!(
+            "<div xml:lang=\"en-us\" xmlns:binding=\"urn:binding\" ",
+            "xmlns=\"urn:default\" xlink:href=\"target\" p:attr=\"value\"></div>"
+        );
+        assert_eq!(dom.inner_html(container).as_deref(), Some(expected));
+
+        let host = DomHost::from_dom(dom);
+        assert_eq!(
+            host.get_html(container, false, &[]).as_deref(),
+            Some(expected)
+        );
+    }
 }

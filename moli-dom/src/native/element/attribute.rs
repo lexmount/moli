@@ -11,6 +11,10 @@ pub struct Attribute {
 }
 
 impl Attribute {
+    const XLINK_NAMESPACE: &'static str = "http://www.w3.org/1999/xlink";
+    const XML_NAMESPACE: &'static str = "http://www.w3.org/XML/1998/namespace";
+    const XMLNS_NAMESPACE: &'static str = "http://www.w3.org/2000/xmlns/";
+
     pub fn new(
         local_name: String,
         namespace: String,
@@ -34,6 +38,24 @@ impl Attribute {
             Some(prefix) if !prefix.is_empty() => format!("{prefix}:{}", self.local_name),
             _ => self.local_name.to_string(),
         }
+    }
+
+    pub(crate) fn push_html_serialized_name(&self, mut push_str: impl FnMut(&str)) {
+        let namespace: &str = self.namespace.as_ref();
+        let local_name: &str = self.local_name.as_ref();
+        let prefix = match namespace {
+            Self::XML_NAMESPACE => Some("xml"),
+            Self::XLINK_NAMESPACE => Some("xlink"),
+            Self::XMLNS_NAMESPACE if self.prefix.is_none() && local_name != "xmlns" => {
+                Some("xmlns")
+            }
+            _ => self.prefix.as_deref().filter(|prefix| !prefix.is_empty()),
+        };
+        if let Some(prefix) = prefix {
+            push_str(prefix);
+            push_str(":");
+        }
+        push_str(local_name);
     }
 
     pub fn name_matches(&self, name: &str) -> bool {

@@ -851,7 +851,7 @@ fn serialize_html_node_frame<'a, S>(
                     return;
                 }
                 out.push(' ');
-                out.push_str(attribute.local_name());
+                attribute.push_html_serialized_name(|part| out.push_str(part));
                 out.push_str("=\"");
                 escape_html_attribute(attribute.value(), out);
                 out.push('"');

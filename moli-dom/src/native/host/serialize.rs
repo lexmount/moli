@@ -267,7 +267,7 @@ impl DomHost {
                 }
                 for attribute in element.attributes() {
                     out.push(' ');
-                    out.push_str(attribute.local_name());
+                    attribute.push_html_serialized_name(|part| out.push_str(part));
                     out.push_str("=\"");
                     escape_html_attribute(attribute.value(), out);
                     out.push('"');

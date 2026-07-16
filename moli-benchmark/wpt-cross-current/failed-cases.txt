@@ -3484,7 +3484,6 @@ html/syntax/parsing/the-end.html
 html/syntax/serializing-html-fragments/escaping.html
 html/syntax/serializing-html-fragments/serializing-cdata-in-html-document.html
 html/syntax/serializing-html-fragments/serializing.html
-html/syntax/serializing-html-fragments/template.html
 html/syntax/serializing-xml-fragments/outerHTML.html
 html/syntax/xmldecl/xmldecl-1.html
 html/syntax/xmldecl/xmldecl-2.html

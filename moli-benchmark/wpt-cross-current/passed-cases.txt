@@ -6278,6 +6278,7 @@ html/syntax/parsing/zero.html
 html/syntax/serializing-html-fragments/initial-linefeed-pre.html
 html/syntax/serializing-html-fragments/outerHTML.html
 html/syntax/serializing-html-fragments/serializing-lt-gt.html
+html/syntax/serializing-html-fragments/template.html
 html/webappapis/animation-frames/callback-cross-realm-report-exception.html
 html/webappapis/animation-frames/callback-exception.html
 html/webappapis/animation-frames/callback-handle.html
