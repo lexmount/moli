@@ -3,8 +3,9 @@ use crate::{
     callback_invocation::{CallbackInvocation, CallbackInvocationOutcome, CallbackInvoker},
     context_bootstrap::events::{
         EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, event_internal_bool_flag,
-        set_event_default_prevented, set_event_internal_flag,
+        set_event_internal_flag,
     },
+    context_bootstrap::{EventHandlerType, apply_event_handler_return_value},
     exception_reporting::CallbackExceptionLogLevel,
     host::report_event_callback_exception,
     util::context_host_ptr_from_global_bridge,
@@ -350,10 +351,5 @@ fn apply_handler_return_value<'s>(
     event: v8::Local<'s, v8::Object>,
     returned: v8::Local<'s, v8::Value>,
 ) {
-    if returned.is_false()
-        && crate::context_bootstrap::event_bool_attribute(scope, event, "cancelable")
-        && !event_internal_bool_flag(scope, event, EVENT_PASSIVE_SLOT)
-    {
-        set_event_default_prevented(scope, event);
-    }
+    apply_event_handler_return_value(scope, event, returned, EventHandlerType::EventHandler);
 }
