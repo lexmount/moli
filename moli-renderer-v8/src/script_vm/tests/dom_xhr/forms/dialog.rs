@@ -1,5 +1,75 @@
 use super::*;
 
+#[tokio::test]
+async fn dialog_toggle_events_cancel_opening_and_coalesce_state_changes() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://dialog-toggle-events.test/",
+        &loader,
+    );
+
+    let before_toggle = vm
+        .eval(
+            r#"
+(() => {
+  const host = document.body || document.documentElement || document;
+  const dialog = document.createElement('dialog');
+  host.appendChild(dialog);
+  globalThis.__dialogToggleEvents = [];
+  globalThis.__dialogToggleTarget = dialog;
+
+  dialog.addEventListener('beforetoggle', event => {
+    __dialogToggleEvents.push(`cancel:${event.oldState}->${event.newState}:${dialog.open}:${event.cancelable}`);
+    event.preventDefault();
+  }, { once: true });
+  dialog.show();
+  const canceledOpen = dialog.open;
+
+  dialog.addEventListener('beforetoggle', event => {
+    __dialogToggleEvents.push(`before:${event.oldState}->${event.newState}:${dialog.open}:${event.cancelable}`);
+  });
+  dialog.addEventListener('toggle', event => {
+    __dialogToggleEvents.push(`toggle:${event.oldState}->${event.newState}:${dialog.open}:${event.cancelable}`);
+  });
+  dialog.show();
+  dialog.close();
+
+  return JSON.stringify({
+    canceledOpen,
+    open: dialog.open,
+    events: __dialogToggleEvents
+  });
+})()
+"#,
+        )
+        .expect("dialog toggle setup should evaluate");
+
+    assert_eq!(
+        before_toggle,
+        r#"{"canceledOpen":false,"open":false,"events":["cancel:closed->open:false:true","before:closed->open:false:true","before:open->closed:true:false"]}"#
+    );
+
+    assert!(
+        !vm.has_ready_timeout(),
+        "dialog toggle events must not create synthetic Page timers"
+    );
+    assert!(
+        vm.run_one_dom_manipulation_task_executor_turn(
+            PageDomManipulationTestFamily::ElementToggle,
+            &loader,
+        )
+        .await
+        .expect("coalesced dialog toggle event should run")
+    );
+    let after_toggle = vm
+        .eval("JSON.stringify(__dialogToggleEvents)")
+        .expect("coalesced dialog toggle state should evaluate");
+    assert_eq!(
+        after_toggle,
+        r#"["cancel:closed->open:false:true","before:closed->open:false:true","before:open->closed:true:false","toggle:closed->closed:false:false"]"#
+    );
+}
+
 #[test]
 fn dialog_show_methods_enforce_requested_state_and_active_document() {
     let mut vm = new_storage_test_vm("https://dialog-requested-state.test/");
@@ -137,6 +207,14 @@ async fn dialog_form_submission_closes_with_submitter_result_and_queues_reentran
         "dialog close must not create a synthetic Page timer"
     );
     assert!(
+        vm.run_one_dom_manipulation_task_executor_turn(
+            PageDomManipulationTestFamily::ElementToggle,
+            &loader,
+        )
+        .await
+        .expect("first coalesced dialog toggle event should run")
+    );
+    assert!(
         vm.run_one_user_interaction_executor_turn(&loader)
             .await
             .expect("first queued dialog close event should run")
@@ -155,6 +233,14 @@ async fn dialog_form_submission_closes_with_submitter_result_and_queues_reentran
         r#"{"open":false,"returnValue":"Hello","events":[["Goodbye",true,false,false]]}"#
     );
 
+    assert!(
+        vm.run_one_dom_manipulation_task_executor_turn(
+            PageDomManipulationTestFamily::ElementToggle,
+            &loader,
+        )
+        .await
+        .expect("second coalesced dialog toggle event should run")
+    );
     assert!(
         vm.run_one_user_interaction_executor_turn(&loader)
             .await
