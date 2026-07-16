@@ -7869,6 +7869,7 @@ trusted-types/eval-csp-tt-default-policy-mutate.html
 trusted-types/eval-csp-tt-default-policy.html
 trusted-types/eval-csp-tt-no-default-policy.html
 trusted-types/eval-function-constructor-untrusted-arguments-and-default-policy-throwing.html
+trusted-types/eval-function-constructor.html
 trusted-types/eval-no-csp-no-tt-default-policy.html
 trusted-types/eval-no-csp-no-tt.html
 trusted-types/eval-with-non-trusted-script-object.html

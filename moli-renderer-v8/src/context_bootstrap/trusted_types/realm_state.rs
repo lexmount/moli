@@ -99,6 +99,8 @@ pub(super) fn install_lazy_trusted_types_runtime_state<'s>(
         TRUSTED_TYPE_POLICY_FACTORY_CONSTRUCTOR_SLOT,
         policy_factory_constructor.into(),
     );
+    install_trusted_script_code_like_constructor(scope, global)?;
+    install_function_constructor_brand_guards(scope, global)?;
     for (property, name) in TrustedTypesGlobalProperty::ALL {
         let data = v8::Integer::new_from_unsigned(scope, property.callback_data());
         global

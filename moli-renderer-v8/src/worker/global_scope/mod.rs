@@ -3003,7 +3003,6 @@ pub(super) fn install_worker_global_scope<'s>(
         scope
             .get_current_context()
             .set_allow_generation_from_strings(false);
-        crate::context_bootstrap::install_trusted_types_eval_runtime_state(scope, global)?;
     }
     crate::context_bootstrap::install_webassembly_runtime_state(scope, global)?;
     if matches!(global_kind, super::thread::WorkerGlobalKind::Service { .. }) {
@@ -6186,6 +6185,16 @@ pub(crate) fn worker_allows_trusted_type_policy_name(
 pub(crate) fn worker_allows_trusted_types_eval(scope: &mut v8::PinScope<'_, '_>) -> Option<bool> {
     Some(
         crate::content_security_policy::content_security_policy_allows_trusted_types_eval(
+            &get_worker_state(scope)?.borrow().content_security_policies,
+        ),
+    )
+}
+
+pub(crate) fn worker_requires_trusted_types_for_script(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<bool> {
+    Some(
+        crate::content_security_policy::content_security_policy_requires_trusted_types_for_script(
             &get_worker_state(scope)?.borrow().content_security_policies,
         ),
     )

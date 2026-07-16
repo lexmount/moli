@@ -708,6 +708,67 @@ fn trusted_script_eval_is_unwrapped_without_trusted_types_enforcement() {
 }
 
 #[test]
+fn trusted_script_code_like_brand_drives_function_constructors() {
+    let mut vm = new_storage_test_vm("https://trusted-script-function-brand.test/");
+    vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const policy = trustedTypes.createPolicy("function-brand", { createScript: value => value });
+  const source = ["a", "b", "c = 5", "return (a + b) * c;"];
+  const constructors = [
+    Function,
+    (async function() {}).constructor,
+    (function*() {}).constructor,
+    (async function*() {}).constructor
+  ];
+  const mixedBlocked = constructors.map(Constructor => {
+    let blocked = 0;
+    for (let mask = 0; mask < 15; mask++) {
+      const args = source.map((value, index) =>
+        mask & (2 ** index) ? policy.createScript(value) : value);
+      try {
+        new Constructor(...args);
+      } catch (error) {
+        blocked += error instanceof EvalError;
+      }
+    }
+    return blocked;
+  });
+  const trusted = source.map(value => policy.createScript(value));
+  const functions = constructors.map(Constructor => new Constructor(...trusted));
+  let forgedBlocked = 0;
+  for (let index = 0; index < source.length; index++) {
+    const forged = trusted.slice();
+    forged[index] = Object.assign(policy.createScript(source[index]), {
+      toString: () => ` ${source[index]} `
+    });
+    try {
+      new Function(...forged);
+    } catch (error) {
+      forgedBlocked += error instanceof EvalError;
+    }
+  }
+  return JSON.stringify({
+    mixedBlocked,
+    trustedConstructorTypes: functions.map(value => typeof value),
+    functionValues: [functions[0](1, 2, 3), functions[0](1, 2)],
+    forgedBlocked
+  });
+})()
+"#,
+        )
+        .expect("TrustedScript function constructor brand probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"mixedBlocked":[15,15,15,15],"trustedConstructorTypes":["function","function","function","function"],"functionValues":[9,15],"forgedBlocked":4}"#
+    );
+}
+
+#[test]
 fn trusted_types_default_policy_receives_type_and_eval_sink_arguments() {
     let mut vm = new_storage_test_vm("https://trusted-types-default-callback-args.test/");
     vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
