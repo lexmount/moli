@@ -18,6 +18,7 @@ fn event_attribute_handlers_use_html_scope_chain_and_report_compile_errors() {
                 <table><tbody><tr><td id="cell"><img id="cell-inner"></td></tr></tbody></table>
                 <form id="owner" onsubmit="return false">
                   <button id="button" type="button"><q id="button-inner"></q></button>
+                  <img id="form-image" alt="form image">
                 </form>
                 <a id="error-inner"></a>
               `;
@@ -63,6 +64,14 @@ fn event_attribute_handlers_use_html_scope_chain_and_report_compile_errors() {
               `);
               buttonInner.click();
 
+              const formImage = document.getElementById("form-image");
+              globalThis.elements = "global-elements";
+              formImage.setAttribute(
+                "onclick",
+                `globalThis.__imageFormScope = elements;`
+              );
+              formImage.click();
+
               globalThis.__windowScope = null;
               globalThis.__compileErrorEvents = 0;
               document.body.bodyOwn = true;
@@ -84,6 +93,8 @@ fn event_attribute_handlers_use_html_scope_chain_and_report_compile_errors() {
               return JSON.stringify({
                 cell: globalThis.__cellScope,
                 form: globalThis.__formScope,
+                imageForm: globalThis.__imageFormScope === form.elements,
+                imageIsNotListed: !Array.from(form.elements).includes(formImage),
                 window: globalThis.__windowScope,
                 errors: globalThis.__compileErrorEvents,
               });
@@ -94,7 +105,7 @@ fn event_attribute_handlers_use_html_scope_chain_and_report_compile_errors() {
 
     assert_eq!(
         result,
-        r#"{"cell":["number","string","function","boolean","undefined","object","updated"],"form":["boolean","object","string","string","boolean","boolean","undefined","object"],"window":["undefined","function","undefined","string"],"errors":1}"#,
+        r#"{"cell":["number","string","function","boolean","undefined","object","updated"],"form":["boolean","object","string","string","boolean","boolean","undefined","object"],"imageForm":true,"imageIsNotListed":true,"window":["undefined","function","undefined","string"],"errors":1}"#,
     );
 }
 
