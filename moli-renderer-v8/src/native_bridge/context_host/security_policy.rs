@@ -769,6 +769,7 @@ impl JsContextHost {
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         allow_trusted_types_eval: bool,
+        source: Option<&str>,
     ) -> bool {
         let owner = policy_owner_dispatch_scope(scope);
         let Some(check) = self.non_url_csp_check_for_owner(
@@ -778,6 +779,7 @@ impl JsContextHost {
             } else {
                 ContentSecurityPolicyNonUrlKind::Eval
             },
+            source,
         ) else {
             return true;
         };
@@ -789,9 +791,11 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'s, '_>,
     ) -> bool {
         let owner = policy_owner_dispatch_scope(scope);
-        let Some(check) =
-            self.non_url_csp_check_for_owner(owner, ContentSecurityPolicyNonUrlKind::WasmEval)
-        else {
+        let Some(check) = self.non_url_csp_check_for_owner(
+            owner,
+            ContentSecurityPolicyNonUrlKind::WasmEval,
+            None,
+        ) else {
             return true;
         };
         self.apply_code_generation_csp_check(scope, owner, check, false)
@@ -801,6 +805,7 @@ impl JsContextHost {
         &self,
         owner: OwnerDispatchScope,
         kind: ContentSecurityPolicyNonUrlKind,
+        source: Option<&str>,
     ) -> Option<DocumentContentSecurityPolicyCheck> {
         let snapshot = self.owner_document_policy_snapshot(owner)?;
         // SAFETY: JsContextHost is owned by the ScriptVm that owns this DocumentRuntime.
@@ -816,6 +821,7 @@ impl JsContextHost {
                     .policy_container
                     .content_security_reporting_endpoints,
                 kind,
+                source,
             ),
         )
     }
@@ -866,6 +872,7 @@ impl JsContextHost {
         self.non_url_csp_check_for_owner(
             OwnerDispatchScope::Child(handle),
             ContentSecurityPolicyNonUrlKind::WasmEval,
+            None,
         )?
         .into_violations()
         .1

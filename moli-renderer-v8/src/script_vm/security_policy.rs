@@ -161,6 +161,7 @@ pub(super) fn string_code_generation_check_callback<'s>(
             if source.is_string() {
                 StringCodeGenerationPolicyAction::CheckCsp {
                     allow_trusted_types_eval: true,
+                    source: string_code_generation_source(scope, source),
                     modified_source: None,
                 }
             } else {
@@ -168,6 +169,7 @@ pub(super) fn string_code_generation_check_callback<'s>(
                     TrustedTypesCodeGenerationCheck::AllowModified(source) => {
                         StringCodeGenerationPolicyAction::CheckCsp {
                             allow_trusted_types_eval: true,
+                            source: Some(source.clone()),
                             modified_source: Some(source),
                         }
                     }
@@ -191,6 +193,7 @@ pub(super) fn string_code_generation_check_callback<'s>(
             NonTrustedTypesCodeGenerationSource::String => {
                 StringCodeGenerationPolicyAction::CheckCsp {
                     allow_trusted_types_eval: false,
+                    source: string_code_generation_source(scope, source),
                     modified_source: None,
                 }
             }
@@ -200,6 +203,7 @@ pub(super) fn string_code_generation_check_callback<'s>(
                     TrustedTypesCodeGenerationCheck::AllowModified(source) => {
                         StringCodeGenerationPolicyAction::CheckCsp {
                             allow_trusted_types_eval: false,
+                            source: Some(source.clone()),
                             modified_source: Some(source),
                         }
                     }
@@ -217,11 +221,14 @@ pub(super) fn string_code_generation_check_callback<'s>(
         StringCodeGenerationPolicyAction::AllowWithoutCsp => true,
         StringCodeGenerationPolicyAction::CheckCsp {
             allow_trusted_types_eval,
+            source,
             modified_source: replacement,
         } => {
-            if !unsafe { &mut *host_ptr }
-                .allows_eval_code_generation_by_csp(scope, allow_trusted_types_eval)
-            {
+            if !unsafe { &mut *host_ptr }.allows_eval_code_generation_by_csp(
+                scope,
+                allow_trusted_types_eval,
+                source.as_deref(),
+            ) {
                 return code_generation_result(false, None);
             }
             let replacement = match replacement {
@@ -254,6 +261,7 @@ enum StringCodeGenerationPolicyAction {
     AllowWithoutCsp,
     CheckCsp {
         allow_trusted_types_eval: bool,
+        source: Option<String>,
         modified_source: Option<String>,
     },
     Block,
@@ -269,11 +277,21 @@ fn code_generation_action_from_trusted_types_check(
         TrustedTypesCodeGenerationCheck::AllowModified(source) => {
             StringCodeGenerationPolicyAction::CheckCsp {
                 allow_trusted_types_eval: false,
+                source: Some(source.clone()),
                 modified_source: Some(source),
             }
         }
         TrustedTypesCodeGenerationCheck::Block => StringCodeGenerationPolicyAction::Block,
     }
+}
+
+fn string_code_generation_source(
+    scope: &mut v8::PinScope<'_, '_>,
+    source: v8::Local<'_, v8::Value>,
+) -> Option<String> {
+    v8::Local::<v8::String>::try_from(source)
+        .ok()
+        .map(|source| source.to_rust_string_lossy(scope))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
