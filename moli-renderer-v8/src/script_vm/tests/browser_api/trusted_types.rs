@@ -199,6 +199,86 @@ fn trusted_type_factory_interface_exposes_stable_branded_empty_values() {
 }
 
 #[test]
+fn trusted_type_factory_get_attribute_type_reuses_attribute_sink_classification() {
+    let mut vm = new_storage_test_vm("https://trusted-type-attribute-types.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const HTML = "http://www.w3.org/1999/xhtml";
+  const SVG = "http://www.w3.org/2000/svg";
+  const MATHML = "http://www.w3.org/1998/Math/MathML";
+  const XLINK = "http://www.w3.org/1999/xlink";
+  const OTHER = "https://example.test/namespace";
+  const type = (...args) => trustedTypes.getAttributeType(...args);
+  const errorName = callback => {
+    try {
+      callback();
+      return "none";
+    } catch (error) {
+      return error.constructor.name;
+    }
+  };
+  const descriptor = Object.getOwnPropertyDescriptor(
+    TrustedTypePolicyFactory.prototype,
+    "getAttributeType"
+  );
+
+  return JSON.stringify({
+    interface: [
+      typeof descriptor.value,
+      descriptor.value.name,
+      descriptor.value.length,
+      descriptor.enumerable,
+      descriptor.configurable,
+      Object.hasOwn(trustedTypes, "getAttributeType")
+    ],
+    htmlDefaults: [
+      type("script", "src"),
+      type("SCRIPT", "SRC", undefined, undefined),
+      type("script", "src", null, null),
+      type("script", "src", "", ""),
+      type("script", "src", HTML, ""),
+      type("ſcript", "src"),
+      type("script", "ſrc")
+    ],
+    urls: [
+      type("embed", "src"),
+      type("object", "data"),
+      type("object", "codebase"),
+      type("script", "href"),
+      type("script", "href", SVG),
+      type("SCRIPT", "HREF", SVG, XLINK),
+      type("script", "href", SVG, OTHER),
+      type("script", "href", SVG.toUpperCase())
+    ],
+    handlers: [
+      type("div", "onclick"),
+      type("g", "ondblclick", SVG),
+      type("mrow", "onmousedown", MATHML),
+      type("div", "onclick", HTML, OTHER),
+      type("foo", "onmouseup", OTHER),
+      type("div", "ondoesnotexist")
+    ],
+    errors: [
+      errorName(() => type()),
+      errorName(() => type("script")),
+      errorName(() => descriptor.value.call({}, "script", "src"))
+    ]
+  });
+})()
+"#,
+        )
+        .expect("TrustedTypePolicyFactory getAttributeType probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"interface":["function","getAttributeType",2,true,true,false],"htmlDefaults":["TrustedScriptURL","TrustedScriptURL","TrustedScriptURL","TrustedScriptURL","TrustedScriptURL",null,null],"urls":["TrustedScriptURL","TrustedScriptURL","TrustedScriptURL",null,"TrustedScriptURL","TrustedScriptURL",null,null],"handlers":["TrustedScript","TrustedScript","TrustedScript",null,null,null],"errors":["TypeError","TypeError","TypeError"]}"#
+    );
+}
+
+#[test]
 fn trusted_type_factory_default_policy_getter_tracks_the_branded_policy() {
     let mut vm = new_storage_test_vm("https://trusted-type-factory-default-policy.test/");
 
