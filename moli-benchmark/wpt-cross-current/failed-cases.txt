@@ -3128,7 +3128,6 @@ html/semantics/interactive-elements/the-dialog-element/dialog-focusing-steps-ine
 html/semantics/interactive-elements/the-dialog-element/dialog-focusing-steps-prevent-autofocus.html
 html/semantics/interactive-elements/the-dialog-element/dialog-inert.html
 html/semantics/interactive-elements/the-dialog-element/dialog-overlay.html
-html/semantics/interactive-elements/the-dialog-element/dialog-requestclose-recurse.html
 html/semantics/interactive-elements/the-dialog-element/dialog-showModal.html
 html/semantics/interactive-elements/the-dialog-element/inertness-with-modal-dialogs-and-iframes.html
 html/semantics/interactive-elements/the-dialog-element/modal-dialog-in-visibility-hidden.html

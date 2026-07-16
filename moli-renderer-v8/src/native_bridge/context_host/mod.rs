@@ -993,6 +993,7 @@ pub(crate) struct JsContextHost {
     button_element_targets: HashMap<(DomHandle, String), DomHandle>,
     constructing_form_data_forms: Vec<DomHandle>,
     active_form_submission_forms: Vec<DomHandle>,
+    active_dialog_request_closes: HashSet<DomHandle>,
     pending_form_submission_child_targets: HashMap<DomHandle, Vec<DomHandle>>,
     active_image_submitter_coordinate: Option<(DomHandle, u32, u32)>,
     current_inline_script_stack: Vec<DomHandle>,

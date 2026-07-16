@@ -387,6 +387,7 @@ impl JsContextHost {
             button_element_targets: HashMap::new(),
             constructing_form_data_forms: Vec::new(),
             active_form_submission_forms: Vec::new(),
+            active_dialog_request_closes: HashSet::new(),
             pending_form_submission_child_targets: HashMap::new(),
             active_image_submitter_coordinate: None,
             current_inline_script_stack: Vec::new(),
@@ -1702,6 +1703,14 @@ impl JsContextHost {
         {
             self.active_form_submission_forms.remove(index);
         }
+    }
+
+    pub(crate) fn begin_dialog_request_close(&mut self, dialog: DomHandle) -> bool {
+        self.active_dialog_request_closes.insert(dialog)
+    }
+
+    pub(crate) fn end_dialog_request_close(&mut self, dialog: DomHandle) {
+        self.active_dialog_request_closes.remove(&dialog);
     }
 
     pub(crate) fn observers_mut(

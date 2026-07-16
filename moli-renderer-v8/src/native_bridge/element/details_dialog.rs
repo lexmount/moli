@@ -16,8 +16,9 @@ use super::super::{
 use super::popover::popover_is_open;
 use super::toggle_event::queue_element_toggle_event;
 use super::{
-    dispatch_public_event, element_has_attribute, html_element_getter_receiver,
-    html_element_setter_receiver, property_dom_string_value, set_reflected_boolean_attribute,
+    construct_simple_event, dispatch_public_event, element_has_attribute,
+    html_element_getter_receiver, html_element_setter_receiver, property_dom_string_value,
+    set_reflected_boolean_attribute,
 };
 
 pub(crate) fn queue_details_toggle_event_for_attribute_change(
@@ -101,6 +102,13 @@ struct DialogCloseArgs {
     return_value: Option<String>,
 }
 
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "HTMLDialogElement.requestClose")]
+struct DialogRequestCloseArgs {
+    #[webidl(with = dialog_request_close_return_value_arg)]
+    return_value: Option<String>,
+}
+
 pub(super) fn main_summary_child(runtime: &JsContextHost, details: DomHandle) -> Option<DomHandle> {
     let details_element = runtime
         .dom_host()
@@ -181,16 +189,28 @@ fn dialog_close_return_value_arg<'s>(
     args: &v8::FunctionCallbackArguments<'s>,
     index: i32,
 ) -> Result<Option<String>, webidl::WebIdlError> {
+    dialog_optional_return_value_arg(scope, args, index, "HTMLDialogElement.close")
+}
+
+fn dialog_request_close_return_value_arg<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+    index: i32,
+) -> Result<Option<String>, webidl::WebIdlError> {
+    dialog_optional_return_value_arg(scope, args, index, "HTMLDialogElement.requestClose")
+}
+
+fn dialog_optional_return_value_arg<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+    index: i32,
+    prefix: &'static str,
+) -> Result<Option<String>, webidl::WebIdlError> {
     if args.length() <= index || args.get(index).is_undefined() {
         return Ok(None);
     }
-    webidl::argument::<webidl::DomString>(
-        scope,
-        args,
-        index,
-        webidl::Context::argument("HTMLDialogElement.close", 1),
-    )
-    .map(|value| Some(value.0))
+    webidl::argument::<webidl::DomString>(scope, args, index, webidl::Context::argument(prefix, 1))
+        .map(|value| Some(value.0))
 }
 
 fn dialog_runtime_and_handle_from_object<'s>(
@@ -507,6 +527,38 @@ pub(super) fn dialog_close_callback<'s>(
         return;
     };
     close_dialog_element(scope, runtime_ptr, handle, parsed.return_value.as_deref());
+}
+
+pub(super) fn dialog_request_close_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let object = args.this();
+    let Some(parsed) = webidl::parse_args::<DialogRequestCloseArgs>(scope, &args) else {
+        return;
+    };
+    let Ok((runtime_ptr, handle)) = dialog_runtime_and_handle_from_object(scope, object) else {
+        return;
+    };
+    let runtime = unsafe { &*runtime_ptr };
+    if !runtime.dom_host().is_html_element_named(handle, "dialog")
+        || !runtime.dom_host().is_connected(handle)
+        || !element_has_attribute(runtime, handle, "open")
+    {
+        return;
+    }
+    let Some(event) = construct_simple_event(scope, "cancel", false, true, false) else {
+        return;
+    };
+    if !unsafe { &mut *runtime_ptr }.begin_dialog_request_close(handle) {
+        return;
+    }
+    let allows_close = dispatch_public_event(scope, runtime_ptr, handle, event).allows_default();
+    if allows_close {
+        close_dialog_element(scope, runtime_ptr, handle, parsed.return_value.as_deref());
+    }
+    unsafe { &mut *runtime_ptr }.end_dialog_request_close(handle);
 }
 
 pub(in crate::native_bridge::element) fn close_dialog_element(

@@ -5981,6 +5981,7 @@ html/semantics/interactive-elements/the-dialog-element/dialog-form-submission-un
 html/semantics/interactive-elements/the-dialog-element/dialog-no-throw-requested-state.html
 html/semantics/interactive-elements/the-dialog-element/dialog-open-2.html
 html/semantics/interactive-elements/the-dialog-element/dialog-open.html
+html/semantics/interactive-elements/the-dialog-element/dialog-requestclose-recurse.html
 html/semantics/interactive-elements/the-dialog-element/dialog-return-value.html
 html/semantics/interactive-elements/the-dialog-element/dialog-showModal-remove.html
 html/semantics/interactive-elements/the-dialog-element/form-submit-dialog-shadow.html
