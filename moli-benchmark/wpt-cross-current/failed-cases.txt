@@ -3679,7 +3679,6 @@ trusted-types/should-trusted-type-policy-creation-be-blocked-by-csp-002.html
 trusted-types/should-trusted-type-policy-creation-be-blocked-by-csp-003.html
 trusted-types/should-trusted-type-policy-creation-be-blocked-by-csp-004-worker.html
 trusted-types/trusted-types-createHTMLDocument.html
-trusted-types/trusted-types-eval-reporting-no-unsafe-eval.html
 trusted-types/trusted-types-eval-reporting-report-only.html
 trusted-types/trusted-types-event-handlers.html
 trusted-types/trusted-types-report-only.html

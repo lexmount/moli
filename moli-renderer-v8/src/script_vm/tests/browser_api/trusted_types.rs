@@ -1877,6 +1877,68 @@ fn rejected_default_policy_reports_both_dispositions_and_enforces_once() {
 }
 
 #[test]
+fn eval_csp_report_samples_use_trusted_types_compliant_source() {
+    let mut vm = new_storage_test_vm("https://eval-csp-report-sample.test/");
+    vm.set_response_content_security_policies(&[
+        "require-trusted-types-for 'script'".to_owned(),
+        "script-src 'nonce-test' 'report-sample'".to_owned(),
+    ]);
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const samples = [];
+  const defaultCalls = [];
+  document.addEventListener("securitypolicyviolation", event => {
+    if (event.effectiveDirective === "script-src") {
+      samples.push(event.sample);
+    }
+  });
+  globalThis.__evalCspReportSamples = samples;
+
+  const explicit = trustedTypes.createPolicy("explicit-eval", {
+    createScript: value => value
+  });
+  trustedTypes.createPolicy("default", {
+    createScript: value => {
+      defaultCalls.push(value);
+      return value;
+    }
+  });
+  const errors = [
+    () => eval(explicit.createScript("trusted-source")),
+    () => eval("default-source")
+  ].map(run => {
+    try {
+      run();
+      return "none";
+    } catch (error) {
+      return `${error.name}:${error instanceof EvalError}`;
+    }
+  });
+  return JSON.stringify({ errors, defaultCalls, samples });
+})()
+"#,
+        )
+        .expect("eval CSP report-sample probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"errors":["EvalError:true","EvalError:true"],"defaultCalls":["default-source"],"samples":[]}"#
+    );
+    assert_eq!(
+        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        2
+    );
+    assert_eq!(
+        vm.eval("JSON.stringify(globalThis.__evalCspReportSamples)")
+            .expect("queued eval CSP samples should be observable"),
+        r#"["trusted-source","default-source"]"#
+    );
+}
+
+#[test]
 fn function_constructor_violations_sample_only_parameters_and_body() {
     let mut vm = new_storage_test_vm("https://function-constructor-violation.test/");
     vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);

@@ -662,7 +662,7 @@ fn prepare_window_timer_handler<'s>(
     let host = unsafe { &mut *host_ptr };
     let allow_trusted_types_eval =
         requirements.is_enforced() && host.allows_trusted_types_eval(scope);
-    host.allows_eval_code_generation_by_csp(scope, allow_trusted_types_eval)
+    host.allows_eval_code_generation_by_csp(scope, allow_trusted_types_eval, Some(source.as_str()))
         .then_some(WindowTimerHandler::Source(source))
 }
 

@@ -999,23 +999,6 @@ pub(crate) fn content_security_policy_trusted_types_policy_violation_with_dispos
     })
 }
 
-pub(crate) fn content_security_policy_non_url_violation_with_disposition_and_reporting_endpoints(
-    policy: &str,
-    protected_url: &Url,
-    kind: ContentSecurityPolicyNonUrlKind,
-    disposition: ContentSecurityPolicyDisposition,
-    reporting_endpoints: &ContentSecurityPolicyReportingEndpoints,
-) -> Option<ContentSecurityPolicyUrlViolation> {
-    content_security_policy_non_url_violation_with_source(
-        policy,
-        protected_url,
-        kind,
-        None,
-        disposition,
-        reporting_endpoints,
-    )
-}
-
 pub(crate) fn content_security_policy_inline_source_violation_with_disposition_and_reporting_endpoints(
     policy: &str,
     protected_url: &Url,
@@ -1114,7 +1097,7 @@ pub(crate) fn content_security_policy_inline_style_element_violation_with_dispos
     })
 }
 
-fn content_security_policy_non_url_violation_with_source(
+pub(crate) fn content_security_policy_non_url_violation_with_source(
     policy: &str,
     protected_url: &Url,
     kind: ContentSecurityPolicyNonUrlKind,
@@ -2987,25 +2970,26 @@ mod tests {
     fn non_url_inline_script_uses_script_src_elem_fallbacks() {
         let reporting_endpoints = ContentSecurityPolicyReportingEndpoints::default();
         assert!(
-            content_security_policy_non_url_violation_with_disposition_and_reporting_endpoints(
+            content_security_policy_non_url_violation_with_source(
                 "script-src-elem 'unsafe-inline'; script-src 'none'",
                 &protected_url(),
                 ContentSecurityPolicyNonUrlKind::DocumentInlineScript,
+                None,
                 ContentSecurityPolicyDisposition::Enforce,
                 &reporting_endpoints,
             )
             .is_none()
         );
 
-        let violation =
-            content_security_policy_non_url_violation_with_disposition_and_reporting_endpoints(
-                "script-src 'self'; default-src 'unsafe-inline'",
-                &protected_url(),
-                ContentSecurityPolicyNonUrlKind::DocumentInlineScript,
-                ContentSecurityPolicyDisposition::Report,
-                &reporting_endpoints,
-            )
-            .expect("script-src should block inline script without unsafe-inline");
+        let violation = content_security_policy_non_url_violation_with_source(
+            "script-src 'self'; default-src 'unsafe-inline'",
+            &protected_url(),
+            ContentSecurityPolicyNonUrlKind::DocumentInlineScript,
+            None,
+            ContentSecurityPolicyDisposition::Report,
+            &reporting_endpoints,
+        )
+        .expect("script-src should block inline script without unsafe-inline");
         assert_eq!(violation.effective_directive, "script-src-elem");
         assert_eq!(violation.blocked_uri, "inline");
         assert_eq!(
@@ -3317,10 +3301,11 @@ mod tests {
             "default-src 'unsafe-eval'",
         ] {
             assert!(
-                content_security_policy_non_url_violation_with_disposition_and_reporting_endpoints(
+                content_security_policy_non_url_violation_with_source(
                     policy,
                     &protected_url(),
                     ContentSecurityPolicyNonUrlKind::WasmEval,
+                    None,
                     ContentSecurityPolicyDisposition::Enforce,
                     &reporting_endpoints,
                 )
@@ -3329,15 +3314,15 @@ mod tests {
             );
         }
 
-        let violation =
-            content_security_policy_non_url_violation_with_disposition_and_reporting_endpoints(
-                "default-src 'self'",
-                &protected_url(),
-                ContentSecurityPolicyNonUrlKind::WasmEval,
-                ContentSecurityPolicyDisposition::Enforce,
-                &reporting_endpoints,
-            )
-            .expect("default-src should block wasm eval without unsafe eval source");
+        let violation = content_security_policy_non_url_violation_with_source(
+            "default-src 'self'",
+            &protected_url(),
+            ContentSecurityPolicyNonUrlKind::WasmEval,
+            None,
+            ContentSecurityPolicyDisposition::Enforce,
+            &reporting_endpoints,
+        )
+        .expect("default-src should block wasm eval without unsafe eval source");
         assert_eq!(violation.effective_directive, "script-src");
         assert_eq!(violation.blocked_uri, "wasm-eval");
     }
