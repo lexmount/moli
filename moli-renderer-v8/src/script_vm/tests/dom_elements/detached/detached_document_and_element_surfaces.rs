@@ -1714,3 +1714,41 @@ fn text_legacy_dom_string_reflectors_use_owner_prototypes() {
 
     assert_eq!(result, "ok");
 }
+
+#[test]
+fn domparser_html_preserves_quirks_mode_and_parses_with_scripting_disabled() {
+    let mut vm = new_storage_test_vm("https://domparser-html-mode.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const parser = new DOMParser();
+  const quirks = parser.parseFromString(
+    "<html><head></head><body></body></html>",
+    "text/html"
+  );
+  const standards = parser.parseFromString(
+    "<!doctype html><html><head></head><body></body></html>",
+    "text/html"
+  );
+  const noscript = parser.parseFromString(
+    "<body><noscript><p id='first'></p><p id='second'></p></noscript></body>",
+    "text/html"
+  );
+  return JSON.stringify({
+    quirks: quirks.compatMode,
+    standards: standards.compatMode,
+    noscriptChildren: Array.from(noscript.querySelector("noscript").children)
+      .map(element => element.id)
+  });
+})()
+"#,
+        )
+        .expect("DOMParser HTML parse mode probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"quirks":"BackCompat","standards":"CSS1Compat","noscriptChildren":["first","second"]}"#
+    );
+}
