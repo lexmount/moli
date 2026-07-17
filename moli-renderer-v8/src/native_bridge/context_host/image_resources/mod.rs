@@ -88,7 +88,7 @@ impl ImageResponseCompletion {
 }
 
 impl super::PendingImageLoadEvent {
-    fn document_task_owner(self) -> FrameDocumentTaskOwner {
+    fn document_task_owner(&self) -> FrameDocumentTaskOwner {
         match self.owner() {
             super::PendingImageLoadEventOwner::Main(binding) => binding.owner(),
             super::PendingImageLoadEventOwner::Child(binding) => binding.owner(),
@@ -111,11 +111,9 @@ impl super::JsContextHost {
     pub(super) fn begin_pending_image_resource(
         &mut self,
         element: DomHandle,
-        pending: super::PendingImageLoadEvent,
+        pending: &super::PendingImageLoadEvent,
     ) {
-        let Some(request_key) =
-            crate::native_bridge::element::image_selected_request_key(self, element)
-        else {
+        let Some(request_key) = pending.request_key().cloned() else {
             self.image_resources.retire_element(element);
             return;
         };
@@ -330,14 +328,16 @@ impl super::JsContextHost {
         descriptor: Option<ImageResponseDescriptor>,
         encoded: &[u8],
     ) -> ImageResponseCompletion {
-        self.complete_pending_image_response_if_matches(
+        let completion = self.complete_pending_image_response_if_matches(
             element,
             sequence,
             None,
             super::PendingImageLoadTerminalSource::Local,
             descriptor,
             encoded,
-        )
+        );
+        self.update_current_image_request_after_response(element, completion);
+        completion
     }
 
     pub(crate) fn complete_pending_image_load_network_response_if_matches(
@@ -348,14 +348,31 @@ impl super::JsContextHost {
         descriptor: Option<ImageResponseDescriptor>,
         encoded: &[u8],
     ) -> ImageResponseCompletion {
-        self.complete_pending_image_response_if_matches(
+        let completion = self.complete_pending_image_response_if_matches(
             element,
             sequence,
             Some(internal_id),
             super::PendingImageLoadTerminalSource::Network,
             descriptor,
             encoded,
-        )
+        );
+        self.update_current_image_request_after_response(element, completion);
+        completion
+    }
+
+    fn update_current_image_request_after_response(
+        &mut self,
+        element: DomHandle,
+        completion: ImageResponseCompletion,
+    ) {
+        if !completion.accepted() {
+            return;
+        }
+        let request_key = self
+            .pending_image_load_events
+            .get(&element)
+            .and_then(|pending| pending.request_key.clone());
+        self.set_current_image_request(element, request_key);
     }
 
     fn complete_pending_image_response_if_matches(
@@ -567,18 +584,22 @@ impl super::JsContextHost {
                 false
             }
         };
-        let Some(pending) = self.pending_image_load_events.get_mut(&task_id.element()) else {
-            return false;
+        let request_key = {
+            let Some(pending) = self.pending_image_load_events.get_mut(&task_id.element()) else {
+                return false;
+            };
+            if pending.id != task_id.sequence() {
+                return false;
+            }
+            pending.network_state = if successful {
+                super::PendingImageLoadNetworkState::Ready(source)
+            } else {
+                super::PendingImageLoadNetworkState::Failed(source)
+            };
+            pending.terminal_followup_queued = true;
+            pending.request_key.clone()
         };
-        if pending.id != task_id.sequence() {
-            return false;
-        }
-        pending.network_state = if successful {
-            super::PendingImageLoadNetworkState::Ready(source)
-        } else {
-            super::PendingImageLoadNetworkState::Failed(source)
-        };
-        pending.terminal_followup_queued = true;
+        self.set_current_image_request(task_id.element(), request_key);
         true
     }
 }
