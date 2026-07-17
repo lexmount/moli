@@ -52,6 +52,108 @@ struct DocumentLocationAccessorDeclaration {
     location: (),
 }
 
+const CONSTRUCTED_DOCUMENT_LOCATION_GETTER_SLOT: &str = "__moliConstructedDocumentLocationGetter";
+const CONSTRUCTED_DOCUMENT_LOCATION_SETTER_SLOT: &str = "__moliConstructedDocumentLocationSetter";
+
+fn constructed_document_location_getter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let receiver = args.this();
+    let Some(location) = get_private_value(scope, receiver, WINDOW_LOCATION_SLOT) else {
+        webidl::throw_type_error(
+            scope,
+            "Document.location getter called on incompatible receiver.",
+        );
+        return;
+    };
+    rv.set(location);
+}
+
+fn constructed_document_location_setter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let receiver = args.this();
+    let Some(location) = get_private_value(scope, receiver, WINDOW_LOCATION_SLOT) else {
+        webidl::throw_type_error(
+            scope,
+            "Document.location setter called on incompatible receiver.",
+        );
+        return;
+    };
+    let Ok(location) = v8::Local::<v8::Object>::try_from(location) else {
+        webidl::throw_type_error(scope, "Cannot set location on a detached Document.");
+        return;
+    };
+    let Some(href) = super::helpers::v8_value_to_string(scope, args.get(0)) else {
+        return;
+    };
+    navigate_location_object(scope, location, LocationNavigationKind::Assign, Some(href));
+}
+
+fn constructed_document_location_accessor_functions<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    document: v8::Local<'s, v8::Object>,
+) -> Result<(v8::Local<'s, v8::Function>, v8::Local<'s, v8::Function>)> {
+    let prototype = document
+        .get_prototype(scope)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        .ok_or_else(|| anyhow!("constructed Document is missing its interface prototype"))?;
+    let cached_getter =
+        get_private_value(scope, prototype, CONSTRUCTED_DOCUMENT_LOCATION_GETTER_SLOT)
+            .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok());
+    let cached_setter =
+        get_private_value(scope, prototype, CONSTRUCTED_DOCUMENT_LOCATION_SETTER_SLOT)
+            .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok());
+    if let (Some(getter), Some(setter)) = (cached_getter, cached_setter) {
+        return Ok((getter, setter));
+    }
+
+    let getter = v8::Function::builder(constructed_document_location_getter_callback)
+        .build(scope)
+        .ok_or_else(|| anyhow!("failed to build constructed Document.location getter"))?;
+    getter.set_name(v8str(scope, "get location"));
+    let setter = v8::Function::builder(constructed_document_location_setter_callback)
+        .length(1)
+        .build(scope)
+        .ok_or_else(|| anyhow!("failed to build constructed Document.location setter"))?;
+    setter.set_name(v8str(scope, "set location"));
+    set_private_value(
+        scope,
+        prototype,
+        CONSTRUCTED_DOCUMENT_LOCATION_GETTER_SLOT,
+        getter.into(),
+    );
+    set_private_value(
+        scope,
+        prototype,
+        CONSTRUCTED_DOCUMENT_LOCATION_SETTER_SLOT,
+        setter.into(),
+    );
+    Ok((getter, setter))
+}
+
+pub(crate) fn install_constructed_document_location_runtime_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    document: v8::Local<'s, v8::Object>,
+) -> Result<()> {
+    let location = v8::null(scope);
+    set_private_value(scope, document, WINDOW_LOCATION_SLOT, location.into());
+    let (getter, setter) = constructed_document_location_accessor_functions(scope, document)?;
+    define_get_set_property(
+        scope,
+        document,
+        v8str(scope, "location").into(),
+        getter.into(),
+        setter.into(),
+        v8::PropertyAttribute::DONT_DELETE,
+        "location",
+    )
+}
+
 pub(crate) fn sync_document_location_runtime_state_from_window<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     document: v8::Local<'s, v8::Object>,

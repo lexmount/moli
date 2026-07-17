@@ -2837,7 +2837,6 @@ html/browsers/history/the-history-interface/history_pushstate_url_rewriting.html
 html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/pushstate.html
 html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/replacestate.html
 html/browsers/history/the-location-interface/assign_before_load.html
-html/browsers/history/the-location-interface/document_location.html
 html/browsers/history/the-location-interface/location-ancestor-origins-new-object.html
 html/browsers/history/the-location-interface/location-ancestor-origins-referrerpolicy-snapshot.html
 html/browsers/history/the-location-interface/location-protocol-setter-non-broken-weird.html
