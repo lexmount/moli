@@ -92,7 +92,7 @@ pub(super) fn prepare_style_world_update(
     context: StyleComputationContext,
     plan: &StyleWorldUpdatePlan,
 ) -> Rc<PreparedStyleWorldUpdate> {
-    let media = StyloStyleEnvironment::from_emulated_media(runtime.emulated_media());
+    let media = stylo_style_environment(runtime, key.source_document());
     let quirks_mode = quirks_mode(runtime, key.source_document());
     let environment = StyleWorldEnvironment::new(
         context.viewport(),
@@ -156,7 +156,23 @@ pub(super) fn stylesheet_query_fallback(
         runtime,
         key,
         context,
-        StyloStyleEnvironment::from_emulated_media(runtime.emulated_media()),
+        stylo_style_environment(runtime, key.source_document()),
+    )
+}
+
+fn stylo_style_environment(
+    runtime: &JsContextHost,
+    document: Option<DomHandle>,
+) -> StyloStyleEnvironment {
+    StyloStyleEnvironment::from_emulated_media(runtime.emulated_media()).with_page_color_schemes(
+        document
+            .map(|document| {
+                crate::document_color_scheme::document_page_color_schemes(
+                    runtime.dom_host(),
+                    document,
+                )
+            })
+            .unwrap_or_default(),
     )
 }
 

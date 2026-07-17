@@ -426,6 +426,7 @@ pub(super) fn new_style_device_with_viewport_bits(
         PointerCapabilities::default(),
     );
     device.set_media_feature_preferences(environment.stylo_media_feature_preferences());
+    device.set_page_color_schemes(environment.stylo_page_color_schemes());
     device
 }
 

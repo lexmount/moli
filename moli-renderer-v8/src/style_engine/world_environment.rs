@@ -1,7 +1,9 @@
 use style::{
-    device::servo::ServoMediaFeaturePreferences, media_queries::MediaType,
-    queries::values::PrefersColorScheme, servo::media_features::PrefersContrast,
-    values::specified::color::ForcedColors,
+    device::servo::ServoMediaFeaturePreferences,
+    media_queries::MediaType,
+    queries::values::PrefersColorScheme,
+    servo::media_features::PrefersContrast,
+    values::specified::color::{ColorSchemeFlags, ForcedColors},
 };
 
 use crate::{document_runtime::DomHandle, dom::native::DomHost};
@@ -92,6 +94,7 @@ impl From<Option<f64>> for StyleViewport {
 pub(crate) struct StyloStyleEnvironment {
     media_type: StyloStyleMediaType,
     color_scheme: StyloStyleColorScheme,
+    page_color_scheme_bits: u8,
     reduced_motion: StyloStyleReducedPreference,
     reduced_data: StyloStyleReducedPreference,
     reduced_transparency: StyloStyleReducedPreference,
@@ -151,6 +154,7 @@ impl StyloStyleEnvironment {
             } else {
                 StyloStyleColorScheme::Light
             },
+            page_color_scheme_bits: 0,
             reduced_motion: match overrides.reduced_motion.as_deref() {
                 Some("reduce") => StyloStyleReducedPreference::Reduce,
                 Some("no-preference") | None => StyloStyleReducedPreference::NoPreference,
@@ -173,6 +177,11 @@ impl StyloStyleEnvironment {
         }
     }
 
+    pub(crate) fn with_page_color_schemes(mut self, color_schemes: ColorSchemeFlags) -> Self {
+        self.page_color_scheme_bits = color_schemes.bits();
+        self
+    }
+
     pub(super) fn stylo_media_type(self) -> MediaType {
         match self.media_type {
             StyloStyleMediaType::Screen => MediaType::screen(),
@@ -185,6 +194,10 @@ impl StyloStyleEnvironment {
             StyloStyleColorScheme::Light => PrefersColorScheme::Light,
             StyloStyleColorScheme::Dark => PrefersColorScheme::Dark,
         }
+    }
+
+    pub(super) fn stylo_page_color_schemes(self) -> ColorSchemeFlags {
+        ColorSchemeFlags::from_bits_retain(self.page_color_scheme_bits)
     }
 
     pub(super) fn stylo_media_feature_preferences(self) -> ServoMediaFeaturePreferences {

@@ -42,6 +42,7 @@ mod detached_css_style;
 mod detached_dom_surface;
 mod detached_event_target;
 mod devtools;
+mod document_color_scheme;
 mod document_cookie_owner;
 mod document_language;
 mod document_last_modified;

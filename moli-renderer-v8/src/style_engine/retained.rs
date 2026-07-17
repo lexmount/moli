@@ -40,6 +40,7 @@ pub(super) struct RetainedStyleInvalidations {
     pub(super) shadow_scope_fallbacks: Vec<DomHandle>,
     pub(super) removed_shadow_scopes: Vec<DomHandle>,
     pub(super) viewport_size_changed: bool,
+    pub(super) used_color_scheme_changed: bool,
 }
 
 /// Compares an explicit full-world snapshot with the canonical retained
@@ -76,6 +77,7 @@ impl RetainedStyleInvalidations {
             shadow_scope_fallbacks: Vec::new(),
             removed_shadow_scopes: Vec::new(),
             viewport_size_changed: false,
+            used_color_scheme_changed: false,
         }
     }
 }
@@ -204,6 +206,7 @@ pub(super) fn update_retained_style_system(
     invalidations.document = document_update.invalidations;
     invalidations.document_scope_fallback = document_update.scope_fallback;
     invalidations.viewport_size_changed = document_update.viewport_size_changed;
+    invalidations.used_color_scheme_changed = document_update.used_color_scheme_changed;
 
     let shadow_reconciliation = reconcile_shadow_scopes(
         retained,
@@ -264,6 +267,7 @@ pub(super) fn update_retained_style_system_incrementally(
     invalidations.document = document_update.invalidations;
     invalidations.document_scope_fallback = document_update.scope_fallback;
     invalidations.viewport_size_changed = document_update.viewport_size_changed;
+    invalidations.used_color_scheme_changed = document_update.used_color_scheme_changed;
 
     let shadow_reconciliation = reconcile_dirty_shadow_scopes(
         retained,
@@ -321,6 +325,7 @@ struct DocumentScopeUpdate {
     scope_fallback: bool,
     device_changed: bool,
     viewport_size_changed: bool,
+    used_color_scheme_changed: bool,
     device_affected_origins: OriginSet,
     stylesheets_changed: bool,
 }
@@ -366,6 +371,10 @@ fn update_document_scope(
 
     let viewport_size_changed = retained.key.viewport_width_bits != key.viewport_width_bits
         || retained.key.viewport_height_bits != key.viewport_height_bits;
+    let used_color_scheme_changed = retained.key.environment.stylo_prefers_color_scheme()
+        != key.environment.stylo_prefers_color_scheme()
+        || retained.key.environment.stylo_page_color_schemes()
+            != key.environment.stylo_page_color_schemes();
     let device_changed = viewport_size_changed
         || retained.key.screen_width_bits != key.screen_width_bits
         || retained.key.screen_height_bits != key.screen_height_bits
@@ -428,6 +437,7 @@ fn update_document_scope(
         scope_fallback,
         device_changed,
         viewport_size_changed,
+        used_color_scheme_changed,
         device_affected_origins,
         stylesheets_changed,
     }

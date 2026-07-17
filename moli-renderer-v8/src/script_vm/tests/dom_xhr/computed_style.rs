@@ -8713,6 +8713,76 @@ fn computed_style_resolves_system_color_properties() {
 }
 
 #[test]
+fn meta_color_scheme_controls_used_system_colors_without_changing_computed_property() {
+    let mut vm = new_parsed_test_vm(
+        "https://meta-color-scheme.test/",
+        r#"<!doctype html>
+        <html><head>
+          <meta id="scheme" http-equiv="content-language" name="color-scheme" content="dark">
+        </head><body>
+          <div id="light" style="color-scheme: only light; color: CanvasText"></div>
+          <div id="dark" style="color-scheme: only dark; color: CanvasText"></div>
+          <div id="normal" style="color-scheme: normal; color: CanvasText"></div>
+        </body></html>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const meta = document.getElementById('scheme');
+  const light = getComputedStyle(document.getElementById('light')).color;
+  const dark = getComputedStyle(document.getElementById('dark')).color;
+  const normal = () => getComputedStyle(document.getElementById('normal')).color;
+  const root = () => getComputedStyle(document.documentElement);
+  const states = {
+    explicitSchemesDiffer: light !== dark,
+    initialRootUsesDark: root().color === dark,
+    initialNormalUsesDark: normal() === dark,
+    rootComputedSchemeStaysNormal: root().colorScheme === 'normal',
+    metaDoesNotChangePreference: !matchMedia('(prefers-color-scheme: dark)').matches
+  };
+
+  meta.content = 'light';
+  states.lightMutationUpdatesRoot = root().color === light;
+  states.lightMutationUpdatesNormal = normal() === light;
+  states.explicitDarkStaysDark =
+    getComputedStyle(document.getElementById('dark')).color === dark;
+
+  meta.content = ',,invalid';
+  states.invalidContentUsesInitial = root().color === light;
+  meta.removeAttribute('content');
+  states.missingContentUsesInitial = root().color === light;
+
+  meta.content = 'dark';
+  const earlier = document.createElement('meta');
+  earlier.name = 'color-scheme';
+  earlier.content = 'light';
+  document.head.insertBefore(earlier, meta);
+  states.firstValidWins = root().color === light;
+  earlier.remove();
+  states.removalRestoresNextValid = root().color === dark;
+
+  meta.remove();
+  const host = document.body.appendChild(document.createElement('div'));
+  const shadowMeta = document.createElement('meta');
+  shadowMeta.name = 'color-scheme';
+  shadowMeta.content = 'dark';
+  host.attachShadow({ mode: 'open' }).appendChild(shadowMeta);
+  states.shadowMetaIsIgnored = root().color === light;
+  return JSON.stringify(states);
+})()
+"#,
+        )
+        .expect("meta color-scheme should control used system colors");
+
+    assert_eq!(
+        result,
+        r#"{"explicitSchemesDiffer":true,"initialRootUsesDark":true,"initialNormalUsesDark":true,"rootComputedSchemeStaysNormal":true,"metaDoesNotChangePreference":true,"lightMutationUpdatesRoot":true,"lightMutationUpdatesNormal":true,"explicitDarkStaysDark":true,"invalidContentUsesInitial":true,"missingContentUsesInitial":true,"firstValidWins":true,"removalRestoresNextValid":true,"shadowMetaIsIgnored":true}"#
+    );
+}
+
+#[test]
 fn computed_style_resolves_env_color_fallbacks() {
     let mut vm = new_storage_test_vm("https://computed-env-color.test/");
 

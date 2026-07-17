@@ -7,7 +7,7 @@ use style::{
     custom_properties::AttrTaint,
     parser::{Parse, ParserContext},
     stylesheets::{CssRuleType, Origin, UrlExtraData},
-    values::specified::color::{Color, SystemColor},
+    values::specified::color::{Color, ColorScheme, ColorSchemeFlags, SystemColor},
 };
 use style_traits::ParsingMode;
 
@@ -49,6 +49,30 @@ pub fn css_system_color_srgb(value: &str) -> Option<(u8, u8, u8)> {
     };
     let [red, green, blue, _alpha] = system_color_absolute(system).to_nscolor().to_le_bytes();
     Some((red, green, blue))
+}
+
+/// Parse the CSS `color-scheme` grammar and return its known-scheme flags.
+///
+/// A successful value with no flags is the valid `normal` keyword. Custom
+/// schemes are preserved by Stylo's validation but do not set a known flag.
+pub fn parse_css_color_scheme_flags(value: &str) -> Option<ColorSchemeFlags> {
+    let url_data = UrlExtraData::from(url::Url::parse("about:blank").ok()?);
+    let context = ParserContext::new(
+        Origin::Author,
+        &url_data,
+        Some(CssRuleType::Style),
+        ParsingMode::DEFAULT,
+        QuirksMode::NoQuirks,
+        Default::default(),
+        None,
+        None,
+        AttrTaint::default(),
+    );
+    let mut input = ParserInput::new(value);
+    Parser::new(&mut input)
+        .parse_entirely(|input| ColorScheme::parse(&context, input))
+        .ok()
+        .map(|scheme| scheme.bits)
 }
 
 fn parse_specified_color(value: &str) -> Option<Color> {
@@ -160,5 +184,28 @@ mod tests {
         assert_eq!(css_system_color_srgb("MenuText"), Some((0, 0, 0)));
         assert_eq!(css_system_color_srgb("ActiveBorder"), Some((169, 169, 169)));
         assert_eq!(css_system_color_srgb("red"), None);
+    }
+
+    #[test]
+    fn color_scheme_flags_use_stylo_grammar() {
+        assert_eq!(
+            parse_css_color_scheme_flags("normal"),
+            Some(ColorSchemeFlags::empty())
+        );
+        assert_eq!(
+            parse_css_color_scheme_flags("light dark"),
+            Some(ColorSchemeFlags::LIGHT | ColorSchemeFlags::DARK)
+        );
+        assert_eq!(
+            parse_css_color_scheme_flags("BLUE light"),
+            Some(ColorSchemeFlags::LIGHT)
+        );
+        assert_eq!(
+            parse_css_color_scheme_flags("only light"),
+            Some(ColorSchemeFlags::ONLY | ColorSchemeFlags::LIGHT)
+        );
+        for invalid in ["", "light,dark", "light, dark", "only"] {
+            assert_eq!(parse_css_color_scheme_flags(invalid), None, "{invalid}");
+        }
     }
 }

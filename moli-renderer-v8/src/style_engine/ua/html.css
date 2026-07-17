@@ -29,6 +29,10 @@
 
 @namespace url(http://www.w3.org/1999/xhtml);
 
+html {
+  color: CanvasText;
+}
+
 html, body, address, article, aside, blockquote, center, dd, dir, div, dl, dt,
 fieldset, figcaption, figure, footer, form, header, hgroup, legend, main, nav,
 noframes, p, search, section, details, summary, optgroup,

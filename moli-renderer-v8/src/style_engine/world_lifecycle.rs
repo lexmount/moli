@@ -300,6 +300,7 @@ fn apply_retained_stylesheet_invalidations(
         shadow_scope_fallbacks,
         removed_shadow_scopes,
         viewport_size_changed,
+        used_color_scheme_changed,
     } = invalidations;
     if let Some(invalidations) = document_invalidations {
         // HTML documents normally have one document element. The native DOM
@@ -335,6 +336,9 @@ fn apply_retained_stylesheet_invalidations(
     }
     if viewport_size_changed {
         invalidate_viewport_unit_styles(host, dom_adapter, document);
+    }
+    if used_color_scheme_changed {
+        cache_cleanup.invalidate_subtrees(host, [document]);
     }
     cache_cleanup.invalidate_stylesheet_dirty_subtrees(host);
     if document_scope_fallback {

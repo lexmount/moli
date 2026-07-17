@@ -14,7 +14,8 @@ mod util;
 mod value;
 
 pub use color::{
-    css_system_color_srgb, parse_css_color_to_opaque_srgb_hex, parse_css_color_to_srgb_bytes,
+    css_system_color_srgb, parse_css_color_scheme_flags, parse_css_color_to_opaque_srgb_hex,
+    parse_css_color_to_srgb_bytes,
 };
 pub use declaration::{CssDeclaration, DeclarationParseOptions, parse_declaration_list};
 pub use font_face::{
