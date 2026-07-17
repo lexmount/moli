@@ -7197,7 +7197,7 @@ pub(crate) fn install_element_template_bindings<'s>(
             install_node_event_handler_template_bindings(
                 scope,
                 prototype,
-                &["onfullscreenchange", "onfullscreenerror"],
+                event_handlers::ELEMENT_FULLSCREEN_EVENT_HANDLER_PROPERTIES,
             );
         }
         "Document" => install!(DocumentCustomElementRegistryPrototypeDeclaration),

@@ -118,15 +118,19 @@ pub(crate) const GENERIC_EVENT_HANDLER_PROPERTIES: &[&str] = &[
     "onwebkittransitionend",
 ];
 
+const ON_FULLSCREEN_CHANGE: &str = "onfullscreenchange";
+const ON_FULLSCREEN_ERROR: &str = "onfullscreenerror";
 const DOCUMENT_EVENT_HANDLER_PROPERTIES: &[&str] = &[
     "onfreeze",
-    "onfullscreenchange",
-    "onfullscreenerror",
+    ON_FULLSCREEN_CHANGE,
+    ON_FULLSCREEN_ERROR,
     "onpointerlockchange",
     "onpointerlockerror",
     "onreadystatechange",
     "onresume",
 ];
+pub(in crate::native_bridge::element) const ELEMENT_FULLSCREEN_EVENT_HANDLER_PROPERTIES: &[&str] =
+    &[ON_FULLSCREEN_CHANGE, ON_FULLSCREEN_ERROR];
 const ELEMENT_SPECIFIC_EVENT_HANDLER_PROPERTIES: &[&str] = &[
     "onencrypted",
     "onwaitingforkey",
@@ -141,6 +145,7 @@ pub(in crate::native_bridge::element) fn is_element_event_handler_content_attrib
     GENERIC_EVENT_HANDLER_PROPERTIES
         .iter()
         .chain(WINDOW_EVENT_HANDLER_PROPERTIES)
+        .chain(ELEMENT_FULLSCREEN_EVENT_HANDLER_PROPERTIES)
         .chain(ELEMENT_SPECIFIC_EVENT_HANDLER_PROPERTIES)
         .copied()
         .chain(["onmessageerror"])
