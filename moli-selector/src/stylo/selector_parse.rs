@@ -3,6 +3,7 @@ use crate::cssom_selector::{
     dom_api_selector_list_has_only_known_pseudo_elements,
     dom_api_selector_text_with_trailing_attribute_recovery,
     selector_list_has_invalid_terminal_pseudo_element_chain,
+    webkit_compat_pseudo_element_validation_selector,
 };
 use cssparser::ToCss;
 use selectors::parser::ParseRelative;
@@ -83,12 +84,20 @@ fn parse_dom_api_selector_list_text_for_url(
 }
 
 pub(crate) fn validate_style_rule_selector_list(selector: &str) -> Result<(), SelectorError> {
-    parse_style_rule_selector_list_for_url(
-        selector,
-        Url::parse("about:blank").expect("about:blank is valid"),
-        false,
-    )
-    .map(|_| ())
+    if selector_list_has_invalid_terminal_pseudo_element_chain(selector) {
+        return Err(SelectorError::syntax(
+            "terminal pseudo-elements cannot be chained",
+        ));
+    }
+    let url = Url::parse("about:blank").expect("about:blank is valid");
+    parse_style_rule_selector_list_for_url(selector, url.clone(), false)
+        .or_else(|error| {
+            let Some(selector) = webkit_compat_pseudo_element_validation_selector(selector) else {
+                return Err(error);
+            };
+            parse_style_rule_selector_list_for_url(&selector, url, false)
+        })
+        .map(|_| ())
 }
 
 pub(crate) fn validate_supports_selector_list(selector: &str) -> Result<(), SelectorError> {
@@ -121,12 +130,29 @@ pub(crate) fn validate_style_rule_selector_list_with_namespaces(
     selector: &str,
     namespace_context: &StyleRuleNamespaceContext,
 ) -> Result<(), SelectorError> {
+    if selector_list_has_invalid_terminal_pseudo_element_chain(selector) {
+        return Err(SelectorError::syntax(
+            "terminal pseudo-elements cannot be chained",
+        ));
+    }
+    let url = Url::parse("about:blank").expect("about:blank is valid");
     parse_style_rule_selector_list_for_url_and_namespaces(
         selector,
-        Url::parse("about:blank").expect("about:blank is valid"),
+        url.clone(),
         namespace_context,
         false,
     )
+    .or_else(|error| {
+        let Some(selector) = webkit_compat_pseudo_element_validation_selector(selector) else {
+            return Err(error);
+        };
+        parse_style_rule_selector_list_for_url_and_namespaces(
+            &selector,
+            url,
+            namespace_context,
+            false,
+        )
+    })
     .map(|_| ())
 }
 
