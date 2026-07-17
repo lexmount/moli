@@ -71,6 +71,7 @@ pub(crate) use owner_wake::{
     ServiceWorkerRuntimeOwnerWake, ServiceWorkerRuntimeOwnerWakeSender,
     service_worker_owner_wake_channel,
 };
+pub(crate) use path_restriction::verify_service_worker_registration_urls;
 pub(crate) use registration::{
     ServiceWorkerNavigationPreloadState, ServiceWorkerNavigationPreloadStateError,
     ServiceWorkerUpdateViaCache,
