@@ -28,7 +28,21 @@ pub(in crate::context_bootstrap) fn document_constructor_callback(
         return;
     }
     match call_global_bridge_method(scope, "__createDetachedDocument", &[]) {
-        Some(value) => rv.set(value),
+        Some(value) => {
+            let Ok(document) = v8::Local::<v8::Object>::try_from(value) else {
+                rv.set_undefined();
+                return;
+            };
+            if crate::context_bootstrap::install_constructed_document_location_runtime_state(
+                scope, document,
+            )
+            .is_err()
+            {
+                rv.set_undefined();
+                return;
+            }
+            rv.set(document.into());
+        }
         None => rv.set_undefined(),
     }
 }
