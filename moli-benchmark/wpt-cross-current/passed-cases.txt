@@ -7905,6 +7905,7 @@ old-tests/submission/Microsoft/selection/removeAllRanges.htm
 old-tests/submission/Microsoft/selection/removeRange.htm
 old-tests/submission/Microsoft/selection/selectAllChildren.htm
 orientation-sensor/OrientationSensor_insecure_context.html
+page-lifecycle/idlharness.html
 page-visibility/test_attributes_exist.html
 page-visibility/test_child_document.html
 page-visibility/test_default_view.html
