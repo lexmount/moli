@@ -14231,6 +14231,98 @@ async fn navigator_service_worker_register_applies_script_path_restriction() {
 }
 
 #[tokio::test]
+async fn navigator_service_worker_register_validates_urls_and_refreshes_cached_workers() {
+    let worker_body = "self.addEventListener('install', () => {});";
+    let (base_url, server) = spawn_service_worker_response_server_with_headers(vec![
+        (
+            "/app/worker.js",
+            "text/javascript; charset=utf-8",
+            vec![("Cache-Control", "no-store")],
+            worker_body,
+        ),
+        (
+            "/app/worker.js",
+            "text/javascript; charset=utf-8",
+            vec![("Cache-Control", "no-store")],
+            worker_body,
+        ),
+    ])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let (mut vm, browser_context_runtime) =
+        new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+            &format!("{base_url}/app/page.html"),
+            &loader,
+        );
+
+    vm.eval(
+        r#"
+            (() => {
+              globalThis.__serviceWorkerRegistrationUrlProbe = "pending";
+              (async () => {
+                const sw = navigator.serviceWorker;
+                const rejection = async (script, options) => {
+                  try {
+                    await sw.register(script, options);
+                    return "resolved";
+                  } catch (error) {
+                    return [
+                      error && error.name,
+                      error instanceof TypeError,
+                      error instanceof DOMException
+                    ].join("|");
+                  }
+                };
+                const encodedSlash = await rejection("worker%2f.js", { scope: "./scope/" });
+                const dataScript = await rejection("data:text/javascript,", { scope: "./scope/" });
+                const dataScope = await rejection("worker.js", { scope: "data:text/html," });
+
+                const newest = registration =>
+                  registration.installing || registration.waiting || registration.active;
+                const first = await sw.register("././worker.js", { scope: "./scope/" });
+                const firstScriptURL = newest(first) && newest(first).scriptURL;
+                const unregistered = await first.unregister();
+                const cleared =
+                  first.installing === null && first.waiting === null && first.active === null;
+                const second = await sw.register("../app/worker.js", { scope: "./scope/" });
+                const secondScriptURL = newest(second) && newest(second).scriptURL;
+
+                globalThis.__serviceWorkerRegistrationUrlProbe = JSON.stringify({
+                  encodedSlash,
+                  dataScript,
+                  dataScope,
+                  firstScriptURL,
+                  unregistered,
+                  cleared,
+                  secondScriptURL
+                });
+              })().catch((error) => {
+                globalThis.__serviceWorkerRegistrationUrlProbe =
+                  "error:" + String(error && error.message);
+              });
+            })()
+            "#,
+    )
+    .expect("service worker registration URL probe should evaluate");
+
+    let expected = format!(
+        r#"{{"encodedSlash":"TypeError|true|false","dataScript":"TypeError|true|false","dataScope":"TypeError|true|false","firstScriptURL":"{base_url}/app/worker.js","unregistered":true,"cleared":true,"secondScriptURL":"{base_url}/app/worker.js"}}"#
+    );
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &browser_context_runtime,
+        &loader,
+        "String(globalThis.__serviceWorkerRegistrationUrlProbe)",
+        &expected,
+    )
+    .await;
+
+    server
+        .await
+        .expect("service worker registration URL server should finish");
+}
+
+#[tokio::test]
 async fn navigator_service_worker_register_identical_main_script_keeps_existing_version() {
     let worker_body = r#"
         self.addEventListener("install", event => {

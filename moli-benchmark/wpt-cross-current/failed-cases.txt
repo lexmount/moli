@@ -3472,7 +3472,6 @@ service-workers/service-worker/registration-end-to-end.https.html
 service-workers/service-worker/registration-schedule-job.https.html
 service-workers/service-worker/registration-scope-module-static-import.https.html
 service-workers/service-worker/registration-scope.https.html
-service-workers/service-worker/registration-script-url.https.html
 service-workers/service-worker/request-end-to-end.https.html
 service-workers/service-worker/resource-timing-cross-origin.https.html
 service-workers/service-worker/respond-with-body-accessed-response.https.html

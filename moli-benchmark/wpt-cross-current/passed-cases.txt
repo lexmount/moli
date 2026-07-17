@@ -7470,6 +7470,7 @@ service-workers/service-worker/register-wait-forever-in-install-worker.https.htm
 service-workers/service-worker/registration-basic.https.html
 service-workers/service-worker/registration-events.https.html
 service-workers/service-worker/registration-iframe.https.html
+service-workers/service-worker/registration-script-url.https.html
 service-workers/service-worker/rejections.https.html
 service-workers/service-worker/serviceworker-message-event-historical.https.html
 service-workers/service-worker/serviceworkerobject-scripturl.https.html
