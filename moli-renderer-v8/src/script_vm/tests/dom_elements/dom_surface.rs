@@ -3035,6 +3035,59 @@ fn document_own_enumerable_surface_matches_browser_location_shape() {
 }
 
 #[test]
+fn constructed_documents_share_legacy_unforgeable_location_accessors() {
+    let mut vm = new_storage_test_vm("https://example.com/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const first = new Document();
+              const second = new Document();
+              const firstDescriptor = Object.getOwnPropertyDescriptor(first, "location");
+              const secondDescriptor = Object.getOwnPropertyDescriptor(second, "location");
+              const throwsName = callback => {
+                try {
+                  callback();
+                  return "returned";
+                } catch (error) {
+                  return error && error.name;
+                }
+              };
+
+              return JSON.stringify({
+                firstValue: first.location,
+                secondValue: second.location,
+                own: Object.prototype.hasOwnProperty.call(first, "location"),
+                getType: typeof firstDescriptor.get,
+                setType: typeof firstDescriptor.set,
+                getName: firstDescriptor.get.name,
+                getLength: firstDescriptor.get.length,
+                setName: firstDescriptor.set.name,
+                setLength: firstDescriptor.set.length,
+                getSame: firstDescriptor.get === secondDescriptor.get,
+                setSame: firstDescriptor.set === secondDescriptor.set,
+                enumerable: firstDescriptor.enumerable,
+                configurable: firstDescriptor.configurable,
+                assign: throwsName(() => {
+                  "use strict";
+                  first.location = "https://example.org/";
+                }),
+                badGet: throwsName(() => firstDescriptor.get.call({})),
+                badSet: throwsName(() => firstDescriptor.set.call({}, "x")),
+              });
+            })()
+            "#,
+        )
+        .expect("constructed Document location accessor probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"firstValue":null,"secondValue":null,"own":true,"getType":"function","setType":"function","getName":"get location","getLength":0,"setName":"set location","setLength":1,"getSame":true,"setSame":true,"enumerable":true,"configurable":false,"assign":"TypeError","badGet":"TypeError","badSet":"TypeError"}"#
+    );
+}
+
+#[test]
 fn document_named_item_does_not_shadow_legacy_unforgeable_location() {
     let mut vm = new_storage_test_vm("https://example.com/current/path");
 
