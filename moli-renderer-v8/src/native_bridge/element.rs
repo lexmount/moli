@@ -192,6 +192,7 @@ pub(crate) use details_dialog::{
 };
 use event_handlers::install_body_or_frameset_window_event_handler_accessors;
 use event_handlers::install_global_event_handler_template_bindings as install_global_event_handler_templates_for_owner;
+use event_handlers::install_node_event_handler_template_bindings;
 pub(crate) use event_handlers::{
     EventAttributeHandlerScope, GlobalEventHandlerOwner,
     body_or_frameset_reflects_window_event_type, canonical_event_handler_event_type,
@@ -793,6 +794,13 @@ struct ElementPrototypeReflectionDeclaration {
         callback = super::pointer_lock::element_request_pointer_lock_callback
     )]
     request_pointer_lock: (),
+    #[webapi(
+        method = "requestFullscreen",
+        length = 0,
+        enumerable,
+        callback = super::fullscreen::element_request_fullscreen_callback
+    )]
+    request_fullscreen: (),
     #[webapi(accessor_property = "shadowRoot", enumerable, getter = element_shadow_root_getter_function)]
     shadow_root: (),
     #[webapi(
@@ -7176,15 +7184,22 @@ pub(crate) fn install_element_template_bindings<'s>(
     }
 
     match interface_name {
-        "Element" => install!(
-            ElementAriaStringReflectionDeclaration,
-            ElementAriaElementReflectionDeclaration,
-            ElementPrototypeReflectionDeclaration,
-            ElementPrototypeQueryAndAttributeMethodsDeclaration,
-            ExtendedElementPrototypeMethodsDeclaration,
-            ElementGeometryPrototypeDeclaration,
-            ElementStylePrototypeDeclaration,
-        ),
+        "Element" => {
+            install!(
+                ElementAriaStringReflectionDeclaration,
+                ElementAriaElementReflectionDeclaration,
+                ElementPrototypeReflectionDeclaration,
+                ElementPrototypeQueryAndAttributeMethodsDeclaration,
+                ExtendedElementPrototypeMethodsDeclaration,
+                ElementGeometryPrototypeDeclaration,
+                ElementStylePrototypeDeclaration,
+            );
+            install_node_event_handler_template_bindings(
+                scope,
+                prototype,
+                &["onfullscreenchange", "onfullscreenerror"],
+            );
+        }
         "Document" => install!(DocumentCustomElementRegistryPrototypeDeclaration),
         "HTMLElement" => install!(
             ElementStylePrototypeDeclaration,

@@ -120,6 +120,8 @@ pub(crate) const GENERIC_EVENT_HANDLER_PROPERTIES: &[&str] = &[
 
 const DOCUMENT_EVENT_HANDLER_PROPERTIES: &[&str] = &[
     "onfreeze",
+    "onfullscreenchange",
+    "onfullscreenerror",
     "onpointerlockchange",
     "onpointerlockerror",
     "onreadystatechange",
@@ -169,42 +171,66 @@ pub(crate) fn install_global_event_handler_template_bindings<'s>(
         if matches!(owner, GlobalEventHandlerOwner::Document) && *name == "onstorage" {
             continue;
         }
-        let data = v8str(scope, name).into();
-        let (getter, setter) = match owner {
-            GlobalEventHandlerOwner::Document => (
-                v8::FunctionTemplate::builder(document_event_handler_getter_function)
-                    .data(data)
-                    .length(0)
-                    .build(scope),
-                v8::FunctionTemplate::builder(document_event_handler_setter_function)
-                    .data(data)
-                    .length(1)
-                    .build(scope),
-            ),
-            GlobalEventHandlerOwner::Element => (
-                v8::FunctionTemplate::builder(node_event_handler_getter_function)
-                    .data(data)
-                    .length(0)
-                    .build(scope),
-                v8::FunctionTemplate::builder(node_event_handler_setter_function)
-                    .data(data)
-                    .length(1)
-                    .build(scope),
-            ),
-        };
-        if let Some(function_name) = v8_string(scope, &format!("get {name}")) {
-            getter.set_class_name(function_name);
-        }
-        if let Some(function_name) = v8_string(scope, &format!("set {name}")) {
-            setter.set_class_name(function_name);
-        }
-        prototype.set_accessor_property(
-            v8str(scope, name).into(),
-            Some(getter),
-            Some(setter),
-            v8::PropertyAttribute::NONE,
+        install_event_handler_template_binding(scope, prototype, owner, name);
+    }
+}
+
+pub(crate) fn install_node_event_handler_template_bindings<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    prototype: v8::Local<'s, v8::ObjectTemplate>,
+    names: &[&'static str],
+) {
+    for name in names {
+        install_event_handler_template_binding(
+            scope,
+            prototype,
+            GlobalEventHandlerOwner::Element,
+            name,
         );
     }
+}
+
+fn install_event_handler_template_binding<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    prototype: v8::Local<'s, v8::ObjectTemplate>,
+    owner: GlobalEventHandlerOwner,
+    name: &'static str,
+) {
+    let data = v8str(scope, name).into();
+    let (getter, setter) = match owner {
+        GlobalEventHandlerOwner::Document => (
+            v8::FunctionTemplate::builder(document_event_handler_getter_function)
+                .data(data)
+                .length(0)
+                .build(scope),
+            v8::FunctionTemplate::builder(document_event_handler_setter_function)
+                .data(data)
+                .length(1)
+                .build(scope),
+        ),
+        GlobalEventHandlerOwner::Element => (
+            v8::FunctionTemplate::builder(node_event_handler_getter_function)
+                .data(data)
+                .length(0)
+                .build(scope),
+            v8::FunctionTemplate::builder(node_event_handler_setter_function)
+                .data(data)
+                .length(1)
+                .build(scope),
+        ),
+    };
+    if let Some(function_name) = v8_string(scope, &format!("get {name}")) {
+        getter.set_class_name(function_name);
+    }
+    if let Some(function_name) = v8_string(scope, &format!("set {name}")) {
+        setter.set_class_name(function_name);
+    }
+    prototype.set_accessor_property(
+        v8str(scope, name).into(),
+        Some(getter),
+        Some(setter),
+        v8::PropertyAttribute::NONE,
+    );
 }
 
 fn event_handler_property_value_for_target<'s>(
@@ -316,7 +342,10 @@ pub(crate) fn node_event_handler_getter_function<'s>(
         rv.set(current);
         return;
     }
-    if !node_is_element(unsafe { &*runtime_ptr }, handle) || !handler_name.starts_with("on") {
+    if !node_is_element(unsafe { &*runtime_ptr }, handle)
+        || !handler_name.starts_with("on")
+        || !is_element_event_handler_content_attribute_name(&handler_name)
+    {
         rv.set_null();
         return;
     }
