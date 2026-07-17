@@ -74,6 +74,7 @@ use super::global_scope::{
     WorkerWebCryptoCompletion, WorkerXhrCompletion, close_worker_owned_broadcast_channels,
     close_worker_owned_message_ports, close_worker_owned_nested_workers,
     dispatch_nested_worker_event, dispatch_worker_csp_violation_event,
+    dispatch_worker_csp_violation_event_for_state,
     dispatch_worker_websocket_event, drain_service_worker_client_focus_result,
     drain_service_worker_client_navigate_result, drain_service_worker_client_query_result,
     drain_service_worker_clients_open_window_result, drain_service_worker_get_notifications_result,
@@ -910,9 +911,9 @@ fn flush_worker_module_fetches(
                 .borrow()
                 .module_static_import_content_security_policies
                 .clone(),
-            state.borrow().content_security_policies.clone(),
-            state.borrow().content_security_report_only_policies.clone(),
-            state.borrow().content_security_reporting_endpoints.clone(),
+            state
+                .borrow()
+                .content_security_policy_snapshot_for_inheritance(),
             module_graph_fetch_tx.clone(),
         );
     }
@@ -2800,9 +2801,7 @@ async fn worker_main(
                 let scope = &mut scope.init();
                 let ctx = v8::Local::new(scope, &context);
                 let scope = &mut v8::ContextScope::new(scope, ctx);
-                super::global_scope::dispatch_worker_csp_violation_event_for_state(
-                    scope, &state, &violation,
-                );
+                dispatch_worker_csp_violation_event_for_state(scope, &state, &violation);
                 perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
                 drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
             }

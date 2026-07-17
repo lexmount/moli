@@ -181,7 +181,8 @@ pub(crate) use messaging::{
     worker_message_port_wake_sender, worker_message_port_wrapper,
 };
 pub(crate) use nested_workers::{
-    NestedWorkerContext, forget_nested_worker_context,
+    NestedWorkerContext, check_and_queue_nested_worker_constructor_csp,
+    forget_nested_worker_context,
     forward_nested_worker_error_after_owner_close, reserve_nested_worker_context,
 };
 pub(super) use nested_workers::{close_worker_owned_nested_workers, dispatch_nested_worker_event};

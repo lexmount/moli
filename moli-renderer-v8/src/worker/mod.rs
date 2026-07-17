@@ -34,6 +34,7 @@ pub(crate) use global_scope::{
     NestedWorkerContext, WorkerFetchCompletion, WorkerFetchEvent, WorkerFetchResponse,
     WorkerFetchStreamingChunk, WorkerFetchStreamingFinished, WorkerFetchStreamingStarted,
     WorkerGlobalState, WorkerOpfsCompletion, WorkerWebCryptoCompletion, cancel_worker_opfs_task,
+    check_and_queue_nested_worker_constructor_csp,
     check_worker_websocket_csp, close_worker_websocket,
     dispatch_worker_trusted_types_sink_violation_event,
     ensure_worker_opfs_directory_iterator_registry, ensure_worker_opfs_handle_registry,

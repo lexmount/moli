@@ -447,6 +447,18 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                     return;
                 }
             };
+        if let Err(message) =
+            crate::worker::check_and_queue_nested_worker_constructor_csp(scope, &resolved_url)
+        {
+            queue_nested_worker_script_load_error(
+                scope,
+                worker,
+                &nested_context,
+                &resolved_url,
+                message,
+            );
+            return;
+        }
         let (script_url, script_source) = match materialize_nested_worker_script_source(
             &resolved_url,
             &nested_context,
@@ -455,37 +467,20 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
         ) {
             Ok(source) => source,
             Err(message) => {
-                nested_context
-                    .worker_context_runtime
-                    .emit_diagnostic(|source| {
-                        crate::DiagnosticEvent::script_load_failure(
-                            source,
-                            resolved_url.as_str(),
-                            resolved_url.as_str(),
-                            &message,
-                        )
-                    });
-                let _ =
-                    nested_context
-                        .wake_tx
-                        .send(crate::worker::WorkerMessage::NestedWorkerEvent {
-                            worker_id: nested_context.worker_id,
-                            message: Box::new(crate::worker::WorkerToParentMessage::Error(
-                                crate::worker::WorkerErrorReport::new(
-                                    message,
-                                    resolved_url.to_string(),
-                                    (0, 0),
-                                    crate::worker::WorkerParentErrorEventKind::Event,
-                                    crate::worker::WorkerErrorPhase::Bootstrap,
-                                    crate::worker::WorkerErrorSource::Runtime,
-                                ),
-                            )),
-                        });
-                set_private_value(
+                nested_context.worker_context_runtime.emit_diagnostic(|source| {
+                    crate::DiagnosticEvent::script_load_failure(
+                        source,
+                        resolved_url.as_str(),
+                        resolved_url.as_str(),
+                        &message,
+                    )
+                });
+                queue_nested_worker_script_load_error(
                     scope,
                     worker,
-                    WORKER_ID_SLOT,
-                    v8::Number::new(scope, nested_context.worker_id.as_u64() as f64).into(),
+                    &nested_context,
+                    &resolved_url,
+                    message,
                 );
                 return;
             }
@@ -744,6 +739,36 @@ pub(in crate::context_bootstrap) fn document_query_encoding_override(
 ) -> Option<&'static encoding_rs::Encoding> {
     form_output_encoding_for_label(host.document_character_set())
         .filter(|encoding| *encoding != encoding_rs::UTF_8)
+}
+
+fn queue_nested_worker_script_load_error(
+    scope: &mut v8::PinScope<'_, '_>,
+    worker: v8::Local<'_, v8::Object>,
+    context: &NestedWorkerContext,
+    script_url: &Url,
+    message: String,
+) {
+    let _ = context
+        .wake_tx
+        .send(crate::worker::WorkerMessage::NestedWorkerEvent {
+            worker_id: context.worker_id,
+            message: Box::new(crate::worker::WorkerToParentMessage::Error(
+                crate::worker::WorkerErrorReport::new(
+                    message,
+                    script_url.to_string(),
+                    (0, 0),
+                    crate::worker::WorkerParentErrorEventKind::Event,
+                    crate::worker::WorkerErrorPhase::Bootstrap,
+                    crate::worker::WorkerErrorSource::Runtime,
+                ),
+            )),
+        });
+    set_private_value(
+        scope,
+        worker,
+        WORKER_ID_SLOT,
+        v8::Number::new(scope, context.worker_id.as_u64() as f64).into(),
+    );
 }
 
 pub(in crate::context_bootstrap) fn worker_constructor_base_url(
