@@ -17,7 +17,7 @@ async fn unsupported_fullscreen_requests_reject_and_queue_spec_shaped_error_even
   globalThis.__fullscreenConversionRejections = [];
   globalThis.__fullscreenOptionReads = [];
   document.body.setAttribute("onfullscreenerror", "globalThis.__fullscreenAttributeRan = true");
-  const contentAttributeIgnored = document.body.onfullscreenerror === null;
+  const contentAttributeInstalled = typeof document.body.onfullscreenerror === "function";
   document.onfullscreenerror = event => {
     __fullscreenEvents.push([
       event.type,
@@ -87,7 +87,7 @@ async fn unsupported_fullscreen_requests_reject_and_queue_spec_shaped_error_even
     ],
     promises: request instanceof Promise && exit instanceof Promise,
     conversionPromiseShapes,
-    contentAttributeIgnored,
+    contentAttributeInstalled,
     optionReads: __fullscreenOptionReads,
     wrongReceivers: [
       outcome(() => Element.prototype.requestFullscreen.call({})),
@@ -102,7 +102,7 @@ async fn unsupported_fullscreen_requests_reject_and_queue_spec_shaped_error_even
 
     assert_eq!(
         before,
-        r#"{"requestShape":["function",0,true,true],"documentShape":["function",0,true,true,false],"promises":true,"conversionPromiseShapes":[true,true,true,true],"contentAttributeIgnored":true,"optionReads":["keyboardLock","navigationUI"],"wrongReceivers":["TypeError","TypeError"],"events":0}"#,
+        r#"{"requestShape":["function",0,true,true],"documentShape":["function",0,true,true,false],"promises":true,"conversionPromiseShapes":[true,true,true,true],"contentAttributeInstalled":true,"optionReads":["keyboardLock","navigationUI"],"wrongReceivers":["TypeError","TypeError"],"events":0}"#,
     );
 
     vm.advance_timers_until_deadline_for_test(&loader)
@@ -123,6 +123,6 @@ JSON.stringify({
         .expect("fullscreen rejection result should evaluate");
     assert_eq!(
         after,
-        r#"{"events":["fullscreenerror:true:true:false:true"],"rejections":["exit:TypeError","request:TypeError"],"conversionRejections":["enum:TypeError:true","getter:RangeError:true","number:TypeError:true","string:TypeError:true"],"contentAttributeRan":false}"#,
+        r#"{"events":["fullscreenerror:true:true:false:true"],"rejections":["exit:TypeError","request:TypeError"],"conversionRejections":["enum:TypeError:true","getter:RangeError:true","number:TypeError:true","string:TypeError:true"],"contentAttributeRan":true}"#,
     );
 }

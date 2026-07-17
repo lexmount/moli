@@ -8,7 +8,9 @@ pub(crate) use body_window::{
     install_body_or_frameset_window_event_handler_accessors,
     resolve_window_event_handler_content_attribute,
 };
-pub(super) use generic::is_element_event_handler_content_attribute_name;
+pub(super) use generic::{
+    ELEMENT_FULLSCREEN_EVENT_HANDLER_PROPERTIES, is_element_event_handler_content_attribute_name,
+};
 pub(crate) use generic::{
     GlobalEventHandlerOwner, canonical_event_handler_event_type,
     event_handler_content_attribute_name, install_global_event_handler_template_bindings,
