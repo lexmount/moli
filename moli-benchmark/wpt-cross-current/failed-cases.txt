@@ -31,6 +31,7 @@ content-security-policy/resource-hints/prefetch-generate-directives.html
 content-security-policy/resource-hints/prefetch-no-csp.html
 content-security-policy/sandbox/autoplay-disabled-by-csp.html
 content-security-policy/sandbox/window-reuse-sandboxed.html
+content-security-policy/script-src/non-nonceable-elements.html
 content-security-policy/script-src/script-src-trusted_types_eval_DedicatedWorker.html
 content-security-policy/securitypolicyviolation/blockeduri-inline.html
 content-security-policy/unsafe-eval/eval-blocked-in-about-blank-iframe.html
@@ -2550,6 +2551,7 @@ dom/ranges/tentative/OpaqueRange-range-updates.html
 dom/ranges/tentative/OpaqueRange-supported-elements.html
 dom/ranges/tentative/OpaqueRange-unsupported-elements.html
 dom/ranges/tentative/OpaqueRange-validation.html
+domparsing/DOMParser-parseFromString-html.html
 domparsing/DOMParser-parseFromString-url-base-pushstate.html
 domparsing/DOMParser-parseFromString-url-base.html
 domparsing/DOMParser-parseFromString-url-moretests.html
@@ -3627,8 +3629,11 @@ trusted-types/block-string-assignment-to-attribute-via-attribute-node.html
 trusted-types/eval-function-constructor-untrusted-arguments-and-applying-default-policy.html
 trusted-types/eval-function-constructor.html
 trusted-types/inheriting-csp-for-local-schemes.html
+trusted-types/legacy-trusted-script-urls.html
 trusted-types/modify-attributes-in-callback.html
 trusted-types/require-trusted-types-for-TypeError-belongs-to-the-global-object-realm.html
+trusted-types/script-enforcement-010.html
+trusted-types/script-enforcement-011.html
 trusted-types/set-attributes-require-trusted-types-default-policy.html
 trusted-types/set-attributes-require-trusted-types-no-default-policy-error-cases.html
 trusted-types/set-attributes-require-trusted-types-no-default-policy.html

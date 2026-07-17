@@ -210,7 +210,6 @@ content-security-policy/script-src/hash-always-converted-to-utf-8/iso-8859-9.htm
 content-security-policy/script-src/hash-always-converted-to-utf-8/utf-8-lone-surrogate.html
 content-security-policy/script-src/hash-always-converted-to-utf-8/utf-8.html
 content-security-policy/script-src/javascript-window-open-blocked.html
-content-security-policy/script-src/non-nonceable-elements.html
 content-security-policy/script-src/script-src-1_1.html
 content-security-policy/script-src/script-src-1_10_1.html
 content-security-policy/script-src/script-src-1_2.html
@@ -4100,7 +4099,6 @@ dom/traversal/TreeWalker.html
 dom/window-extends-event-target.html
 dom/xpath-result-single-node-value-nullable.html
 domparsing/DOMParser-parseFromString-encoding.html
-domparsing/DOMParser-parseFromString-html.html
 domparsing/DOMParser-parseFromString-stylesheets.html
 domparsing/DOMParser-parseFromString-xml-parsererror.html
 domparsing/createContextualFragment-in-detached-xml-document-crash.html
@@ -8722,7 +8720,6 @@ trusted-types/eval-no-csp-no-tt.html
 trusted-types/eval-with-non-trusted-script-object.html
 trusted-types/eval-with-permissive-csp.html
 trusted-types/get-trusted-types-compliant-attribute-value.html
-trusted-types/legacy-trusted-script-urls.html
 trusted-types/legacy-trusted-scripts.html
 trusted-types/navigate-to-javascript-url-001.html
 trusted-types/navigate-to-javascript-url-002.html
@@ -8743,8 +8740,6 @@ trusted-types/script-enforcement-004.html
 trusted-types/script-enforcement-005.html
 trusted-types/script-enforcement-006.html
 trusted-types/script-enforcement-007.html
-trusted-types/script-enforcement-010.html
-trusted-types/script-enforcement-011.html
 trusted-types/script-enforcement-012.html
 trusted-types/script-enforcement-013.html
 trusted-types/script-enforcement-014.html
