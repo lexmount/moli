@@ -3327,6 +3327,7 @@ css/selectors/selector-after-font-family.html
 css/selectors/selector-placeholder-shown-emptify-placeholder.html
 css/selectors/selectors-attr-many-2.html
 css/selectors/selectors-case-sensitive-001.html
+css/selectors/webkit-pseudo-element.html
 css/selectors/x-pseudo-element.html
 custom-elements/CustomElementRegistry-constructor-and-callbacks-are-held-strongly.html
 custom-elements/CustomElementRegistry-getName.html
@@ -6280,6 +6281,7 @@ html/semantics/scripting-1/the-template-element/template-element/template-descen
 html/semantics/scripting-1/the-template-element/template-element/template-descendant-frameset.html
 html/semantics/scripting-1/the-template-element/template-element/template-descendant-head.html
 html/semantics/sections/headingoffset-and-headingreset.html
+html/semantics/selectors/pseudo-classes/autofill.html
 html/semantics/selectors/pseudo-classes/checked-type-change.html
 html/semantics/selectors/pseudo-classes/checked.html
 html/semantics/selectors/pseudo-classes/default.html
