@@ -825,7 +825,7 @@ fn frame_ancestors_matches_origins_and_rejects_opaque_ancestors() {
 }
 
 #[test]
-fn worker_src_none_blocks_shared_worker_script() {
+fn worker_src_none_blocks_worker_constructor() {
     assert!(!allowed(
         "worker-src 'none'; script-src 'self'",
         ContentSecurityPolicyResourceKind::WorkerConstructor,
@@ -864,7 +864,7 @@ fn document_font_requests_use_font_src_and_default_src() {
 }
 
 #[test]
-fn shared_worker_script_uses_script_src_and_default_src_fallbacks() {
+fn worker_constructor_uses_script_src_and_default_src_fallbacks() {
     assert!(!allowed(
         "script-src 'none'",
         ContentSecurityPolicyResourceKind::WorkerConstructor,
@@ -883,7 +883,7 @@ fn shared_worker_script_uses_script_src_and_default_src_fallbacks() {
 }
 
 #[test]
-fn shared_worker_script_uses_child_src_before_script_src_fallback() {
+fn worker_constructor_uses_child_src_before_script_src_fallback() {
     assert!(!allowed(
         "child-src 'none'; script-src 'self'",
         ContentSecurityPolicyResourceKind::WorkerConstructor,
@@ -916,7 +916,7 @@ fn document_script_element_uses_script_src_elem_fallbacks() {
 }
 
 #[test]
-fn worker_src_takes_precedence_for_shared_worker_scripts() {
+fn worker_src_takes_precedence_for_worker_constructors() {
     assert!(allowed(
         "default-src 'none'; script-src 'none'; worker-src 'self'",
         ContentSecurityPolicyResourceKind::WorkerConstructor,
