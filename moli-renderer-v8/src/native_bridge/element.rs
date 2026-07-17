@@ -289,6 +289,7 @@ pub(crate) use details_dialog::{
     queue_parser_details_toggle_events_in_subtree,
 };
 use event_handlers::install_global_event_handler_template_bindings as install_global_event_handler_templates_for_owner;
+use event_handlers::install_node_event_handler_template_bindings;
 pub(crate) use event_handlers::{
     GlobalEventHandlerOwner, ParserAddedEventHandlers, body_or_frameset_reflects_window_event_type,
     canonical_event_handler_event_type, compile_body_window_event_attribute,
@@ -1533,15 +1534,22 @@ pub(crate) fn install_element_template_bindings<'s>(
     }
 
     match interface_name {
-        "Element" => install!(
-            ElementAriaStringReflectionDeclaration,
-            ElementAriaElementReflectionDeclaration,
-            ElementPrototypeReflectionDeclaration,
-            ElementPrototypeQueryAndAttributeMethodsDeclaration,
-            ExtendedElementPrototypeMethodsDeclaration,
-            ElementGeometryPrototypeDeclaration,
-            ElementStylePrototypeDeclaration,
-        ),
+        "Element" => {
+            install!(
+                ElementAriaStringReflectionDeclaration,
+                ElementAriaElementReflectionDeclaration,
+                ElementPrototypeReflectionDeclaration,
+                ElementPrototypeQueryAndAttributeMethodsDeclaration,
+                ExtendedElementPrototypeMethodsDeclaration,
+                ElementGeometryPrototypeDeclaration,
+                ElementStylePrototypeDeclaration,
+            );
+            install_node_event_handler_template_bindings(
+                scope,
+                prototype,
+                &["onfullscreenchange", "onfullscreenerror"],
+            );
+        }
         "Document" => install!(DocumentCustomElementRegistryPrototypeDeclaration),
         "HTMLElement" => install!(
             ElementStylePrototypeDeclaration,

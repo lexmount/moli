@@ -11,8 +11,7 @@ pub(crate) use context_host::MouseReleaseFollowUp;
 pub(crate) use context_host::{
     ChildDocumentFetch, PageScriptHost, PageScriptHostTaskCapabilities,
     PendingScrollObservableEffects, PostParseAutofocusAdmission, ServiceWorkerWindowOwner,
-    SharedResourceTimingBufferRegistry, caller_can_access_window,
-    contexts_can_script_access as window_contexts_allow_access,
+    SharedResourceTimingBufferRegistry,
 };
 #[cfg(feature = "devtools")]
 pub(crate) use current_input::CurrentInputEventScope;
@@ -21,6 +20,7 @@ pub(crate) use current_input::{
 };
 pub(crate) mod document;
 pub(crate) mod element;
+pub(crate) mod fullscreen;
 mod helpers;
 mod history_queue;
 pub(crate) mod history_traversal;
@@ -88,7 +88,6 @@ pub(crate) use element::{
     compute_mock_intersection_client_rect, compute_mock_intersection_scrollport_client_rect,
 };
 pub(super) use helpers::*;
-pub(crate) use node::NativeNodeReference;
 pub(crate) use node::branded_node_handle;
 pub(crate) use node::{
     current_or_live_delegate_node_arg_handle, node_or_foreign_arg_handle_allow_detached,
