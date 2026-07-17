@@ -2517,7 +2517,6 @@ css/selectors/parsing/parse-is-where.html
 css/selectors/parsing/parse-part.html
 css/selectors/parsing/parse-slotted.html
 css/selectors/selectors-4/lang-singleton-subtag-matching.html
-css/selectors/webkit-pseudo-element.html
 custom-elements/upgrading/upgrade-custom-element-error-event.html
 density-size-correction/density-corrected-image-in-canvas.html
 density-size-correction/density-corrected-natural-size.html
@@ -3195,7 +3194,6 @@ html/semantics/scripting-1/the-template-element/template-element/node-document-c
 html/semantics/scripting-1/the-template-element/template-element/template-content-hierarcy.html
 html/semantics/scripting-1/the-template-element/template-element/template-content-node-document.html
 html/semantics/sections/headingoffset-and-headingreset.html
-html/semantics/selectors/pseudo-classes/autofill.html
 html/semantics/selectors/pseudo-classes/dir.html
 html/semantics/selectors/pseudo-classes/readwrite-readonly.html
 html/semantics/selectors/pseudo-classes/valid-invalid.html
