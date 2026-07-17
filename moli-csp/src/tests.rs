@@ -698,10 +698,10 @@ fn frame_ancestors_matches_origins_and_rejects_opaque_ancestors() {
 }
 
 #[test]
-fn worker_src_none_blocks_shared_worker_script() {
+fn worker_src_none_blocks_worker_constructor() {
     assert!(!allowed(
         "worker-src 'none'; script-src 'self'",
-        ContentSecurityPolicyResourceKind::SharedWorkerScript,
+        ContentSecurityPolicyResourceKind::WorkerConstructor,
         "https://app.test/worker.js"
     ));
 }
@@ -737,34 +737,34 @@ fn document_font_requests_use_font_src_and_default_src() {
 }
 
 #[test]
-fn shared_worker_script_uses_script_src_and_default_src_fallbacks() {
+fn worker_constructor_uses_script_src_and_default_src_fallbacks() {
     assert!(!allowed(
         "script-src 'none'",
-        ContentSecurityPolicyResourceKind::SharedWorkerScript,
+        ContentSecurityPolicyResourceKind::WorkerConstructor,
         "https://app.test/worker.js"
     ));
     assert!(!allowed(
         "default-src 'none'",
-        ContentSecurityPolicyResourceKind::SharedWorkerScript,
+        ContentSecurityPolicyResourceKind::WorkerConstructor,
         "https://app.test/worker.js"
     ));
     assert!(allowed(
         "default-src 'self'",
-        ContentSecurityPolicyResourceKind::SharedWorkerScript,
+        ContentSecurityPolicyResourceKind::WorkerConstructor,
         "https://app.test/worker.js"
     ));
 }
 
 #[test]
-fn shared_worker_script_uses_child_src_before_script_src_fallback() {
+fn worker_constructor_uses_child_src_before_script_src_fallback() {
     assert!(!allowed(
         "child-src 'none'; script-src 'self'",
-        ContentSecurityPolicyResourceKind::SharedWorkerScript,
+        ContentSecurityPolicyResourceKind::WorkerConstructor,
         "https://app.test/worker.js"
     ));
     assert!(allowed(
         "child-src https://workers.test; script-src 'none'",
-        ContentSecurityPolicyResourceKind::SharedWorkerScript,
+        ContentSecurityPolicyResourceKind::WorkerConstructor,
         "https://workers.test/worker.js"
     ));
 }
@@ -789,15 +789,15 @@ fn document_script_element_uses_script_src_elem_fallbacks() {
 }
 
 #[test]
-fn worker_src_takes_precedence_for_shared_worker_scripts() {
+fn worker_src_takes_precedence_for_worker_constructors() {
     assert!(allowed(
         "default-src 'none'; script-src 'none'; worker-src 'self'",
-        ContentSecurityPolicyResourceKind::SharedWorkerScript,
+        ContentSecurityPolicyResourceKind::WorkerConstructor,
         "https://app.test/worker.js"
     ));
     assert!(!allowed(
         "default-src *; script-src *; worker-src 'none'",
-        ContentSecurityPolicyResourceKind::SharedWorkerScript,
+        ContentSecurityPolicyResourceKind::WorkerConstructor,
         "https://app.test/worker.js"
     ));
 }
@@ -1428,7 +1428,7 @@ fn exact_host_port_wildcards_apply_across_resource_kinds() {
         ContentSecurityPolicyResourceKind::DocumentStyleElement,
         ContentSecurityPolicyResourceKind::WorkerConnect,
         ContentSecurityPolicyResourceKind::WorkerScript,
-        ContentSecurityPolicyResourceKind::SharedWorkerScript,
+        ContentSecurityPolicyResourceKind::WorkerConstructor,
         ContentSecurityPolicyResourceKind::WorkerStaticModuleImport,
     ] {
         for source in ["https://cdn.test:*", "http://cdn.test:*", "CDN.TEST:*"] {
