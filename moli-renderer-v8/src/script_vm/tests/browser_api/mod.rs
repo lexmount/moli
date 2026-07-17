@@ -20,6 +20,7 @@ mod event_handlers;
 mod event_listener_options;
 mod events_selection_storage;
 mod fontface_descriptors;
+mod fullscreen;
 mod gamepad;
 mod history_worlds;
 mod ice_candidate;

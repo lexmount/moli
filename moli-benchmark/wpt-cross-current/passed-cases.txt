@@ -5559,7 +5559,10 @@ focus/iframe-focuses-parent-same-site.html
 focus/scroll-matches-focus.html
 focus/synthetic-focus-event-crash.html
 fullscreen/api/document-fullscreen-enabled-active-document.html
+fullscreen/api/document-onfullscreenerror.html
+fullscreen/api/element-request-fullscreen-not-allowed.html
 fullscreen/api/historical.html
+fullscreen/api/promises-reject.html
 fullscreen/crashtests/backdrop-list-item.html
 fullscreen/rendering/fullscreen-pseudo-class-support.html
 geolocation/non-secure-contexts.http.html
