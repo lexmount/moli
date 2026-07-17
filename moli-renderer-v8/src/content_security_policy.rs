@@ -43,7 +43,7 @@ pub(crate) enum ContentSecurityPolicyResourceKind {
     DocumentMedia,
     DocumentScriptElement,
     DocumentStyleElement,
-    SharedWorkerScript,
+    WorkerConstructor,
     WorkerConnect,
     WorkerDynamicModuleImport,
     WorkerScript,
@@ -1966,7 +1966,7 @@ impl ContentSecurityPolicyResourceKind {
             Self::DocumentMedia => MEDIA_SRC,
             Self::DocumentScriptElement | Self::WorkerDynamicModuleImport => SCRIPT_SRC_ELEM,
             Self::DocumentStyleElement => STYLE_SRC_ELEM,
-            Self::SharedWorkerScript | Self::WorkerStaticModuleImport => WORKER_SRC,
+            Self::WorkerConstructor | Self::WorkerStaticModuleImport => WORKER_SRC,
             Self::WorkerConnect => CONNECT_SRC,
             Self::WorkerScript => SCRIPT_SRC,
         }
@@ -1981,7 +1981,7 @@ impl ContentSecurityPolicyResourceKind {
             Self::DocumentMedia => &[MEDIA_SRC, DEFAULT_SRC],
             Self::DocumentScriptElement => &[SCRIPT_SRC_ELEM, SCRIPT_SRC, DEFAULT_SRC],
             Self::DocumentStyleElement => &[STYLE_SRC_ELEM, STYLE_SRC, DEFAULT_SRC],
-            Self::SharedWorkerScript => &[WORKER_SRC, CHILD_SRC, SCRIPT_SRC, DEFAULT_SRC],
+            Self::WorkerConstructor => &[WORKER_SRC, CHILD_SRC, SCRIPT_SRC, DEFAULT_SRC],
             Self::WorkerConnect => &[CONNECT_SRC, DEFAULT_SRC],
             Self::WorkerDynamicModuleImport => &[SCRIPT_SRC_ELEM, SCRIPT_SRC, DEFAULT_SRC],
             Self::WorkerScript => &[SCRIPT_SRC, DEFAULT_SRC],
@@ -2426,43 +2426,43 @@ mod tests {
     }
 
     #[test]
-    fn worker_src_none_blocks_shared_worker_script() {
+    fn worker_src_none_blocks_worker_constructor() {
         assert!(!allowed(
             "worker-src 'none'; script-src 'self'",
-            ContentSecurityPolicyResourceKind::SharedWorkerScript,
+            ContentSecurityPolicyResourceKind::WorkerConstructor,
             "https://app.test/worker.js"
         ));
     }
 
     #[test]
-    fn shared_worker_script_uses_script_src_and_default_src_fallbacks() {
+    fn worker_constructor_uses_script_src_and_default_src_fallbacks() {
         assert!(!allowed(
             "script-src 'none'",
-            ContentSecurityPolicyResourceKind::SharedWorkerScript,
+            ContentSecurityPolicyResourceKind::WorkerConstructor,
             "https://app.test/worker.js"
         ));
         assert!(!allowed(
             "default-src 'none'",
-            ContentSecurityPolicyResourceKind::SharedWorkerScript,
+            ContentSecurityPolicyResourceKind::WorkerConstructor,
             "https://app.test/worker.js"
         ));
         assert!(allowed(
             "default-src 'self'",
-            ContentSecurityPolicyResourceKind::SharedWorkerScript,
+            ContentSecurityPolicyResourceKind::WorkerConstructor,
             "https://app.test/worker.js"
         ));
     }
 
     #[test]
-    fn shared_worker_script_uses_child_src_before_script_src_fallback() {
+    fn worker_constructor_uses_child_src_before_script_src_fallback() {
         assert!(!allowed(
             "child-src 'none'; script-src 'self'",
-            ContentSecurityPolicyResourceKind::SharedWorkerScript,
+            ContentSecurityPolicyResourceKind::WorkerConstructor,
             "https://app.test/worker.js"
         ));
         assert!(allowed(
             "child-src https://workers.test; script-src 'none'",
-            ContentSecurityPolicyResourceKind::SharedWorkerScript,
+            ContentSecurityPolicyResourceKind::WorkerConstructor,
             "https://workers.test/worker.js"
         ));
     }
@@ -2487,15 +2487,15 @@ mod tests {
     }
 
     #[test]
-    fn worker_src_takes_precedence_for_shared_worker_scripts() {
+    fn worker_src_takes_precedence_for_worker_constructors() {
         assert!(allowed(
             "default-src 'none'; script-src 'none'; worker-src 'self'",
-            ContentSecurityPolicyResourceKind::SharedWorkerScript,
+            ContentSecurityPolicyResourceKind::WorkerConstructor,
             "https://app.test/worker.js"
         ));
         assert!(!allowed(
             "default-src *; script-src *; worker-src 'none'",
-            ContentSecurityPolicyResourceKind::SharedWorkerScript,
+            ContentSecurityPolicyResourceKind::WorkerConstructor,
             "https://app.test/worker.js"
         ));
     }
