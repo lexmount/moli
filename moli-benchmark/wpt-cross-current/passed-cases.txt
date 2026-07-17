@@ -7244,6 +7244,7 @@ navigation-timing/test-unique-performance-objects.html
 netinfo/netinfo-basics.html
 old-tests/submission/Microsoft/foreigncontent/foreign_content_014.html
 orientation-sensor/OrientationSensor_insecure_context.html
+page-lifecycle/idlharness.html
 page-visibility/test_attributes_exist.html
 page-visibility/test_child_document.html
 page-visibility/test_default_view.html

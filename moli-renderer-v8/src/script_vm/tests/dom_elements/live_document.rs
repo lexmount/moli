@@ -25,6 +25,61 @@ fn document_compat_mode_reflects_parser_quirks_mode() {
 }
 
 #[test]
+fn document_page_lifecycle_accessors_use_document_event_handler_semantics() {
+    let mut vm = new_parsed_test_vm(
+        "https://page-lifecycle-surface.test/",
+        "<!doctype html><body></body>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const freeze = Object.getOwnPropertyDescriptor(Document.prototype, 'onfreeze');
+  const resume = Object.getOwnPropertyDescriptor(Document.prototype, 'onresume');
+  const discarded = Object.getOwnPropertyDescriptor(Document.prototype, 'wasDiscarded');
+  const outcome = callback => {
+    try {
+      callback();
+      return 'ok';
+    } catch (error) {
+      return error.name;
+    }
+  };
+  const calls = [];
+  document.onfreeze = event => calls.push(`${event.type}:${event.currentTarget === document}`);
+  document.onresume = event => calls.push(`${event.type}:${event.currentTarget === document}`);
+  document.dispatchEvent(new Event('freeze'));
+  document.dispatchEvent(new Event('resume'));
+  document.onfreeze = 1;
+
+  return [
+    [typeof freeze.get, typeof freeze.set, freeze.enumerable, freeze.configurable].join(','),
+    [typeof discarded.get, typeof discarded.set, discarded.enumerable, discarded.configurable].join(','),
+    document.wasDiscarded,
+    outcome(() => freeze.get.call({})),
+    outcome(() => freeze.set.call({}, null)),
+    outcome(() => discarded.get.call({})),
+    calls.join(','),
+    document.onfreeze === null
+  ].join('|');
+})()
+"#,
+        )
+        .expect("Document page lifecycle accessors should evaluate");
+
+    assert_eq!(
+        result,
+        concat!(
+            "function,function,true,true|",
+            "function,undefined,true,true|",
+            "false|TypeError|TypeError|TypeError|",
+            "freeze:true,resume:true|true"
+        )
+    );
+}
+
+#[test]
 fn disconnected_form_attribute_uses_only_a_nearest_ancestor_form() {
     let mut vm = new_parsed_test_vm("https://form-owner.test/", "<!doctype html><body></body>");
 

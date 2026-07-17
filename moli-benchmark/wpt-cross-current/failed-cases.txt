@@ -3343,7 +3343,6 @@ navigation-timing/navigation-type-post-backforward.html
 navigation-timing/test-document-onload.html
 navigation-timing/test-timing-attributes-order.html
 old-tests/submission/Microsoft/foreigncontent/foreign_content_015.html
-page-lifecycle/idlharness.html
 page-visibility/iframe-session-history.html
 performance-timeline/get-invalid-entries.html
 performance-timeline/navigation-id-worker-created-entries.html

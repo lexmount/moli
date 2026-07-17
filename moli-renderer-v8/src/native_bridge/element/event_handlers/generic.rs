@@ -1,7 +1,10 @@
 use crate::{
     context_bootstrap::WINDOW_EVENT_HANDLER_PROPERTIES,
     document_runtime::EventTargetHandle,
-    util::{context_host_ptr_from_global_bridge, node_wrapper_from_handle, v8_string, v8str},
+    util::{
+        context_host_ptr_from_global_bridge, node_wrapper_from_handle, throw_type_error, v8_string,
+        v8str,
+    },
 };
 
 use super::super::super::node::{
@@ -116,9 +119,11 @@ pub(crate) const GENERIC_EVENT_HANDLER_PROPERTIES: &[&str] = &[
 ];
 
 const DOCUMENT_EVENT_HANDLER_PROPERTIES: &[&str] = &[
+    "onfreeze",
     "onpointerlockchange",
     "onpointerlockerror",
     "onreadystatechange",
+    "onresume",
 ];
 const ELEMENT_SPECIFIC_EVENT_HANDLER_PROPERTIES: &[&str] = &[
     "onencrypted",
@@ -245,11 +250,11 @@ fn document_event_handler_getter_function<'s>(
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, args.this())
     else {
-        rv.set_null();
+        throw_type_error(scope, "Illegal invocation");
         return;
     };
     if !node_is_document(unsafe { &*runtime_ptr }, handle) {
-        rv.set_null();
+        throw_type_error(scope, "Illegal invocation");
         return;
     }
     rv.set(event_handler_property_value_for_target(
@@ -265,18 +270,23 @@ fn document_event_handler_setter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if let Ok((runtime_ptr, handle)) =
+    let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, args.this())
-        && node_is_document(unsafe { &*runtime_ptr }, handle)
-    {
-        set_event_handler_property_for_target(
-            scope,
-            runtime_ptr,
-            EventTargetHandle::Node(handle),
-            args.data(),
-            args.get(0),
-        );
+    else {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    };
+    if !node_is_document(unsafe { &*runtime_ptr }, handle) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
     }
+    set_event_handler_property_for_target(
+        scope,
+        runtime_ptr,
+        EventTargetHandle::Node(handle),
+        args.data(),
+        args.get(0),
+    );
     rv.set_undefined();
 }
 

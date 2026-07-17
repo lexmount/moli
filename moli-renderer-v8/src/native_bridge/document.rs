@@ -579,6 +579,11 @@ struct DocumentStatePrototypeDeclaration {
     #[webapi(accessor_property, getter = document_prerendering_getter_function)]
     prerendering: (),
     #[webapi(
+        accessor_property = "wasDiscarded",
+        getter = document_was_discarded_getter_function
+    )]
+    was_discarded: (),
+    #[webapi(
         accessor_property,
         getter = document_domain_getter_function,
         setter = document_domain_setter_function
@@ -1444,6 +1449,21 @@ fn document_prerendering_getter_function<'s>(
 ) {
     if document_receiver_runtime_and_handle(scope, args.this()).is_none() {
         rv.set_undefined();
+        return;
+    }
+    rv.set_bool(false);
+}
+
+fn document_was_discarded_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    if document_receiver_runtime_and_handle(scope, args.this()).is_none() {
+        throw_type_error(
+            scope,
+            "Document.wasDiscarded getter called on incompatible receiver.",
+        );
         return;
     }
     rv.set_bool(false);
