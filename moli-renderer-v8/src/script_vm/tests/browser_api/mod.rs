@@ -28,6 +28,7 @@ mod events_selection_storage;
 mod font_face_event_init;
 mod fontface_descriptors;
 mod fonts;
+mod fullscreen;
 mod gamepad;
 mod history_worlds;
 mod ice_candidate;
