@@ -97,11 +97,10 @@ impl PageScriptHost {
             request_initiator_type,
             resource_timing_initiator_type,
         );
-        if !self.insert_pending_image_load_event(image_handle, pending) {
+        if !self.insert_pending_image_load_event(image_handle, pending.clone()) {
             let _ = self.settle_pending_image_load_event(pending, true);
             return None;
         }
-        self.begin_pending_image_resource(image_handle, pending);
         match pending.owner() {
             PendingImageLoadEventOwner::Main(binding) => tracing::debug!(
                 image = image_handle.index(),
@@ -125,7 +124,7 @@ impl PageScriptHost {
     pub(crate) fn pending_image_load_event_is_current(
         &self,
         image_handle: DomHandle,
-        pending: PendingImageLoadEvent,
+        pending: &PendingImageLoadEvent,
     ) -> bool {
         if self.dom_host().owner_document_handle(image_handle)
             != Some(pending.owner_document_handle())
@@ -145,6 +144,34 @@ impl PageScriptHost {
         }
     }
 
+    pub(crate) fn prepare_pending_image_load_request_if_matches(
+        &mut self,
+        image_handle: DomHandle,
+        id: ImageLoadEventId,
+        request_key: crate::types::ImageRequestKey,
+    ) -> bool {
+        let pending = {
+            let Some(pending) = self.pending_image_load_events.get_mut(&image_handle) else {
+                return false;
+            };
+            if pending.id != id
+                || pending.request_key.is_some()
+                || pending.network_state != PendingImageLoadNetworkState::Unbound
+            {
+                return false;
+            }
+            pending.request_key = Some(request_key);
+            pending.clone()
+        };
+        self.begin_pending_image_resource(image_handle, &pending);
+        tracing::debug!(
+            image = image_handle.index(),
+            sequence = id.get(),
+            "selected image request identity"
+        );
+        true
+    }
+
     pub(crate) fn bind_pending_image_load_network_request_if_matches(
         &mut self,
         image_handle: DomHandle,
@@ -154,7 +181,10 @@ impl PageScriptHost {
         let Some(pending) = self.pending_image_load_events.get_mut(&image_handle) else {
             return false;
         };
-        if pending.id != id || pending.network_state != PendingImageLoadNetworkState::Unbound {
+        if pending.id != id
+            || pending.request_key.is_none()
+            || pending.network_state != PendingImageLoadNetworkState::Unbound
+        {
             return false;
         }
         pending.network_state = PendingImageLoadNetworkState::Pending(internal_id);
@@ -173,24 +203,32 @@ impl PageScriptHost {
         id: ImageLoadEventId,
         successful: bool,
     ) -> Option<RendererPageImageLoadEventKind> {
-        let pending = self.pending_image_load_events.get_mut(&image_handle)?;
-        if pending.id != id || pending.network_state != PendingImageLoadNetworkState::Unbound {
-            return None;
-        }
+        self.pending_image_load_events
+            .get(&image_handle)
+            .filter(|pending| {
+                pending.id == id && pending.network_state == PendingImageLoadNetworkState::Unbound
+            })?;
         let _ = self.retire_image_resource_for_element(image_handle);
-        let pending = self.pending_image_load_events.get_mut(&image_handle)?;
-        pending.network_state = if successful {
-            PendingImageLoadNetworkState::Ready(PendingImageLoadTerminalSource::Local)
-        } else {
-            PendingImageLoadNetworkState::Failed(PendingImageLoadTerminalSource::Local)
+        let (followup, current_request) = {
+            let pending = self.pending_image_load_events.get_mut(&image_handle)?;
+            pending.network_state = if successful {
+                PendingImageLoadNetworkState::Ready(PendingImageLoadTerminalSource::Local)
+            } else {
+                PendingImageLoadNetworkState::Failed(PendingImageLoadTerminalSource::Local)
+            };
+            (
+                pending_image_load_terminal_followup(pending),
+                pending.request_key.clone(),
+            )
         };
+        self.set_current_image_request(image_handle, current_request);
         tracing::debug!(
             image = image_handle.index(),
             sequence = id.get(),
             successful,
             "completed local or policy image resource"
         );
-        pending_image_load_terminal_followup(pending)
+        followup
     }
 
     pub(crate) fn complete_pending_image_load_reused_resource_if_matches(
@@ -201,18 +239,25 @@ impl PageScriptHost {
         if !self.image_resource_is_ready(image_handle) {
             return None;
         }
-        let pending = self.pending_image_load_events.get_mut(&image_handle)?;
-        if pending.id != id || pending.network_state != PendingImageLoadNetworkState::Unbound {
-            return None;
-        }
-        pending.network_state =
-            PendingImageLoadNetworkState::Ready(PendingImageLoadTerminalSource::Reused);
+        let (followup, current_request) = {
+            let pending = self.pending_image_load_events.get_mut(&image_handle)?;
+            if pending.id != id || pending.network_state != PendingImageLoadNetworkState::Unbound {
+                return None;
+            }
+            pending.network_state =
+                PendingImageLoadNetworkState::Ready(PendingImageLoadTerminalSource::Reused);
+            (
+                pending_image_load_terminal_followup(pending),
+                pending.request_key.clone(),
+            )
+        };
+        self.set_current_image_request(image_handle, current_request);
         tracing::debug!(
             image = image_handle.index(),
             sequence = id.get(),
             "reused active decoded image resource without another fetch or decode"
         );
-        pending_image_load_terminal_followup(pending)
+        followup
     }
 
     pub(crate) fn complete_pending_image_load_network_request_if_matches(
@@ -222,9 +267,13 @@ impl PageScriptHost {
         internal_id: u64,
         successful: bool,
     ) -> Option<RendererPageImageLoadEventKind> {
-        let pending = self.pending_image_load_events.get_mut(&image_handle)?;
-        if pending.id != id
-            || pending.network_state != PendingImageLoadNetworkState::Pending(internal_id)
+        if !self
+            .pending_image_load_events
+            .get(&image_handle)
+            .is_some_and(|pending| {
+                pending.id == id
+                    && pending.network_state == PendingImageLoadNetworkState::Pending(internal_id)
+            })
         {
             tracing::debug!(
                 image = image_handle.index(),
@@ -236,12 +285,19 @@ impl PageScriptHost {
             return None;
         }
         let _ = self.retire_image_resource_for_element(image_handle);
-        let pending = self.pending_image_load_events.get_mut(&image_handle)?;
-        pending.network_state = if successful {
-            PendingImageLoadNetworkState::Ready(PendingImageLoadTerminalSource::Network)
-        } else {
-            PendingImageLoadNetworkState::Failed(PendingImageLoadTerminalSource::Network)
+        let (followup, current_request) = {
+            let pending = self.pending_image_load_events.get_mut(&image_handle)?;
+            pending.network_state = if successful {
+                PendingImageLoadNetworkState::Ready(PendingImageLoadTerminalSource::Network)
+            } else {
+                PendingImageLoadNetworkState::Failed(PendingImageLoadTerminalSource::Network)
+            };
+            (
+                pending_image_load_terminal_followup(pending),
+                pending.request_key.clone(),
+            )
         };
+        self.set_current_image_request(image_handle, current_request);
         tracing::debug!(
             image = image_handle.index(),
             sequence = id.get(),
@@ -249,7 +305,7 @@ impl PageScriptHost {
             successful,
             "applied image network terminal to lifecycle sequence"
         );
-        pending_image_load_terminal_followup(pending)
+        followup
     }
 
     pub(crate) fn pending_image_load_terminal_followup_if_ready(
@@ -271,7 +327,7 @@ impl PageScriptHost {
         let pending = self
             .pending_image_load_event(task_id.element())
             .filter(|pending| pending.id() == task_id.sequence())?;
-        if !self.pending_image_load_event_is_current(task_id.element(), pending) {
+        if !self.pending_image_load_event_is_current(task_id.element(), &pending) {
             return None;
         }
         let kind = pending

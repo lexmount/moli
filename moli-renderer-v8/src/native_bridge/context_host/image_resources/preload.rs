@@ -591,7 +591,7 @@ mod tests {
             document_owner: owner(1),
             request_key: key,
         };
-        resources.begin(identity.clone());
+        resources.begin(identity.clone(), false);
         let claimed = resources
             .claim_scanned_preload(element)
             .expect("the exact element should claim the decoded preload");

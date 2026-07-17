@@ -36,7 +36,17 @@ pub(in crate::native_bridge::context_host) struct ImageResourceStore {
 struct ImageResourceSlot {
     identity: ImageResourceRequestIdentity,
     state: ImageResourceState,
+    retained_current: Option<Arc<ReadyImageResource>>,
     scanned_preload: Option<SharedScannedImagePreloadLoad>,
+}
+
+impl ImageResourceSlot {
+    fn current_ready(&self) -> Option<&Arc<ReadyImageResource>> {
+        match &self.state {
+            ImageResourceState::Ready(resource) => Some(resource),
+            _ => self.retained_current.as_ref(),
+        }
+    }
 }
 
 enum ImageResourceState {
@@ -118,17 +128,38 @@ impl ImageResourceStore {
         }
     }
 
-    pub(super) fn begin(&mut self, identity: ImageResourceRequestIdentity) {
+    pub(super) fn begin(
+        &mut self,
+        identity: ImageResourceRequestIdentity,
+        retain_current: bool,
+    ) -> bool {
         let ready = self.ready_by_request.get(&identity.request_key);
+        // The latest admission owns transport and decode. An available HTML
+        // image keeps its current response until the replacement settles.
+        let retained_current = if retain_current && ready.is_none() {
+            self.slots
+                .get(&identity.element)
+                .filter(|slot| {
+                    slot.identity.document_handle == identity.document_handle
+                        && slot.identity.document_owner == identity.document_owner
+                })
+                .and_then(ImageResourceSlot::current_ready)
+                .cloned()
+        } else {
+            None
+        };
+        let has_retained_current = retained_current.is_some();
         self.slots.insert(
             identity.element,
             ImageResourceSlot {
                 identity,
                 state: ready.map_or(ImageResourceState::Pending, ImageResourceState::Ready),
+                retained_current,
                 scanned_preload: None,
             },
         );
         self.visual_generation.bump();
+        has_retained_current
     }
 
     pub(super) fn identity(&self, element: DomHandle) -> Option<&ImageResourceRequestIdentity> {
@@ -219,6 +250,7 @@ impl ImageResourceStore {
             }
             ImageResourceState::Pending => {
                 slot.state = ImageResourceState::Ready(resource);
+                slot.retained_current = None;
                 slot.scanned_preload = None;
                 self.visual_generation.bump();
                 true
@@ -251,6 +283,7 @@ impl ImageResourceStore {
         self.ready_by_request
             .insert(identity.request_key.clone(), &resource);
         slot.state = ImageResourceState::Ready(resource);
+        slot.retained_current = None;
         slot.scanned_preload = None;
         self.visual_generation.bump();
         true
@@ -264,16 +297,14 @@ impl ImageResourceStore {
             return false;
         }
         slot.state = ImageResourceState::Failed;
+        slot.retained_current = None;
         slot.scanned_preload = None;
         self.visual_generation.bump();
         true
     }
 
     pub(super) fn ready_for_layout(&self, element: DomHandle) -> Option<ReadyImageForLayout> {
-        let slot = self.slots.get(&element)?;
-        let ImageResourceState::Ready(resource) = &slot.state else {
-            return None;
-        };
+        let resource = self.slots.get(&element)?.current_ready()?;
         let (intrinsic_width, intrinsic_height) = intrinsic_dimensions(resource);
         Some(ReadyImageForLayout {
             intrinsic_width,
@@ -294,10 +325,7 @@ impl ImageResourceStore {
     }
 
     pub(super) fn intrinsic_dimensions(&self, element: DomHandle) -> Option<(f32, f32)> {
-        let slot = self.slots.get(&element)?;
-        let ImageResourceState::Ready(resource) = &slot.state else {
-            return None;
-        };
+        let resource = self.slots.get(&element)?.current_ready()?;
         Some(intrinsic_dimensions(resource))
     }
 

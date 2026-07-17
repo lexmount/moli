@@ -721,7 +721,7 @@ pub(crate) enum PendingImageLoadEventOwner {
     Child(FrameDocumentImageLoadEventBinding),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct PendingImageLoadEvent {
     id: ImageLoadEventId,
     owner_document_handle: DomHandle,
@@ -729,6 +729,7 @@ pub(crate) struct PendingImageLoadEvent {
     owner: PendingImageLoadEventOwner,
     request_initiator_type: crate::types::SubresourceRequestInitiatorType,
     resource_timing_initiator_type: &'static str,
+    request_key: Option<ImageRequestKey>,
     network_state: PendingImageLoadNetworkState,
     terminal_followup_queued: bool,
 }
@@ -766,36 +767,41 @@ impl PendingImageLoadEvent {
             owner,
             request_initiator_type,
             resource_timing_initiator_type,
+            request_key: None,
             network_state: PendingImageLoadNetworkState::Unbound,
             terminal_followup_queued: false,
         }
     }
 
-    pub(crate) fn id(self) -> ImageLoadEventId {
+    pub(crate) fn id(&self) -> ImageLoadEventId {
         self.id
     }
 
-    pub(crate) fn owner_document_handle(self) -> DomHandle {
+    pub(crate) fn owner_document_handle(&self) -> DomHandle {
         self.owner_document_handle
     }
 
-    pub(crate) fn target(self) -> WindowDocumentTaskTarget {
+    pub(crate) fn target(&self) -> WindowDocumentTaskTarget {
         self.target
     }
 
-    pub(crate) fn owner(self) -> PendingImageLoadEventOwner {
+    pub(crate) fn owner(&self) -> PendingImageLoadEventOwner {
         self.owner
     }
 
-    pub(crate) fn request_initiator_type(self) -> crate::types::SubresourceRequestInitiatorType {
+    pub(crate) fn request_initiator_type(&self) -> crate::types::SubresourceRequestInitiatorType {
         self.request_initiator_type
     }
 
-    pub(crate) fn resource_timing_initiator_type(self) -> &'static str {
+    pub(crate) fn resource_timing_initiator_type(&self) -> &'static str {
         self.resource_timing_initiator_type
     }
 
-    pub(crate) fn network_request_id(self) -> Option<u64> {
+    pub(crate) fn request_key(&self) -> Option<&ImageRequestKey> {
+        self.request_key.as_ref()
+    }
+
+    pub(crate) fn network_request_id(&self) -> Option<u64> {
         match self.network_state {
             PendingImageLoadNetworkState::Pending(internal_id) => Some(internal_id),
             PendingImageLoadNetworkState::Unbound
@@ -805,7 +811,7 @@ impl PendingImageLoadEvent {
         }
     }
 
-    pub(crate) fn terminal_source(self) -> Option<PendingImageLoadTerminalSource> {
+    pub(crate) fn terminal_source(&self) -> Option<PendingImageLoadTerminalSource> {
         match self.network_state {
             PendingImageLoadNetworkState::Ready(source)
             | PendingImageLoadNetworkState::Failed(source) => Some(source),
@@ -816,7 +822,7 @@ impl PendingImageLoadEvent {
     }
 
     pub(crate) fn terminal_followup(
-        self,
+        &self,
     ) -> Option<crate::page_task_queue::RendererPageImageLoadEventKind> {
         if !self.terminal_followup_queued {
             return None;
@@ -973,6 +979,9 @@ pub(crate) struct PageScriptHost {
     user_interaction_tasks: user_interaction_tasks::UserInteractionTaskState,
     pending_image_load_events: HashMap<DomHandle, PendingImageLoadEvent>,
     next_image_load_event_id: u64,
+    // Source selection can change before its pending request becomes available or broken. Keep
+    // the request exposed by currentSrc separate from the element's mutable source attributes.
+    current_image_requests: HashMap<DomHandle, ImageRequestKey>,
     pending_media_load_sequences: HashMap<DomHandle, PendingMediaLoadSequence>,
     next_media_load_sequence_id: u64,
     pending_text_track_load_sequences: HashMap<DomHandle, PendingTextTrackLoadSequence>,
