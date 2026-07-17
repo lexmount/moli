@@ -605,8 +605,13 @@ impl DocumentRuntime {
         self.dom_host.create_detached_xml_document()
     }
 
-    pub(crate) fn create_detached_html_document_with_url(&mut self, url: url::Url) -> DomHandle {
-        self.dom_host.create_detached_html_document_with_url(url)
+    pub(crate) fn create_detached_html_document_with_url_and_scripting(
+        &mut self,
+        url: url::Url,
+        scripting_enabled: bool,
+    ) -> DomHandle {
+        self.dom_host
+            .create_detached_html_document_with_url_and_scripting(url, scripting_enabled)
     }
 
     pub(crate) fn create_detached_xml_document_with_url(&mut self, url: url::Url) -> DomHandle {

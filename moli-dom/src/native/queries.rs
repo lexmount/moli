@@ -285,6 +285,17 @@ impl NativeDom {
             .map(|document| document.is_html_document())
     }
 
+    pub fn node_document_scripting_enabled(&self, node_id: NativeNodeId) -> Option<bool> {
+        let node = self.node(node_id)?;
+        if let Some(document) = node.as_document() {
+            return Some(document.scripting_enabled());
+        }
+        let owner_document = node.owner_document()?;
+        self.node(owner_document)
+            .and_then(Node::as_document)
+            .map(|document| document.scripting_enabled())
+    }
+
     fn collect_matching_elements(
         &self,
         root: NativeNodeId,

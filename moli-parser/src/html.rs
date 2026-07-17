@@ -411,7 +411,14 @@ impl HtmlParser {
     }
 
     pub fn parse_dom_host(&self, final_url: Url, html: String) -> DomHost {
-        let mut stream = self.start_document(final_url);
+        let target =
+            ParserStreamHtmlTreeSinkTarget::new_with_declarative_shadow_roots_and_scripting(
+                final_url,
+                true,
+                self.scripting_enabled,
+            );
+        let mut stream =
+            HtmlTreeSinkStream::from_target_with_scripting(target, self.scripting_enabled);
         for chunk in html_chunks(&html) {
             stream.feed(chunk);
         }
@@ -424,7 +431,11 @@ impl HtmlParser {
         html: String,
     ) -> NativeDom {
         let target =
-            ParserStreamHtmlTreeSinkTarget::new_with_declarative_shadow_roots(final_url, false);
+            ParserStreamHtmlTreeSinkTarget::new_with_declarative_shadow_roots_and_scripting(
+                final_url,
+                false,
+                self.scripting_enabled,
+            );
         let mut stream =
             HtmlTreeSinkStream::from_target_with_scripting(target, self.scripting_enabled);
         for chunk in html_chunks(&html) {
@@ -471,10 +482,12 @@ impl HtmlParser {
         allow_declarative_shadow_roots: bool,
         scripting_enabled: bool,
     ) -> NativeDom {
-        let target = ParserStreamHtmlTreeSinkTarget::new_with_declarative_shadow_roots(
-            final_url,
-            allow_declarative_shadow_roots,
-        );
+        let target =
+            ParserStreamHtmlTreeSinkTarget::new_with_declarative_shadow_roots_and_scripting(
+                final_url,
+                allow_declarative_shadow_roots,
+                scripting_enabled,
+            );
         let context = QualName::new(
             None,
             Namespace::from(context_namespace),
@@ -2054,6 +2067,25 @@ mod tests {
                 .stylesheet_candidate_handles_for_tree_scope(document.document_node_id())
                 .is_empty(),
             "inert template contents must not become Document stylesheet candidates"
+        );
+    }
+
+    #[test]
+    fn standalone_html_parser_preserves_the_requested_scripting_mode() {
+        let document = HtmlParser::SCRIPTING_DISABLED.parse_without_declarative_shadow_roots(
+            Url::parse("https://example.test/").expect("test url"),
+            "<body><noscript>&amp;&nbsp;&lt;&gt;</noscript></body>".to_owned(),
+        );
+        assert_eq!(
+            document
+                .document()
+                .map(|document| document.scripting_enabled()),
+            Some(false)
+        );
+        let noscript = first_element_by_ns(&document, HTML_NS, "noscript");
+        assert_eq!(
+            document.inner_html(noscript).as_deref(),
+            Some("&amp;&nbsp;&lt;&gt;")
         );
     }
 

@@ -759,6 +759,10 @@ impl JsContextHost {
         }
         self.child_browsing_context_host_for_document_handle(document_handle)
             .map(|handle| self.child_browsing_context_scripting_enabled(handle))
+            .or_else(|| {
+                self.dom_host()
+                    .document_scripting_enabled_for_handle(document_handle)
+            })
             // DOMParser and document.implementation documents have no browsing
             // context, so scripting is disabled for their fragment parsers too.
             .unwrap_or(false)

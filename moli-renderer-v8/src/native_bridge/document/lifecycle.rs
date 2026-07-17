@@ -802,13 +802,15 @@ fn exec_command_insert_html_target(runtime: &JsContextHost) -> Option<DomHandle>
 }
 
 fn input_text_from_html_fragment(runtime: &JsContextHost, value: &str) -> String {
-    let parsed = HtmlParser::with_scripting_enabled(true)
-        .parse_fragment_without_declarative_shadow_roots(
-            runtime.host_document().url().clone(),
-            "http://www.w3.org/1999/xhtml",
-            "body",
-            value.to_owned(),
-        );
+    let document_handle = runtime.dom_host().document_handle();
+    let parsed =
+        HtmlParser::with_scripting_enabled(runtime.document_scripting_enabled(document_handle))
+            .parse_fragment_without_declarative_shadow_roots(
+                runtime.host_document().url().clone(),
+                "http://www.w3.org/1999/xhtml",
+                "body",
+                value.to_owned(),
+            );
     let root = parsed
         .body_node_id()
         .unwrap_or_else(|| parsed.document_node_id());

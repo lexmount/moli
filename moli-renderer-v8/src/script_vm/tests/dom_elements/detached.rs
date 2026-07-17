@@ -299,6 +299,58 @@ fn domparser_html_preserves_quirks_mode_and_parses_with_scripting_disabled() {
 }
 
 #[test]
+fn offline_html_documents_parse_and_serialize_noscript_with_scripting_disabled() {
+    let mut vm = new_storage_test_vm("https://offline-noscript.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const encoded = '&amp;&nbsp;&lt;&gt;';
+  const decoded = '&\u00a0<>';
+  const markup = value => `<noscript>${value}</noscript>`;
+  const matches = (node, serialization) =>
+    node.textContent === decoded && node.innerHTML === serialization;
+
+  const live = document.createElement('div');
+  live.innerHTML = markup(decoded);
+
+  const parsed = new DOMParser().parseFromString(
+    `<body>${markup(encoded)}</body>`,
+    'text/html'
+  );
+
+  const template = document.createElement('template');
+  template.innerHTML = markup(encoded);
+
+  const created = document.implementation.createHTMLDocument('');
+  created.body.innerHTML = `<pre>${markup(encoded)}</pre>`;
+
+  const contextualDocument = document.implementation.createHTMLDocument('');
+  const range = contextualDocument.createRange();
+  range.selectNode(contextualDocument.body);
+  const contextual = range.createContextualFragment(markup(encoded));
+
+  const written = document.implementation.createHTMLDocument('');
+  written.write(`<div>${markup(decoded)}</div>`);
+
+  return [
+    matches(live.firstChild, decoded),
+    matches(parsed.body.firstChild, encoded),
+    matches(template.content.firstChild, encoded),
+    matches(created.body.firstChild.firstChild, encoded),
+    matches(contextual.firstChild, encoded),
+    matches(written.body.firstChild.firstChild, encoded)
+  ].join('|');
+})()
+"#,
+        )
+        .expect("offline noscript parsing and serialization probe should evaluate");
+
+    assert_eq!(result, "true|true|true|true|true|true");
+}
+
+#[test]
 fn domparser_xml_preserves_requested_content_type_for_success_and_error_documents() {
     let mut vm = new_storage_test_vm("https://domparser-xml-content-type.test/");
 
