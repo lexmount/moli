@@ -1432,7 +1432,12 @@ fn event_handler_attribute_writes_enforce_trusted_script_at_the_attribute_bounda
   ordinary.setAttributeNS("urn:test", "onclick", "plain-namespaced");
   const uppercaseSvg = document.createElementNS("http://www.w3.org/2000/svg", "g");
   uppercaseSvg.setAttributeNS(null, "ONCLICK", "plain-uppercase");
-  const elementSpecificRejected = ["onwaitingforkey", "onbegin"].map(name => {
+  const elementSpecificRejected = [
+    "onwaitingforkey",
+    "onbegin",
+    "onfullscreenchange",
+    "onfullscreenerror"
+  ].map(name => {
     try {
       document.createElement("div").setAttribute(name, "plain-special");
       return false;
@@ -1478,7 +1483,7 @@ fn event_handler_attribute_writes_enforce_trusted_script_at_the_attribute_bounda
 
     assert_eq!(
         result,
-        r#"{"runs":["trusted","trusted-ns","default"],"unsuitableRejected":true,"unsuitableAttribute":null,"plainRejected":true,"plainAttribute":null,"plainNsRejected":true,"plainNsAttribute":null,"ordinary":["plain-data","plain-unknown","plain-namespaced","plain-uppercase"],"elementSpecificRejected":[true,true],"defaultedAttribute":"globalThis.__eventHandlerAttributeRuns.push('default')","defaultCalls":[["default-input","TrustedScript","Element onclick"]]}"#
+        r#"{"runs":["trusted","trusted-ns","default"],"unsuitableRejected":true,"unsuitableAttribute":null,"plainRejected":true,"plainAttribute":null,"plainNsRejected":true,"plainNsAttribute":null,"ordinary":["plain-data","plain-unknown","plain-namespaced","plain-uppercase"],"elementSpecificRejected":[true,true,true,true],"defaultedAttribute":"globalThis.__eventHandlerAttributeRuns.push('default')","defaultCalls":[["default-input","TrustedScript","Element onclick"]]}"#
     );
 }
 

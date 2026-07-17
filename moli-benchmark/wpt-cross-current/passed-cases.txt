@@ -7947,6 +7947,7 @@ trusted-types/trusted-types-duplicate-names-without-enforcement.html
 trusted-types/trusted-types-duplicate-names.html
 trusted-types/trusted-types-eval-reporting-no-unsafe-eval.html
 trusted-types/trusted-types-eval-reporting-report-only.html
+trusted-types/trusted-types-event-handlers.html
 trusted-types/trusted-types-reporting-check-report-DedicatedWorker-create-policy.html
 trusted-types/trusted-types-reporting-clipping-of-sample.html
 trusted-types/trusted-types-reporting-for-DOMParser-parseFromString.html
