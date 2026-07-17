@@ -139,6 +139,10 @@ pub(crate) enum WorkerMessage {
     ServiceWorkerGetNotificationsResult(ServiceWorkerGetNotificationsResult),
     /// Run the worker's queued unhandled promise rejection notification task.
     DispatchPendingPromiseRejections,
+    /// Dispatch a CSP violation queued while the current worker was still evaluating script.
+    DispatchContentSecurityPolicyViolation(
+        Box<crate::content_security_policy::ContentSecurityPolicyUrlViolation>,
+    ),
     /// A worker spawned from this worker has queued a parent-facing event.
     NestedWorkerEvent {
         worker_id: DedicatedWorkerId,
