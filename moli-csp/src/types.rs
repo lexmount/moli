@@ -10,7 +10,7 @@ pub enum ContentSecurityPolicyResourceKind {
     DocumentFont,
     DocumentScriptElement,
     DocumentStyleElement,
-    SharedWorkerScript,
+    WorkerConstructor,
     WorkerConnect,
     WorkerDynamicModuleImport,
     WorkerScript,
