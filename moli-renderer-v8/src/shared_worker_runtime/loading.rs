@@ -288,7 +288,7 @@ impl SharedWorkerScriptRequestPolicy {
             &self.document_content_security_policies,
             document_url,
             script_url,
-            ContentSecurityPolicyResourceKind::SharedWorkerScript,
+            ContentSecurityPolicyResourceKind::WorkerConstructor,
             || {
                 format!(
                     "Failed to load shared worker script `{script_url}`: blocked by Content Security Policy."

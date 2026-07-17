@@ -25,7 +25,8 @@ mod timer_callback;
 pub(crate) use data_url::decode_data_url_script_source;
 pub(crate) use global_scope::{
     NestedWorkerContext, WORKER_STATE_SLOT, WorkerOpfsCompletion, WorkerWebCryptoCompletion,
-    cancel_worker_opfs_task, check_worker_websocket_csp, close_worker_websocket,
+    cancel_worker_opfs_task, check_and_queue_nested_worker_constructor_csp,
+    check_worker_websocket_csp, close_worker_websocket,
     dispatch_worker_trusted_types_sink_violation_event,
     ensure_worker_opfs_directory_iterator_registry, ensure_worker_opfs_handle_registry,
     forget_nested_worker_context, forget_worker_broadcast_channel_wrapper,
@@ -35,7 +36,8 @@ pub(crate) use global_scope::{
     register_worker_webcrypto_task, register_worker_websocket, reserve_nested_worker_context,
     send_worker_websocket_binary, send_worker_websocket_text, service_worker_runtime_identity,
     try_worker_xhr_abort_callback, try_worker_xhr_reschedule_timeout_after_timeout_change,
-    try_worker_xhr_send_callback, worker_allows_trusted_type_policy_name_by_csp,
+    try_worker_xhr_send_callback, worker_allows_eval_code_generation_by_csp,
+    worker_allows_trusted_type_policy_name_by_csp,
     worker_allows_trusted_types_eval, worker_broadcast_channel_registry,
     worker_broadcast_channel_storage_key, worker_broadcast_channel_wake_sender,
     worker_broadcast_channel_wrapper, worker_current_script_url, worker_global_is_closed,
@@ -43,7 +45,8 @@ pub(crate) use global_scope::{
     worker_notification_permission_state, worker_opfs_directory_iterator_registry,
     worker_opfs_handle_registry, worker_requires_trusted_types_for_script,
     worker_service_worker_control_state, worker_storage_key, worker_storage_partition_identity,
-    worker_termination_requested, worker_uses_shared_worker_agent_cluster,
+    worker_termination_requested, worker_trusted_types_for_script_requirements,
+    worker_uses_shared_worker_agent_cluster,
 };
 pub(crate) use handle::WorkerMessage;
 pub(crate) use handle::{
