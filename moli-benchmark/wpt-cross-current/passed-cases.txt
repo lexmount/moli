@@ -175,6 +175,7 @@ content-security-policy/img-src/img-src-targeting.html
 content-security-policy/img-src/img-src-wildcard-allowed.html
 content-security-policy/inheritance/blob-inherits-from-meta-http-equiv-with-invalid-characters.html
 content-security-policy/inheritance/inherited-csp-list-modifications-are-local.html
+content-security-policy/inside-worker/dedicatedworker-worker-src.html
 content-security-policy/media-src/media-src-7_1.html
 content-security-policy/media-src/media-src-7_2.html
 content-security-policy/media-src/media-src-blocked-blob-url.html
