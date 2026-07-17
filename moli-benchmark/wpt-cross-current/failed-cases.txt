@@ -3324,7 +3324,6 @@ old-tests/submission/Microsoft/selection/insertNodeIntoSelection.htm
 old-tests/submission/Microsoft/selection/select.htm
 old-tests/submission/Microsoft/selection/selectionStartEnd.htm
 old-tests/submission/Microsoft/selection/setSelectionRange.htm
-page-lifecycle/idlharness.html
 page-visibility/iframe-session-history.html
 performance-timeline/get-invalid-entries.html
 performance-timeline/navigation-id-worker-created-entries.html
