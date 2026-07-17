@@ -53,6 +53,10 @@ pub struct Document {
     quirks_mode: QuirksMode,
     kind: DocumentKind,
     design_mode_enabled: bool,
+    // The document's HTML scripting flag. Browsing-context policy can still
+    // override execution, but detached/template documents must retain `false`
+    // for fragment parsing and serialization even without a window.
+    scripting_enabled: bool,
     css_target: Option<NativeNodeId>,
     default_language: Option<Box<str>>,
     source_last_modified_ms: Option<f64>,
@@ -65,6 +69,10 @@ impl Document {
     }
 
     pub fn new_html(url: Url) -> Self {
+        Self::new_html_with_scripting(url, true)
+    }
+
+    pub fn new_html_with_scripting(url: Url, scripting_enabled: bool) -> Self {
         Self {
             base_url_state: DocumentBaseUrlState::new(&url),
             url,
@@ -74,6 +82,7 @@ impl Document {
             quirks_mode: QuirksMode::NoQuirks,
             kind: DocumentKind::Html,
             design_mode_enabled: false,
+            scripting_enabled,
             css_target: None,
             default_language: None,
             source_last_modified_ms: None,
@@ -90,6 +99,7 @@ impl Document {
             quirks_mode: QuirksMode::NoQuirks,
             kind: DocumentKind::Xml,
             design_mode_enabled: false,
+            scripting_enabled: true,
             css_target: None,
             default_language: None,
             source_last_modified_ms: None,
@@ -148,6 +158,10 @@ impl Document {
         self.design_mode_enabled
     }
 
+    pub fn scripting_enabled(&self) -> bool {
+        self.scripting_enabled
+    }
+
     pub fn fallback_base_url(&self) -> &Url {
         self.base_url_state.fallback_base_url()
     }
@@ -184,6 +198,10 @@ impl Document {
 
     pub fn set_design_mode_enabled(&mut self, design_mode_enabled: bool) {
         self.design_mode_enabled = design_mode_enabled;
+    }
+
+    pub fn set_scripting_enabled(&mut self, scripting_enabled: bool) {
+        self.scripting_enabled = scripting_enabled;
     }
 
     pub fn set_css_target(&mut self, target: Option<NativeNodeId>) -> bool {
