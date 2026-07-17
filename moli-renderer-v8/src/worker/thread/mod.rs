@@ -73,9 +73,10 @@ use super::global_scope::{
     continue_pending_worker_fetch, continue_pending_worker_fetch_response,
     continue_pending_worker_xhr, continue_pending_worker_xhr_response,
     dispatch_nested_worker_event, dispatch_worker_csp_violation_event,
-    dispatch_worker_websocket_event, drain_service_worker_client_focus_result,
-    drain_service_worker_client_navigate_result, drain_service_worker_client_query_result,
-    drain_service_worker_clients_open_window_result, drain_service_worker_get_notifications_result,
+    dispatch_worker_csp_violation_event_for_state, dispatch_worker_websocket_event,
+    drain_service_worker_client_focus_result, drain_service_worker_client_navigate_result,
+    drain_service_worker_client_query_result, drain_service_worker_clients_open_window_result,
+    drain_service_worker_get_notifications_result,
     drain_service_worker_periodic_sync_get_tags_result,
     drain_service_worker_periodic_sync_registration_result,
     drain_service_worker_periodic_sync_unregistration_result,
@@ -2673,9 +2674,7 @@ async fn worker_main(
                 let scope = &mut scope.init();
                 let ctx = v8::Local::new(scope, &context);
                 let scope = &mut v8::ContextScope::new(scope, ctx);
-                super::global_scope::dispatch_worker_csp_violation_event_for_state(
-                    scope, &state, &violation,
-                );
+                dispatch_worker_csp_violation_event_for_state(scope, &state, &violation);
                 perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
                 drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
             }
