@@ -1338,7 +1338,7 @@ impl ContentSecurityPolicyResourceKind {
             Self::DocumentFont => "font-src",
             Self::DocumentScriptElement | Self::WorkerDynamicModuleImport => SCRIPT_SRC_ELEM,
             Self::DocumentStyleElement => STYLE_SRC_ELEM,
-            Self::SharedWorkerScript | Self::WorkerStaticModuleImport => WORKER_SRC,
+            Self::WorkerConstructor | Self::WorkerStaticModuleImport => WORKER_SRC,
             Self::WorkerConnect => CONNECT_SRC,
             Self::WorkerScript => SCRIPT_SRC,
         }
@@ -1354,7 +1354,7 @@ impl ContentSecurityPolicyResourceKind {
             Self::DocumentFont => &["font-src", DEFAULT_SRC],
             Self::DocumentScriptElement => &[SCRIPT_SRC_ELEM, SCRIPT_SRC, DEFAULT_SRC],
             Self::DocumentStyleElement => &[STYLE_SRC_ELEM, STYLE_SRC, DEFAULT_SRC],
-            Self::SharedWorkerScript => &[WORKER_SRC, CHILD_SRC, SCRIPT_SRC, DEFAULT_SRC],
+            Self::WorkerConstructor => &[WORKER_SRC, CHILD_SRC, SCRIPT_SRC, DEFAULT_SRC],
             Self::WorkerConnect => &[CONNECT_SRC, DEFAULT_SRC],
             Self::WorkerDynamicModuleImport => &[SCRIPT_SRC_ELEM, SCRIPT_SRC, DEFAULT_SRC],
             Self::WorkerScript => &[SCRIPT_SRC, DEFAULT_SRC],
