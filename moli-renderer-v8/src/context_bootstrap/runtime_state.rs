@@ -122,6 +122,12 @@ struct DocumentPrototypeRuntimeDeclaration {
     )]
     fullscreen_enabled: (),
     #[webapi(
+        method = "exitFullscreen",
+        length = 0,
+        callback = native_bridge::fullscreen::document_exit_fullscreen_callback
+    )]
+    exit_fullscreen: (),
+    #[webapi(
         accessor_property = "pointerLockElement",
         getter = native_bridge::pointer_lock::document_pointer_lock_element_getter
     )]

@@ -5130,7 +5130,10 @@ focus/iframe-focuses-parent-different-site.html
 focus/iframe-focuses-parent-same-site.html
 focus/scroll-matches-focus.html
 fullscreen/api/document-fullscreen-enabled-active-document.html
+fullscreen/api/document-onfullscreenerror.html
+fullscreen/api/element-request-fullscreen-not-allowed.html
 fullscreen/api/historical.html
+fullscreen/api/promises-reject.html
 fullscreen/rendering/fullscreen-pseudo-class-support.html
 geolocation/non-secure-contexts.http.html
 gyroscope/Gyroscope_insecure_context.html

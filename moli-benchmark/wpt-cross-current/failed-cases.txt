@@ -2763,10 +2763,7 @@ focus/iframe-focus-with-same-as-top-intermediate-frame.html
 font-access/permissions-policy/local-fonts-supported-by-permissions-policy.html
 fullscreen/api/document-exit-fullscreen-active-document.html
 fullscreen/api/document-fullscreen-enabled.html
-fullscreen/api/document-onfullscreenerror.html
 fullscreen/api/element-request-fullscreen-active-document.html
-fullscreen/api/element-request-fullscreen-not-allowed.html
-fullscreen/api/promises-reject.html
 gyroscope/Gyroscope-supported-by-permissions-policy.html
 hr-time/test_cross_frame_start.html
 html/browsers/browsing-the-web/history-traversal/001.html
