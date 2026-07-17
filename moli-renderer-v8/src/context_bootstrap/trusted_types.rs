@@ -437,33 +437,6 @@ pub(crate) enum TrustedTypesCodeGenerationCheck {
     Block,
 }
 
-pub(crate) fn trusted_types_code_generation_check_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    source: v8::Local<'s, v8::Value>,
-    is_code_like: bool,
-) -> v8::ModifyCodeGenerationFromStringsResult<'s> {
-    if trusted_types_eval_is_allowed(scope) && source.is_string() {
-        return v8::ModifyCodeGenerationFromStringsResult {
-            codegen_allowed: true,
-            modified_source: None,
-        };
-    }
-    let requirements = trusted_types_for_script_requirements(scope);
-    let (codegen_allowed, modified_source) =
-        match trusted_types_code_generation_check(scope, source, is_code_like, requirements) {
-            TrustedTypesCodeGenerationCheck::AllowOriginal => (true, None),
-            TrustedTypesCodeGenerationCheck::AllowModified(source) => {
-                let source = v8_string(scope, &source);
-                (source.is_some(), source)
-            }
-            TrustedTypesCodeGenerationCheck::Block => (false, None),
-        };
-    v8::ModifyCodeGenerationFromStringsResult {
-        codegen_allowed,
-        modified_source,
-    }
-}
-
 pub(crate) fn trusted_types_code_generation_check<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     source: v8::Local<'s, v8::Value>,
@@ -1409,18 +1382,6 @@ fn trusted_types_for_script_is_required(scope: &mut v8::PinScope<'_, '_>) -> boo
         return false;
     };
     unsafe { &*host_ptr }.requires_trusted_types_for_script(scope)
-}
-
-fn trusted_types_for_script_requirements(
-    scope: &mut v8::PinScope<'_, '_>,
-) -> TrustedTypesForScriptRequirements {
-    if let Some(required) = crate::worker::worker_requires_trusted_types_for_script(scope) {
-        return TrustedTypesForScriptRequirements::enforced_only(required);
-    }
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        return TrustedTypesForScriptRequirements::default();
-    };
-    unsafe { &*host_ptr }.trusted_types_for_script_requirements(scope)
 }
 
 fn trusted_types_eval_is_allowed(scope: &mut v8::PinScope<'_, '_>) -> bool {

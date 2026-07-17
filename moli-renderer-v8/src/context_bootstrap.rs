@@ -434,7 +434,6 @@ pub(crate) use self::trusted_types::{
     install_trusted_types_runtime_state, trusted_html_string_or_throw, trusted_html_value_string,
     trusted_script_string_for_script_element_execution, trusted_script_string_or_type_error,
     trusted_script_url_string_or_throw, trusted_types_code_generation_check,
-    trusted_types_code_generation_check_callback,
 };
 pub(crate) use self::url_search_params_runtime::url_search_params_request_body;
 pub(crate) use self::web_storage::install_storage_aliases_for_window;

@@ -53,7 +53,7 @@ use url::Url;
 use super::{
     decode_data_url_script_source,
     handle::{
-        WorkerConsoleMessage, WorkerFetchHandlerType, WorkerPendingFetchContinue,
+        WorkerConsoleMessage, WorkerFetchHandlerType, WorkerMessage, WorkerPendingFetchContinue,
         WorkerPendingSubresourceFetch, WorkerPendingXhrContinue, WorkerToParentMessage,
         WorkerWebSocketFrameEvent, WorkerWebSocketLifecycleEvent,
     },
@@ -148,6 +148,16 @@ pub(super) fn dispatch_worker_csp_violation_event<'s>(
 ) {
     content_security_policy::dispatch_worker_content_security_policy_violation_event(
         scope, loader, violation,
+    );
+}
+
+pub(super) fn dispatch_worker_csp_violation_event_for_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    state: &Rc<RefCell<WorkerGlobalState>>,
+    violation: &crate::content_security_policy::ContentSecurityPolicyUrlViolation,
+) {
+    content_security_policy::dispatch_worker_content_security_policy_violation_event_for_state(
+        scope, state, violation,
     );
 }
 
@@ -2852,6 +2862,50 @@ pub(crate) fn reserve_nested_worker_context(
     })
 }
 
+pub(crate) fn check_and_queue_nested_worker_constructor_csp(
+    scope: &mut v8::PinScope<'_, '_>,
+    request_url: &Url,
+) -> Result<(), String> {
+    let state = get_worker_state(scope)
+        .expect("nested Worker construction requires an installed worker global state");
+    let (wake_tx, report_only_violation, enforce_violation) = {
+        let state = state.borrow();
+        let protected_url = state
+            .current_script_url
+            .as_ref()
+            .expect("nested Worker construction requires a current worker script URL");
+        (
+            state.worker_wake_tx.clone(),
+            worker_content_security_policy_report_only_violation(
+                &state,
+                protected_url,
+                request_url,
+                crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerConstructor,
+            ),
+            worker_content_security_policy_violation(
+                &state,
+                protected_url,
+                request_url,
+                crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerConstructor,
+            ),
+        )
+    };
+
+    if let Some(violation) = report_only_violation {
+        let _ = wake_tx.send(WorkerMessage::DispatchContentSecurityPolicyViolation(
+            Box::new(violation),
+        ));
+    }
+    let Some(violation) = enforce_violation else {
+        return Ok(());
+    };
+    let message = worker_content_security_policy_error_message(&violation, "Worker");
+    let _ = wake_tx.send(WorkerMessage::DispatchContentSecurityPolicyViolation(
+        Box::new(violation),
+    ));
+    Err(message)
+}
+
 pub(crate) fn worker_service_worker_control_state(
     scope: &mut v8::PinScope<'_, '_>,
 ) -> Option<crate::runtime::ServiceWorkerControlState> {
@@ -2995,11 +3049,12 @@ pub(super) fn install_worker_global_scope<'s>(
         secure_context,
     )?;
     crate::context_bootstrap::install_trusted_types_runtime_state(scope, global)?;
-    let require_trusted_types_for_script =
-        crate::content_security_policy::content_security_policy_requires_trusted_types_for_script(
-            &state.borrow().content_security_policies,
-        );
-    if require_trusted_types_for_script {
+    let has_string_code_generation_policy = {
+        let state = state.borrow();
+        !state.content_security_policies.is_empty()
+            || !state.content_security_report_only_policies.is_empty()
+    };
+    if has_string_code_generation_policy {
         scope
             .get_current_context()
             .set_allow_generation_from_strings(false);
@@ -6194,12 +6249,68 @@ pub(crate) fn worker_allows_trusted_types_eval(scope: &mut v8::PinScope<'_, '_>)
     )
 }
 
+pub(crate) fn worker_allows_eval_code_generation_by_csp(
+    scope: &mut v8::PinScope<'_, '_>,
+    allow_trusted_types_eval: bool,
+    source: Option<&str>,
+) -> Option<bool> {
+    let state = get_worker_state(scope)?;
+    let (wake_tx, report_only_violation, enforce_violation) = {
+        let state = state.borrow();
+        let Some(protected_url) = state.current_script_url.as_ref() else {
+            return Some(true);
+        };
+        (
+            state.worker_wake_tx.clone(),
+            worker_eval_content_security_policy_violation(
+                &state,
+                protected_url,
+                allow_trusted_types_eval,
+                source,
+                crate::content_security_policy::ContentSecurityPolicyDisposition::Report,
+            ),
+            worker_eval_content_security_policy_violation(
+                &state,
+                protected_url,
+                allow_trusted_types_eval,
+                source,
+                crate::content_security_policy::ContentSecurityPolicyDisposition::Enforce,
+            ),
+        )
+    };
+    if let Some(violation) = report_only_violation {
+        let _ = wake_tx.send(WorkerMessage::DispatchContentSecurityPolicyViolation(
+            Box::new(violation),
+        ));
+    }
+    let allowed = enforce_violation.is_none();
+    if let Some(violation) = enforce_violation {
+        let _ = wake_tx.send(WorkerMessage::DispatchContentSecurityPolicyViolation(
+            Box::new(violation),
+        ));
+    }
+    Some(allowed)
+}
+
 pub(crate) fn worker_requires_trusted_types_for_script(
     scope: &mut v8::PinScope<'_, '_>,
 ) -> Option<bool> {
+    Some(worker_trusted_types_for_script_requirements(scope)?.is_enforced())
+}
+
+pub(crate) fn worker_trusted_types_for_script_requirements(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<crate::content_security_policy::TrustedTypesForScriptRequirements> {
+    let state = get_worker_state(scope)?;
+    let state = state.borrow();
     Some(
-        crate::content_security_policy::content_security_policy_requires_trusted_types_for_script(
-            &get_worker_state(scope)?.borrow().content_security_policies,
+        crate::content_security_policy::TrustedTypesForScriptRequirements::new(
+            crate::content_security_policy::content_security_policy_requires_trusted_types_for_script(
+                &state.content_security_policies,
+            ),
+            crate::content_security_policy::content_security_policy_requires_trusted_types_for_script(
+                &state.content_security_report_only_policies,
+            ),
         ),
     )
 }

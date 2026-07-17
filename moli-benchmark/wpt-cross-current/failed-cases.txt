@@ -18,7 +18,6 @@ content-security-policy/generic/policy-inherited-correctly-by-plznavigate.html
 content-security-policy/inheritance/document-write-iframe.html
 content-security-policy/inheritance/location-reload.html
 content-security-policy/inside-worker/dedicatedworker-report-only.html
-content-security-policy/inside-worker/dedicatedworker-worker-src.html
 content-security-policy/inside-worker/serviceworker-report-only.https.sub.html
 content-security-policy/navigation/to-javascript-parent-initiated-parent-csp.html
 content-security-policy/object-src/object-src-url-blocked.html
@@ -30,7 +29,6 @@ content-security-policy/resource-hints/prefetch-no-csp.html
 content-security-policy/sandbox/autoplay-disabled-by-csp.html
 content-security-policy/sandbox/window-reuse-sandboxed.html
 content-security-policy/script-src/nonce-enforce-blocked.html
-content-security-policy/script-src/script-src-trusted_types_eval_DedicatedWorker.html
 content-security-policy/securitypolicyviolation/blockeduri-inline.html
 content-security-policy/unsafe-eval/eval-blocked-in-about-blank-iframe.html
 content-security-policy/webrtc/webrtc-allowed-default-src-none.html

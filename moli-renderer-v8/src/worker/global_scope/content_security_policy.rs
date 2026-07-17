@@ -5,9 +5,10 @@ use url::Url;
 
 use crate::RendererSyntheticResponseBody;
 use crate::content_security_policy::{
-    ContentSecurityPolicyDisposition, ContentSecurityPolicyRedirectStatus,
-    ContentSecurityPolicyResourceKind, ContentSecurityPolicyUrlViolation,
-    ContentSecurityPolicyViolationEventFields, content_security_policy_report_requests,
+    ContentSecurityPolicyDisposition, ContentSecurityPolicyNonUrlKind,
+    ContentSecurityPolicyRedirectStatus, ContentSecurityPolicyResourceKind,
+    ContentSecurityPolicyUrlViolation, ContentSecurityPolicyViolationEventFields,
+    content_security_policy_non_url_violation_with_source, content_security_policy_report_requests,
     content_security_policy_trusted_types_policy_violation_with_disposition_and_reporting_endpoints,
     content_security_policy_trusted_types_sink_violation_with_disposition_and_reporting_endpoints,
     content_security_policy_url_violation_for_checked_url_with_redirect_status_disposition_and_reporting_endpoints,
@@ -829,6 +830,34 @@ pub(super) fn worker_content_security_policy_violation(
         kind,
         ContentSecurityPolicyRedirectStatus::NoRedirect,
     )
+}
+
+pub(super) fn worker_eval_content_security_policy_violation(
+    state: &WorkerGlobalState,
+    protected_url: &Url,
+    allow_trusted_types_eval: bool,
+    source: Option<&str>,
+    disposition: ContentSecurityPolicyDisposition,
+) -> Option<ContentSecurityPolicyUrlViolation> {
+    let policies = match disposition {
+        ContentSecurityPolicyDisposition::Enforce => &state.content_security_policies,
+        ContentSecurityPolicyDisposition::Report => &state.content_security_report_only_policies,
+    };
+    let kind = if allow_trusted_types_eval {
+        ContentSecurityPolicyNonUrlKind::TrustedTypesEval
+    } else {
+        ContentSecurityPolicyNonUrlKind::Eval
+    };
+    policies.iter().find_map(|policy| {
+        content_security_policy_non_url_violation_with_source(
+            policy,
+            protected_url,
+            kind,
+            source,
+            disposition,
+            &state.content_security_reporting_endpoints,
+        )
+    })
 }
 
 pub(super) fn worker_content_security_policy_violation_with_redirect_status(
