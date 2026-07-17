@@ -8,7 +8,9 @@ pub(super) use engine::{
     HtmlSerializationTarget, HtmlSerializedShadowRoot, escape_html_attribute_into_string,
     serialize_html_with_shadow_root_provider,
 };
-use engine::{serialize_html, serialize_html_with_limit};
+use engine::{
+    serialize_html, serialize_html_with_limit, serialize_html_with_stored_scripting_state,
+};
 
 /// A bounded serialization stopped before appending bytes past its limit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,7 +32,12 @@ impl std::error::Error for HtmlSerializationLimitExceeded {}
 
 impl NativeDom {
     pub fn serialize_document(&self) -> String {
-        self.serialize_document_with_scripting_enabled(true)
+        serialize_html_with_stored_scripting_state(
+            self,
+            self.document_node_id,
+            HtmlSerializationTarget::ChildrenOnly,
+        )
+        .unwrap_or_default()
     }
 
     pub fn serialize_document_with_scripting_enabled(&self, scripting_enabled: bool) -> String {
@@ -44,7 +51,11 @@ impl NativeDom {
     }
 
     pub fn outer_html(&self, node_id: NativeNodeId) -> Option<String> {
-        self.outer_html_with_scripting_enabled(node_id, true)
+        serialize_html_with_stored_scripting_state(
+            self,
+            node_id,
+            HtmlSerializationTarget::IncludeNode,
+        )
     }
 
     pub fn outer_html_with_scripting_enabled(
@@ -74,7 +85,11 @@ impl NativeDom {
     }
 
     pub fn inner_html(&self, node_id: NativeNodeId) -> Option<String> {
-        self.inner_html_with_scripting_enabled(node_id, true)
+        serialize_html_with_stored_scripting_state(
+            self,
+            node_id,
+            HtmlSerializationTarget::ChildrenOnly,
+        )
     }
 
     pub fn inner_html_with_scripting_enabled(
