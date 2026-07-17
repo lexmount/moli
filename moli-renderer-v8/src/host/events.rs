@@ -281,8 +281,7 @@ fn invoke_event_handler_property<'s>(
     event_type: &str,
     event: v8::Local<'s, v8::Object>,
 ) {
-    let Some(handler_name) =
-        crate::native_bridge::element::event_handler_content_attribute_name(event_type)
+    let Some(handler_name) = crate::native_bridge::element::event_handler_property_name(event_type)
     else {
         return;
     };
