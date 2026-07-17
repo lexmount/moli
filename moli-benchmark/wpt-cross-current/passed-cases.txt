@@ -3564,6 +3564,7 @@ css/selectors/selectors-attr-many-2.html
 css/selectors/selectors-case-sensitive-001.html
 css/selectors/spurious-brace-crash.html
 css/selectors/visited-part-crash.html
+css/selectors/webkit-pseudo-element.html
 css/selectors/x-pseudo-element.html
 custom-elements/CustomElementRegistry-constructor-and-callbacks-are-held-strongly.html
 custom-elements/CustomElementRegistry-getName.html
@@ -6889,6 +6890,7 @@ html/semantics/scripting-1/the-template-element/template-element/template-elemen
 html/semantics/scripting-1/the-template-element/template-element/template-set-inner-html-in-inactive-document-crash.html
 html/semantics/scripting-1/the-template-element/template-table-crash.html
 html/semantics/sections/headingoffset-and-headingreset.html
+html/semantics/selectors/pseudo-classes/autofill.html
 html/semantics/selectors/pseudo-classes/checked-type-change.html
 html/semantics/selectors/pseudo-classes/checked.html
 html/semantics/selectors/pseudo-classes/default.html
