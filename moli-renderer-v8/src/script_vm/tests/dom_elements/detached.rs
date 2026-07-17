@@ -351,7 +351,7 @@ fn offline_html_documents_parse_and_serialize_noscript_with_scripting_disabled()
 }
 
 #[test]
-fn domparser_xml_preserves_requested_content_type_for_success_and_error_documents() {
+fn domparser_xml_uses_document_interface_and_chromium_error_documents() {
     let mut vm = new_storage_test_vm("https://domparser-xml-content-type.test/");
 
     let result = vm
@@ -366,14 +366,24 @@ fn domparser_xml_preserves_requested_content_type_for_success_and_error_document
     "image/svg+xml"
   ].map(contentType => {
     const valid = parser.parseFromString("<root/>", contentType);
-    const invalid = parser.parseFromString(
+    const invalid = parser.parseFromString("<foo>", contentType);
+    const namespaceInvalid = parser.parseFromString(
       '<span x:test="testing">1</span>',
       contentType
     );
+    const invalidError = invalid.getElementsByTagName("parsererror")[0];
+    const namespaceError = namespaceInvalid.getElementsByTagName("parsererror")[0];
     return [
       valid.contentType,
+      Object.getPrototypeOf(valid) === Document.prototype,
+      valid instanceof XMLDocument,
       invalid.contentType,
-      invalid.documentElement.localName
+      Object.getPrototypeOf(invalid) === Document.prototype,
+      invalid instanceof XMLDocument,
+      invalid.documentElement.localName,
+      invalidError.namespaceURI,
+      namespaceInvalid.documentElement.localName,
+      namespaceError.namespaceURI
     ];
   }));
 })()
@@ -383,7 +393,7 @@ fn domparser_xml_preserves_requested_content_type_for_success_and_error_document
 
     assert_eq!(
         result,
-        r#"[["text/xml","text/xml","html"],["application/xml","application/xml","html"],["application/xhtml+xml","application/xhtml+xml","html"],["image/svg+xml","image/svg+xml","html"]]"#
+        r#"[["text/xml",true,false,"text/xml",true,false,"foo","http://www.w3.org/1999/xhtml","html","http://www.w3.org/1999/xhtml"],["application/xml",true,false,"application/xml",true,false,"foo","http://www.w3.org/1999/xhtml","html","http://www.w3.org/1999/xhtml"],["application/xhtml+xml",true,false,"application/xhtml+xml",true,false,"foo","http://www.w3.org/1999/xhtml","html","http://www.w3.org/1999/xhtml"],["image/svg+xml",true,false,"image/svg+xml",true,false,"foo","http://www.w3.org/1999/xhtml","html","http://www.w3.org/1999/xhtml"]]"#
     );
 }
 
@@ -8324,7 +8334,7 @@ fn detached_document_state_accessors_are_declared_on_prototypes() {
     descriptorOwner(htmlProto, "fonts") === Document.prototype,
     descriptorOwner(htmlProto, "implementation") === Document.prototype,
     htmlProto === HTMLDocument.prototype,
-    xmlProto === XMLDocument.prototype
+    xmlProto === Document.prototype
   ].join(",");
 
   return [

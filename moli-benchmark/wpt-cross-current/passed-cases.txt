@@ -3815,6 +3815,7 @@ domparsing/DOMParser-parseFromString-html.html
 domparsing/DOMParser-parseFromString-stylesheets.html
 domparsing/DOMParser-parseFromString-xml-doctype.html
 domparsing/DOMParser-parseFromString-xml-parsererror.html
+domparsing/DOMParser-parseFromString-xml.html
 domparsing/createContextualFragment.html
 domparsing/domparser-spurious-attributes.html
 domparsing/innerhtml-04.html
