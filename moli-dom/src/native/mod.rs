@@ -158,13 +158,20 @@ impl NativeDom {
     }
 
     pub fn new_html(final_url: url::Url) -> Self {
+        Self::new_html_with_scripting(final_url, true)
+    }
+
+    pub fn new_html_with_scripting(final_url: url::Url, scripting_enabled: bool) -> Self {
         let document_node_id = NativeNodeId::new(0);
         let document_node = Node::new(
             document_node_id,
             None,
             None,
             NodeFlags::new(true),
-            NodeData::Document(Box::new(Document::new_html(final_url))),
+            NodeData::Document(Box::new(Document::new_html_with_scripting(
+                final_url,
+                scripting_enabled,
+            ))),
         );
         Self {
             nodes: NativeNodeStorage::from_node(document_node),
@@ -506,7 +513,7 @@ impl NativeDom {
             .map(|document| document.url().clone())
             .unwrap_or_else(|| url::Url::parse("about:blank").expect("about:blank is valid"));
         let owner_document = self.create_node(
-            NodeData::Document(Box::new(Document::new_html(url))),
+            NodeData::Document(Box::new(Document::new_html_with_scripting(url, false))),
             None,
             false,
             false,
@@ -2583,6 +2590,12 @@ mod tests {
             .and_then(Node::owner_document)
             .expect("template content owner document");
         assert_ne!(content_owner, dom.document_node_id());
+        assert_eq!(
+            dom.node(content_owner)
+                .and_then(Node::as_document)
+                .map(Document::scripting_enabled),
+            Some(false)
+        );
 
         let child = dom.create_element("span");
         assert_eq!(
