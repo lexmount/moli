@@ -119,9 +119,11 @@ pub(crate) const GENERIC_EVENT_HANDLER_PROPERTIES: &[&str] = &[
 ];
 
 const DOCUMENT_EVENT_HANDLER_PROPERTIES: &[&str] = &[
+    "onfreeze",
     "onpointerlockchange",
     "onpointerlockerror",
     "onreadystatechange",
+    "onresume",
 ];
 const ELEMENT_SPECIFIC_EVENT_HANDLER_PROPERTIES: &[&str] = &[
     "onencrypted",
