@@ -4099,6 +4099,7 @@ dom/xpath-result-single-node-value-nullable.html
 domparsing/DOMParser-parseFromString-encoding.html
 domparsing/DOMParser-parseFromString-stylesheets.html
 domparsing/DOMParser-parseFromString-xml-parsererror.html
+domparsing/DOMParser-parseFromString-xml.html
 domparsing/createContextualFragment-in-detached-xml-document-crash.html
 domparsing/createContextualFragment.html
 domparsing/domparser-spurious-attributes.html
