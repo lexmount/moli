@@ -752,89 +752,96 @@ fn parser_document_fragment_insertion_queues_resource_followups_from_hoisted_roo
         .expect("current-thread runtime should build");
 
     runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
-            let mut page_vm = new_phase_one_page_vm_for_test();
-            let body = create_connected_html_body_for_test(&mut page_vm);
-            let context_host = page_vm
+        let mut page_vm = new_phase_one_page_vm_for_test();
+        let body = create_connected_html_body_for_test(&mut page_vm);
+        let context_host = page_vm
+            .vm()
+            .context_host_weak_for_test()
+            .upgrade()
+            .expect("context host should be alive");
+
+        let (fragment, _container, image, video) =
+            create_parser_resource_fragment_for_test(&mut page_vm, "parser-fragment-resource");
+        assert!(
+            !context_host
+                .borrow()
+                .has_pending_image_load_event_for_test(image),
+            "disconnected fragment setup should not queue image load events"
+        );
+        assert!(
+            !context_host
+                .borrow()
+                .lazy_media_load_candidates()
+                .contains(&video),
+            "disconnected fragment setup should not register lazy media candidates"
+        );
+        assert_eq!(
+            page_vm.vm().ms_to_next_timeout(),
+            None,
+            "disconnected fragment setup should not queue text-track timers"
+        );
+
+        let custom_element_reaction_roots = {
+            apply_parser_dom_mutation_for_test(
+                &mut page_vm,
+                ParserDomMutation::AppendChild {
+                    parent: body,
+                    child: fragment,
+                },
+                "parser fragment resource insertion should apply",
+            )
+        };
+        assert!(
+            custom_element_reaction_roots.is_empty(),
+            "plain resource fragment insertion should not queue custom element reactions"
+        );
+        assert_eq!(
+            page_vm
                 .vm()
-                .context_host_weak_for_test()
-                .upgrade()
-                .expect("context host should be alive");
-
-            let (fragment, _container, image, video) =
-                create_parser_resource_fragment_for_test(&mut page_vm, "parser-fragment-resource");
-            assert!(
-                !context_host
-                    .borrow()
-                    .has_pending_image_load_event_for_test(image),
-                "disconnected fragment setup should not queue image load events"
-            );
-            assert!(
-                !context_host
-                    .borrow()
-                    .lazy_media_load_candidates()
-                    .contains(&video),
-                "disconnected fragment setup should not register lazy media candidates"
-            );
-            assert_eq!(
-                page_vm.vm().ms_to_next_timeout(),
-                None,
-                "disconnected fragment setup should not queue text-track timers"
-            );
-
-            let custom_element_reaction_roots = {
-                apply_parser_dom_mutation_for_test(
-                    &mut page_vm,
-                    ParserDomMutation::AppendChild {
-                        parent: body,
-                        child: fragment,
-                    },
-                    "parser fragment resource insertion should apply",
-                )
-            };
-            assert!(
-                custom_element_reaction_roots.is_empty(),
-                "plain resource fragment insertion should not queue custom element reactions"
-            );
-            assert_eq!(
-                page_vm
-                    .vm()
-                    .document_runtime
-                    .dom_host()
-                    .child_handles(fragment)
-                    .count(),
-                0,
-                "parser DocumentFragment resource insertion should hoist and empty the fragment"
-            );
-            assert!(
-                context_host
-                    .borrow()
-                    .has_pending_image_load_event_for_test(image),
-                "parser DocumentFragment insertion should queue image load events for hoisted subtree children"
-            );
-            assert!(
-                context_host
-                    .borrow()
-                    .lazy_media_load_candidates()
-                    .contains(&video),
-                "parser DocumentFragment insertion should register hoisted lazy media candidates"
-            );
-            assert_eq!(
-                page_vm.vm().ms_to_next_timeout(),
-                None,
-                "parser DocumentFragment insertion must not represent text-track default-mode work as a timer"
-            );
-            assert!(matches!(
+                .document_runtime
+                .dom_host()
+                .child_handles(fragment)
+                .count(),
+            0,
+            "parser DocumentFragment resource insertion should hoist and empty the fragment"
+        );
+        assert!(
+            context_host
+                .borrow()
+                .has_pending_image_load_event_for_test(image),
+            "parser DocumentFragment insertion should queue image load events for hoisted subtree children"
+        );
+        assert!(
+            context_host
+                .borrow()
+                .lazy_media_load_candidates()
+                .contains(&video),
+            "parser DocumentFragment insertion should register hoisted lazy media candidates"
+        );
+        assert_eq!(
+            page_vm.vm().ms_to_next_timeout(),
+            None,
+            "parser DocumentFragment insertion must not represent text-track default-mode work as a timer"
+        );
+        page_vm
+            .vm_mut()
+            .perform_script_task_checkpoint(None)
+            .expect("parser task-end checkpoint should select the image request");
+        assert!(
+            matches!(
+                take_next_dom_manipulation_task_for_test(&page_vm),
+                crate::page_task_queue::RendererPageDomManipulationTask::TextTrackDefaultMode(_)
+            ),
+            "the synchronous text-track task should precede the image terminal queued by the task-end microtask"
+        );
+        assert!(
+            matches!(
                 take_next_dom_manipulation_task_for_test(&page_vm),
                 crate::page_task_queue::RendererPageDomManipulationTask::ImageLoadEvent(_)
-            ));
-            assert!(
-                matches!(
-                    take_next_dom_manipulation_task_for_test(&page_vm),
-                    crate::page_task_queue::RendererPageDomManipulationTask::TextTrackDefaultMode(_)
-                ),
-                "hoisted text track should follow the earlier image in the shared DOM FIFO"
-            );
-        }));
+            ),
+            "the image-update microtask should queue its terminal after the earlier text-track task"
+        );
+    }));
 }
 #[test]
 fn parser_document_fragment_insert_before_queues_resource_followups_from_hoisted_roots() {
@@ -844,113 +851,120 @@ fn parser_document_fragment_insert_before_queues_resource_followups_from_hoisted
         .expect("current-thread runtime should build");
 
     runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
-            let mut page_vm = new_phase_one_page_vm_for_test();
-            let body = create_connected_html_body_for_test(&mut page_vm);
-            let context_host = page_vm
-                .vm()
-                .context_host_weak_for_test()
-                .upgrade()
-                .expect("context host should be alive");
-            let reference = {
-                let dom_host = page_vm.vm_mut().document_runtime.dom_host_mut();
-                let reference = dom_host.create_parser_element_without_attributes(
-                    "span".to_owned(),
-                    "http://www.w3.org/1999/xhtml".to_owned(),
-                    None,
-                );
-                assert!(dom_host.set_attribute(reference, "id", "parser-fragment-resource-ref"));
-                assert!(dom_host.append_child(body, reference));
-                reference
-            };
+        let mut page_vm = new_phase_one_page_vm_for_test();
+        let body = create_connected_html_body_for_test(&mut page_vm);
+        let context_host = page_vm
+            .vm()
+            .context_host_weak_for_test()
+            .upgrade()
+            .expect("context host should be alive");
+        let reference = {
+            let dom_host = page_vm.vm_mut().document_runtime.dom_host_mut();
+            let reference = dom_host.create_parser_element_without_attributes(
+                "span".to_owned(),
+                "http://www.w3.org/1999/xhtml".to_owned(),
+                None,
+            );
+            assert!(dom_host.set_attribute(reference, "id", "parser-fragment-resource-ref"));
+            assert!(dom_host.append_child(body, reference));
+            reference
+        };
 
-            let (fragment, container, image, video) = create_parser_resource_fragment_for_test(
+        let (fragment, container, image, video) = create_parser_resource_fragment_for_test(
+            &mut page_vm,
+            "parser-fragment-resource-before",
+        );
+        assert!(
+            !context_host
+                .borrow()
+                .has_pending_image_load_event_for_test(image),
+            "disconnected fragment setup should not queue image load events"
+        );
+        assert!(
+            !context_host
+                .borrow()
+                .lazy_media_load_candidates()
+                .contains(&video),
+            "disconnected fragment setup should not register lazy media candidates"
+        );
+        assert_eq!(
+            page_vm.vm().ms_to_next_timeout(),
+            None,
+            "disconnected fragment setup should not queue text-track timers"
+        );
+
+        let custom_element_reaction_roots = {
+            apply_parser_dom_mutation_for_test(
                 &mut page_vm,
-                "parser-fragment-resource-before",
-            );
-            assert!(
-                !context_host
-                    .borrow()
-                    .has_pending_image_load_event_for_test(image),
-                "disconnected fragment setup should not queue image load events"
-            );
-            assert!(
-                !context_host
-                    .borrow()
-                    .lazy_media_load_candidates()
-                    .contains(&video),
-                "disconnected fragment setup should not register lazy media candidates"
-            );
-            assert_eq!(
-                page_vm.vm().ms_to_next_timeout(),
-                None,
-                "disconnected fragment setup should not queue text-track timers"
-            );
-
-            let custom_element_reaction_roots = {
-                apply_parser_dom_mutation_for_test(
-                    &mut page_vm,
-                    ParserDomMutation::InsertBefore {
-                        parent: body,
-                        child: fragment,
-                        reference_child: Some(reference),
-                    },
-                    "parser fragment resource insertBefore should apply",
-                )
-            };
-            assert!(
-                custom_element_reaction_roots.is_empty(),
-                "plain resource fragment insertBefore should not queue custom element reactions"
-            );
-            assert_eq!(
-                page_vm
-                    .vm()
-                    .document_runtime
-                    .dom_host()
-                    .child_handles(fragment)
-                    .count(),
-                0,
-                "parser DocumentFragment resource insertBefore should hoist and empty the fragment"
-            );
-            assert_eq!(
-                page_vm
-                    .vm()
-                    .document_runtime
-                    .dom_host()
-                    .child_handles(body)
-                    .collect::<Vec<_>>(),
-                vec![container, reference],
-                "parser DocumentFragment resource insertBefore should place the hoisted root before the reference child"
-            );
-            assert!(
-                context_host
-                    .borrow()
-                    .has_pending_image_load_event_for_test(image),
-                "parser DocumentFragment insertBefore should queue image load events for hoisted subtree children"
-            );
-            assert!(
-                context_host
-                    .borrow()
-                    .lazy_media_load_candidates()
-                    .contains(&video),
-                "parser DocumentFragment insertBefore should register hoisted lazy media candidates"
-            );
-            assert_eq!(
-                page_vm.vm().ms_to_next_timeout(),
-                None,
-                "parser DocumentFragment insertBefore must not represent text-track default-mode work as a timer"
-            );
-            assert!(matches!(
+                ParserDomMutation::InsertBefore {
+                    parent: body,
+                    child: fragment,
+                    reference_child: Some(reference),
+                },
+                "parser fragment resource insertBefore should apply",
+            )
+        };
+        assert!(
+            custom_element_reaction_roots.is_empty(),
+            "plain resource fragment insertBefore should not queue custom element reactions"
+        );
+        assert_eq!(
+            page_vm
+                .vm()
+                .document_runtime
+                .dom_host()
+                .child_handles(fragment)
+                .count(),
+            0,
+            "parser DocumentFragment resource insertBefore should hoist and empty the fragment"
+        );
+        assert_eq!(
+            page_vm
+                .vm()
+                .document_runtime
+                .dom_host()
+                .child_handles(body)
+                .collect::<Vec<_>>(),
+            vec![container, reference],
+            "parser DocumentFragment resource insertBefore should place the hoisted root before the reference child"
+        );
+        assert!(
+            context_host
+                .borrow()
+                .has_pending_image_load_event_for_test(image),
+            "parser DocumentFragment insertBefore should queue image load events for hoisted subtree children"
+        );
+        assert!(
+            context_host
+                .borrow()
+                .lazy_media_load_candidates()
+                .contains(&video),
+            "parser DocumentFragment insertBefore should register hoisted lazy media candidates"
+        );
+        assert_eq!(
+            page_vm.vm().ms_to_next_timeout(),
+            None,
+            "parser DocumentFragment insertBefore must not represent text-track default-mode work as a timer"
+        );
+        page_vm
+            .vm_mut()
+            .perform_script_task_checkpoint(None)
+            .expect("parser task-end checkpoint should select the image request");
+        assert!(
+            matches!(
+                take_next_dom_manipulation_task_for_test(&page_vm),
+                crate::page_task_queue::RendererPageDomManipulationTask::TextTrackDefaultMode(_)
+            ),
+            "the synchronous text-track task should precede the image terminal queued by the task-end microtask"
+        );
+        assert!(
+            matches!(
                 take_next_dom_manipulation_task_for_test(&page_vm),
                 crate::page_task_queue::RendererPageDomManipulationTask::ImageLoadEvent(_)
-            ));
-            assert!(
-                matches!(
-                    take_next_dom_manipulation_task_for_test(&page_vm),
-                    crate::page_task_queue::RendererPageDomManipulationTask::TextTrackDefaultMode(_)
-                ),
-                "insertBefore-hoisted text track should follow the image in the shared DOM FIFO"
-            );
-        }));
+            ),
+            "the image-update microtask should queue its terminal after the earlier text-track task"
+        );
+    }));
 }
 #[test]
 fn js_insert_before_inserted_lazy_media_registers_candidate_from_mutation_owner() {
