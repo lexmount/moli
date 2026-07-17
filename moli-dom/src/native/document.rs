@@ -72,6 +72,8 @@ struct DocumentMetadata {
     kind: DocumentKind,
     interface: DocumentInterface,
     design_mode_enabled: bool,
+    // Portable parser policy; inert/template documents keep scripting disabled.
+    scripting_enabled: bool,
     default_language: Option<Box<str>>,
     source_last_modified_ms: Option<f64>,
     base_url_state: DocumentBaseUrlState,
@@ -94,14 +96,18 @@ impl Document {
     }
 
     pub fn new_html(url: Url) -> Self {
-        Self::new_with_kind(url, DocumentKind::Html)
+        Self::new_html_with_scripting(url, true)
+    }
+
+    pub fn new_html_with_scripting(url: Url, scripting_enabled: bool) -> Self {
+        Self::new_with_kind(url, DocumentKind::Html, scripting_enabled)
     }
 
     pub fn new_xml(url: Url) -> Self {
-        Self::new_with_kind(url, DocumentKind::Xml)
+        Self::new_with_kind(url, DocumentKind::Xml, true)
     }
 
-    fn new_with_kind(url: Url, kind: DocumentKind) -> Self {
+    fn new_with_kind(url: Url, kind: DocumentKind, scripting_enabled: bool) -> Self {
         let (content_type, interface) = match kind {
             DocumentKind::Html => ("text/html", DocumentInterface::Html),
             DocumentKind::Xml => ("application/xml", DocumentInterface::Xml),
@@ -117,6 +123,7 @@ impl Document {
                 kind,
                 interface,
                 design_mode_enabled: false,
+                scripting_enabled,
                 default_language: None,
                 source_last_modified_ms: None,
                 meta_referrer_policy: None,
@@ -127,7 +134,7 @@ impl Document {
 
     pub(super) fn new_inert_template(kind: DocumentKind) -> Self {
         let url = Url::parse("about:blank").expect("about:blank is valid");
-        let mut document = Self::new_with_kind(url, kind);
+        let mut document = Self::new_with_kind(url, kind, false);
         document.metadata.interface = DocumentInterface::Document;
         document.arena_state.is_inert_template_document = true;
         document
@@ -238,6 +245,10 @@ impl Document {
         self.metadata.design_mode_enabled
     }
 
+    pub fn scripting_enabled(&self) -> bool {
+        self.metadata.scripting_enabled
+    }
+
     pub fn fallback_base_url(&self) -> &Url {
         self.metadata.base_url_state.fallback_base_url()
     }
@@ -275,6 +286,10 @@ impl Document {
 
     pub fn set_design_mode_enabled(&mut self, design_mode_enabled: bool) {
         self.metadata.design_mode_enabled = design_mode_enabled;
+    }
+
+    pub fn set_scripting_enabled(&mut self, scripting_enabled: bool) {
+        self.metadata.scripting_enabled = scripting_enabled;
     }
 
     pub fn set_css_target(&mut self, target: Option<NativeNodeId>) -> bool {
