@@ -3033,6 +3033,52 @@ fn document_own_enumerable_surface_matches_browser_location_shape() {
         r#"{"keys":["location"],"internalOwnNames":[],"ownLocation":true,"locationEnumerable":true,"locationConfigurable":false,"locationIdentity":true}"#
     );
 }
+
+#[test]
+fn document_named_item_does_not_shadow_legacy_unforgeable_location() {
+    let mut vm = new_storage_test_vm("https://example.com/current/path");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              if (!document.documentElement) {
+                document.appendChild(document.createElement("html"));
+              }
+              if (!document.body) {
+                document.documentElement.appendChild(document.createElement("body"));
+              }
+
+              const originalLocation = document.location;
+              const originalPathname = originalLocation.pathname;
+              const locationForm = document.createElement("form");
+              locationForm.name = "location";
+              const ordinaryForm = document.createElement("form");
+              ordinaryForm.name = "namedProbe";
+              document.body.append(locationForm, ordinaryForm);
+
+              const whileConnected = [
+                document.location === originalLocation,
+                document.location.pathname === originalPathname,
+                document.namedProbe === ordinaryForm,
+              ];
+              locationForm.remove();
+
+              return JSON.stringify({
+                whileConnected,
+                afterRemoval: document.location === originalLocation,
+              });
+            })()
+            "#,
+        )
+        .expect("legacy-unforgeable document location probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"whileConnected":[true,true,true],"afterRemoval":true}"#
+    );
+}
+
 #[test]
 fn customized_built_in_constructors_can_extend_specialized_html_elements() {
     let mut vm = new_storage_test_vm("https://example.com/");

@@ -118,12 +118,20 @@ fn build_document_named_items_collection<'s>(
 
 type DocumentNamedAccessContext = (*mut JsContextHost, DomHandle, String, Vec<DomHandle>);
 
+fn is_document_legacy_unforgeable_property(name: &str) -> bool {
+    // Document is [LegacyOverrideBuiltIns], so ordinary interface properties do
+    // not mask supported named properties. `location` is the exception because
+    // its IDL attribute is [LegacyUnforgeable] and must remain the own accessor.
+    // https://html.spec.whatwg.org/multipage/dom.html#the-document-object
+    name == "location"
+}
+
 fn document_named_access_context_for_name(
     scope: &mut v8::PinScope<'_, '_>,
     name: String,
     holder: v8::Local<'_, v8::Object>,
 ) -> Option<DocumentNamedAccessContext> {
-    if name.is_empty() {
+    if name.is_empty() || is_document_legacy_unforgeable_property(&name) {
         return None;
     }
     let (runtime_ptr, document_handle) = node_runtime_and_handle_from_object(scope, holder).ok()?;
