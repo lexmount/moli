@@ -151,3 +151,47 @@ pub(in crate::worker) fn dispatch_nested_worker_event(
         },
     }
 }
+
+pub(crate) fn check_and_queue_nested_worker_constructor_csp(
+    scope: &mut v8::PinScope<'_, '_>,
+    request_url: &Url,
+) -> Result<(), String> {
+    let state = get_worker_state(scope)
+        .expect("nested Worker construction requires an installed worker global state");
+    let (wake_tx, report_only_violation, enforce_violation) = {
+        let state = state.borrow();
+        let protected_url = state
+            .current_script_url
+            .as_ref()
+            .expect("nested Worker construction requires a current worker script URL");
+        (
+            state.worker_wake_tx.clone(),
+            worker_content_security_policy_report_only_violation(
+                &state,
+                protected_url,
+                request_url,
+                crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerConstructor,
+            ),
+            worker_content_security_policy_violation(
+                &state,
+                protected_url,
+                request_url,
+                crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerConstructor,
+            ),
+        )
+    };
+
+    if let Some(violation) = report_only_violation {
+        let _ = wake_tx.send(WorkerMessage::DispatchContentSecurityPolicyViolation(
+            Box::new(violation),
+        ));
+    }
+    let Some(violation) = enforce_violation else {
+        return Ok(());
+    };
+    let message = worker_content_security_policy_error_message(&violation, "Worker");
+    let _ = wake_tx.send(WorkerMessage::DispatchContentSecurityPolicyViolation(
+        Box::new(violation),
+    ));
+    Err(message)
+}

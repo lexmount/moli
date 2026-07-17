@@ -206,7 +206,8 @@ pub(crate) use messaging::{
 };
 pub(super) use nested_workers::dispatch_nested_worker_event;
 pub(crate) use nested_workers::{
-    NestedWorkerContext, forget_nested_worker_context, reserve_nested_worker_context,
+    NestedWorkerContext, check_and_queue_nested_worker_constructor_csp,
+    forget_nested_worker_context, reserve_nested_worker_context,
 };
 pub(super) use network_state::{
     PausedWorkerSubresourceResponse, PendingWorkerCspReport, PendingWorkerFetch,
