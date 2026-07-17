@@ -12,7 +12,8 @@ pub(super) use generic::is_element_event_handler_content_attribute_name;
 pub(crate) use generic::{
     GlobalEventHandlerOwner, canonical_event_handler_event_type,
     event_handler_content_attribute_name, install_global_event_handler_template_bindings,
-    node_event_handler_getter_function, node_event_handler_setter_function,
+    install_node_event_handler_template_bindings, node_event_handler_getter_function,
+    node_event_handler_setter_function,
 };
 pub(crate) use shared::{EventAttributeHandlerScope, compile_event_attribute_handler_for_owner};
 
