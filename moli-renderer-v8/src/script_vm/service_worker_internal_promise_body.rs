@@ -44,6 +44,7 @@ impl ScriptVm {
 
         let context = pending.context;
         let resolver = pending.resolver;
+        let scope_url = pending.scope_url;
         let context_ptr: *const v8::Global<v8::Context> = &context;
         self.with_context_scope_by_ptr(context_ptr, move |scope, _host_ptr| {
             let resolver = v8::Local::new(scope, &resolver);
@@ -51,6 +52,7 @@ impl ScriptVm {
                 scope,
                 resolver,
                 owner.dispatch_scope(),
+                &scope_url,
                 completion.result,
             );
             Ok(())
