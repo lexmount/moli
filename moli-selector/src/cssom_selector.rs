@@ -668,6 +668,43 @@ pub(crate) fn dom_api_selector_list_contains_known_pseudo_element(selector_text:
     false
 }
 
+pub(crate) fn webkit_compat_pseudo_element_validation_selector(
+    selector_text: &str,
+) -> Option<String> {
+    let mut input = ParserInput::new(selector_text);
+    let mut parser = Parser::new(&mut input);
+    let mut replacements = Vec::new();
+
+    while !parser.is_exhausted() {
+        let Ok(token) = parser.next_including_whitespace_and_comments().cloned() else {
+            return None;
+        };
+        if !matches!(token, Token::Colon) {
+            continue;
+        }
+        let Ok(Token::Colon) = parser.next_including_whitespace_and_comments().cloned() else {
+            continue;
+        };
+        let name_start = parser.position().byte_index();
+        let Ok(Token::Ident(name)) = parser.next_including_whitespace_and_comments().cloned()
+        else {
+            continue;
+        };
+        if is_unknown_webkit_pseudo_element_name(&name) {
+            replacements.push((name_start, parser.position().byte_index()));
+        }
+    }
+
+    if replacements.is_empty() {
+        return None;
+    }
+    let mut selector = selector_text.to_owned();
+    for (start, end) in replacements.into_iter().rev() {
+        selector.replace_range(start..end, "part(webkit-compat)");
+    }
+    Some(selector)
+}
+
 pub(crate) fn selector_list_has_invalid_terminal_pseudo_element_chain(selector_text: &str) -> bool {
     let mut input = ParserInput::new(selector_text);
     let mut parser = Parser::new(&mut input);
@@ -721,22 +758,23 @@ fn parse_known_pseudo_element_after_colon(
     parser: &mut Parser<'_, '_>,
 ) -> Option<KnownPseudoElementKind> {
     let state = parser.state();
-    if !matches!(
+    let has_double_colon = matches!(
         parser
             .next_including_whitespace_and_comments()
             .cloned()
             .ok()?,
         Token::Colon
-    ) {
+    );
+    if !has_double_colon {
         parser.reset(&state);
     }
     let Ok(token) = parser.next_including_whitespace_and_comments().cloned() else {
         return None;
     };
     match token {
-        Token::Ident(name) => {
-            is_known_terminal_pseudo_element_name(&name).then_some(KnownPseudoElementKind::Terminal)
-        }
+        Token::Ident(name) => (is_known_terminal_pseudo_element_name(&name)
+            || (has_double_colon && is_unknown_webkit_pseudo_element_name(&name)))
+        .then_some(KnownPseudoElementKind::Terminal),
         Token::Function(name) => {
             let kind = match name.to_ascii_lowercase().as_str() {
                 "cue" | "highlight" => KnownPseudoElementKind::Terminal,
@@ -748,6 +786,12 @@ fn parse_known_pseudo_element_after_colon(
         }
         _ => None,
     }
+}
+
+fn is_unknown_webkit_pseudo_element_name(name: &str) -> bool {
+    const WEBKIT_PREFIX: &str = "-webkit-";
+    name.get(..WEBKIT_PREFIX.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(WEBKIT_PREFIX))
 }
 
 fn is_known_terminal_pseudo_element_name(name: &str) -> bool {
@@ -1157,6 +1201,12 @@ mod tests {
         assert!(dom_api_selector_list_has_only_known_pseudo_elements(
             "#target::highlight(foo)"
         ));
+        assert!(dom_api_selector_list_has_only_known_pseudo_elements(
+            "span::-WeBkIt-something-invalid"
+        ));
+        assert!(!dom_api_selector_list_has_only_known_pseudo_elements(
+            "input:-webkit-autofill"
+        ));
     }
 
     #[test]
@@ -1179,6 +1229,23 @@ mod tests {
     }
 
     #[test]
+    fn rewrites_webkit_compat_pseudo_elements_only_for_stylo_validation() {
+        assert_eq!(
+            webkit_compat_pseudo_element_validation_selector(
+                "span::-WeBkIt-something-invalid:active"
+            )
+            .as_deref(),
+            Some("span::part(webkit-compat):active")
+        );
+        assert_eq!(
+            webkit_compat_pseudo_element_validation_selector(
+                r#"[data-value='::-webkit-something-invalid']"#
+            ),
+            None
+        );
+    }
+
+    #[test]
     fn detects_invalid_terminal_pseudo_element_chains() {
         assert!(selector_list_has_invalid_terminal_pseudo_element_chain(
             "::before::highlight(foo)"
@@ -1188,6 +1255,15 @@ mod tests {
         ));
         assert!(selector_list_has_invalid_terminal_pseudo_element_chain(
             "::highlight(foo)::part(label)"
+        ));
+        assert!(selector_list_has_invalid_terminal_pseudo_element_chain(
+            "span::-webkit-something-invalid::before"
+        ));
+        assert!(!selector_list_has_invalid_terminal_pseudo_element_chain(
+            "span::-webkit-something-invalid:active"
+        ));
+        assert!(!selector_list_has_invalid_terminal_pseudo_element_chain(
+            "input:-webkit-autofill::before"
         ));
         assert!(!selector_list_has_invalid_terminal_pseudo_element_chain(
             "::part(label)::highlight(foo)"
