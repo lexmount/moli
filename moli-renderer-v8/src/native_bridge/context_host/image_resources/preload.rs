@@ -194,12 +194,25 @@ impl ScannedImagePreloadStore {
     }
 
     pub(super) fn contains(&self, identity: &ImageResourceRequestIdentity) -> bool {
+        self.contains_request(
+            identity.document_handle,
+            identity.document_owner,
+            &identity.request_key,
+        )
+    }
+
+    pub(super) fn contains_request(
+        &self,
+        document_handle: DomHandle,
+        document_owner: FrameDocumentTaskOwner,
+        request_key: &ImageRequestKey,
+    ) -> bool {
         let key = ScannedImagePreloadKey {
-            document_handle: identity.document_handle,
-            request_key: identity.request_key.clone(),
+            document_handle,
+            request_key: request_key.clone(),
         };
         self.inner.lock().entries.get(&key).is_some_and(|entry| {
-            entry.identity.document_owner == identity.document_owner
+            entry.identity.document_owner == document_owner
                 && !entry.load.inner.cancel_handle.is_cancelled()
         })
     }
@@ -591,7 +604,7 @@ mod tests {
             document_owner: owner(1),
             request_key: key,
         };
-        resources.begin(identity.clone());
+        resources.begin(identity.clone(), false);
         let claimed = resources
             .claim_scanned_preload(element)
             .expect("the exact element should claim the decoded preload");

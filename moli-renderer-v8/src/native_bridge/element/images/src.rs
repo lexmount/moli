@@ -6,7 +6,7 @@ use crate::page_task_queue::{
     RendererPageImageLoadEventTaskId,
 };
 use crate::types::{ImageRequestCorsMode, ImageRequestKey, SubresourceRequestInitiatorType};
-use crate::util::v8_string;
+use crate::util::{context_host_ptr_from_global_bridge, v8_string};
 use crate::v8_execution_watchdog::V8ExecutionWatchdog;
 use moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE;
 
@@ -15,11 +15,15 @@ use super::super::geometry::compute_mock_client_rect;
 use super::super::{construct_simple_event, dispatch_public_event, resolve_url_like_attribute};
 use super::lazy::{image_load_is_deferred, revealed_lazy_image_handles};
 
-#[derive(Clone, Copy)]
+const IMAGE_UPDATE_HANDLE_INDEX: u32 = 0;
+const IMAGE_UPDATE_ID_INDEX: u32 = 1;
+const IMAGE_UPDATE_TRIGGER_INDEX: u32 = 2;
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+#[repr(u32)]
 enum ImageLoadQueueTrigger {
     SourceOrInsertion,
     LazyReveal,
-    DocumentAdoption,
 }
 
 pub(crate) fn queue_image_load_event_if_needed(
@@ -45,7 +49,7 @@ pub(crate) fn queue_image_load_event_after_document_adoption(
         scope,
         runtime_ptr,
         handle,
-        ImageLoadQueueTrigger::DocumentAdoption,
+        ImageLoadQueueTrigger::SourceOrInsertion,
         SubresourceRequestInitiatorType::Other,
     );
 }
@@ -110,7 +114,7 @@ pub(crate) fn queue_image_load_event_for_loading_change(
         scope,
         runtime_ptr,
         handle,
-        ImageLoadQueueTrigger::SourceOrInsertion,
+        ImageLoadQueueTrigger::LazyReveal,
         SubresourceRequestInitiatorType::Script,
     );
 }
@@ -127,15 +131,9 @@ fn queue_image_load_event(
     if image_load_is_deferred(runtime, handle) && !allow_deferred_lazy {
         return;
     }
-    if image_load_is_suppressed_for_non_active_parent(runtime, handle)
-        && !matches!(trigger, ImageLoadQueueTrigger::DocumentAdoption)
+    if image_selected_source(runtime, handle).is_none()
+        && !connected_empty_src_without_srcset(runtime, handle)
     {
-        return;
-    }
-    let selected_source = image_selected_source_url(runtime, handle);
-    let invalid_empty_source =
-        selected_source.is_empty() && connected_empty_src_without_srcset(runtime, handle);
-    if selected_source.is_empty() && !invalid_empty_source {
         let _ = runtime.cancel_pending_image_load_event(handle);
         let _ = runtime.process_image_decode_requests_for_element(scope, handle);
         return;
@@ -160,7 +158,7 @@ fn queue_image_load_event(
         if let Some(pending) = runtime
             .pending_image_load_event(handle)
             .or(pending_before_registration)
-            .filter(|pending| runtime.pending_image_load_event_is_current(handle, *pending))
+            .filter(|pending| runtime.pending_image_load_event_is_current(handle, pending))
         {
             let followup =
                 runtime.pending_image_load_terminal_followup_if_ready(handle, pending.id());
@@ -174,111 +172,268 @@ fn queue_image_load_event(
         let _ = runtime.process_image_decode_requests_for_element(scope, handle);
         return;
     };
-    let request_url = if invalid_empty_source {
-        Err("an empty image source cannot be fetched".to_owned())
-    } else {
-        url::Url::parse(&selected_source).map_err(|error| error.to_string())
+    if trigger == ImageLoadQueueTrigger::LazyReveal {
+        run_image_update(scope, runtime_ptr, handle, pending.id(), trigger);
+        return;
+    }
+    if let Some(request_key) = synchronous_available_image_request(runtime, handle)
+        .filter(|key| !runtime.has_scanned_image_preload_for_pending_request(&pending, key))
+    {
+        let request_allowed = url::Url::parse(request_key.url())
+            .is_ok_and(|url| image_request_is_allowed(scope, runtime, handle, &url));
+        if runtime.prepare_pending_image_load_request_if_matches(handle, pending.id(), request_key)
+        {
+            let followup = if request_allowed {
+                runtime.complete_pending_image_load_reused_resource_if_matches(handle, pending.id())
+            } else {
+                runtime.complete_pending_image_load_local_resource_if_matches(
+                    handle,
+                    pending.id(),
+                    false,
+                )
+            };
+            queue_image_load_terminal_followup_if_ready(
+                runtime_ptr,
+                handle,
+                pending.id(),
+                followup,
+            );
+            let _ = runtime.process_image_decode_requests_for_element(scope, handle);
+            return;
+        }
+    }
+    queue_image_update_microtask(scope, runtime_ptr, handle, pending.id(), trigger);
+}
+
+fn synchronous_available_image_request(
+    runtime: &PageScriptHost,
+    handle: DomHandle,
+) -> Option<ImageRequestKey> {
+    let element = runtime.dom_host().node(handle)?.as_element()?;
+    // The synchronous available-image path precedes responsive source selection.
+    if !element.is_html_element("img")
+        || element.attribute("srcset").is_some()
+        || runtime
+            .dom_host()
+            .parent_node(handle)
+            .is_some_and(|parent| runtime.dom_host().is_html_element_named(parent, "picture"))
+    {
+        return None;
+    }
+    let request = image_selected_request_key(runtime, handle)?;
+    runtime.has_ready_image_request(&request).then_some(request)
+}
+
+fn image_request_is_allowed(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime: &mut PageScriptHost,
+    handle: DomHandle,
+    request_url: &url::Url,
+) -> bool {
+    !runtime
+        .check_element_subresource_csp(
+            scope,
+            handle,
+            request_url,
+            DocumentSubresourceCspKind::Image,
+        )
+        .blocks_request()
+}
+
+fn queue_image_update_microtask(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    handle: DomHandle,
+    sequence: ImageLoadEventId,
+    trigger: ImageLoadQueueTrigger,
+) {
+    let data = v8::Array::new(scope, 3);
+    let _ = data.set_index(
+        scope,
+        IMAGE_UPDATE_HANDLE_INDEX,
+        v8::BigInt::new_from_u64(scope, handle.index() as u64).into(),
+    );
+    let _ = data.set_index(
+        scope,
+        IMAGE_UPDATE_ID_INDEX,
+        v8::BigInt::new_from_u64(scope, sequence.get()).into(),
+    );
+    let _ = data.set_index(
+        scope,
+        IMAGE_UPDATE_TRIGGER_INDEX,
+        v8::Integer::new_from_unsigned(scope, trigger as u32).into(),
+    );
+    let Some(callback) = v8::Function::builder(queued_image_update_microtask_callback)
+        .data(data.into())
+        .build(scope)
+    else {
+        let _ = unsafe { &mut *runtime_ptr }
+            .cancel_pending_image_load_event_if_matches(handle, sequence);
+        return;
     };
+    scope.enqueue_microtask(callback);
+}
+
+fn queued_image_update_microtask_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(runtime_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return;
+    };
+    let Some((handle, sequence, trigger)) =
+        image_update_target_from_callback_data(scope, args.data())
+    else {
+        return;
+    };
+    run_image_update(scope, runtime_ptr, handle, sequence, trigger);
+}
+
+fn run_image_update(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    handle: DomHandle,
+    sequence: ImageLoadEventId,
+    trigger: ImageLoadQueueTrigger,
+) {
+    let runtime = unsafe { &mut *runtime_ptr };
+    let Some(pending) = runtime
+        .pending_image_load_event(handle)
+        .filter(|pending| pending.id() == sequence)
+    else {
+        return;
+    };
+    if !runtime.pending_image_load_event_is_current(handle, &pending) {
+        let _ = runtime.cancel_pending_image_load_event_if_matches(handle, sequence);
+        return;
+    }
+    if pending.request_key().is_some() {
+        return;
+    }
+    if image_load_is_deferred(runtime, handle) && trigger != ImageLoadQueueTrigger::LazyReveal {
+        let _ = runtime.cancel_pending_image_load_event_if_matches(handle, sequence);
+        return;
+    }
+
+    let Some(request_key) = image_selected_request_key(runtime, handle) else {
+        if connected_empty_src_without_srcset(runtime, handle) {
+            let followup = runtime
+                .complete_pending_image_load_local_resource_if_matches(handle, sequence, false);
+            queue_image_load_terminal_followup_if_ready(runtime_ptr, handle, sequence, followup);
+        } else {
+            let _ = runtime.cancel_pending_image_load_event_if_matches(handle, sequence);
+        }
+        let _ = runtime.process_image_decode_requests_for_element(scope, handle);
+        return;
+    };
+    if !runtime.prepare_pending_image_load_request_if_matches(handle, sequence, request_key.clone())
+    {
+        return;
+    }
+    let request_url = url::Url::parse(request_key.url()).map_err(|error| error.to_string());
     // Cached pixels must pass the requesting element's current Document policy
     // before they can satisfy its load or decode work.
-    let blocked_by_csp = request_url.as_ref().is_ok_and(|request_url| {
-        runtime
-            .check_element_subresource_csp(
-                scope,
-                handle,
-                request_url,
-                DocumentSubresourceCspKind::Image,
-            )
-            .blocks_request()
-    });
+    let blocked_by_csp = request_url
+        .as_ref()
+        .is_ok_and(|request_url| !image_request_is_allowed(scope, runtime, handle, request_url));
     let terminated = scope.is_execution_terminating()
-        || (allow_deferred_lazy && V8ExecutionWatchdog::callback_dispatch_has_timed_out(scope));
+        || (trigger == ImageLoadQueueTrigger::LazyReveal
+            && V8ExecutionWatchdog::callback_dispatch_has_timed_out(scope));
     if blocked_by_csp || terminated {
-        let followup = runtime.complete_pending_image_load_local_resource_if_matches(
-            handle,
-            pending.id(),
-            false,
-        );
-        queue_image_load_terminal_followup_if_ready(runtime_ptr, handle, pending.id(), followup);
+        let followup =
+            runtime.complete_pending_image_load_local_resource_if_matches(handle, sequence, false);
+        queue_image_load_terminal_followup_if_ready(runtime_ptr, handle, sequence, followup);
         if !terminated {
             let _ = runtime.process_image_decode_requests_for_element(scope, handle);
         }
         return;
     }
-    // Register the current request before reconsidering decode() promises. An
-    // image may receive src and decode() while detached, then be inserted in
-    // the same script job. Processing the promise before this registration
-    // would reject it even though insertion has just started its exact request.
-    let _ = runtime.process_image_decode_requests_for_element(scope, handle);
+
     if runtime.image_resource_is_ready(handle)
         && !runtime.has_scanned_image_preload_for_element(handle)
     {
         let followup =
-            runtime.complete_pending_image_load_reused_resource_if_matches(handle, pending.id());
-        queue_image_load_terminal_followup_if_ready(runtime_ptr, handle, pending.id(), followup);
+            runtime.complete_pending_image_load_reused_resource_if_matches(handle, sequence);
+        queue_image_load_terminal_followup_if_ready(runtime_ptr, handle, sequence, followup);
+        let _ = runtime.process_image_decode_requests_for_element(scope, handle);
         return;
     }
+
     let start = request_url.and_then(|request_url| {
         crate::network_host::start_image_element_resource_fetch(
             scope,
             runtime,
             handle,
-            pending.id(),
+            sequence,
             request_url,
         )
     });
     match start {
         Ok(crate::network_host::ImageElementResourceFetchStart::Pending) => {}
         Ok(crate::network_host::ImageElementResourceFetchStart::PolicySkipped) => {
-            let followup = runtime.complete_pending_image_load_local_resource_if_matches(
-                handle,
-                pending.id(),
-                true,
-            );
-            queue_image_load_terminal_followup_if_ready(
-                runtime_ptr,
-                handle,
-                pending.id(),
-                followup,
-            );
+            let followup = runtime
+                .complete_pending_image_load_local_resource_if_matches(handle, sequence, true);
+            queue_image_load_terminal_followup_if_ready(runtime_ptr, handle, sequence, followup);
         }
         Ok(crate::network_host::ImageElementResourceFetchStart::Local {
             descriptor,
             encoded,
         }) => {
             let completion = runtime.complete_pending_image_load_local_response_if_matches(
-                handle,
-                pending.id(),
-                descriptor,
-                encoded,
+                handle, sequence, descriptor, encoded,
             );
             queue_image_load_terminal_followup_if_ready(
                 runtime_ptr,
                 handle,
-                pending.id(),
+                sequence,
                 completion.followup(),
             );
         }
         Err(error) => {
             tracing::debug!(
                 image = handle.index(),
-                sequence = pending.id().get(),
+                sequence = sequence.get(),
                 %error,
                 "image resource selection failed"
             );
-            let followup = runtime.complete_pending_image_load_local_resource_if_matches(
-                handle,
-                pending.id(),
-                false,
-            );
-            queue_image_load_terminal_followup_if_ready(
-                runtime_ptr,
-                handle,
-                pending.id(),
-                followup,
-            );
+            let followup = runtime
+                .complete_pending_image_load_local_resource_if_matches(handle, sequence, false);
+            queue_image_load_terminal_followup_if_ready(runtime_ptr, handle, sequence, followup);
         }
     }
+}
+
+fn image_update_target_from_callback_data(
+    scope: &mut v8::PinScope<'_, '_>,
+    data: v8::Local<'_, v8::Value>,
+) -> Option<(DomHandle, ImageLoadEventId, ImageLoadQueueTrigger)> {
+    let data = v8::Local::<v8::Array>::try_from(data).ok()?;
+    let handle = data.get_index(scope, IMAGE_UPDATE_HANDLE_INDEX)?;
+    let handle = v8::Local::<v8::BigInt>::try_from(handle).ok()?;
+    let (handle, handle_lossless) = handle.u64_value();
+    let sequence = data.get_index(scope, IMAGE_UPDATE_ID_INDEX)?;
+    let sequence = v8::Local::<v8::BigInt>::try_from(sequence).ok()?;
+    let (sequence, sequence_lossless) = sequence.u64_value();
+    let trigger = data
+        .get_index(scope, IMAGE_UPDATE_TRIGGER_INDEX)?
+        .uint32_value(scope)
+        .and_then(|value| match value {
+            value if value == ImageLoadQueueTrigger::SourceOrInsertion as u32 => {
+                Some(ImageLoadQueueTrigger::SourceOrInsertion)
+            }
+            value if value == ImageLoadQueueTrigger::LazyReveal as u32 => {
+                Some(ImageLoadQueueTrigger::LazyReveal)
+            }
+            _ => None,
+        })?;
+    (handle_lossless && sequence_lossless).then(|| {
+        (
+            DomHandle::new(handle as usize),
+            ImageLoadEventId::new(sequence),
+            trigger,
+        )
+    })
 }
 
 pub(crate) fn image_selected_source(runtime: &PageScriptHost, handle: DomHandle) -> Option<String> {
@@ -379,22 +534,6 @@ fn image_selected_picture_source(
         }
     }
     None
-}
-
-fn image_load_is_suppressed_for_non_active_parent(
-    runtime: &PageScriptHost,
-    handle: DomHandle,
-) -> bool {
-    runtime
-        .dom_host()
-        .node(handle)
-        .is_some_and(|node| !node.is_connected() && node.parent_node().is_some())
-}
-
-pub(crate) fn image_selected_source_url(runtime: &PageScriptHost, handle: DomHandle) -> String {
-    image_selected_resource(runtime, handle)
-        .map(|selected| selected.url)
-        .unwrap_or_default()
 }
 
 fn image_selected_resource(
@@ -536,7 +675,10 @@ pub(crate) fn apply_image_attribute_mutation_plan(
 
 pub(crate) fn reset_image_load_dispatch(runtime: &mut PageScriptHost, handle: DomHandle) {
     let _ = runtime.cancel_pending_image_load_event(handle);
-    let _ = runtime.retire_image_resource_for_element(handle);
+    if image_selected_request_key(runtime, handle).is_none() {
+        runtime.set_current_image_request(handle, None);
+        let _ = runtime.retire_image_resource_for_element(handle);
+    }
     if let Some(element) = runtime
         .dom_host_mut()
         .node_mut(handle)
@@ -556,21 +698,18 @@ pub(crate) fn mark_image_load_dispatched(runtime: &mut PageScriptHost, handle: D
     }
 }
 
-fn record_local_image_resource_performance_entry(
+fn record_image_resource_performance_entry_for_pending(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime: &PageScriptHost,
-    handle: DomHandle,
-    initiator_type: &'static str,
+    pending: &crate::native_bridge::PendingImageLoadEvent,
 ) {
-    let url = image_selected_source_url(runtime, handle);
-    if url.is_empty() {
+    let Some(request_key) = pending.request_key() else {
         return;
-    }
+    };
     crate::context_bootstrap::record_resource_performance_entry(
         scope,
         crate::context_bootstrap::ResourcePerformanceEntry::without_network_result(
-            url,
-            initiator_type,
+            request_key.url(),
+            pending.resource_timing_initiator_type(),
             None,
         ),
     );
@@ -603,7 +742,7 @@ pub(crate) fn apply_authorized_image_load_event_in_context(
     }
     let pending =
         runtime.take_pending_image_load_event_task_for_exact_target(task_id, target, kind)?;
-    let dispatched = dispatch_queued_image_load_event(scope, runtime_ptr, handle, pending, kind);
+    let dispatched = dispatch_queued_image_load_event(scope, runtime_ptr, handle, &pending, kind);
     let _ = runtime.settle_pending_image_load_event(pending, true);
     Some(if dispatched {
         PageImageLoadEventTargetEffect::DispatchedToCurrentOwner
@@ -616,7 +755,7 @@ fn dispatch_queued_image_load_event(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
-    pending: crate::native_bridge::PendingImageLoadEvent,
+    pending: &crate::native_bridge::PendingImageLoadEvent,
     kind: RendererPageImageLoadEventKind,
 ) -> bool {
     let runtime = unsafe { &mut *runtime_ptr };
@@ -628,12 +767,7 @@ fn dispatch_queued_image_load_event(
         && pending.terminal_source()
             == Some(crate::native_bridge::PendingImageLoadTerminalSource::Local)
     {
-        record_local_image_resource_performance_entry(
-            scope,
-            runtime,
-            handle,
-            pending.resource_timing_initiator_type(),
-        );
+        record_image_resource_performance_entry_for_pending(scope, pending);
     }
     let _ = runtime.process_pending_image_decode_requests(scope);
     let already_dispatched = runtime
@@ -1085,17 +1219,10 @@ fn image_current_src_value<'s>(
 }
 
 fn image_current_src_value_for_handle(runtime: &PageScriptHost, handle: DomHandle) -> String {
-    let complete = runtime
-        .dom_host()
-        .node(handle)
-        .and_then(Node::as_element)
-        .is_some_and(|element| element.image_load_dispatched())
-        || runtime.image_resource_is_ready(handle);
-    if complete {
-        image_selected_source_url(runtime, handle)
-    } else {
-        String::new()
-    }
+    runtime
+        .current_image_request_url(handle)
+        .unwrap_or_default()
+        .to_owned()
 }
 
 #[cfg(test)]
