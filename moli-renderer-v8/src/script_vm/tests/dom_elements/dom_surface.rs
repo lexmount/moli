@@ -11923,7 +11923,7 @@ async fn child_image_network_failure_releases_lifecycle_before_later_host_load()
     assert!(
         vm._context_host
             .borrow()
-            .pending_image_load_event_is_current(child_image, detached_pending),
+            .pending_image_load_event_is_current(child_image, &detached_pending),
         "same-document detach must preserve current image ownership"
     );
     assert!(

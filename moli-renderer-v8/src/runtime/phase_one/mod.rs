@@ -13941,16 +13941,23 @@ window.parserMixedAdoptEvents.length = 0;
                 None,
                 "parser DocumentFragment insertion must not represent text-track default-mode work as a timer"
             );
-            assert!(matches!(
-                take_next_dom_manipulation_task_for_test(&page_vm),
-                crate::page_task_queue::RendererPageDomManipulationTask::ImageLoadEvent(_)
-            ));
+            page_vm
+                .vm_mut()
+                .perform_script_task_checkpoint(None)
+                .expect("parser task-end checkpoint should select the image request");
             assert!(
                 matches!(
                     take_next_dom_manipulation_task_for_test(&page_vm),
                     crate::page_task_queue::RendererPageDomManipulationTask::TextTrackDefaultMode(_)
                 ),
-                "hoisted text track should follow the earlier image in the shared DOM FIFO"
+                "the synchronous text-track task should precede the image terminal queued by the task-end microtask"
+            );
+            assert!(
+                matches!(
+                    take_next_dom_manipulation_task_for_test(&page_vm),
+                    crate::page_task_queue::RendererPageDomManipulationTask::ImageLoadEvent(_)
+                ),
+                "the image-update microtask should queue its terminal after the earlier text-track task"
             );
         }));
     }
@@ -14058,16 +14065,23 @@ window.parserMixedAdoptEvents.length = 0;
                 None,
                 "parser DocumentFragment insertBefore must not represent text-track default-mode work as a timer"
             );
-            assert!(matches!(
-                take_next_dom_manipulation_task_for_test(&page_vm),
-                crate::page_task_queue::RendererPageDomManipulationTask::ImageLoadEvent(_)
-            ));
+            page_vm
+                .vm_mut()
+                .perform_script_task_checkpoint(None)
+                .expect("parser task-end checkpoint should select the image request");
             assert!(
                 matches!(
                     take_next_dom_manipulation_task_for_test(&page_vm),
                     crate::page_task_queue::RendererPageDomManipulationTask::TextTrackDefaultMode(_)
                 ),
-                "insertBefore-hoisted text track should follow the image in the shared DOM FIFO"
+                "the synchronous text-track task should precede the image terminal queued by the task-end microtask"
+            );
+            assert!(
+                matches!(
+                    take_next_dom_manipulation_task_for_test(&page_vm),
+                    crate::page_task_queue::RendererPageDomManipulationTask::ImageLoadEvent(_)
+                ),
+                "the image-update microtask should queue its terminal after the earlier text-track task"
             );
         }));
     }

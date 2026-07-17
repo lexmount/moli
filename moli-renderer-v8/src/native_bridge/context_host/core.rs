@@ -307,6 +307,7 @@ impl JsContextHost {
                 super::user_interaction_tasks::UserInteractionTaskState::default(),
             pending_image_load_events: HashMap::new(),
             next_image_load_event_id: 1,
+            current_image_requests: HashMap::new(),
             pending_media_load_sequences: HashMap::new(),
             next_media_load_sequence_id: 1,
             pending_text_track_load_sequences: HashMap::new(),
@@ -1495,7 +1496,7 @@ impl JsContextHost {
         &self,
         handle: DomHandle,
     ) -> Option<super::PendingImageLoadEvent> {
-        self.pending_image_load_events.get(&handle).copied()
+        self.pending_image_load_events.get(&handle).cloned()
     }
 
     pub(crate) fn next_image_load_event_id(&mut self) -> super::ImageLoadEventId {
@@ -1636,6 +1637,24 @@ impl JsContextHost {
 
     pub(crate) fn lazy_media_load_candidates(&self) -> Vec<DomHandle> {
         self.lazy_media_load_candidates.iter().copied().collect()
+    }
+
+    pub(crate) fn set_current_image_request(
+        &mut self,
+        handle: DomHandle,
+        request_key: Option<crate::types::ImageRequestKey>,
+    ) {
+        if let Some(request_key) = request_key {
+            self.current_image_requests.insert(handle, request_key);
+        } else {
+            self.current_image_requests.remove(&handle);
+        }
+    }
+
+    pub(crate) fn current_image_request_url(&self, handle: DomHandle) -> Option<&str> {
+        self.current_image_requests
+            .get(&handle)
+            .map(crate::types::ImageRequestKey::url)
     }
 
     pub(crate) fn begin_form_data_construction(&mut self, form_handle: DomHandle) -> bool {

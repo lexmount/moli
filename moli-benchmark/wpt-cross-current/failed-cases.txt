@@ -3062,7 +3062,6 @@ html/semantics/embedded-content/the-img-element/image-loading-lazy-in-scroller-n
 html/semantics/embedded-content/the-img-element/image-loading-lazy-in-scroller-nested.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-in-scroller.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-in-viewport-dynamic.html
-html/semantics/embedded-content/the-img-element/img-picture-ancestor.html
 html/semantics/embedded-content/the-img-element/natural-size-orientation.html
 html/semantics/embedded-content/the-img-element/naturalWidth-naturalHeight-width-height.html
 html/semantics/embedded-content/the-img-element/relevant-mutations-lazy.html
@@ -3075,7 +3074,6 @@ html/semantics/embedded-content/the-img-element/source-media-outside-doc.html
 html/semantics/embedded-content/the-img-element/source-relevant-mutations.html
 html/semantics/embedded-content/the-img-element/svg-img-density-vs-zoom.html
 html/semantics/embedded-content/the-img-element/update-the-image-data/current-request-microtask-002.html
-html/semantics/embedded-content/the-img-element/update-the-image-data/current-request-microtask.html
 html/semantics/embedded-content/the-img-element/update-the-image-data/lazy-out-of-band-load.html
 html/semantics/embedded-content/the-img-element/update-the-image-data/not-broken-while-load-task-scheduled.html
 html/semantics/embedded-content/the-img-element/update-the-image-data/src-then-lazy-load.html

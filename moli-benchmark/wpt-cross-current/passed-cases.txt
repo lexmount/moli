@@ -5664,6 +5664,7 @@ html/semantics/embedded-content/the-img-element/image-loading-lazy-relevant-muta
 html/semantics/embedded-content/the-img-element/image-loading-lazy-srcset.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-to-eager.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-use-list-of-available-images.html
+html/semantics/embedded-content/the-img-element/img-picture-ancestor.html
 html/semantics/embedded-content/the-img-element/img-src-in-synthetic-document.html
 html/semantics/embedded-content/the-img-element/img.complete.html
 html/semantics/embedded-content/the-img-element/invalid-src.html
@@ -5683,6 +5684,7 @@ html/semantics/embedded-content/the-img-element/srcset/select-an-image-source.ht
 html/semantics/embedded-content/the-img-element/srcset/srcset-media-dynamic.html
 html/semantics/embedded-content/the-img-element/update-media.html
 html/semantics/embedded-content/the-img-element/update-src-complete.html
+html/semantics/embedded-content/the-img-element/update-the-image-data/current-request-microtask.html
 html/semantics/embedded-content/the-img-element/update-the-image-data/fail-to-resolve.html
 html/semantics/embedded-content/the-object-element/block-object-with-ruby-crash.html
 html/semantics/embedded-content/the-object-element/historical.html
