@@ -1210,6 +1210,61 @@ fn performance_navigation_timing_updates_at_load_event_end() {
 }
 
 #[test]
+fn performance_navigation_lifecycle_timestamps_are_write_once_per_navigation() {
+    let mut vm = new_storage_test_vm("https://performance-navigation-write-once.test/");
+
+    vm.dispatch_document_lifecycle_event("DOMContentLoaded")
+        .expect("first DOMContentLoaded should update navigation timing");
+    vm.dispatch_window_load_event()
+        .expect("first load should update navigation timing");
+    vm.eval(
+        r#"
+        globalThis.__initialNavigationLifecycleTiming = (() => {
+          const navigation = performance.getEntriesByType("navigation")[0];
+          return [
+            navigation.domInteractive,
+            navigation.domContentLoadedEventStart,
+            navigation.domContentLoadedEventEnd,
+            navigation.domComplete,
+            navigation.loadEventStart,
+            navigation.loadEventEnd
+          ];
+        })();
+        "#,
+    )
+    .expect("initial navigation lifecycle timing should be captured");
+
+    vm.dispatch_document_lifecycle_event("DOMContentLoaded")
+        .expect("repeated DOMContentLoaded should remain dispatchable");
+    vm.dispatch_window_load_event()
+        .expect("repeated load should remain dispatchable");
+
+    assert_eq!(
+        vm.eval(
+            r#"
+            (() => {
+              const navigation = performance.getEntriesByType("navigation")[0];
+              const current = [
+                navigation.domInteractive,
+                navigation.domContentLoadedEventStart,
+                navigation.domContentLoadedEventEnd,
+                navigation.domComplete,
+                navigation.loadEventStart,
+                navigation.loadEventEnd
+              ];
+              return current.every(
+                (value, index) =>
+                  value === globalThis.__initialNavigationLifecycleTiming[index]
+              );
+            })()
+            "#,
+        )
+        .expect("repeated navigation lifecycle timing should be compared"),
+        "true"
+    );
+}
+
+#[test]
 fn materialized_legacy_performance_timing_uses_integer_milliseconds() {
     const TIME_ORIGIN: f64 = 1_700_000_000_000.75;
 
