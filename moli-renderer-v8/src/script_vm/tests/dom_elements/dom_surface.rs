@@ -6394,6 +6394,89 @@ async fn element_matches_delegates_loaded_child_document_elements() {
 }
 
 #[tokio::test]
+async fn child_navigation_performance_name_updates_after_iframe_src_change() {
+    let mut vm = new_storage_test_vm("https://child-navigation-performance.test/page.html");
+    vm.eval(
+        r#"
+(() => {
+  globalThis.__childNavigationLoadCount = 0;
+  const frame = document.createElement("iframe");
+  globalThis.__childNavigationFrame = frame;
+  frame.onload = () => {
+    globalThis.__childNavigationLoadCount++;
+  };
+  frame.src = "/src/browser/tests/navigation-timing/resources/blank_page_green.html";
+  (document.body || document.documentElement || document).appendChild(frame);
+})()
+"#,
+    )
+    .expect("child navigation performance setup should evaluate");
+    let loads_before_initial_dispatch = vm
+        .eval("String(globalThis.__childNavigationLoadCount)")
+        .expect("initial child navigation load count should evaluate");
+    assert_eq!(loads_before_initial_dispatch, "0");
+    run_child_navigation_commit_and_host_load_for_test(
+        &mut vm,
+        "initial child navigation performance load",
+    )
+    .await;
+    let first = vm
+        .eval(
+            r#"
+(() => {
+  const frame = __childNavigationFrame;
+  const entry = frame.contentWindow.performance.getEntriesByType("navigation")[0];
+  const timing = frame.contentWindow.performance.timing;
+  return [
+    entry.name === frame.contentWindow.location.href,
+    entry.name.endsWith("/blank_page_green.html"),
+    globalThis.__childNavigationLoadCount,
+    timing.domInteractive > timing.navigationStart,
+    timing.loadEventStart >= timing.domInteractive,
+    timing.loadEventEnd >= timing.loadEventStart,
+    frame.contentWindow.performance.now() >=
+      timing.loadEventEnd - timing.navigationStart
+  ].join(":");
+})()
+"#,
+        )
+        .expect("first child navigation performance probe should evaluate");
+    assert_eq!(first, "true:true:1:true:true:true:true");
+
+    vm.eval(
+        r#"__childNavigationFrame.src = "/src/browser/tests/navigation-timing/resources/blank_page_yellow.html";"#,
+    )
+    .expect("second child navigation should queue");
+    let loads_before_second_dispatch = vm
+        .eval("String(globalThis.__childNavigationLoadCount)")
+        .expect("second child navigation pre-HostLoad load count should evaluate");
+    assert_eq!(loads_before_second_dispatch, "1");
+    run_child_navigation_commit_and_host_load_for_test(
+        &mut vm,
+        "second child navigation performance load",
+    )
+    .await;
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const frame = __childNavigationFrame;
+  const entry = frame.contentWindow.performance.getEntriesByType("navigation")[0];
+  return [
+    entry.name === frame.contentWindow.location.href,
+    entry.name.endsWith("/blank_page_yellow.html"),
+    globalThis.__childNavigationLoadCount
+  ].join(":");
+})()
+"#,
+        )
+        .expect("second child navigation performance probe should evaluate");
+
+    assert_eq!(result, "true:true:2");
+}
+
+#[tokio::test]
 async fn child_content_document_getter_does_not_enumerate_script_wrappers_after_load() {
     let mut vm = new_storage_test_vm("https://child-content-document-getter-script-state.test/");
     vm.eval(
