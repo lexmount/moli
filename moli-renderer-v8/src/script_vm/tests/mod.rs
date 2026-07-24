@@ -14918,6 +14918,11 @@ fn eval_probe_fixture_output(url: &str, markup: &str) -> serde_json::Value {
 
 #[test]
 fn script_turn_watchdog_terminates_runaway_script_and_recovers_isolate() {
+    let _watchdog_timeout =
+        crate::v8_execution_watchdog::V8ExecutionWatchdog::override_timeout_for_test(
+            crate::v8_execution_watchdog::V8ExecutionWatchdogKind::ScriptTurn,
+            std::time::Duration::from_millis(500),
+        );
     let mut vm = new_parsed_test_vm("https://example.test/", "<!doctype html><body></body>");
     let started = Instant::now();
     let error = vm
@@ -14941,6 +14946,11 @@ fn script_turn_watchdog_terminates_runaway_script_and_recovers_isolate() {
 
 #[test]
 fn microtask_checkpoint_watchdog_terminates_runaway_queue_and_recovers_isolate() {
+    let _watchdog_timeout =
+        crate::v8_execution_watchdog::V8ExecutionWatchdog::override_timeout_for_test(
+            crate::v8_execution_watchdog::V8ExecutionWatchdogKind::ScriptTurn,
+            std::time::Duration::from_millis(500),
+        );
     let mut vm = new_parsed_test_vm("https://example.test/", "<!doctype html><body></body>");
     let started = Instant::now();
     let error = vm
@@ -15108,6 +15118,11 @@ fn runtime_await_promise_sync_result_survives_queued_allocation_gc() {
 
 #[tokio::test]
 async fn timer_callback_watchdog_terminates_runaway_timer_and_recovers_isolate() {
+    let _watchdog_timeout =
+        crate::v8_execution_watchdog::V8ExecutionWatchdog::override_timeout_for_test(
+            crate::v8_execution_watchdog::V8ExecutionWatchdogKind::TimerCallback,
+            std::time::Duration::from_millis(500),
+        );
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_parsed_test_vm("https://example.test/", "<!doctype html><body></body>");
     vm.exec(

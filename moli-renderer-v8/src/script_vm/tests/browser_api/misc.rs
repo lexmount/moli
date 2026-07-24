@@ -2961,6 +2961,11 @@ fn host_dispatched_events_ignore_user_replaced_event_constructor() {
 }
 #[test]
 fn domcontentloaded_listener_watchdog_terminates_runaway_listener_and_recovers_isolate() {
+    let _watchdog_timeout =
+        crate::v8_execution_watchdog::V8ExecutionWatchdog::override_timeout_for_test(
+            crate::v8_execution_watchdog::V8ExecutionWatchdogKind::LifecycleEvent,
+            std::time::Duration::from_millis(500),
+        );
     let mut vm = new_storage_test_vm("https://example.com/");
 
     vm.exec(
