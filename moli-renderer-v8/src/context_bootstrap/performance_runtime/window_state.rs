@@ -29,9 +29,39 @@ pub(crate) fn bind_document_performance<'s>(
     window: v8::Local<'s, v8::Object>,
     timing: crate::document_runtime::DocumentTimingSnapshot,
 ) -> Result<()> {
-    bind_window_performance_seed(scope, window, "navigate", timing.time_origin)?;
-    super::install::project_window_lifecycle_timing(scope, window, timing.lifecycle, false);
+    bind_window_document_performance(scope, window, "navigate", timing)
+}
+
+pub(crate) fn bind_window_document_performance<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
+    navigation_type: &str,
+    timing: crate::document_runtime::DocumentTimingSnapshot,
+) -> Result<()> {
+    bind_window_performance_seed(scope, window, navigation_type, timing.time_origin)?;
+    project_window_document_lifecycle_timing(scope, window, timing, false);
     Ok(())
+}
+
+pub(crate) fn project_window_document_lifecycle_timing<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
+    timing: crate::document_runtime::DocumentTimingSnapshot,
+    notify_observers: bool,
+) {
+    let Some(context) = window.get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let window = context.global(scope);
+    if time_origin_seed_value(scope, window) == Some(timing.time_origin) {
+        super::install::project_window_lifecycle_timing(
+            scope,
+            window,
+            timing.lifecycle,
+            notify_observers,
+        );
+    }
 }
 
 pub(crate) fn bind_window_performance_seed<'s>(

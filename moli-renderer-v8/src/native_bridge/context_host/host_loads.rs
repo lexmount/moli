@@ -4,7 +4,10 @@ use crate::{
         construct_original_event, construct_original_page_transition_event,
         navigate_child_meta_refresh,
     },
-    document_runtime::{DocumentRuntime, DomHandle, EventTargetHandle, MetaRefreshNavigation},
+    document_runtime::{
+        DocumentLifecycleTiming, DocumentRuntime, DomHandle, EventTargetHandle,
+        MetaRefreshNavigation,
+    },
     frame_owner_model::{
         FrameDocumentLoadDeliveryAction, FrameDocumentLoadDeliveryPhase,
         FrameDocumentLoadDeliveryProgress,
@@ -389,7 +392,19 @@ impl PageScriptHost {
             self.abort_and_requeue_child_load_delivery(action);
             return ChildFrameLoadDeliveryPhaseResult::without_callback(None);
         };
+        self.record_child_document_lifecycle_timing(
+            scope,
+            handle,
+            action.owner(),
+            DocumentLifecycleTiming::LoadStart,
+        );
         self.dispatch_child_window_event(scope, handle, "load", event);
+        self.record_child_document_lifecycle_timing(
+            scope,
+            handle,
+            action.owner(),
+            DocumentLifecycleTiming::LoadEnd,
+        );
         let progress = self
             .frame_owner_store
             .finish_current_child_document_load_delivery(action);

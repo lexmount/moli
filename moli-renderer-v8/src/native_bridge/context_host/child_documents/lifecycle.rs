@@ -11,7 +11,7 @@ use crate::{
         dispatch_pagehide_for_runtime_owner, dispatch_unload_for_runtime_owner,
     },
     detached_event_target::dispatch_detached_simple_event,
-    document_runtime::DomHandle,
+    document_runtime::{DocumentLifecycleTiming, DomHandle},
     dom::native::DocumentReadyState,
     frame_owner_model::{
         FrameDocumentCompleteLifecycleAction, FrameDocumentDescendantLoadCompletion,
@@ -725,6 +725,12 @@ impl PageScriptHost {
                 crate::native_bridge::WindowDocumentOwner::Frame(action.owner()),
             );
         }
+        self.record_child_document_lifecycle_timing(
+            scope,
+            child_handle,
+            action.owner(),
+            DocumentLifecycleTiming::DomContentLoadedStart,
+        );
         let event_dispatched = self
             .child_browsing_context_document_wrapper(scope, child_handle)
             .is_some_and(|document| {
@@ -738,6 +744,12 @@ impl PageScriptHost {
                     false,
                 )
             });
+        self.record_child_document_lifecycle_timing(
+            scope,
+            child_handle,
+            action.owner(),
+            DocumentLifecycleTiming::DomContentLoadedEnd,
+        );
         if self
             .frame_owner_store
             .child_document_task_owner_is_current(child_handle, action.owner())

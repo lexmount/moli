@@ -30,7 +30,7 @@ mod security_policy;
 #[path = "stylesheet_runtime/mod.rs"]
 mod stylesheet_runtime;
 mod timing;
-pub(crate) use timing::{DocumentLifecycleTiming, DocumentTimingSnapshot};
+pub(crate) use timing::{DocumentLifecycleTiming, DocumentTiming, DocumentTimingSnapshot};
 
 #[cfg(test)]
 pub(crate) use mutation_commands::ParserPostStepRuntimeWorkForTest;

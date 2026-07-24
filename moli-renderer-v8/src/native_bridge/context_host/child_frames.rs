@@ -7,7 +7,10 @@ use super::{
     PageScriptHost, child_documents::CompletedFrameOwnerResourceTiming,
 };
 use crate::{
-    document_runtime::{DocumentPolicyContainer, DocumentSandboxPolicy, DomHandle},
+    document_runtime::{
+        DocumentLifecycleTiming, DocumentPolicyContainer, DocumentSandboxPolicy, DocumentTiming,
+        DocumentTimingSnapshot, DomHandle,
+    },
     frame_owner_model::{
         ChildFrameOwnerSnapshot, FrameDocumentTaskOwner, FrameId, FrameRealmId, FrameScriptJob,
         FrameScriptJobKind,
@@ -69,16 +72,12 @@ pub(super) struct ChildBrowsingContextEntry {
 
 pub(super) type ChildDocumentPolicyContainer = DocumentPolicyContainer;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct ChildPerformanceTimeOrigin(u64);
+#[derive(Debug, Clone)]
+pub(super) struct ChildPerformanceTimeOrigin(DocumentTiming);
 
 impl ChildPerformanceTimeOrigin {
     pub(super) fn now() -> Self {
-        Self(moli_time::unix_epoch_millis().to_bits())
-    }
-
-    pub(super) fn as_millis(self) -> f64 {
-        f64::from_bits(self.0)
+        Self(DocumentTiming::default())
     }
 }
 
@@ -843,12 +842,19 @@ impl ChildBrowsingContextEntry {
             .unwrap_or("navigate")
     }
 
-    pub(super) fn performance_time_origin_millis(&self) -> f64 {
-        self.performance_time_origin.as_millis()
+    pub(super) fn performance_time_origin(&self) -> ChildPerformanceTimeOrigin {
+        self.performance_time_origin.clone()
     }
 
-    pub(super) fn performance_time_origin(&self) -> ChildPerformanceTimeOrigin {
-        self.performance_time_origin
+    pub(super) fn document_performance_timing(&self) -> DocumentTimingSnapshot {
+        self.performance_time_origin.0.snapshot()
+    }
+
+    pub(super) fn record_document_lifecycle_timing(
+        &mut self,
+        phase: DocumentLifecycleTiming,
+    ) -> DocumentTimingSnapshot {
+        self.performance_time_origin.0.record(phase)
     }
 
     pub(super) fn reset_performance_time_origin(&mut self) {
