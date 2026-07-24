@@ -2,7 +2,7 @@ use super::super::PageScriptHost;
 use super::document_slots::sync_child_document_window_slots;
 use crate::{
     context_bootstrap::{
-        bind_window_performance_seed, install_navigation_entry_view_for_holder,
+        bind_window_document_performance, install_navigation_entry_view_for_holder,
         reset_window_location_history_navigation_runtime_state, set_window_origin_runtime_state,
         sync_window_location_history_navigation_runtime_surface, window_location_href,
     },
@@ -103,12 +103,14 @@ impl PageScriptHost {
         }
         install_navigation_entry_view_for_holder(scope, wrapper, &visible_state.entry_seed);
         let performance_navigation_type = self.child_performance_navigation_type(handle);
-        let _ = bind_window_performance_seed(
-            scope,
-            wrapper,
-            &performance_navigation_type,
-            self.child_performance_time_origin(handle),
-        );
+        if let Some(timing) = self.child_document_performance_timing(handle) {
+            let _ = bind_window_document_performance(
+                scope,
+                wrapper,
+                &performance_navigation_type,
+                timing,
+            );
+        }
         bind_materialized_child_window_indexed_db_factory(scope, wrapper, handle);
         let document = self
             .child_browsing_context_document_wrapper(scope, handle)
@@ -167,12 +169,14 @@ impl PageScriptHost {
         );
         install_navigation_entry_view_for_holder(scope, wrapper, &entry_seed);
         let performance_navigation_type = self.child_performance_navigation_type(handle);
-        let _ = bind_window_performance_seed(
-            scope,
-            wrapper,
-            &performance_navigation_type,
-            self.child_performance_time_origin(handle),
-        );
+        if let Some(timing) = self.child_document_performance_timing(handle) {
+            let _ = bind_window_document_performance(
+                scope,
+                wrapper,
+                &performance_navigation_type,
+                timing,
+            );
+        }
         sync_window_location_history_navigation_runtime_surface(scope, wrapper);
     }
 }

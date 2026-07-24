@@ -1824,3 +1824,123 @@ fn html_constructor_proxy_handlers_ignore_inherited_get_traps() {
 "#).expect("HTML constructor Proxy trap lookup should stay internal");
     assert_eq!(result, "ok");
 }
+
+#[tokio::test]
+async fn child_navigation_performance_name_updates_after_iframe_src_change() {
+    const HOST: &str = "child-navigation-performance.test";
+    let server = StaticHttpServer::spawn_with_bodies(vec![
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/lightpanda/upstream/navigation-timing/resources/blank_page_green.html"
+        ))
+        .to_owned(),
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/lightpanda/upstream/navigation-timing/resources/blank_page_yellow.html"
+        ))
+        .to_owned(),
+    ])
+    .await;
+    let parent_url = server.url_for_host(HOST, "/page.html");
+    let loader = static_http_loader([server.resolve_entry(HOST)]);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(parent_url.as_str(), &loader);
+    vm.eval(
+        r#"
+(() => {
+  globalThis.__childNavigationLoadCount = 0;
+  const frame = document.createElement("iframe");
+  globalThis.__childNavigationFrame = frame;
+  frame.onload = () => {
+    globalThis.__childNavigationLoadCount++;
+  };
+  frame.src = "/src/browser/tests/navigation-timing/resources/blank_page_green.html";
+  (document.body || document.documentElement || document).appendChild(frame);
+})()
+"#,
+    )
+    .expect("child navigation performance setup should evaluate");
+    let loads_before_initial_dispatch = vm
+        .eval("String(globalThis.__childNavigationLoadCount)")
+        .expect("initial child navigation load count should evaluate");
+    assert_eq!(loads_before_initial_dispatch, "0");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__childNavigationLoadCount)",
+        "1",
+        "initial child navigation performance load",
+    )
+    .await;
+    let first = vm
+        .eval(
+            r#"
+(() => {
+  const frame = __childNavigationFrame;
+  const entry = frame.contentWindow.performance.getEntriesByType("navigation")[0];
+  const timing = frame.contentWindow.performance.timing;
+  return [
+    entry.name === frame.contentWindow.location.href,
+    entry.name.endsWith("/blank_page_green.html"),
+    globalThis.__childNavigationLoadCount,
+    timing.domInteractive > timing.navigationStart,
+    timing.loadEventStart >= timing.domInteractive,
+    timing.loadEventEnd >= timing.loadEventStart,
+    frame.contentWindow.performance.now() >=
+      timing.loadEventEnd - timing.navigationStart
+  ].join(":");
+})()
+"#,
+        )
+        .expect("first child navigation performance probe should evaluate");
+    let lifecycle_timing = vm.eval(r#"JSON.stringify((() => {
+        const p = __childNavigationFrame.contentWindow.performance;
+        const n = p.getEntriesByType('navigation')[0];
+        return {timeOrigin:p.timeOrigin,now:p.now(),legacy:{navigationStart:p.timing.navigationStart,domInteractive:p.timing.domInteractive,loadEventStart:p.timing.loadEventStart,loadEventEnd:p.timing.loadEventEnd},navigation:{domInteractive:n.domInteractive,domContentLoadedEventStart:n.domContentLoadedEventStart,domContentLoadedEventEnd:n.domContentLoadedEventEnd,loadEventStart:n.loadEventStart,loadEventEnd:n.loadEventEnd}};
+    })())"#).expect("native child lifecycle values should be observable");
+    assert_eq!(
+        first, "true:true:1:true:true:true:true",
+        "native lifecycle timing: {lifecycle_timing}"
+    );
+
+    vm.eval(
+        r#"__childNavigationFrame.src = "/src/browser/tests/navigation-timing/resources/blank_page_yellow.html";"#,
+    )
+    .expect("second child navigation should queue");
+    let loads_before_second_dispatch = vm
+        .eval("String(globalThis.__childNavigationLoadCount)")
+        .expect("second child navigation pre-HostLoad load count should evaluate");
+    assert_eq!(loads_before_second_dispatch, "1");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__childNavigationLoadCount)",
+        "2",
+        "second child navigation performance load",
+    )
+    .await;
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const frame = __childNavigationFrame;
+  const entry = frame.contentWindow.performance.getEntriesByType("navigation")[0];
+  return [
+    entry.name === frame.contentWindow.location.href,
+    entry.name.endsWith("/blank_page_yellow.html"),
+    globalThis.__childNavigationLoadCount
+  ].join(":");
+})()
+"#,
+        )
+        .expect("second child navigation performance probe should evaluate");
+
+    assert_eq!(result, "true:true:2");
+    assert_eq!(
+        server.finish_targets().await,
+        vec![
+            "/src/browser/tests/navigation-timing/resources/blank_page_green.html",
+            "/src/browser/tests/navigation-timing/resources/blank_page_yellow.html",
+        ]
+    );
+}
