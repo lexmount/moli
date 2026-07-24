@@ -2,7 +2,8 @@ use super::{FrameDocumentLoadDeliveryTask, JsContextHost};
 use crate::{
     context_bootstrap::{
         construct_original_event, construct_original_page_transition_event,
-        navigate_child_meta_refresh,
+        navigate_child_meta_refresh, record_performance_load_event_end_for_window,
+        record_performance_load_event_start_for_window,
     },
     document_runtime::{DocumentRuntime, DomHandle, EventTargetHandle, MetaRefreshNavigation},
     frame_owner_model::{
@@ -406,13 +407,20 @@ impl JsContextHost {
         action: FrameDocumentLoadDeliveryAction,
     ) -> ChildFrameLoadDeliveryPhaseResult {
         let handle = action.child_handle();
+        let performance_window = self.existing_child_browsing_context_window_wrapper(scope, handle);
         let Some(event) = construct_original_event(scope, "load") else {
             self.abort_and_requeue_child_load_delivery(action);
             return ChildFrameLoadDeliveryPhaseResult::without_callback(None);
         };
+        if let Some(window) = performance_window {
+            record_performance_load_event_start_for_window(scope, window);
+        }
         self.enter_child_browsing_context_host_load_dispatch(handle);
         self.dispatch_child_window_event(scope, handle, "load", event);
         self.leave_child_browsing_context_host_load_dispatch(handle);
+        if let Some(window) = performance_window {
+            record_performance_load_event_end_for_window(scope, window);
+        }
         let progress = self
             .frame_owner_store
             .finish_current_child_document_load_delivery(action);

@@ -92,6 +92,7 @@ mod element_toggle_events;
 mod event_callbacks;
 mod file_chooser;
 mod file_entry_file_callbacks;
+mod fixture_support;
 mod focus;
 mod frame_document_ready_routes;
 mod hash_changes;
