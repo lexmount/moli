@@ -1,3 +1,4 @@
+use super::super::fixture_support::child_upstream_fixture_text;
 use super::super::{ChildBrowsingContextBootstrap, ChildBrowsingContextSnapshot, JsContextHost};
 use crate::document_response_decoder::decode_document_response;
 use crate::document_runtime::{DocumentPolicyContainer, DomHandle};
@@ -43,7 +44,13 @@ impl JsContextHost {
                 url.clone(),
                 "<!DOCTYPE html><html><head></head><body></body></html>".into(),
             )),
-            "http" | "https" => None,
+            "http" | "https" => child_upstream_fixture_text(url).map(|markup| {
+                ChildBrowsingContextSnapshot::new(
+                    url.clone(),
+                    markup,
+                    child_document_content_type_for_url(url),
+                )
+            }),
             "blob" => {
                 let (body, mime_type) = crate::blob::object_url_body_and_type(url.as_str())?;
                 if !mime_type.is_empty() && !is_html_document_mime(&mime_type) {

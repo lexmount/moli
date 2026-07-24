@@ -1,3 +1,4 @@
+use super::super::fixture_support::child_upstream_fixture_text;
 use super::super::{ChildBrowsingContextBootstrap, JsContextHost};
 use crate::document_runtime::DomHandle;
 use url::Url;
@@ -7,7 +8,7 @@ impl JsContextHost {
         &self,
         url: &Url,
     ) -> bool {
-        matches!(url.scheme(), "http" | "https")
+        matches!(url.scheme(), "http" | "https") && child_upstream_fixture_text(url).is_none()
     }
 
     pub(in crate::native_bridge::context_host::child_documents) fn child_document_bootstrap_requires_async_load(
