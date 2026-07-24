@@ -23,10 +23,7 @@ use crate::v8_execution_watchdog::{
     V8ExecutionWatchdog, V8ExecutionWatchdogKind, V8ExecutionWatchdogOutcome,
 };
 
-#[cfg(not(test))]
 const LIFECYCLE_EVENT_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(8);
-#[cfg(test)]
-const LIFECYCLE_EVENT_WATCHDOG_TIMEOUT: Duration = Duration::from_millis(500);
 
 impl ScriptVm {
     fn dispatch_document_event_body(&mut self, event_type: &str) -> Result<()> {
@@ -130,6 +127,7 @@ impl ScriptVm {
                     LIFECYCLE_EVENT_WATCHDOG_TIMEOUT,
                 )
             });
+        let watchdog_timeout = watchdog.timeout();
         let result = {
             let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context;
             self.renderer_document_isolate
@@ -150,7 +148,7 @@ impl ScriptVm {
         if timed_out {
             anyhow::bail!(
                 "document lifecycle event `{event_type}` exceeded {:?} and was terminated",
-                LIFECYCLE_EVENT_WATCHDOG_TIMEOUT
+                watchdog_timeout
             );
         }
         Ok(())

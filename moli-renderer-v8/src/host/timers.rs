@@ -209,10 +209,7 @@ impl ScheduledTimerTask {
 }
 
 const MIN_DELAY_TIMER_READY_EARLY_ALLOWANCE: Duration = Duration::from_millis(1);
-#[cfg(not(test))]
 const TIMER_CALLBACK_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(8);
-#[cfg(test)]
-const TIMER_CALLBACK_WATCHDOG_TIMEOUT: Duration = Duration::from_millis(500);
 
 #[derive(Default)]
 pub(crate) struct HostTimeoutScheduler {
@@ -1110,6 +1107,7 @@ fn run_window_timer_callback(
                 scope.thread_safe_handle(),
                 TIMER_CALLBACK_WATCHDOG_TIMEOUT,
             );
+            let watchdog_timeout = watchdog.timeout();
             let result = CallbackInvoker::invoke(
                 scope,
                 "callback",
@@ -1122,7 +1120,7 @@ fn run_window_timer_callback(
             if watchdog_timed_out {
                 return Err(HostTimeoutRunResult::CallbackError(format!(
                     "timer callback exceeded {:?} and was terminated",
-                    TIMER_CALLBACK_WATCHDOG_TIMEOUT
+                    watchdog_timeout
                 )));
             }
             match result {
@@ -1152,12 +1150,13 @@ fn run_window_timer_callback(
                 scope.thread_safe_handle(),
                 TIMER_CALLBACK_WATCHDOG_TIMEOUT,
             );
+            let watchdog_timeout = watchdog.timeout();
             let result = callback.invoke(scope, host_ptr, extra_args);
             let watchdog_timed_out = watchdog.disarm() == V8ExecutionWatchdogOutcome::TimedOut;
             if watchdog_timed_out {
                 return Err(HostTimeoutRunResult::CallbackError(format!(
                     "Window Web IDL callback exceeded {:?} and was terminated",
-                    TIMER_CALLBACK_WATCHDOG_TIMEOUT
+                    watchdog_timeout
                 )));
             }
             match result {
@@ -1185,12 +1184,13 @@ fn run_window_timer_callback(
                 scope.thread_safe_handle(),
                 TIMER_CALLBACK_WATCHDOG_TIMEOUT,
             );
+            let watchdog_timeout = watchdog.timeout();
             let result = run_window_timer_source(scope, source);
             let watchdog_timed_out = watchdog.disarm() == V8ExecutionWatchdogOutcome::TimedOut;
             if watchdog_timed_out {
                 return Err(HostTimeoutRunResult::CallbackError(format!(
                     "timer source exceeded {:?} and was terminated",
-                    TIMER_CALLBACK_WATCHDOG_TIMEOUT
+                    watchdog_timeout
                 )));
             }
             result

@@ -236,6 +236,7 @@ fn execute_source_text_on_current_stack_with_completion(
         scope.thread_safe_handle(),
         SCRIPT_TURN_WATCHDOG_TIMEOUT,
     );
+    let watchdog_timeout = watchdog.timeout();
     let run_result = script.run(&scope);
     let watchdog_timed_out = watchdog.disarm() == V8ExecutionWatchdogOutcome::TimedOut;
     scope.set_continuation_preserved_embedder_data(previous_continuation_data);
@@ -243,7 +244,7 @@ fn execute_source_text_on_current_stack_with_completion(
         if watchdog_timed_out {
             return RawScriptExecutionError::Internal(anyhow!(
                 "script execution exceeded {:?} and was terminated",
-                SCRIPT_TURN_WATCHDOG_TIMEOUT
+                watchdog_timeout
             ));
         }
         let exception = scope.exception();
@@ -573,12 +574,13 @@ impl ScriptVm {
             scope.thread_safe_handle(),
             SCRIPT_TURN_WATCHDOG_TIMEOUT,
         );
+        let watchdog_timeout = watchdog.timeout();
         perform_microtask_checkpoint_and_report_pending_promise_rejections(scope);
         let watchdog_timed_out = watchdog.disarm() == V8ExecutionWatchdogOutcome::TimedOut;
         if watchdog_timed_out {
             return Err(anyhow!(
                 "microtask checkpoint exceeded {:?} and was terminated",
-                SCRIPT_TURN_WATCHDOG_TIMEOUT
+                watchdog_timeout
             ));
         }
         if let Some(script_url) = script_url {
