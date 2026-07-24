@@ -173,8 +173,10 @@ pub(super) enum DomStringReflection {
     AreaAlt,
     AreaCoords,
     AreaDownload,
+    AreaHreflang,
     AreaReferrerPolicy,
     AreaShape,
+    AreaType,
     BrClear,
     DataValue,
     EmbedHeight,
@@ -206,13 +208,17 @@ pub(super) enum DomStringReflection {
     LinkCharset,
     LinkFetchPriority,
     LinkHreflang,
+    LinkIntegrity,
     LinkMedia,
     LinkReferrerPolicy,
+    LinkRev,
+    LinkType,
     LiType,
     MarqueeBgColor,
     MarqueeHeight,
     MarqueeWidth,
     MetaMedia,
+    MetaScheme,
     ModDateTime,
     ObjectArchive,
     ObjectCode,
@@ -345,6 +351,10 @@ const DOM_STRING_REFLECTION_DESCRIPTORS: &[(DomStringReflection, DomStringReflec
             DomStringReflectionDescriptor::new("HTMLAreaElement", "download", "download"),
         ),
         (
+            DomStringReflection::AreaHreflang,
+            DomStringReflectionDescriptor::new("HTMLAreaElement", "hreflang", "hreflang"),
+        ),
+        (
             DomStringReflection::AreaReferrerPolicy,
             DomStringReflectionDescriptor::new(
                 "HTMLAreaElement",
@@ -355,6 +365,10 @@ const DOM_STRING_REFLECTION_DESCRIPTORS: &[(DomStringReflection, DomStringReflec
         (
             DomStringReflection::AreaShape,
             DomStringReflectionDescriptor::new("HTMLAreaElement", "shape", "shape"),
+        ),
+        (
+            DomStringReflection::AreaType,
+            DomStringReflectionDescriptor::new("HTMLAreaElement", "type", "type"),
         ),
         (
             DomStringReflection::BrClear,
@@ -509,6 +523,15 @@ const DOM_STRING_REFLECTION_DESCRIPTORS: &[(DomStringReflection, DomStringReflec
             DomStringReflectionDescriptor::new("HTMLLinkElement", "hreflang", "hreflang"),
         ),
         (
+            DomStringReflection::LinkIntegrity,
+            DomStringReflectionDescriptor::new_html_element(
+                "HTMLLinkElement",
+                "link",
+                "integrity",
+                "integrity",
+            ),
+        ),
+        (
             DomStringReflection::LinkMedia,
             DomStringReflectionDescriptor::new("HTMLLinkElement", "media", "media"),
         ),
@@ -518,6 +541,24 @@ const DOM_STRING_REFLECTION_DESCRIPTORS: &[(DomStringReflection, DomStringReflec
                 "HTMLLinkElement",
                 "referrerpolicy",
                 "referrerPolicy",
+            ),
+        ),
+        (
+            DomStringReflection::LinkRev,
+            DomStringReflectionDescriptor::new_html_element(
+                "HTMLLinkElement",
+                "link",
+                "rev",
+                "rev",
+            ),
+        ),
+        (
+            DomStringReflection::LinkType,
+            DomStringReflectionDescriptor::new_html_element(
+                "HTMLLinkElement",
+                "link",
+                "type",
+                "type",
             ),
         ),
         (
@@ -539,6 +580,15 @@ const DOM_STRING_REFLECTION_DESCRIPTORS: &[(DomStringReflection, DomStringReflec
         (
             DomStringReflection::MetaMedia,
             DomStringReflectionDescriptor::new("HTMLMetaElement", "media", "media"),
+        ),
+        (
+            DomStringReflection::MetaScheme,
+            DomStringReflectionDescriptor::new_html_element(
+                "HTMLMetaElement",
+                "meta",
+                "scheme",
+                "scheme",
+            ),
         ),
         (
             DomStringReflection::ModDateTime,
