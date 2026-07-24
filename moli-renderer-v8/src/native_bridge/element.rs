@@ -4173,6 +4173,20 @@ struct HtmlLinkElementUrlPrototypeDeclaration {
         data = DomStringReflection::LinkIntegrity
     )]
     integrity: (),
+    #[webapi(
+        accessor_property,
+        getter = dom_string_reflection_getter_function,
+        setter = dom_string_reflection_setter_function,
+        data = DomStringReflection::LinkRev
+    )]
+    rev: (),
+    #[webapi(
+        accessor_property,
+        getter = dom_string_reflection_getter_function,
+        setter = dom_string_reflection_setter_function,
+        data = DomStringReflection::LinkType
+    )]
+    r#type: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -4406,6 +4420,13 @@ struct HtmlMetaElementPrototypeDeclaration {
         setter = meta_http_equiv_setter_function
     )]
     http_equiv: (),
+    #[webapi(
+        accessor_property,
+        getter = dom_string_reflection_getter_function,
+        setter = dom_string_reflection_setter_function,
+        data = DomStringReflection::MetaScheme
+    )]
+    scheme: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -4480,6 +4501,13 @@ struct HtmlAreaElementPrototypeDeclaration {
     download: (),
     #[webapi(
         accessor_property,
+        getter = html_hreflang_getter_function,
+        setter = dom_string_reflection_setter_function,
+        setter_data = DomStringReflection::AreaHreflang
+    )]
+    hreflang: (),
+    #[webapi(
+        accessor_property,
         getter = html_shape_getter_function,
         setter = dom_string_reflection_setter_function,
         setter_data = DomStringReflection::AreaShape
@@ -4492,6 +4520,13 @@ struct HtmlAreaElementPrototypeDeclaration {
         setter_data = UsvStringReflection::AreaPing
     )]
     ping: (),
+    #[webapi(
+        accessor_property,
+        getter = html_type_getter_function,
+        setter = dom_string_reflection_setter_function,
+        setter_data = DomStringReflection::AreaType
+    )]
+    r#type: (),
     #[webapi(
         accessor_property = "noHref",
         getter = html_no_href_getter_function,
