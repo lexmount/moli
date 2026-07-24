@@ -9,6 +9,8 @@ use crate::{
     context_bootstrap::{
         construct_original_event, dispatch_beforeunload_for_runtime_owner,
         dispatch_pagehide_for_runtime_owner, dispatch_unload_for_runtime_owner,
+        record_performance_dom_content_loaded_event_end,
+        record_performance_dom_content_loaded_event_start,
     },
     detached_event_target::dispatch_detached_simple_event,
     document_runtime::DomHandle,
@@ -712,6 +714,7 @@ impl JsContextHost {
         {
             return FrameDocumentLifecycleTaskEffect::NotApplied;
         }
+        record_performance_dom_content_loaded_event_start(scope);
         let event_dispatched = self
             .child_browsing_context_document_wrapper(scope, child_handle)
             .is_some_and(|document| {
@@ -725,6 +728,7 @@ impl JsContextHost {
                     false,
                 )
             });
+        record_performance_dom_content_loaded_event_end(scope);
         if self
             .frame_owner_store
             .child_document_task_owner_is_current(child_handle, action.owner())

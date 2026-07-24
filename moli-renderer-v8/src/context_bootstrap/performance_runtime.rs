@@ -194,6 +194,43 @@ pub(crate) fn current_performance_time_origin(scope: &mut v8::PinScope<'_, '_>) 
         .unwrap_or(0.0)
 }
 
+pub(crate) fn record_performance_load_event_start_for_window(
+    scope: &mut v8::PinScope<'_, '_>,
+    window: v8::Local<'_, v8::Object>,
+) {
+    record_performance_load_event_for_window(
+        scope,
+        window,
+        install::record_performance_load_event_start,
+    );
+}
+
+pub(crate) fn record_performance_load_event_end_for_window(
+    scope: &mut v8::PinScope<'_, '_>,
+    window: v8::Local<'_, v8::Object>,
+) {
+    record_performance_load_event_for_window(
+        scope,
+        window,
+        install::record_performance_load_event_end,
+    );
+}
+
+fn record_performance_load_event_for_window(
+    scope: &mut v8::PinScope<'_, '_>,
+    window: v8::Local<'_, v8::Object>,
+    record: fn(&mut v8::PinScope<'_, '_>),
+) {
+    let Some(relevant_context) = window.get_creation_context(scope) else {
+        return;
+    };
+    if relevant_context == scope.get_current_context() {
+        record(scope);
+        return;
+    }
+    let scope = &mut v8::ContextScope::new(scope, relevant_context);
+    record(scope);
+}
 pub(crate) struct ResourcePerformanceEntry {
     name: String,
     initiator_type: String,
