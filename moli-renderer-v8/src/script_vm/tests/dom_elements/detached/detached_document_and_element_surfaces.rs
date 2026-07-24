@@ -1460,9 +1460,9 @@ fn hyperlink_metadata_accessors_use_owner_prototypes() {
   accessor(HTMLAnchorElement.prototype, "hreflang");
   accessor(HTMLAreaElement.prototype, "download");
   accessor(HTMLAreaElement.prototype, "ping");
+  accessor(HTMLAreaElement.prototype, "hreflang");
+  accessor(HTMLAreaElement.prototype, "type");
   accessor(HTMLLinkElement.prototype, "hreflang");
-  assert(!own(HTMLAreaElement.prototype, "hreflang"), "area hreflang should be removed");
-  assert(!own(HTMLAreaElement.prototype, "type"), "area type should be removed");
   for (const name of ["download", "ping", "hreflang"]) {
     assert(!own(HTMLElement.prototype, name), `HTMLElement should not own ${name}`);
   }
@@ -1479,15 +1479,11 @@ fn hyperlink_metadata_accessors_use_owner_prototypes() {
   );
   const cases = [
     [document.createElement("a"), parsed.querySelector("a"), ["download", "ping", "hreflang"], "anchor"],
-    [document.createElement("area"), parsed.querySelector("area"), ["download", "ping"], "area"],
+    [document.createElement("area"), parsed.querySelector("area"), ["download", "ping", "hreflang", "type"], "area"],
     [document.createElement("link"), parsed.querySelector("link"), ["hreflang"], "link"]
   ];
   for (const [live, detached, names, label] of cases) {
     for (const element of [live, detached]) {
-      if (label === "area") {
-        assert(!("hreflang" in element), "area instance should not expose hreflang");
-        assert(!("type" in element), "area instance should not expose type");
-      }
       for (const name of names) {
         assert(!own(element, name), `${label}.${name} should not be own before set`);
       }
@@ -1518,6 +1514,15 @@ fn hyperlink_metadata_accessors_use_owner_prototypes() {
         assert(delete element.hreflang, `${label}.hreflang delete`);
         assert(!own(element, "hreflang"), `${label}.hreflang should stay inherited`);
         assert(element.hreflang === `${label}-lang`, `${label}.hreflang after delete`);
+      }
+      if (names.includes("type")) {
+        element.type = `${label}/type`;
+        assert(!own(element, "type"), `${label}.type should not be own after set`);
+        assert(element.type === `${label}/type`, `${label}.type value`);
+        assert(element.getAttribute("type") === `${label}/type`, `${label}.type attr`);
+        assert(delete element.type, `${label}.type delete`);
+        assert(!own(element, "type"), `${label}.type should stay inherited`);
+        assert(element.type === `${label}/type`, `${label}.type after delete`);
       }
     }
   }
