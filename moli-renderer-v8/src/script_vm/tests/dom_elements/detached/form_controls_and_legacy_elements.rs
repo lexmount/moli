@@ -1162,7 +1162,7 @@ fn detached_simple_structural_accessors_use_owner_prototypes() {
     [HTMLOptGroupElement.prototype, ["disabled"]],
     [HTMLDetailsElement.prototype, ["open"]],
     [HTMLDialogElement.prototype, ["open", "returnValue"]],
-    [HTMLMetaElement.prototype, ["content", "httpEquiv"]],
+    [HTMLMetaElement.prototype, ["content", "httpEquiv", "scheme"]],
     [HTMLTitleElement.prototype, ["text"]]
   ];
   for (const [prototype, names] of prototypeCases) {
@@ -1195,6 +1195,7 @@ fn detached_simple_structural_accessors_use_owner_prototypes() {
       [dialog, "open", true, "", "open"],
       [meta, "content", "width=device-width", "width=device-width", "content"],
       [meta, "httpEquiv", "refresh", "refresh", "http-equiv"],
+      [meta, "scheme", "utf-8", "utf-8", "scheme"],
       [title, "text", "Page Title", "Page Title", null]
     ];
 
@@ -1274,11 +1275,13 @@ fn detached_simple_specialized_accessors_reject_incompatible_receivers() {
   const ol = doc.createElement("ol");
   const optgroup = doc.createElement("optgroup");
   const details = doc.createElement("details");
+  const link = doc.createElement("link");
   const meta = doc.createElement("meta");
+  const style = doc.createElement("style");
   const title = doc.createElement("title");
   const div = doc.createElement("div");
   const text = doc.createTextNode("x");
-  const elements = [li, ol, optgroup, details, meta, title, div];
+  const elements = [li, ol, optgroup, details, link, meta, style, title, div];
 
   const cases = [
     [HTMLLIElement.prototype, "value", li, 7],
@@ -1287,8 +1290,13 @@ fn detached_simple_specialized_accessors_reject_incompatible_receivers() {
     [HTMLOListElement.prototype, "type", ol, "A"],
     [HTMLOptGroupElement.prototype, "disabled", optgroup, true],
     [HTMLDetailsElement.prototype, "open", details, true],
+    [HTMLLinkElement.prototype, "integrity", link, "sha256-test"],
+    [HTMLLinkElement.prototype, "rev", link, "made"],
+    [HTMLLinkElement.prototype, "type", link, "text/css"],
     [HTMLMetaElement.prototype, "content", meta, "width=device-width"],
     [HTMLMetaElement.prototype, "httpEquiv", meta, "refresh"],
+    [HTMLMetaElement.prototype, "scheme", meta, "utf-8"],
+    [HTMLStyleElement.prototype, "type", style, "text/less"],
     [HTMLTitleElement.prototype, "text", title, "Page Title"]
   ];
 
