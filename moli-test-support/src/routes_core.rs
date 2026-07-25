@@ -18,6 +18,9 @@ static RUNTIME_OWNED_ASYNC_CHUNKED_TAIL_GATES: OnceLock<
 static RUNTIME_OWNED_IN_ORDER_ERROR_AFTER_DCL_GATES: OnceLock<
     Mutex<HashMap<String, Arc<tokio::sync::Notify>>>,
 > = OnceLock::new();
+static RUNTIME_OWNED_IN_ORDER_LOAD_AFTER_DCL_GATES: OnceLock<
+    Mutex<HashMap<String, Arc<tokio::sync::Notify>>>,
+> = OnceLock::new();
 
 struct ConcurrentSharedStateRequestGuard;
 
@@ -143,6 +146,27 @@ fn remove_runtime_owned_in_order_error_after_dcl_gate(host_key: &str) {
 
 pub(crate) fn notify_runtime_owned_in_order_error_after_dcl_gate(host_key: &str) {
     runtime_owned_in_order_error_after_dcl_gate(host_key).notify_one();
+}
+
+fn runtime_owned_in_order_load_after_dcl_gate(host_key: &str) -> Arc<tokio::sync::Notify> {
+    let gates =
+        RUNTIME_OWNED_IN_ORDER_LOAD_AFTER_DCL_GATES.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut gates = gates.lock();
+    gates
+        .entry(host_key.to_owned())
+        .or_insert_with(|| Arc::new(tokio::sync::Notify::new()))
+        .clone()
+}
+
+fn remove_runtime_owned_in_order_load_after_dcl_gate(host_key: &str) {
+    let Some(gates) = RUNTIME_OWNED_IN_ORDER_LOAD_AFTER_DCL_GATES.get() else {
+        return;
+    };
+    gates.lock().remove(host_key);
+}
+
+pub(crate) fn notify_runtime_owned_in_order_load_after_dcl_gate(host_key: &str) {
+    runtime_owned_in_order_load_after_dcl_gate(host_key).notify_one();
 }
 
 pub(super) async fn static_page() -> Html<&'static str> {
@@ -2520,6 +2544,14 @@ pub(super) async fn runtime_owned_external_in_order_load_after_domcontentloaded_
     Html(RUNTIME_OWNED_EXTERNAL_IN_ORDER_LOAD_AFTER_DOMCONTENTLOADED_HTML)
 }
 
+pub(super) async fn release_runtime_owned_external_in_order_load_after_domcontentloaded(
+    headers: HeaderMap,
+) -> StatusCode {
+    let host_key = request_host_key(&headers).unwrap_or_default();
+    notify_runtime_owned_in_order_load_after_dcl_gate(&host_key);
+    StatusCode::NO_CONTENT
+}
+
 pub(super) async fn runtime_owned_external_in_order_with_defer_stays_after_domcontentloaded_page()
 -> Html<&'static str> {
     Html(RUNTIME_OWNED_EXTERNAL_IN_ORDER_WITH_DEFER_STAYS_AFTER_DOMCONTENTLOADED_HTML)
@@ -4321,6 +4353,17 @@ pub(super) async fn asset_parse_time_async_load_order_script() -> Response {
 }
 
 pub(super) async fn asset_runtime_owned_in_order_load_script() -> Response {
+    javascript_response(RUNTIME_OWNED_IN_ORDER_LOAD_JS)
+}
+
+pub(super) async fn asset_runtime_owned_in_order_load_after_dcl_gated_script(
+    headers: HeaderMap,
+) -> Response {
+    let host_key = request_host_key(&headers).unwrap_or_default();
+    runtime_owned_in_order_load_after_dcl_gate(&host_key)
+        .notified()
+        .await;
+    remove_runtime_owned_in_order_load_after_dcl_gate(&host_key);
     javascript_response(RUNTIME_OWNED_IN_ORDER_LOAD_JS)
 }
 
