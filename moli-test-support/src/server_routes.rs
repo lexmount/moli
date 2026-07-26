@@ -2394,6 +2394,18 @@ pub(super) fn build_router() -> Router {
             get(asset_blocking_stylesheet_slow_css),
         )
         .route(
+            "/assets/runtime_inserted_stylesheet_href_mutation_stale.css",
+            get(asset_runtime_inserted_stylesheet_href_mutation_stale_css),
+        )
+        .route(
+            "/assets/runtime_inserted_stylesheet_href_mutation_fresh.css",
+            get(asset_runtime_inserted_stylesheet_href_mutation_fresh_css),
+        )
+        .route(
+            "/assets/runtime_inserted_stylesheet_href_mutation_probe.js",
+            get(asset_runtime_inserted_stylesheet_href_mutation_probe_script),
+        )
+        .route(
             "/assets/runtime_connected_modulepreload_slow.mjs",
             get(asset_runtime_connected_modulepreload_slow_module),
         )
