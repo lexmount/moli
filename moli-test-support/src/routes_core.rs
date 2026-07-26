@@ -1,7 +1,7 @@
 use super::*;
 use parking_lot::Mutex;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
 static NET_UPSTREAM_XHR_404_THEN_200_REQUESTS: AtomicUsize = AtomicUsize::new(0);
@@ -21,6 +21,25 @@ static RUNTIME_OWNED_IN_ORDER_ERROR_AFTER_DCL_GATES: OnceLock<
 static RUNTIME_OWNED_IN_ORDER_LOAD_AFTER_DCL_GATES: OnceLock<
     Mutex<HashMap<String, Arc<tokio::sync::Notify>>>,
 > = OnceLock::new();
+static RUNTIME_INSERTED_STYLESHEET_HREF_MUTATION_GATES: OnceLock<
+    Mutex<HashMap<String, Arc<RuntimeInsertedStylesheetHrefMutationGate>>>,
+> = OnceLock::new();
+
+struct RuntimeInsertedStylesheetHrefMutationGate {
+    release_stale_response: tokio::sync::Notify,
+    stale_request_started: AtomicBool,
+    stale_response_timed_out: AtomicBool,
+}
+
+impl RuntimeInsertedStylesheetHrefMutationGate {
+    fn new() -> Self {
+        Self {
+            release_stale_response: tokio::sync::Notify::new(),
+            stale_request_started: AtomicBool::new(false),
+            stale_response_timed_out: AtomicBool::new(false),
+        }
+    }
+}
 
 struct ConcurrentSharedStateRequestGuard;
 
@@ -167,6 +186,34 @@ fn remove_runtime_owned_in_order_load_after_dcl_gate(host_key: &str) {
 
 pub(crate) fn notify_runtime_owned_in_order_load_after_dcl_gate(host_key: &str) {
     runtime_owned_in_order_load_after_dcl_gate(host_key).notify_one();
+}
+
+fn runtime_inserted_stylesheet_href_mutation_gate(
+    host_key: &str,
+) -> Arc<RuntimeInsertedStylesheetHrefMutationGate> {
+    let gates =
+        RUNTIME_INSERTED_STYLESHEET_HREF_MUTATION_GATES.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut gates = gates.lock();
+    gates
+        .entry(host_key.to_owned())
+        .or_insert_with(|| Arc::new(RuntimeInsertedStylesheetHrefMutationGate::new()))
+        .clone()
+}
+
+fn remove_runtime_inserted_stylesheet_href_mutation_gate(host_key: &str) {
+    let Some(gates) = RUNTIME_INSERTED_STYLESHEET_HREF_MUTATION_GATES.get() else {
+        return;
+    };
+    gates.lock().remove(host_key);
+}
+
+pub(crate) fn clear_runtime_inserted_stylesheet_href_mutation_gate(host_key: &str) {
+    let Some(gates) = RUNTIME_INSERTED_STYLESHEET_HREF_MUTATION_GATES.get() else {
+        return;
+    };
+    if let Some(gate) = gates.lock().remove(host_key) {
+        gate.release_stale_response.notify_one();
+    }
 }
 
 pub(super) async fn static_page() -> Html<&'static str> {
@@ -5524,6 +5571,45 @@ pub(super) async fn asset_dynamic_blocking_stylesheet_gated_css(
 ) -> Response {
     state.dynamic_stylesheet_script_executed.wait().await;
     css_response(BLOCKING_STYLESHEET_SLOW_CSS)
+}
+
+pub(super) async fn asset_runtime_inserted_stylesheet_href_mutation_stale_css(
+    headers: HeaderMap,
+) -> Response {
+    let host_key = request_host_key(&headers).unwrap_or_default();
+    let gate = runtime_inserted_stylesheet_href_mutation_gate(&host_key);
+    gate.stale_request_started.store(true, Ordering::SeqCst);
+    let released_by_probe = tokio::time::timeout(
+        Duration::from_secs(2),
+        gate.release_stale_response.notified(),
+    )
+    .await
+    .is_ok();
+    if released_by_probe {
+        remove_runtime_inserted_stylesheet_href_mutation_gate(&host_key);
+    } else {
+        gate.stale_response_timed_out.store(true, Ordering::SeqCst);
+    }
+    css_response(BLOCKING_STYLESHEET_SLOW_CSS)
+}
+
+pub(super) async fn asset_runtime_inserted_stylesheet_href_mutation_fresh_css() -> Response {
+    css_response(CHROME_STYLESHEETLIST_1_CSS)
+}
+
+pub(super) async fn asset_runtime_inserted_stylesheet_href_mutation_probe_script(
+    headers: HeaderMap,
+) -> Response {
+    let host_key = request_host_key(&headers).unwrap_or_default();
+    let gate = runtime_inserted_stylesheet_href_mutation_gate(&host_key);
+    let parser_not_blocked = !gate.stale_response_timed_out.load(Ordering::SeqCst);
+    gate.release_stale_response.notify_one();
+    if gate.stale_request_started.load(Ordering::SeqCst) {
+        remove_runtime_inserted_stylesheet_href_mutation_gate(&host_key);
+    }
+    javascript_string_response(format!(
+        "window.runtimeInsertedHrefMutationParserNotBlocked = {parser_not_blocked};"
+    ))
 }
 
 pub(super) async fn asset_runtime_connected_preload_very_slow_css() -> Response {
