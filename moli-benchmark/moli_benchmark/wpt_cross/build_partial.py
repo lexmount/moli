@@ -44,7 +44,19 @@ def main(argv: list[str] | None = None) -> int:
 
     matrix = []
     for cp in ordered_cases:
-        row = {"case_path": cp, "results": {}}
+        first_result = next(
+            (
+                by_engine_case[engine][cp]
+                for engine in args.engine
+                if cp in by_engine_case[engine]
+            ),
+            {},
+        )
+        row = {
+            "case_path": cp,
+            "test_type": first_result.get("test_type", "testharness"),
+            "results": {},
+        }
         for e in args.engine:
             r = by_engine_case[e].get(cp)
             if r is None:
@@ -54,9 +66,14 @@ def main(argv: list[str] | None = None) -> int:
                     "status": r["status"],
                     "duration_ms": r["duration_ms"],
                     "subtests": r["subtests"],
+                    "failures": r.get("failures", []),
+                    "failure_names": r.get("failure_names", []),
                     "harness_status_name": r.get("harness_status_name"),
                     "harness_message": r.get("harness_message"),
                     "error": r.get("error"),
+                    "test_type": r.get("test_type", row["test_type"]),
+                    "reftest_comparisons": r.get("reftest_comparisons", []),
+                    "artifacts": r.get("artifacts", {}),
                 }
         matrix.append(row)
 
