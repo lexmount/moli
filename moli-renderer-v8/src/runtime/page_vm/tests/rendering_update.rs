@@ -2335,6 +2335,63 @@ getComputedStyle(document.getElementById('inline-gradient')).getPropertyValue('-
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn rounded_flex_max_content_width_does_not_rewrap_its_text() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        loader.set_optional_resource_fetch_mask(
+            crate::protocol_types::OptionalResourceFetchMask::FONT,
+        );
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/flex-intrinsic-rounding.html")?,
+        );
+        let encoded_font = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../moli-layout/tests/fixtures/moli-ahem.woff2"
+        ));
+        let encoded = base64::engine::general_purpose::STANDARD.encode(encoded_font);
+        page_vm.vm_mut().eval(&format!(
+            r#"
+document.head.innerHTML = `<style>
+@font-face {{ font-family:MoliAhem; src:url(data:font/woff2;base64,{encoded}) format('woff2') }}
+* {{ box-sizing:border-box }}
+html,body {{ margin:0 }}
+.row {{ display:flex; justify-content:center; gap:8px; padding-top:20px }}
+.item {{ display:inline-flex; align-items:center; gap:8px; padding:10px 14px; border:1px solid; border-radius:24px }}
+.icon {{ width:20px; height:20px; flex:0 0 auto }}
+.text,#constrained {{ font-family:MoliAhem; font-size:9px }}
+#constrained {{ width:80px }}
+</style>`;
+document.body.innerHTML = `<div class=row><div class=item id=ask><i class=icon></i><span class=text id=ask-text>Ask about files</span></div></div><div id=constrained>Ask about files</div>`;
+'installed'
+"#
+        ))?;
+        page_vm
+            .vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries(['ask','ask-text','constrained'].map(id=>{const r=document.getElementById(id).getBoundingClientRect();return [id,[r.width,r.height]]})))"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        // Chromium keeps the auto-sized label on one 11px line, leaving the
+        // icon and padding to establish the 42px pill height.
+        assert_eq!(geometry["ask"], serde_json::json!([139, 42]));
+        assert_eq!(geometry["ask-text"], serde_json::json!([81, 11]));
+        assert_eq!(
+            geometry["constrained"],
+            serde_json::json!([80, 22]),
+            "a genuinely narrower content box must still wrap; geometry={geometry}"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("rounded flex max-content fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn stylesheet_lifecycle_registers_only_the_current_documents_data_web_fonts() {
     run_page_vm_async_test(async move {
         let loader =

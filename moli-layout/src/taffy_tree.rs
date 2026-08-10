@@ -1808,9 +1808,24 @@ where
             }
             .max(0.0)
         });
+        // Taffy may feed an intrinsic inline size back through a quantized
+        // definite flex/grid constraint, while Parley's content-width and
+        // line-breaking passes can accumulate the same glyph advances in a
+        // slightly different order. Preserve the max-content boundary plus a
+        // small floating-point margin when those widths differ only by noise.
+        // Otherwise a one-line flex item can immediately rewrap during final
+        // layout. Keep genuinely constrained widths unchanged so normal
+        // wrapping is unaffected.
+        let intrinsic_max_width = content_widths.max + float_max_width;
+        let intrinsic_tolerance = width.abs().max(1.0) * f32::EPSILON * 8.0;
+        let line_break_width = if intrinsic_max_width <= width + intrinsic_tolerance {
+            width.max(intrinsic_max_width + intrinsic_tolerance)
+        } else {
+            width
+        };
         let max_advance = match available_space.width {
             AvailableSpace::MaxContent => None,
-            AvailableSpace::MinContent | AvailableSpace::Definite(_) => Some(width),
+            AvailableSpace::MinContent | AvailableSpace::Definite(_) => Some(line_break_width),
         };
         let has_inline_float = context
             .objects
