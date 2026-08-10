@@ -1,26 +1,65 @@
 """Per-engine WPT case runner.
 
-Connects to a launched :class:`EngineDriver`, navigates the engine to each
-WPT case URL, and polls ``window.__bench_wpt__`` (installed by the fixture
-server's testharnessreport.js bridge) for the testharness completion result.
+Connects to a launched :class:`EngineDriver` and executes either testharness
+cases (through ``window.__bench_wpt__``) or manifest-backed screenshot
+reftests at a fixed viewport.
 
 Classifies each result as ``pass`` / ``fail`` / ``timeout`` / ``crash`` /
-``error`` so that the cross-engine matrix can be built without the runner
-making subjective judgments about WHY a case failed.
+``error`` so that the cross-engine matrix can be built without rewriting raw
+engine behavior. Reftest failures retain test/reference/diff PNG artifacts.
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import io
 import json
+import re
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
+from PIL import Image, ImageChops
+
 from ..raw_cdp import RawCdpClient, RawCdpError, connect_raw_cdp
+from .case_set import FuzzyTolerance
 from .engine import EngineDriver, EngineDriverHandle
 
-CaseRun = tuple[str, str] | tuple[str, str, float]
+LAYOUT_VIEWPORT_WIDTH = 800
+LAYOUT_VIEWPORT_HEIGHT = 600
+LAYOUT_DEVICE_SCALE_FACTOR = 1.0
+
+
+@dataclass(frozen=True)
+class Viewport:
+    width: int = LAYOUT_VIEWPORT_WIDTH
+    height: int = LAYOUT_VIEWPORT_HEIGHT
+    device_scale_factor: float = LAYOUT_DEVICE_SCALE_FACTOR
+
+
+LAYOUT_VIEWPORT = Viewport()
+
+
+@dataclass(frozen=True)
+class ReftestReferenceRun:
+    reference_path: str
+    url: str
+    relation: str
+    fuzzy: FuzzyTolerance | None = None
+
+
+@dataclass(frozen=True)
+class ReftestRun:
+    case_path: str
+    url: str
+    timeout_seconds: float
+    references: tuple[ReftestReferenceRun, ...]
+
+
+CaseRun = tuple[str, str] | tuple[str, str, float] | ReftestRun
 
 
 # WPT testharness.js status constants (testharness.js: TestsStatus)
@@ -75,6 +114,9 @@ class CaseResult:
     payload_source: str | None = None
     failures: list[dict[str, Any]] = field(default_factory=list)
     failure_names: list[str] = field(default_factory=list)
+    test_type: str = "testharness"
+    reftest_comparisons: list[dict[str, Any]] = field(default_factory=list)
+    artifacts: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -162,7 +204,11 @@ def _failure_names(tests: Any) -> list[str]:
     return names
 
 
-async def _attach_page(client: RawCdpClient) -> str:
+async def _attach_page(
+    client: RawCdpClient,
+    *,
+    viewport: Viewport | None = None,
+) -> str:
     """Create a fresh BrowserContext + Target and return its sessionId.
 
     Falls back to the default target if Target.createBrowserContext is not
@@ -199,6 +245,18 @@ async def _attach_page(client: RawCdpClient) -> str:
 
     for method in ("Runtime.enable", "Page.enable"):
         cmd_id = await client.send(method, session_id=session_id)
+        await client.recv_until_id(cmd_id, timeout=5)
+    if viewport is not None:
+        cmd_id = await client.send(
+            "Emulation.setDeviceMetricsOverride",
+            {
+                "width": viewport.width,
+                "height": viewport.height,
+                "deviceScaleFactor": viewport.device_scale_factor,
+                "mobile": False,
+            },
+            session_id=session_id,
+        )
         await client.recv_until_id(cmd_id, timeout=5)
     for method in ("Log.enable",):
         try:
@@ -314,6 +372,528 @@ async def _run_one_case(
         console_errors=console_errors,
         js_exceptions=js_exceptions,
     )
+
+
+_REFTEST_LOCATION_EXPRESSION = """
+(function(expectedUrl) {
+  return {
+    href: location.href,
+    expectedHref: new URL(expectedUrl, location.href).href,
+    readyState: document.readyState
+  };
+})(%s)
+"""
+
+_REFTEST_READY_EXPRESSION = r"""
+(async function() {
+  if (document.readyState !== 'complete') {
+    await new Promise(function(resolve) {
+      addEventListener('load', resolve, {once: true});
+    });
+  }
+  if (document.fonts && document.fonts.ready) {
+    try { await document.fonts.ready; } catch (_) {}
+  }
+  var waitForPaints = function() {
+    return new Promise(function(resolve) {
+      var settled = false;
+      var timer = null;
+      var done = function() {
+        if (!settled) {
+          settled = true;
+          if (timer !== null) clearTimeout(timer);
+          resolve();
+        }
+      };
+      timer = setTimeout(done, 100);
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(function() { requestAnimationFrame(done); });
+      }
+    });
+  };
+  await waitForPaints();
+  var root = document.documentElement;
+  if (root && root.classList.contains('reftest-wait')) {
+    await new Promise(function(resolve) {
+      var finish = function() {
+        if (!root.classList.contains('reftest-wait')) {
+          if (observer) observer.disconnect();
+          if (timer) clearInterval(timer);
+          resolve();
+        }
+      };
+      var observer = null;
+      var timer = null;
+      if (typeof MutationObserver === 'function') {
+        observer = new MutationObserver(finish);
+        observer.observe(root, {attributes: true, attributeFilter: ['class']});
+      } else {
+        timer = setInterval(finish, 10);
+      }
+      root.dispatchEvent(new Event('TestRendered', {bubbles: true}));
+      finish();
+    });
+    await waitForPaints();
+  }
+  return {
+    href: location.href,
+    readyState: document.readyState,
+    width: window.innerWidth,
+    height: window.innerHeight,
+    deviceScaleFactor: window.devicePixelRatio
+  };
+})()
+"""
+
+
+@dataclass(frozen=True)
+class CapturedScreenshot:
+    png: bytes
+    sha256: str
+    width: int
+    height: int
+
+
+@dataclass
+class _ReftestEvidence:
+    reference: ReftestReferenceRun
+    screenshot: CapturedScreenshot
+    diff_image: Image.Image
+
+
+def _remote_object_value(response: dict[str, Any]) -> Any:
+    command_result = response.get("result") or {}
+    if command_result.get("exceptionDetails"):
+        return None
+    remote_object = command_result.get("result") or {}
+    return remote_object.get("value")
+
+
+async def _wait_for_reftest_ready(
+    client: RawCdpClient,
+    session_id: str,
+    url: str,
+    timeout_seconds: float,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    deadline = time.perf_counter() + timeout_seconds
+    seen_messages: list[dict[str, Any]] = []
+    location_expression = _REFTEST_LOCATION_EXPRESSION % json.dumps(url)
+
+    while time.perf_counter() < deadline:
+        remaining = deadline - time.perf_counter()
+        try:
+            eval_id = await client.send(
+                "Runtime.evaluate",
+                {"expression": location_expression, "returnByValue": True},
+                session_id=session_id,
+            )
+            response, messages = await client.recv_until_id(
+                eval_id,
+                timeout=max(0.01, min(5.0, remaining)),
+            )
+            seen_messages.extend(messages)
+        except (RawCdpError, asyncio.TimeoutError):
+            await asyncio.sleep(0.025)
+            continue
+        value = _remote_object_value(response)
+        if (
+            isinstance(value, dict)
+            and value.get("href") == value.get("expectedHref")
+        ):
+            break
+        await asyncio.sleep(0.025)
+    else:
+        raise asyncio.TimeoutError(f"navigation did not commit to {url}")
+
+    remaining = deadline - time.perf_counter()
+    if remaining <= 0:
+        raise asyncio.TimeoutError(f"reftest readiness timed out for {url}")
+    eval_id = await client.send(
+        "Runtime.evaluate",
+        {
+            "expression": _REFTEST_READY_EXPRESSION,
+            "returnByValue": True,
+            "awaitPromise": True,
+        },
+        session_id=session_id,
+    )
+    response, messages = await client.recv_until_id(eval_id, timeout=remaining)
+    seen_messages.extend(messages)
+    value = _remote_object_value(response)
+    if not isinstance(value, dict):
+        raise RuntimeError(f"reftest readiness script failed for {url}: {response}")
+    return value, seen_messages
+
+
+async def _navigate_and_capture_reftest(
+    *,
+    client: RawCdpClient,
+    session_id: str,
+    url: str,
+    timeout_seconds: float,
+    viewport: Viewport,
+) -> tuple[CapturedScreenshot, list[dict[str, Any]]]:
+    seen_messages: list[dict[str, Any]] = []
+    nav_id = await client.send("Page.navigate", {"url": url}, session_id=session_id)
+    nav_response, nav_seen = await client.recv_until_id(nav_id, timeout=timeout_seconds)
+    seen_messages.extend(nav_seen)
+    nav_result = nav_response.get("result") or {}
+    if nav_result.get("errorText"):
+        raise RuntimeError(f"navigation failed for {url}: {nav_result['errorText']}")
+
+    ready, ready_seen = await _wait_for_reftest_ready(
+        client,
+        session_id,
+        url,
+        timeout_seconds,
+    )
+    seen_messages.extend(ready_seen)
+    actual_viewport = (ready.get("width"), ready.get("height"))
+    expected_viewport = (viewport.width, viewport.height)
+    if actual_viewport != expected_viewport:
+        raise RuntimeError(
+            f"viewport mismatch for {url}: expected {expected_viewport}, got {actual_viewport}"
+        )
+    actual_scale = ready.get("deviceScaleFactor")
+    if not isinstance(actual_scale, (int, float)) or abs(
+        float(actual_scale) - viewport.device_scale_factor
+    ) > 1e-6:
+        raise RuntimeError(
+            f"device scale mismatch for {url}: expected "
+            f"{viewport.device_scale_factor}, got {actual_scale}"
+        )
+
+    capture_id = await client.send(
+        "Page.captureScreenshot",
+        {
+            "format": "png",
+            "quality": 100,
+            "fromSurface": True,
+            "captureBeyondViewport": False,
+        },
+        session_id=session_id,
+    )
+    capture_response, capture_seen = await client.recv_until_id(
+        capture_id,
+        timeout=timeout_seconds,
+    )
+    seen_messages.extend(capture_seen)
+    encoded = (capture_response.get("result") or {}).get("data")
+    if not isinstance(encoded, str) or not encoded:
+        raise RuntimeError(f"captureScreenshot returned no PNG data for {url}")
+    try:
+        png = base64.b64decode(encoded, validate=True)
+        with Image.open(io.BytesIO(png)) as image:
+            image.load()
+            width, height = image.size
+    except Exception as exc:
+        raise RuntimeError(f"captureScreenshot returned invalid PNG data for {url}: {exc}") from exc
+    expected_pixels = (
+        round(viewport.width * viewport.device_scale_factor),
+        round(viewport.height * viewport.device_scale_factor),
+    )
+    if (width, height) != expected_pixels:
+        raise RuntimeError(
+            f"screenshot size mismatch for {url}: expected {expected_pixels}, "
+            f"got {(width, height)}"
+        )
+    return (
+        CapturedScreenshot(
+            png=png,
+            sha256=hashlib.sha256(png).hexdigest(),
+            width=width,
+            height=height,
+        ),
+        seen_messages,
+    )
+
+
+def _image_difference(
+    lhs: CapturedScreenshot,
+    rhs: CapturedScreenshot,
+) -> tuple[int, int, Image.Image, bool]:
+    with Image.open(io.BytesIO(lhs.png)) as lhs_source:
+        lhs_image = lhs_source.convert("RGB")
+    with Image.open(io.BytesIO(rhs.png)) as rhs_source:
+        rhs_image = rhs_source.convert("RGB")
+
+    try:
+        same_size = lhs_image.size == rhs_image.size
+        if same_size:
+            diff_image = ImageChops.difference(lhs_image, rhs_image)
+            max_difference, different_pixels = _diff_metrics(diff_image)
+            return max_difference, different_pixels, diff_image, True
+
+        width = max(lhs_image.width, rhs_image.width)
+        height = max(lhs_image.height, rhs_image.height)
+        lhs_canvas = Image.new("RGB", (width, height), (0, 0, 0))
+        rhs_canvas = Image.new("RGB", (width, height), (255, 255, 255))
+        try:
+            lhs_canvas.paste(lhs_image, (0, 0))
+            rhs_canvas.paste(rhs_image, (0, 0))
+            diff_image = ImageChops.difference(lhs_canvas, rhs_canvas)
+            max_difference, different_pixels = _diff_metrics(diff_image)
+            return max_difference, different_pixels, diff_image, False
+        finally:
+            lhs_canvas.close()
+            rhs_canvas.close()
+    finally:
+        lhs_image.close()
+        rhs_image.close()
+
+
+def _diff_metrics(diff_image: Image.Image) -> tuple[int, int]:
+    max_difference = max(upper for _lower, upper in diff_image.getextrema())
+    channels = diff_image.split()
+    mask = channels[0]
+    generated_masks: list[Image.Image] = []
+    try:
+        for channel in channels[1:]:
+            next_mask = ImageChops.lighter(mask, channel)
+            generated_masks.append(next_mask)
+            mask = next_mask
+        histogram = mask.histogram()
+        different_pixels = sum(histogram[1:])
+    finally:
+        for image in channels:
+            image.close()
+        for image in generated_masks:
+            image.close()
+    return max_difference, different_pixels
+
+
+def compare_reftest_screenshots(
+    lhs: CapturedScreenshot,
+    rhs: CapturedScreenshot,
+    fuzzy: FuzzyTolerance | None,
+) -> tuple[bool, dict[str, Any], Image.Image]:
+    """Compare two viewport PNGs using WPT's fuzzy reftest semantics."""
+
+    if lhs.sha256 == rhs.sha256 and (lhs.width, lhs.height) == (rhs.width, rhs.height):
+        with Image.open(io.BytesIO(lhs.png)) as image:
+            diff_image = Image.new("RGB", image.size, (0, 0, 0))
+        max_difference = 0
+        different_pixels = 0
+        same_size = True
+    else:
+        max_difference, different_pixels, diff_image, same_size = _image_difference(lhs, rhs)
+
+    if not same_size:
+        equal = False
+    elif fuzzy is None:
+        equal = max_difference == 0 and different_pixels == 0
+    else:
+        allowed_difference = fuzzy.max_difference
+        allowed_pixels = fuzzy.total_pixels
+        equal = (
+            (different_pixels == 0 and allowed_pixels[0] == 0)
+            or (max_difference == 0 and allowed_difference[0] == 0)
+            or (
+                allowed_difference[0] <= max_difference <= allowed_difference[1]
+                and allowed_pixels[0] <= different_pixels <= allowed_pixels[1]
+            )
+        )
+    metrics: dict[str, Any] = {
+        "equal": equal,
+        "same_size": same_size,
+        "max_difference": max_difference,
+        "different_pixels": different_pixels,
+        "test_sha256": lhs.sha256,
+        "reference_sha256": rhs.sha256,
+        "test_size": [lhs.width, lhs.height],
+        "reference_size": [rhs.width, rhs.height],
+        "fuzzy": fuzzy.to_dict() if fuzzy is not None else None,
+    }
+    return equal, metrics, diff_image
+
+
+def reftest_relation_passes(relation: str, *, equal: bool) -> bool:
+    if relation == "==":
+        return equal
+    if relation == "!=":
+        return not equal
+    raise ValueError(f"unsupported reftest relation: {relation}")
+
+
+def reftest_comparisons_pass(comparisons: list[dict[str, Any]]) -> bool:
+    """Apply WPT's alternate-match and required-mismatch relationship rules."""
+
+    matching = [item for item in comparisons if item["relation"] == "=="]
+    mismatching = [item for item in comparisons if item["relation"] == "!="]
+    return (
+        (not matching or any(bool(item["passed"]) for item in matching))
+        and all(bool(item["passed"]) for item in mismatching)
+    )
+
+
+def _artifact_case_directory(output_dir: Path, engine: str, case_path: str) -> Path:
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", case_path).strip("-.")
+    if not slug:
+        slug = "reftest"
+    slug = slug[:120]
+    digest = hashlib.sha256(case_path.encode("utf-8")).hexdigest()[:12]
+    return output_dir / "artifacts" / engine / f"{slug}-{digest}"
+
+
+def _write_reftest_failure_artifacts(
+    *,
+    output_dir: Path,
+    engine: str,
+    case_path: str,
+    test_screenshot: CapturedScreenshot,
+    evidence: list[_ReftestEvidence],
+) -> dict[str, Any]:
+    case_dir = _artifact_case_directory(output_dir, engine, case_path)
+    case_dir.mkdir(parents=True, exist_ok=True)
+    test_path = case_dir / "test.png"
+    test_path.write_bytes(test_screenshot.png)
+    references: list[dict[str, Any]] = []
+    for index, item in enumerate(evidence, start=1):
+        reference_path = case_dir / f"reference-{index:02d}.png"
+        diff_path = case_dir / f"diff-{index:02d}.png"
+        reference_path.write_bytes(item.screenshot.png)
+        item.diff_image.save(diff_path, format="PNG")
+        references.append(
+            {
+                "reference_path": item.reference.reference_path,
+                "relation": item.reference.relation,
+                "reference": reference_path.relative_to(output_dir).as_posix(),
+                "diff": diff_path.relative_to(output_dir).as_posix(),
+            }
+        )
+    return {
+        "directory": case_dir.relative_to(output_dir).as_posix(),
+        "test": test_path.relative_to(output_dir).as_posix(),
+        "references": references,
+    }
+
+
+async def _run_one_reftest(
+    *,
+    client: RawCdpClient,
+    session_id: str,
+    case: ReftestRun,
+    viewport: Viewport,
+    engine: str,
+    artifact_output_dir: Path | None,
+    reference_cache: dict[str, CapturedScreenshot],
+) -> CaseResult:
+    started = time.perf_counter()
+    seen_messages: list[dict[str, Any]] = []
+    test_screenshot: CapturedScreenshot | None = None
+    evidence: list[_ReftestEvidence] = []
+    try:
+        test_screenshot, trace = await _navigate_and_capture_reftest(
+            client=client,
+            session_id=session_id,
+            url=case.url,
+            timeout_seconds=case.timeout_seconds,
+            viewport=viewport,
+        )
+        seen_messages.extend(trace)
+        comparisons: list[dict[str, Any]] = []
+        for reference in case.references:
+            reference_screenshot = reference_cache.get(reference.url)
+            if reference_screenshot is None:
+                reference_screenshot, trace = await _navigate_and_capture_reftest(
+                    client=client,
+                    session_id=session_id,
+                    url=reference.url,
+                    timeout_seconds=case.timeout_seconds,
+                    viewport=viewport,
+                )
+                seen_messages.extend(trace)
+                reference_cache[reference.url] = reference_screenshot
+            equal, metrics, diff_image = compare_reftest_screenshots(
+                test_screenshot,
+                reference_screenshot,
+                reference.fuzzy,
+            )
+            relation_passed = reftest_relation_passes(reference.relation, equal=equal)
+            comparison = {
+                "reference_path": reference.reference_path,
+                "reference_url": reference.url,
+                "relation": reference.relation,
+                "passed": relation_passed,
+                **metrics,
+            }
+            comparisons.append(comparison)
+            evidence.append(
+                _ReftestEvidence(
+                    reference=reference,
+                    screenshot=reference_screenshot,
+                    diff_image=diff_image,
+                )
+            )
+
+        passed = reftest_comparisons_pass(comparisons)
+        artifacts: dict[str, Any] = {}
+        if not passed and artifact_output_dir is not None:
+            artifacts = _write_reftest_failure_artifacts(
+                output_dir=artifact_output_dir,
+                engine=engine,
+                case_path=case.case_path,
+                test_screenshot=test_screenshot,
+                evidence=evidence,
+            )
+        failed_comparisons = [item for item in comparisons if not item["passed"]]
+        failures = [
+            {
+                "name": f"{item['relation']} {item['reference_path']}",
+                "status": TEST_STATUS_FAIL,
+                "status_name": TEST_STATUS_NAMES[TEST_STATUS_FAIL],
+                "message": (
+                    f"maxDifference={item['max_difference']}, "
+                    f"differentPixels={item['different_pixels']}"
+                ),
+            }
+            for item in failed_comparisons
+        ]
+        console_errors, js_exceptions = _count_traces(seen_messages)
+        return CaseResult(
+            case_path=case.case_path,
+            url=case.url,
+            status="pass" if passed else "fail",
+            duration_ms=(time.perf_counter() - started) * 1000.0,
+            subtests_total=len(comparisons),
+            subtests_pass=sum(1 for item in comparisons if item["passed"]),
+            subtests_fail=len(failed_comparisons),
+            console_errors=console_errors,
+            js_exceptions=js_exceptions,
+            error=None if passed else "reftest reference relations did not match",
+            failures=failures[:MAX_RECORDED_FAILURES],
+            failure_names=[item["name"] for item in failures],
+            test_type="reftest",
+            reftest_comparisons=comparisons,
+            artifacts=artifacts,
+        )
+    except asyncio.TimeoutError as error:
+        console_errors, js_exceptions = _count_traces(seen_messages)
+        return CaseResult(
+            case_path=case.case_path,
+            url=case.url,
+            status="timeout",
+            duration_ms=(time.perf_counter() - started) * 1000.0,
+            console_errors=console_errors,
+            js_exceptions=js_exceptions,
+            error=f"reftest timed out: {error}",
+            test_type="reftest",
+        )
+    except (RawCdpError, RuntimeError, OSError) as error:
+        console_errors, js_exceptions = _count_traces(seen_messages)
+        return CaseResult(
+            case_path=case.case_path,
+            url=case.url,
+            status="error",
+            duration_ms=(time.perf_counter() - started) * 1000.0,
+            console_errors=console_errors,
+            js_exceptions=js_exceptions,
+            error=f"reftest runner failed: {error}",
+            test_type="reftest",
+        )
+    finally:
+        for item in evidence:
+            item.diff_image.close()
 
 
 def classify_payload(
@@ -432,6 +1012,8 @@ async def _run_async(
     cases: list[CaseRun],
     case_timeout_seconds: float,
     launch_timeout_seconds: float,
+    viewport: Viewport | None,
+    artifact_output_dir: Path | None,
 ) -> EngineRunResult:
     handle: EngineDriverHandle | None = None
     result = EngineRunResult(
@@ -460,8 +1042,12 @@ async def _run_async(
         result.shutdown_info = driver.shutdown(handle)
         return result
 
+    effective_viewport = viewport
+    if effective_viewport is None and any(isinstance(case, ReftestRun) for case in cases):
+        effective_viewport = LAYOUT_VIEWPORT
+
     try:
-        session_id = await _attach_page(client)
+        session_id = await _attach_page(client, viewport=effective_viewport)
     except Exception as error:
         result.setup_error = f"attach failed: {error}"
         try:
@@ -474,6 +1060,7 @@ async def _run_async(
     relaunch_count = 0
     max_relaunches = 10
     consecutive_relaunch_failures = 0
+    reference_cache: dict[str, CapturedScreenshot] = {}
 
     try:
         for case_index, case in enumerate(cases):
@@ -488,12 +1075,14 @@ async def _run_async(
                         status="crash",
                         duration_ms=None,
                         error=f"engine process exited with code {exit_code} (pre-case)",
+                        test_type=_case_test_type(case),
                     )
                 )
                 relaunched = await _try_relaunch(
                     driver=driver,
                     binary_override=binary_override,
                     launch_timeout_seconds=launch_timeout_seconds,
+                    viewport=effective_viewport,
                 )
                 if relaunched is None:
                     consecutive_relaunch_failures += 1
@@ -505,6 +1094,7 @@ async def _run_async(
                                     case_path=rp, url=ru, status="crash",
                                     duration_ms=None,
                                     error="engine relaunch failed 3x; aborting",
+                                    test_type=_case_test_type(remaining),
                                 )
                             )
                         break
@@ -518,16 +1108,30 @@ async def _run_async(
                     pass
                 driver.shutdown(handle)  # ensure old handle fully reaped
                 handle, client, session_id = relaunched
+                reference_cache.clear()
                 continue
 
             try:
-                case_result = await _run_one_case(
-                    client=client,
-                    session_id=session_id,
-                    case_path=case_path,
-                    url=url,
-                    timeout_seconds=timeout_seconds,
-                )
+                if isinstance(case, ReftestRun):
+                    if effective_viewport is None:
+                        raise RuntimeError("reftest requires a fixed viewport")
+                    case_result = await _run_one_reftest(
+                        client=client,
+                        session_id=session_id,
+                        case=case,
+                        viewport=effective_viewport,
+                        engine=driver.name,
+                        artifact_output_dir=artifact_output_dir,
+                        reference_cache=reference_cache,
+                    )
+                else:
+                    case_result = await _run_one_case(
+                        client=client,
+                        session_id=session_id,
+                        case_path=case_path,
+                        url=url,
+                        timeout_seconds=timeout_seconds,
+                    )
             except Exception as error:
                 # CDP / websocket / asyncio explosion mid-case.
                 proc_alive = handle.process.poll() is None
@@ -537,6 +1141,7 @@ async def _run_async(
                     status="crash" if not proc_alive else "error",
                     duration_ms=None,
                     error=f"runner exception: {type(error).__name__}: {error}",
+                    test_type=_case_test_type(case),
                 )
                 result.cases.append(case_result)
                 if relaunch_count >= max_relaunches:
@@ -547,6 +1152,7 @@ async def _run_async(
                                 case_path=rp, url=ru, status="crash",
                                 duration_ms=None,
                                 error=f"exceeded max relaunches ({max_relaunches})",
+                                test_type=_case_test_type(remaining),
                             )
                         )
                     break
@@ -560,6 +1166,7 @@ async def _run_async(
                     driver=driver,
                     binary_override=binary_override,
                     launch_timeout_seconds=launch_timeout_seconds,
+                    viewport=effective_viewport,
                 )
                 if relaunched is None:
                     consecutive_relaunch_failures += 1
@@ -571,6 +1178,7 @@ async def _run_async(
                                     case_path=rp, url=ru, status="crash",
                                     duration_ms=None,
                                     error="engine relaunch failed 3x after crash; aborting",
+                                    test_type=_case_test_type(remaining),
                                 )
                             )
                         break
@@ -584,14 +1192,17 @@ async def _run_async(
                         cases,
                         case_index,
                         case_timeout_seconds,
+                        effective_viewport,
                     )
                     if handle is None:
                         break
+                    reference_cache.clear()
                 else:
                     consecutive_relaunch_failures = 0
                 relaunch_count += 1
                 if relaunched is not None:
                     handle, client, session_id = relaunched
+                    reference_cache.clear()
                 continue
 
             consecutive_relaunch_failures = 0
@@ -613,6 +1224,7 @@ async def _try_relaunch(
     driver: EngineDriver,
     binary_override: str | None,
     launch_timeout_seconds: float,
+    viewport: Viewport | None,
 ) -> tuple[EngineDriverHandle, RawCdpClient, str] | None:
     """Relaunch engine + reconnect CDP + reattach. Returns None on failure."""
 
@@ -632,7 +1244,7 @@ async def _try_relaunch(
             pass
         return None
     try:
-        new_session_id = await _attach_page(new_client)
+        new_session_id = await _attach_page(new_client, viewport=viewport)
     except Exception:
         try:
             await new_client.websocket.close()
@@ -654,12 +1266,14 @@ async def _wait_then_retry_launch(
     cases: list[CaseRun],
     case_index: int,
     case_timeout_seconds: float,
+    viewport: Viewport | None,
 ) -> tuple[EngineDriverHandle | None, RawCdpClient | None, str | None]:
     await asyncio.sleep(1.0)
     relaunched = await _try_relaunch(
         driver=driver,
         binary_override=binary_override,
         launch_timeout_seconds=launch_timeout_seconds,
+        viewport=viewport,
     )
     if relaunched is None:
         for remaining in cases[case_index + 1:]:
@@ -669,6 +1283,7 @@ async def _wait_then_retry_launch(
                     case_path=rp, url=ru, status="crash",
                     duration_ms=None,
                     error="engine relaunch failed after backoff; aborting",
+                    test_type=_case_test_type(remaining),
                 )
             )
         return None, None, None
@@ -676,9 +1291,15 @@ async def _wait_then_retry_launch(
 
 
 def _case_parts(case: CaseRun, default_timeout: float) -> tuple[str, str, float]:
+    if isinstance(case, ReftestRun):
+        return case.case_path, case.url, case.timeout_seconds
     if len(case) == 3:
         return case[0], case[1], case[2]
     return case[0], case[1], default_timeout
+
+
+def _case_test_type(case: CaseRun) -> str:
+    return "reftest" if isinstance(case, ReftestRun) else "testharness"
 
 
 def run_engine_on_cases(
@@ -688,6 +1309,8 @@ def run_engine_on_cases(
     binary_override: str | None = None,
     case_timeout_seconds: float = 30.0,
     launch_timeout_seconds: float = 30.0,
+    viewport: Viewport | None = None,
+    artifact_output_dir: Path | None = None,
 ) -> EngineRunResult:
     """Synchronous wrapper around the async runner.
 
@@ -704,6 +1327,8 @@ def run_engine_on_cases(
             cases=cases,
             case_timeout_seconds=case_timeout_seconds,
             launch_timeout_seconds=launch_timeout_seconds,
+            viewport=viewport,
+            artifact_output_dir=artifact_output_dir,
         )
     )
 
@@ -712,6 +1337,7 @@ def case_result_to_dict(case: CaseResult) -> dict[str, Any]:
     return {
         "case_path": case.case_path,
         "url": case.url,
+        "test_type": case.test_type,
         "status": case.status,
         "duration_ms": case.duration_ms,
         "harness_status": case.harness_status,
@@ -730,6 +1356,8 @@ def case_result_to_dict(case: CaseResult) -> dict[str, Any]:
         "error": case.error,
         "failures": case.failures,
         "failure_names": case.failure_names,
+        "reftest_comparisons": case.reftest_comparisons,
+        "artifacts": case.artifacts,
     }
 
 
