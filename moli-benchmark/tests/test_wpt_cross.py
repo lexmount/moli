@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import io
 import json
 import socket
 import subprocess
@@ -13,6 +15,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.request import Request, urlopen
 
+from PIL import Image
+
 from moli_benchmark.config import clear_current_proxy_env
 from moli_benchmark.wpt_cross.__main__ import (
     CASE_LIST_FILES,
@@ -21,6 +25,7 @@ from moli_benchmark.wpt_cross.__main__ import (
     _build_parser,
     _case_requires_non_trustworthy_origin,
     _case_requires_trustworthy_origin,
+    _deduplicate_cases,
     _harness_timeout_multiplier,
     _is_full_case_list_run,
     _recorded_failure_drift,
@@ -34,9 +39,14 @@ from moli_benchmark.wpt_cross.case_set import (
     WINDOW_JS_WINDOW_QUERY,
     any_js_window_case_path,
     DEFAULT_EXCLUDE_DIR_PREFIXES,
+    FuzzyTolerance,
+    LAYOUT_PROFILE_DIR_PREFIXES,
     LONG_TIMEOUT_MULTIPLIER,
+    ReftestReference,
     WptCase,
     enumerate_cases,
+    enumerate_reftest_cases,
+    explicit_reftest_case,
     explicit_case,
     parse_any_js_meta,
     window_js_window_case_path,
@@ -68,10 +78,19 @@ from moli_benchmark.wpt_cross.any_js import (
 )
 from moli_benchmark.wpt_cross.render_html import render_html
 from moli_benchmark.wpt_cross.runner import (
+    _ReftestEvidence,
+    _write_reftest_failure_artifacts,
+    CapturedScreenshot,
     CaseResult,
     EngineRunResult,
+    LAYOUT_VIEWPORT,
+    ReftestReferenceRun,
+    ReftestRun,
     case_result_to_dict,
     classify_payload,
+    compare_reftest_screenshots,
+    reftest_comparisons_pass,
+    reftest_relation_passes,
 )
 from moli_benchmark.wpt_cross.scheduler import (
     FIXED_RUN_SHUFFLE_SEED,
@@ -180,6 +199,297 @@ class WptCrossTests(unittest.TestCase):
         self.assertNotIn("--cdp-parallelism", help_text)
         self.assertNotIn("--run-order", parser.format_help())
         self.assertNotIn("--shuffle-seed", parser.format_help())
+
+    def test_layout_profiles_are_explicit_and_keep_fixed_parallelism(self) -> None:
+        parser = _build_parser()
+        args = parser.parse_args(
+            [
+                "--wpt-root",
+                "/tmp/wpt",
+                "--engine",
+                "moli",
+                "--output-dir",
+                "/tmp/out",
+                "--profile",
+                "layout",
+            ]
+        )
+
+        self.assertEqual(args.profile, "layout")
+        self.assertEqual(
+            LAYOUT_PROFILE_DIR_PREFIXES,
+            (
+                "css/css-flexbox",
+                "css/css-grid",
+                "css/css-sizing",
+                "css/cssom-view",
+            ),
+        )
+        self.assertEqual(
+            (LAYOUT_VIEWPORT.width, LAYOUT_VIEWPORT.height),
+            (800, 600),
+        )
+        self.assertEqual(LAYOUT_VIEWPORT.device_scale_factor, 1.0)
+        self.assertEqual(WPT_CROSS_PARALLELISM, 100)
+
+    def test_all_profile_matrix_deduplicates_default_and_layout_cases(self) -> None:
+        semantic = WptCase("css/cssom-view/shared.html")
+        duplicate_layout = WptCase("css/cssom-view/shared.html")
+        reftest = WptCase(
+            "css/css-grid/reference.html",
+            test_type="reftest",
+            references=(
+                ReftestReference("css/css-grid/reference-ref.html", "=="),
+            ),
+        )
+
+        merged = _deduplicate_cases([semantic, duplicate_layout, reftest])
+
+        self.assertEqual(
+            [case.case_path for case in merged],
+            ["css/css-grid/reference.html", "css/cssom-view/shared.html"],
+        )
+        self.assertEqual(merged[0].test_type, "reftest")
+
+    def test_manifest_reftest_enumeration_supports_relations_fuzzy_and_filters(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+
+            def write_document(rel: str, body: str = "<!doctype html><p>static</p>") -> None:
+                path = root / rel
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(body, encoding="utf-8")
+
+            documents = {
+                "css/css-flexbox/static.html": "<!doctype html><meta name=timeout content=long><p>test</p>",
+                "css/css-flexbox/ref.html": "<!doctype html><p>reference</p>",
+                "css/css-flexbox/notref.html": "<!doctype html><p>not reference</p>",
+                "css/css-flexbox/animation/dynamic.html": "<!doctype html><style>p { animation: pulse 1s }</style>",
+                "css/css-flexbox/media.html": "<!doctype html><video></video>",
+                "css/css-flexbox/server.html": "<!doctype html><script src='/handler.py'></script>",
+                "css/css-flexbox/protocol.h2.html": "<!doctype html><p>h2</p>",
+                "css/css-flexbox/driver.html": "<!doctype html><p>driver</p>",
+            }
+            for rel, body in documents.items():
+                write_document(rel, body)
+
+            reftests: dict[str, object] = {}
+
+            def add_manifest_item(rel: str, item: list[object]) -> None:
+                node = reftests
+                parts = rel.split("/")
+                for part in parts[:-1]:
+                    child = node.setdefault(part, {})
+                    assert isinstance(child, dict)
+                    node = child
+                node[parts[-1]] = ["sha", item]
+
+            add_manifest_item(
+                "css/css-flexbox/static.html",
+                [
+                    None,
+                    [
+                        ["/css/css-flexbox/ref.html", "=="],
+                        ["/css/css-flexbox/notref.html", "!="],
+                    ],
+                    {
+                        "timeout": "long",
+                        "fuzzy": [
+                            [None, [[0, 1], [0, 2]]],
+                            [
+                                [
+                                    "/css/css-flexbox/static.html",
+                                    "/css/css-flexbox/notref.html",
+                                    "!=",
+                                ],
+                                [[0, 3], [0, 4]],
+                            ],
+                        ],
+                    },
+                ],
+            )
+            for rel in (
+                "css/css-flexbox/animation/dynamic.html",
+                "css/css-flexbox/media.html",
+                "css/css-flexbox/server.html",
+                "css/css-flexbox/protocol.h2.html",
+            ):
+                add_manifest_item(
+                    rel,
+                    [None, [["/css/css-flexbox/ref.html", "=="]], {}],
+                )
+            add_manifest_item(
+                "css/css-flexbox/driver.html",
+                [
+                    None,
+                    [["/css/css-flexbox/ref.html", "=="]],
+                    {"testdriver": True},
+                ],
+            )
+            (root / "MANIFEST.json").write_text(
+                json.dumps(
+                    {
+                        "version": 9,
+                        "url_base": "/",
+                        "items": {"reftest": reftests},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            cases = enumerate_reftest_cases(
+                root,
+                dir_prefixes=("css/css-flexbox",),
+            )
+
+            self.assertEqual([case.case_path for case in cases], ["css/css-flexbox/static.html"])
+            case = cases[0]
+            self.assertEqual(case.test_type, "reftest")
+            self.assertEqual(case.timeout_multiplier, LONG_TIMEOUT_MULTIPLIER)
+            self.assertEqual(
+                case.references,
+                (
+                    ReftestReference(
+                        "css/css-flexbox/ref.html",
+                        "==",
+                        FuzzyTolerance((0, 1), (0, 2)),
+                    ),
+                    ReftestReference(
+                        "css/css-flexbox/notref.html",
+                        "!=",
+                        FuzzyTolerance((0, 3), (0, 4)),
+                    ),
+                ),
+            )
+            self.assertEqual(
+                explicit_reftest_case(root, "css/css-flexbox/static.html"),
+                case,
+            )
+
+    def test_reftest_pixel_comparison_supports_exact_and_fuzzy_bounds(self) -> None:
+        def captured(image: Image.Image) -> CapturedScreenshot:
+            stream = io.BytesIO()
+            image.save(stream, format="PNG")
+            png = stream.getvalue()
+            return CapturedScreenshot(
+                png=png,
+                sha256=hashlib.sha256(png).hexdigest(),
+                width=image.width,
+                height=image.height,
+            )
+
+        test_image = Image.new("RGB", (4, 4), (0, 0, 0))
+        reference_image = test_image.copy()
+        reference_image.putpixel((2, 1), (2, 0, 0))
+        test_png = captured(test_image)
+        reference_png = captured(reference_image)
+
+        exact_equal, exact_metrics, exact_diff = compare_reftest_screenshots(
+            test_png,
+            reference_png,
+            None,
+        )
+        fuzzy_equal, fuzzy_metrics, fuzzy_diff = compare_reftest_screenshots(
+            test_png,
+            reference_png,
+            FuzzyTolerance((0, 2), (0, 1)),
+        )
+        too_strict, _, strict_diff = compare_reftest_screenshots(
+            test_png,
+            reference_png,
+            FuzzyTolerance((0, 1), (0, 1)),
+        )
+        self.addCleanup(exact_diff.close)
+        self.addCleanup(fuzzy_diff.close)
+        self.addCleanup(strict_diff.close)
+
+        self.assertFalse(exact_equal)
+        self.assertEqual(exact_metrics["max_difference"], 2)
+        self.assertEqual(exact_metrics["different_pixels"], 1)
+        self.assertTrue(fuzzy_equal)
+        self.assertEqual(
+            fuzzy_metrics["fuzzy"],
+            {"max_difference": [0, 2], "total_pixels": [0, 1]},
+        )
+        self.assertFalse(too_strict)
+
+    def test_reftest_failure_artifacts_write_test_reference_and_diff_pngs(self) -> None:
+        def captured(color: tuple[int, int, int]) -> CapturedScreenshot:
+            image = Image.new("RGB", (3, 2), color)
+            stream = io.BytesIO()
+            image.save(stream, format="PNG")
+            image.close()
+            png = stream.getvalue()
+            return CapturedScreenshot(
+                png=png,
+                sha256=hashlib.sha256(png).hexdigest(),
+                width=3,
+                height=2,
+            )
+
+        test_png = captured((255, 255, 255))
+        reference_png = captured((0, 0, 0))
+        diff_image = Image.new("RGB", (3, 2), (255, 255, 255))
+        self.addCleanup(diff_image.close)
+        evidence = _ReftestEvidence(
+            reference=ReftestReferenceRun(
+                reference_path="css/example-ref.html",
+                url="http://example.test/css/example-ref.html",
+                relation="==",
+            ),
+            screenshot=reference_png,
+            diff_image=diff_image,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            artifacts = _write_reftest_failure_artifacts(
+                output_dir=output_dir,
+                engine="moli",
+                case_path="css/example.html",
+                test_screenshot=test_png,
+                evidence=[evidence],
+            )
+            written = sorted(
+                path.name
+                for path in (output_dir / artifacts["directory"]).glob("*.png")
+            )
+            artifact_paths = [
+                artifacts["test"],
+                artifacts["references"][0]["reference"],
+                artifacts["references"][0]["diff"],
+            ]
+
+            self.assertEqual(
+                written,
+                ["diff-01.png", "reference-01.png", "test.png"],
+            )
+            self.assertTrue(
+                all((output_dir / artifact_path).stat().st_size > 0 for artifact_path in artifact_paths)
+            )
+
+    def test_reftest_match_and_mismatch_relationship_semantics(self) -> None:
+        self.assertTrue(reftest_relation_passes("==", equal=True))
+        self.assertFalse(reftest_relation_passes("==", equal=False))
+        self.assertTrue(reftest_relation_passes("!=", equal=False))
+        self.assertFalse(reftest_relation_passes("!=", equal=True))
+        self.assertTrue(
+            reftest_comparisons_pass(
+                [
+                    {"relation": "==", "passed": False},
+                    {"relation": "==", "passed": True},
+                    {"relation": "!=", "passed": True},
+                ]
+            )
+        )
+        self.assertFalse(
+            reftest_comparisons_pass(
+                [
+                    {"relation": "==", "passed": True},
+                    {"relation": "!=", "passed": False},
+                ]
+            )
+        )
 
     def test_fixed_run_schedule_is_deterministic(self) -> None:
         cases = [
@@ -494,8 +804,34 @@ class WptCrossTests(unittest.TestCase):
                 "window",
             ]
         )
+        layout = parser.parse_args(
+            [
+                "--wpt-root",
+                "/tmp/wpt",
+                "--engine",
+                "moli",
+                "--output-dir",
+                "/tmp/out",
+                "--profile",
+                "layout",
+            ]
+        )
+        all_profiles = parser.parse_args(
+            [
+                "--wpt-root",
+                "/tmp/wpt",
+                "--engine",
+                "moli",
+                "--output-dir",
+                "/tmp/out",
+                "--profile",
+                "all",
+            ]
+        )
 
         self.assertTrue(_is_full_case_list_run(full))
+        self.assertTrue(_is_full_case_list_run(all_profiles))
+        self.assertFalse(_is_full_case_list_run(layout))
         self.assertFalse(_is_full_case_list_run(explicit_case))
         self.assertFalse(_is_full_case_list_run(dir_prefix))
         self.assertFalse(_is_full_case_list_run(limited))
@@ -993,6 +1329,97 @@ class WptCrossTests(unittest.TestCase):
             [case.case_path for case in cases],
         )
 
+    def test_layout_testharness_profile_forces_cdp_and_fixed_viewport(self) -> None:
+        captured: dict[str, object] = {}
+
+        class FakeServer:
+            def __init__(self, wpt_root: Path) -> None:
+                self.wpt_root = Path(wpt_root)
+                self.base_url = "http://127.0.0.1:8000"
+                self.alternate_base_url = "http://127.0.0.1:8001"
+                self.external_base_url = None
+                self.external_alternate_base_url = None
+                self.external_remote_base_url = None
+                self.external_host = None
+
+            def __enter__(self) -> "FakeServer":
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def set_harness_timeout_multipliers(
+                self,
+                multipliers: dict[str, float],
+                *,
+                default_multiplier: float,
+            ) -> None:
+                return None
+
+            def url_for_case(self, case_path: str, *, external: bool = False) -> str:
+                return f"{self.base_url}/{case_path}"
+
+        def fake_cdp_run(**kwargs: object) -> EngineRunResult:
+            captured.update(kwargs)
+            cases_arg = kwargs["cases"]
+            assert isinstance(cases_arg, list)
+            case_path, url, _timeout = cases_arg[0]
+            return EngineRunResult(
+                engine="moli",
+                binary="/tmp/moli",
+                binary_sha256="sha",
+                binary_version="version",
+                endpoint="cdp://127.0.0.1:1",
+                ready_ms=1.0,
+                cases=[CaseResult(case_path, url, "pass", 1.0)],
+            )
+
+        case = WptCase("css/css-flexbox/layout.html")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir) / "out"
+            with (
+                patch(
+                    "moli_benchmark.wpt_cross.__main__.enumerate_cases",
+                    return_value=[case],
+                ) as enumerate_mock,
+                patch(
+                    "moli_benchmark.wpt_cross.__main__.build_driver",
+                    return_value=SimpleNamespace(cli_fetch_command=lambda *_: []),
+                ),
+                patch(
+                    "moli_benchmark.wpt_cross.__main__.run_engine_on_cases",
+                    side_effect=fake_cdp_run,
+                ),
+                patch(
+                    "moli_benchmark.wpt_cross.__main__.run_engine_on_cases_cli",
+                    side_effect=AssertionError("layout profile must not use CLI mode"),
+                ),
+                patch("moli_benchmark.wpt_cross.server.WptFixtureServer", FakeServer),
+                redirect_stdout(StringIO()),
+                redirect_stderr(StringIO()),
+            ):
+                code = main(
+                    [
+                        "--wpt-root",
+                        "/tmp/wpt",
+                        "--engine",
+                        "moli",
+                        "--output-dir",
+                        str(output_dir),
+                        "--profile",
+                        "layout-testharness",
+                    ]
+                )
+
+            summary = json.loads((output_dir / "summary.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(code, 0)
+        self.assertEqual(captured["viewport"], LAYOUT_VIEWPORT)
+        self.assertIsNone(captured["artifact_output_dir"])
+        self.assertTrue(enumerate_mock.call_args.kwargs["layout_static_only"])
+        self.assertEqual(summary["profile"], "layout-testharness")
+        self.assertEqual(summary["viewport"]["width"], 800)
+
     def test_main_preserves_harness_multiplier_except_step_timeout_sensitive_cases(self) -> None:
         calls = []
 
@@ -1166,7 +1593,7 @@ class WptCrossTests(unittest.TestCase):
                 "Harness completed with a tracked message",
             )
 
-    def test_build_partial_preserves_harness_message(self) -> None:
+    def test_build_partial_preserves_diagnostic_fields(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output_dir = Path(temp_dir)
             (output_dir / "engine-moli.json").write_text(
@@ -1187,6 +1614,27 @@ class WptCrossTests(unittest.TestCase):
                                 "harness_status_name": "ERROR",
                                 "harness_message": "Unhandled rejection: cycle",
                                 "error": "testharness completed without reporting any subtests",
+                                "test_type": "reftest",
+                                "failures": [{"name": "== known-ref.html"}],
+                                "failure_names": ["== known-ref.html"],
+                                "reftest_comparisons": [
+                                    {
+                                        "reference_path": "known-ref.html",
+                                        "relation": "==",
+                                        "passed": False,
+                                        "max_difference": 255,
+                                        "different_pixels": 10,
+                                    }
+                                ],
+                                "artifacts": {
+                                    "test": "artifacts/moli/known/test.png",
+                                    "references": [
+                                        {
+                                            "reference": "artifacts/moli/known/reference-01.png",
+                                            "diff": "artifacts/moli/known/diff-01.png",
+                                        }
+                                    ],
+                                },
                             }
                         ]
                     }
@@ -1206,6 +1654,14 @@ class WptCrossTests(unittest.TestCase):
             self.assertEqual(
                 matrix[0]["results"]["moli"]["harness_message"],
                 "Unhandled rejection: cycle",
+            )
+            self.assertEqual(matrix[0]["test_type"], "reftest")
+            result = matrix[0]["results"]["moli"]
+            self.assertEqual(result["failure_names"], ["== known-ref.html"])
+            self.assertEqual(result["reftest_comparisons"][0]["relation"], "==")
+            self.assertEqual(
+                result["artifacts"]["test"],
+                "artifacts/moli/known/test.png",
             )
 
     def test_parser_accepts_known_failure_audit_options(self) -> None:
@@ -2647,6 +3103,39 @@ test(() => {}, "ok");
         )
 
         self.assertEqual(row["payload_source"], "completion-callback")
+
+    def test_case_result_dict_records_reftest_comparisons_and_artifacts(self) -> None:
+        row = case_result_to_dict(
+            CaseResult(
+                case_path="css/example.html",
+                url="http://example.test/css/example.html",
+                status="fail",
+                duration_ms=1.0,
+                test_type="reftest",
+                reftest_comparisons=[
+                    {
+                        "reference_path": "css/example-ref.html",
+                        "relation": "==",
+                        "passed": False,
+                        "max_difference": 255,
+                        "different_pixels": 10,
+                    }
+                ],
+                artifacts={
+                    "test": "artifacts/moli/example/test.png",
+                    "references": [
+                        {
+                            "reference": "artifacts/moli/example/reference-01.png",
+                            "diff": "artifacts/moli/example/diff-01.png",
+                        }
+                    ],
+                },
+            )
+        )
+
+        self.assertEqual(row["test_type"], "reftest")
+        self.assertEqual(row["reftest_comparisons"][0]["relation"], "==")
+        self.assertEqual(row["artifacts"]["test"], "artifacts/moli/example/test.png")
 
     def test_cli_runner_extracts_payload_from_stdout_html(self) -> None:
         payload = {

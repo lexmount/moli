@@ -45,6 +45,45 @@ uv run moli-benchmark synthetic \
   --runs 5
 ```
 
+### Cross-engine layout WPT
+
+The standalone cross-engine runner has separate layout profiles, so its
+existing semantic baseline is unchanged. Layout runs require an upstream WPT
+checkout with `MANIFEST.json` and use CDP with a fixed `800x600` viewport at
+DPR 1:
+
+```bash
+uv run python -m moli_benchmark.wpt_cross \
+  --wpt-root ../../wpt \
+  --engine moli --engine chrome \
+  --output-dir /tmp/moli-layout-wpt \
+  --profile layout-testharness
+
+uv run python -m moli_benchmark.wpt_cross \
+  --wpt-root ../../wpt \
+  --engine moli --engine chrome \
+  --output-dir /tmp/moli-layout-reftest \
+  --profile layout-reftest
+
+uv run python -m moli_benchmark.wpt_cross \
+  --wpt-root ../../wpt \
+  --engine moli \
+  --output-dir /tmp/moli-wpt-all \
+  --profile all
+```
+
+`--profile layout` combines both layout sets; `--profile all` merges the
+default semantic baseline and both layout sets into one deduplicated matrix.
+The stable layout profile covers
+`css/css-flexbox`, `css/css-grid`, `css/css-sizing`, and `css/cssom-view`;
+repeat `--dir-prefix` to override that list. Reftests are loaded from the
+manifest and support `==`, `!=`, and fuzzy bounds. The initial static subset
+filters wptserve Python handlers, HTTP/2, testdriver, animation, media, and
+canvas dependencies. Failed reftests retain `test.png`, `reference-N.png`, and
+`diff-N.png` under `OUTPUT_DIR/artifacts/ENGINE/`, with links in `index.html`.
+An unfiltered full `default` or `all` run refreshes the unified status lists
+directly under `wpt-cross-current/`.
+
 Public-web suites read a Markdown seed list. A minimal `sites.md` looks like:
 
 ```markdown

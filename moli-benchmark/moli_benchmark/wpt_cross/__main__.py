@@ -8,13 +8,14 @@ Usage:
         --output-dir /tmp/moli-wpt-cross \\
         --limit 20
 
-This is the v1 driver verification harness. It:
+The runner:
 
-1. Enumerates the default blacklist-filtered WPT case set from ``--wpt-root``.
+1. Enumerates either the default semantic baseline or an explicit layout
+   profile from ``--wpt-root``.
 2. Starts a single fixture server (loopback + optional global IPv6 for Obscura).
 3. For each engine, launches it via :class:`EngineDriver`, runs every case
-   through CDP + the testharness completion bridge, and writes per-engine
-   JSON results.
+   through the testharness bridge or the CDP screenshot reftest path, and
+   writes per-engine JSON results.
 4. Emits ``matrix.json`` with the cross-engine pass/fail/timeout/crash table.
 """
 
@@ -28,17 +29,39 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from .case_set import ANY_JS_GLOBAL_CHOICES, WptCase, enumerate_cases, explicit_case
+from .case_set import (
+    ANY_JS_GLOBAL_CHOICES,
+    LAYOUT_PROFILE_DIR_PREFIXES,
+    WptCase,
+    enumerate_cases,
+    enumerate_reftest_cases,
+    explicit_case,
+    explicit_reftest_case,
+)
 from .cli_runner import run_engine_on_cases_cli
 from .engine import ENGINES, build_driver
 from .audit import audit_matrix, load_known_failure_manifest
-from .runner import MAX_RECORDED_FAILURES, engine_result_to_dict, run_engine_on_cases
+from .runner import (
+    LAYOUT_VIEWPORT,
+    MAX_RECORDED_FAILURES,
+    ReftestReferenceRun,
+    ReftestRun,
+    engine_result_to_dict,
+    run_engine_on_cases,
+)
 from .scheduler import build_run_schedule, write_run_schedule
 from ..config import clear_current_proxy_env
 
 REPO_CASE_LIST_DIR = Path(__file__).resolve().parents[2] / "wpt-cross-current"
 WPT_CROSS_CASE_TIMEOUT_SECONDS = 120.0
 WPT_CROSS_PARALLELISM = 100
+WPT_CROSS_PROFILES = (
+    "default",
+    "layout-testharness",
+    "layout-reftest",
+    "layout",
+    "all",
+)
 CASE_LIST_FILES = {
     "pass": "passed-cases.txt",
     "fail": "failed-cases.txt",
@@ -114,13 +137,27 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Max number of cases to run (after filter). Useful for smoke runs.",
     )
     parser.add_argument(
+        "--profile",
+        choices=WPT_CROSS_PROFILES,
+        default="default",
+        help=(
+            "Case profile. 'default' keeps the broad semantic baseline; "
+            "'layout-testharness' runs deterministic layout testharness cases; "
+            "'layout-reftest' runs manifest-backed screenshot reftests; "
+            "'layout' combines both layout profiles; 'all' combines the "
+            "default and layout baselines in one matrix. Layout and all "
+            "profiles use a fixed 800x600 viewport at DPR 1 and CDP mode."
+        ),
+    )
+    parser.add_argument(
         "--dir-prefix",
         action="append",
         default=None,
         help=(
             "Restrict enumeration to a WPT directory prefix (repeatable). "
-            "When omitted, the runner scans the whole WPT tree and applies "
-            "the default rendering/layout blacklist."
+            "When omitted, the default profile scans the whole WPT tree with "
+            "its rendering/layout blacklist, while layout profiles use their "
+            "stable CSS directory list."
         ),
     )
     parser.add_argument(
@@ -245,6 +282,19 @@ def _build_matrix(
     for case in cases:
         row: dict[str, Any] = {
             "case_path": case.case_path,
+            "test_type": case.test_type,
+            "references": [
+                {
+                    "reference_path": reference.reference_path,
+                    "relation": reference.relation,
+                    "fuzzy": (
+                        reference.fuzzy.to_dict()
+                        if reference.fuzzy is not None
+                        else None
+                    ),
+                }
+                for reference in case.references
+            ],
             "results": {},
         }
         for engine in engine_results:
@@ -261,6 +311,9 @@ def _build_matrix(
                     "harness_status_name": r.get("harness_status_name"),
                     "harness_message": r.get("harness_message"),
                     "error": r.get("error"),
+                    "test_type": r.get("test_type", case.test_type),
+                    "reftest_comparisons": r.get("reftest_comparisons", []),
+                    "artifacts": r.get("artifacts", {}),
                 }
         matrix.append(row)
     return matrix
@@ -318,14 +371,13 @@ def _write_repo_case_lists(
 
 def _is_full_case_list_run(args: argparse.Namespace) -> bool:
     return (
-        args.case is None
+        args.profile in {"default", "all"}
+        and args.case is None
         and args.dir_prefix is None
         and args.limit is None
         and not args.include_tentative
         and args.any_js_global == "none"
     )
-
-
 def _recorded_failure_names(result: dict[str, Any]) -> dict[str, str]:
     names: dict[str, str] = {}
     for index, failure in enumerate(result.get("failures", [])):
@@ -410,7 +462,8 @@ def _recorded_failure_drift(
 
 
 def _case_timeout(base_seconds: float, case: WptCase) -> float:
-    del case
+    if case.test_type == "reftest":
+        return base_seconds * case.timeout_multiplier
     return base_seconds
 
 
@@ -430,6 +483,117 @@ def _harness_timeout_multiplier(
     if case_path in STEP_TIMEOUT_SENSITIVE_CASES:
         return 1.0
     return max(1.0, case_timeout_seconds / default_harness_timeout_seconds)
+
+
+def _is_layout_profile(profile: str) -> bool:
+    return profile in {"layout-testharness", "layout-reftest", "layout", "all"}
+
+
+def _deduplicate_cases(cases: list[WptCase]) -> list[WptCase]:
+    by_path: dict[str, WptCase] = {}
+    for case in cases:
+        current = by_path.get(case.case_path)
+        if current is None or case.test_type == "reftest":
+            by_path[case.case_path] = case
+    return sorted(by_path.values(), key=lambda case: case.case_path)
+
+
+def _select_cases(args: argparse.Namespace) -> list[WptCase]:
+    if args.case:
+        if args.profile == "layout-reftest":
+            cases = [
+                explicit_reftest_case(args.wpt_root, case_path)
+                for case_path in args.case
+            ]
+        elif args.profile in {"layout", "all"}:
+            cases = []
+            for case_path in args.case:
+                try:
+                    case = explicit_reftest_case(args.wpt_root, case_path)
+                except RuntimeError:
+                    case = explicit_case(args.wpt_root, case_path)
+                cases.append(case)
+        else:
+            cases = [explicit_case(args.wpt_root, case_path) for case_path in args.case]
+        return cases[: args.limit] if args.limit is not None else cases
+
+    requested_prefixes = tuple(args.dir_prefix) if args.dir_prefix else None
+    if args.profile == "default":
+        return enumerate_cases(
+            args.wpt_root,
+            dir_prefixes=requested_prefixes,
+            include_tentative=args.include_tentative,
+            any_js_global=args.any_js_global,
+            limit=args.limit,
+        )
+
+    cases: list[WptCase] = []
+    if args.profile == "all":
+        cases.extend(
+            enumerate_cases(
+                args.wpt_root,
+                dir_prefixes=requested_prefixes,
+                include_tentative=args.include_tentative,
+                any_js_global=args.any_js_global,
+            )
+        )
+    layout_prefixes = requested_prefixes or LAYOUT_PROFILE_DIR_PREFIXES
+    if args.profile in {"layout-testharness", "layout", "all"}:
+        cases.extend(
+            enumerate_cases(
+                args.wpt_root,
+                dir_prefixes=layout_prefixes,
+                include_tentative=args.include_tentative,
+                any_js_global=args.any_js_global,
+                layout_static_only=True,
+            )
+        )
+    if args.profile in {"layout-reftest", "layout", "all"}:
+        cases.extend(
+            enumerate_reftest_cases(
+                args.wpt_root,
+                dir_prefixes=layout_prefixes,
+                include_tentative=args.include_tentative,
+            )
+        )
+    cases = _deduplicate_cases(cases)
+    if args.limit is not None:
+        cases = cases[: args.limit]
+    return cases
+
+
+def _cdp_case_run(
+    server: Any,
+    case: WptCase,
+    *,
+    external: bool,
+    timeout_seconds: float,
+) -> tuple[str, str, float] | ReftestRun:
+    url = _url_for_case_origin(server, case.case_path, external=external)
+    if case.test_type != "reftest":
+        return case.case_path, url, timeout_seconds
+    return ReftestRun(
+        case_path=case.case_path,
+        url=url,
+        timeout_seconds=timeout_seconds,
+        references=tuple(
+            ReftestReferenceRun(
+                reference_path=reference.reference_path,
+                url=_url_for_case_origin(
+                    server,
+                    reference.reference_path,
+                    external=external,
+                ),
+                relation=reference.relation,
+                fuzzy=reference.fuzzy,
+            )
+            for reference in case.references
+        ),
+    )
+
+
+def _run_case_path(case: tuple[str, str, float] | ReftestRun) -> str:
+    return case.case_path if isinstance(case, ReftestRun) else case[0]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -466,22 +630,26 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 2
 
-    if args.case:
-        cases = [explicit_case(args.wpt_root, case_path) for case_path in args.case]
-        if args.limit is not None:
-            cases = cases[: args.limit]
-    else:
-        prefixes = tuple(args.dir_prefix) if args.dir_prefix else None
-        cases = enumerate_cases(
-            args.wpt_root,
-            dir_prefixes=prefixes,
-            include_tentative=args.include_tentative,
-            any_js_global=args.any_js_global,
-            limit=args.limit,
-        )
-    if not cases:
-        print("error: no WPT cases selected; check --wpt-root and --dir-prefix", file=sys.stderr)
+    try:
+        cases = _select_cases(args)
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
         return 2
+    if not cases:
+        print(
+            "error: no WPT cases selected; check --wpt-root, --profile, and --dir-prefix",
+            file=sys.stderr,
+        )
+        return 2
+
+    has_reftests = any(case.test_type == "reftest" for case in cases)
+    fixed_layout_viewport = _is_layout_profile(args.profile) or has_reftests
+    if fixed_layout_viewport and args.mode == "cli":
+        print(
+            "error: layout profiles and reftests require CDP mode for fixed viewport screenshots",
+            file=sys.stderr,
+        )
+        return 4
 
     case_list_path = output_dir / "cases.txt"
     case_list_path.write_text("\n".join(c.case_path for c in cases) + "\n", encoding="utf-8")
@@ -524,7 +692,7 @@ def main(argv: list[str] | None = None) -> int:
         for engine in args.engine:
             driver = build_driver(engine)
             external = engine == "obscura"
-            mode_for_check = args.mode
+            mode_for_check = "cdp" if fixed_layout_viewport else args.mode
             if mode_for_check == "auto":
                 mode_for_check = "cli" if driver.cli_fetch_command is not None else "cdp"
             if external and mode_for_check == "cdp" and server.external_base_url is None:
@@ -550,23 +718,25 @@ def main(argv: list[str] | None = None) -> int:
                 ),
             )
             cases_for_engine = [
-                (
-                    case.case_path,
-                    _url_for_case_origin(server, case.case_path, external=external),
-                    _case_timeout(engine_case_timeout, case),
+                _cdp_case_run(
+                    server,
+                    case,
+                    external=external,
+                    timeout_seconds=_case_timeout(engine_case_timeout, case),
                 )
                 for case in cases
             ]
             scheduled_cases_for_engine = [
-                (
-                    case.case_path,
-                    _url_for_case_origin(server, case.case_path, external=external),
-                    _case_timeout(engine_case_timeout, case),
+                _cdp_case_run(
+                    server,
+                    case,
+                    external=external,
+                    timeout_seconds=_case_timeout(engine_case_timeout, case),
                 )
                 for case in scheduled_cases
             ]
 
-            mode = args.mode
+            mode = "cdp" if fixed_layout_viewport else args.mode
             if mode == "auto":
                 mode = "cli" if driver.cli_fetch_command is not None else "cdp"
             elif mode == "cli" and driver.cli_fetch_command is None:
@@ -634,12 +804,14 @@ def main(argv: list[str] | None = None) -> int:
                         binary_override=_binary_override_for(engine, args),
                         case_timeout_seconds=engine_case_timeout,
                         launch_timeout_seconds=args.launch_timeout,
+                        viewport=LAYOUT_VIEWPORT if fixed_layout_viewport else None,
+                        artifact_output_dir=output_dir if has_reftests else None,
                     )
                     by_path = {case.case_path: case for case in result.cases}
                     result.cases = [
-                        by_path[case[0]]
+                        by_path[_run_case_path(case)]
                         for case in cases_for_engine
-                        if case[0] in by_path
+                        if _run_case_path(case) in by_path
                     ]
                 else:
                     print(
@@ -661,6 +833,8 @@ def main(argv: list[str] | None = None) -> int:
                                 binary_override=_binary_override_for(engine, args),
                                 case_timeout_seconds=engine_case_timeout,
                                 launch_timeout_seconds=args.launch_timeout,
+                                viewport=LAYOUT_VIEWPORT if fixed_layout_viewport else None,
+                                artifact_output_dir=output_dir if has_reftests else None,
                             )
                             for chunk in chunks
                         ]
@@ -673,9 +847,9 @@ def main(argv: list[str] | None = None) -> int:
                         merged_cases.extend(p.cases)
                     by_path = {c.case_path: c for c in merged_cases}
                     merged_cases = [
-                        by_path[case[0]]
+                        by_path[_run_case_path(case)]
                         for case in cases_for_engine
-                        if case[0] in by_path
+                        if _run_case_path(case) in by_path
                     ]
                     result = _EngineRunResult(
                         engine=base.engine,
@@ -716,12 +890,24 @@ def main(argv: list[str] | None = None) -> int:
 
     matrix = _build_matrix(cases, engine_results)
     summary = _summarize(matrix, list(args.engine))
+    summary["profile"] = args.profile
+    summary["viewport"] = (
+        {
+            "width": LAYOUT_VIEWPORT.width,
+            "height": LAYOUT_VIEWPORT.height,
+            "device_scale_factor": LAYOUT_VIEWPORT.device_scale_factor,
+        }
+        if fixed_layout_viewport
+        else None
+    )
     summary["recorded_failure_drift"] = _recorded_failure_drift(matrix, list(args.engine))
     summary["total_elapsed_seconds"] = time.perf_counter() - started_at
     summary["engine_metadata"] = engine_metadata
     summary["run_schedule"] = schedule_metadata
     if _is_full_case_list_run(args):
         _write_repo_case_lists(matrix, list(args.engine))
+        summary["repo_case_list_dir"] = str(REPO_CASE_LIST_DIR)
+        print(f"[wpt-cross] refreshed repo case lists: {REPO_CASE_LIST_DIR}")
     else:
         print("[wpt-cross] skipped repo case list refresh for non-full run")
 
