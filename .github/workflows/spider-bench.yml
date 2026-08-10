@@ -8,7 +8,7 @@ on:
       base_ref:
         description: Base commit or ref
         required: false
-        default: master
+        default: main
       head_ref:
         description: Head commit or ref (defaults to the dispatched commit)
         required: false
