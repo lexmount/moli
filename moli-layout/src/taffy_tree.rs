@@ -1638,7 +1638,12 @@ where
             },
             ..child_inputs
         };
-        let percentage_basis = available_space.width.into_option();
+        // CSS Sizing resolves cyclic percentages against zero while measuring
+        // intrinsic contributions. Keeping the basis as `None` discards the
+        // entire calc expression, including its absolute term (for example
+        // `calc(0% + 30px)`). A final definite-width layout still supplies its
+        // actual basis here.
+        let percentage_basis = inline_percentage_basis(available_space.width);
         let mut layout = context.unbroken.clone();
         let mut atomic = vec![None; context.objects.len()];
         let mut atomic_baseline_ascents = vec![None; context.objects.len()];
@@ -2176,6 +2181,32 @@ where
             padding,
             margin,
         };
+    }
+}
+
+fn inline_percentage_basis(available: AvailableSpace) -> Option<f32> {
+    Some(available.into_option().unwrap_or(0.0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::inline_percentage_basis;
+    use taffy::AvailableSpace;
+
+    #[test]
+    fn intrinsic_inline_percentages_use_a_zero_basis() {
+        assert_eq!(
+            inline_percentage_basis(AvailableSpace::MinContent),
+            Some(0.0)
+        );
+        assert_eq!(
+            inline_percentage_basis(AvailableSpace::MaxContent),
+            Some(0.0)
+        );
+        assert_eq!(
+            inline_percentage_basis(AvailableSpace::Definite(240.0)),
+            Some(240.0)
+        );
     }
 }
 
