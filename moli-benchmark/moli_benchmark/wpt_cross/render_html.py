@@ -512,6 +512,9 @@ def _chart_payload(
                 "duration_ms": result.get("duration_ms"),
                 "subtests": result.get("subtests"),
                 "error": result.get("error"),
+                "test_type": result.get("test_type", row.get("test_type", "testharness")),
+                "reftest_comparisons": result.get("reftest_comparisons", []),
+                "artifacts": result.get("artifacts", {}),
             }
         slim_rows.append({"case": row.get("case_path", ""), "group": _group_key(str(row.get("case_path", ""))), "results": cells})
     return {
@@ -663,6 +666,9 @@ code {
   font-weight: 720;
 }
 .cell-sub { margin-top: 3px; color: var(--muted); font-size: 11px; }
+.artifact-links { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+.artifact-links a { color: #1d4ed8; font-size: 11px; text-decoration: none; }
+.artifact-links a:hover { text-decoration: underline; }
 .empty { color: var(--muted); margin: 0; }
 .notice {
   padding: 10px 12px;
@@ -794,7 +800,32 @@ function resultTitle(result) {
     bits.push(`subtests: ${result.subtests.pass || 0}/${result.subtests.total || 0} pass`);
   }
   if (result.error) bits.push(result.error);
+  if (result.reftest_comparisons && result.reftest_comparisons.length) {
+    const first = result.reftest_comparisons[0];
+    bits.push(`reftest ${first.relation}: maxDifference=${first.max_difference}, differentPixels=${first.different_pixels}`);
+  }
   return bits.join(' · ');
+}
+
+function appendArtifactLinks(cell, artifacts) {
+  if (!artifacts || !artifacts.test) return;
+  const links = document.createElement('div');
+  links.className = 'artifact-links';
+  const add = (label, href) => {
+    if (!href) return;
+    const link = document.createElement('a');
+    link.href = href;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.textContent = label;
+    links.appendChild(link);
+  };
+  add('test', artifacts.test);
+  for (const [index, reference] of (artifacts.references || []).entries()) {
+    add(`ref ${index + 1}`, reference.reference);
+    add(`diff ${index + 1}`, reference.diff);
+  }
+  cell.appendChild(links);
 }
 
 function renderMatrix() {
@@ -847,6 +878,7 @@ function renderMatrix() {
         sub.textContent = parts.join(' · ');
         td.appendChild(sub);
       }
+      appendArtifactLinks(td, result.artifacts);
       tr.appendChild(td);
     }
     frag.appendChild(tr);

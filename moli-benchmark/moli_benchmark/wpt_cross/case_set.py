@@ -1,6 +1,10 @@
-"""Enumerate WPT cases that the v1 cross-engine runner can execute.
+"""Enumerate WPT cases that the cross-engine runner can execute.
 
-A case is selectable if:
+The default semantic profile selects testharness cases. Layout profiles add a
+deterministic static subset and read upstream ``MANIFEST.json`` for reftest
+URLs, ``==`` / ``!=`` references, timeout metadata, and fuzzy bounds.
+
+A testharness case is selectable if:
 
 * The file does not live under one of the default excluded directory prefixes.
 * It is a navigable ``.html`` file, a selected ``.any.js`` global, or a
@@ -9,8 +13,7 @@ A case is selectable if:
 * Its filename does not contain ``.tentative`` or ``.optional``.
 * Its filename does not end in ``-manual.html``.
 * It is not under a ``resources`` support directory.
-* HTML cases reference ``/resources/testharness.js`` (testharness-based, not
-  reftest / manual / visual).
+* HTML cases reference ``/resources/testharness.js``.
 * The file body does NOT reference ``/resources/testdriver`` (testdriver
   requires a WebDriver-style automation backend the v1 fixture server does
   not provide).
@@ -34,17 +37,21 @@ wrapper variants explicitly. Focused runs also include ``.window.js`` /
 ``.worker.js`` script wrappers. The broad default keeps script wrappers out
 except for semantic suites listed in ``DEFAULT_SCRIPT_CASE_DIR_PREFIXES``;
 Streams is included because most upstream Streams coverage is authored as
-script WPT rather than navigable HTML.
+script WPT rather than navigable HTML. Layout reftests additionally exclude
+dynamic wptserve Python handlers, HTTP/2 cases, animation directories, and
+media/canvas documents during the initial static baseline.
 """
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import urlsplit
+from typing import Any, Iterator
+from urllib.parse import urljoin, urlsplit
 
 from .any_js import (
     ANY_JS_DEDICATED_WORKER_GLOBAL,
@@ -292,11 +299,68 @@ DEFAULT_ANY_JS_GLOBALS_BY_DIR_PREFIX: tuple[tuple[str, str], ...] = (
 )
 DEFAULT_SCRIPT_CASE_DIR_PREFIXES: tuple[str, ...] = ("streams",)
 
+# The initial layout baseline deliberately starts with the CSS areas that are
+# both high-value for Moli and predominantly made up of deterministic, static
+# documents. More areas can be opted into with --dir-prefix without changing
+# the stable profile definition.
+LAYOUT_PROFILE_DIR_PREFIXES: tuple[str, ...] = (
+    "css/css-flexbox",
+    "css/css-grid",
+    "css/css-sizing",
+    "css/cssom-view",
+)
+
+LAYOUT_DOCUMENT_SUFFIXES: tuple[str, ...] = (
+    ".html",
+    ".htm",
+    ".xhtml",
+    ".xht",
+    ".svg",
+    ".xml",
+)
+
+LAYOUT_DYNAMIC_PATH_PARTS = frozenset(
+    {
+        "animation",
+        "animations",
+        "media",
+        "transitions",
+    }
+)
+LAYOUT_MEDIA_ELEMENT_TAGS = frozenset({"audio", "canvas", "video"})
+
+
+@dataclass(frozen=True)
+class FuzzyTolerance:
+    """WPT reftest fuzzy bounds.
+
+    Each tuple is inclusive ``(minimum, maximum)`` as represented by WPT's
+    ``maxDifference`` and ``totalPixels`` manifest metadata.
+    """
+
+    max_difference: tuple[int, int]
+    total_pixels: tuple[int, int]
+
+    def to_dict(self) -> dict[str, list[int]]:
+        return {
+            "max_difference": list(self.max_difference),
+            "total_pixels": list(self.total_pixels),
+        }
+
+
+@dataclass(frozen=True)
+class ReftestReference:
+    reference_path: str
+    relation: str
+    fuzzy: FuzzyTolerance | None = None
+
 
 @dataclass
 class WptCase:
     case_path: str  # relative to wpt root, e.g. "dom/nodes/Node-textContent.html"
     timeout_multiplier: float = 1.0
+    test_type: str = "testharness"
+    references: tuple[ReftestReference, ...] = ()
 
 
 @dataclass
@@ -417,10 +481,12 @@ class _CaseHtmlParser(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.variants: list[str] = []
         self.script_srcs: list[str] = []
+        self.element_tags: set[str] = set()
         self.long_timeout = False
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         tag_name = tag.lower()
+        self.element_tags.add(tag_name)
         values = {name.lower(): value or "" for name, value in attrs}
         name = values.get("name", "").lower()
         if tag_name == "meta" and name == "variant":
@@ -447,6 +513,35 @@ def _parse_case_html(html: str) -> _CaseHtmlParser:
     parser = _CaseHtmlParser()
     parser.feed(html)
     return parser
+
+
+LAYOUT_ANIMATION_SOURCE_RE = re.compile(
+    r"(?:"
+    r"@(?:-\w+-)?keyframes\b"
+    r"|(?:^|[;{])\s*(?:-\w+-)?(?:animation|transition)(?:-[\w-]+)?\s*:"
+    r"|\.animate\s*\("
+    r"|new\s+Animation\s*\("
+    r")",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _has_layout_dynamic_dependency(
+    rel_or_url: str,
+    source: str,
+    parser: _CaseHtmlParser,
+) -> bool:
+    """Return whether a layout case needs an intentionally excluded stack."""
+
+    path = urlsplit(rel_or_url).path
+    parts = {part.lower() for part in path.split("/") if part}
+    if parts & LAYOUT_DYNAMIC_PATH_PARTS:
+        return True
+    if ".h2." in path.lower():
+        return True
+    if parser.element_tags & LAYOUT_MEDIA_ELEMENT_TAGS:
+        return True
+    return LAYOUT_ANIMATION_SOURCE_RE.search(HTML_COMMENT_RE.sub("", source)) is not None
 
 
 def _script_timeout_multiplier(source: str) -> float:
@@ -726,6 +821,7 @@ def enumerate_cases(
     exclude_case_prefixes: tuple[str, ...] = DEFAULT_EXCLUDE_CASE_PREFIXES,
     include_tentative: bool = False,
     any_js_global: str = "none",
+    layout_static_only: bool = False,
     limit: int | None = None,
 ) -> list[WptCase]:
     """Walk ``wpt_root`` and return selectable cases.
@@ -780,6 +876,8 @@ def enumerate_cases(
                 continue
             parser = _parse_case_html(head)
             if _references_unsupported_server_feature(wpt_root, path, head, parser):
+                continue
+            if layout_static_only and _has_layout_dynamic_dependency(rel, head, parser):
                 continue
             timeout_multiplier = LONG_TIMEOUT_MULTIPLIER if parser.long_timeout else 1.0
             found.extend(
@@ -937,7 +1035,10 @@ def _selected_any_js_global(rel: str, requested_global: str) -> str:
 
 
 def _matches_any_dir_prefix(rel: str, prefixes: tuple[str, ...]) -> bool:
-    return any(rel == prefix or rel.startswith(f"{prefix}/") for prefix in prefixes)
+    return any(
+        not prefix or rel == prefix or rel.startswith(f"{prefix}/")
+        for prefix in prefixes
+    )
 
 
 def _matches_any_case_prefix(rel: str, prefixes: tuple[str, ...]) -> bool:
@@ -1020,6 +1121,278 @@ def _is_manual_or_support_case(rel: str) -> bool:
     return parts[-1].endswith("-manual.html") or any(
         part in {"resources", "support"} for part in parts[:-1]
     )
+
+
+def _iter_manifest_leaves(
+    node: Any,
+    parts: tuple[str, ...] = (),
+) -> Iterator[tuple[str, list[Any]]]:
+    if isinstance(node, list):
+        yield "/".join(parts), node
+        return
+    if not isinstance(node, dict):
+        return
+    for name in sorted(node):
+        yield from _iter_manifest_leaves(node[name], (*parts, name))
+
+
+def _load_reftest_manifest(wpt_root: Path) -> dict[str, Any]:
+    manifest_path = wpt_root / "MANIFEST.json"
+    if not manifest_path.is_file():
+        raise RuntimeError(f"WPT manifest does not exist: {manifest_path}")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"failed to read WPT manifest {manifest_path}: {exc}") from exc
+    reftests = (manifest.get("items") or {}).get("reftest")
+    if not isinstance(reftests, dict):
+        raise RuntimeError(f"WPT manifest has no reftest items: {manifest_path}")
+    return reftests
+
+
+def _manifest_test_url(source_rel: str, raw_url: Any) -> str | None:
+    if raw_url is None:
+        value = source_rel
+    elif not isinstance(raw_url, str) or not raw_url:
+        return None
+    elif raw_url.startswith(("?", "#")):
+        value = f"{source_rel}{raw_url}"
+    else:
+        value = raw_url
+    parsed = urlsplit(value)
+    if parsed.scheme or parsed.netloc:
+        return None
+    path = parsed.path.lstrip("/")
+    if not path or ".." in path.split("/"):
+        return None
+    suffix = f"?{parsed.query}" if parsed.query else ""
+    if parsed.fragment:
+        suffix += f"#{parsed.fragment}"
+    return f"{path}{suffix}"
+
+
+def _manifest_reference_url(test_url: str, raw_url: Any) -> str | None:
+    if not isinstance(raw_url, str) or not raw_url:
+        return None
+    parsed_raw = urlsplit(raw_url)
+    if parsed_raw.scheme or parsed_raw.netloc or raw_url.startswith("//"):
+        return None
+    joined = urlsplit(urljoin(f"/{test_url}", raw_url))
+    path = joined.path.lstrip("/")
+    if not path or ".." in path.split("/"):
+        return None
+    suffix = f"?{joined.query}" if joined.query else ""
+    if joined.fragment:
+        suffix += f"#{joined.fragment}"
+    return f"{path}{suffix}"
+
+
+def _fuzzy_range(value: Any) -> tuple[int, int] | None:
+    if (
+        not isinstance(value, list)
+        or len(value) != 2
+        or not all(isinstance(item, int) and not isinstance(item, bool) for item in value)
+    ):
+        return None
+    minimum, upper = value
+    if minimum < 0 or upper < minimum:
+        return None
+    return minimum, upper
+
+
+def _manifest_fuzzy_tolerance(
+    extras: dict[str, Any],
+    *,
+    test_url: str,
+    reference_url: str,
+    relation: str,
+) -> FuzzyTolerance | None:
+    fuzzy_entries = extras.get("fuzzy")
+    if not isinstance(fuzzy_entries, list):
+        return None
+
+    default_ranges: Any = None
+    keyed_ranges: Any = None
+    canonical_key = (f"/{test_url}", f"/{reference_url}", relation)
+    for entry in fuzzy_entries:
+        if not isinstance(entry, list) or len(entry) != 2:
+            continue
+        key, ranges = entry
+        if key is None:
+            default_ranges = ranges
+        elif isinstance(key, list) and tuple(key) == canonical_key:
+            keyed_ranges = ranges
+    ranges = keyed_ranges if keyed_ranges is not None else default_ranges
+    if not isinstance(ranges, list) or len(ranges) != 2:
+        return None
+    max_difference = _fuzzy_range(ranges[0])
+    total_pixels = _fuzzy_range(ranges[1])
+    if max_difference is None or total_pixels is None:
+        return None
+    return FuzzyTolerance(
+        max_difference=max_difference,
+        total_pixels=total_pixels,
+    )
+
+
+def _layout_document_is_static(
+    wpt_root: Path,
+    document_url: str,
+    cache: dict[str, tuple[bool, float]],
+) -> tuple[bool, float]:
+    document_path = urlsplit(document_url).path.lstrip("/")
+    cached = cache.get(document_path)
+    if cached is not None:
+        return cached
+    if (
+        not document_path.lower().endswith(LAYOUT_DOCUMENT_SUFFIXES)
+        or ".h2." in document_path.lower()
+        or document_path.endswith(".py")
+    ):
+        cache[document_path] = (False, 1.0)
+        return cache[document_path]
+    file_path = (wpt_root / document_path).resolve()
+    try:
+        file_path.relative_to(wpt_root)
+    except ValueError:
+        cache[document_path] = (False, 1.0)
+        return cache[document_path]
+    if not file_path.is_file() or file_path.with_suffix(".py").exists():
+        cache[document_path] = (False, 1.0)
+        return cache[document_path]
+    try:
+        source = file_path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        cache[document_path] = (False, 1.0)
+        return cache[document_path]
+    parser = _parse_case_html(source)
+    supported = not (
+        "/resources/testdriver" in source
+        or _references_unsupported_server_feature(wpt_root, file_path, source, parser)
+        or _has_layout_dynamic_dependency(document_url, source, parser)
+    )
+    timeout_multiplier = LONG_TIMEOUT_MULTIPLIER if parser.long_timeout else 1.0
+    cache[document_path] = (supported, timeout_multiplier)
+    return cache[document_path]
+
+
+def enumerate_reftest_cases(
+    wpt_root: Path,
+    *,
+    dir_prefixes: tuple[str, ...] = LAYOUT_PROFILE_DIR_PREFIXES,
+    include_tentative: bool = False,
+    limit: int | None = None,
+) -> list[WptCase]:
+    """Enumerate deterministic static reftests from upstream ``MANIFEST.json``."""
+
+    wpt_root = wpt_root.resolve()
+    if not wpt_root.exists():
+        raise RuntimeError(f"wpt root does not exist: {wpt_root}")
+    reftest_manifest = _load_reftest_manifest(wpt_root)
+    document_cache: dict[str, tuple[bool, float]] = {}
+    found: list[WptCase] = []
+
+    for source_rel, leaf in _iter_manifest_leaves(reftest_manifest):
+        if not _matches_any_dir_prefix(source_rel, dir_prefixes):
+            continue
+        if not isinstance(leaf, list) or len(leaf) < 2:
+            continue
+        if not include_tentative and ".tentative." in source_rel:
+            continue
+        if ".optional." in source_rel or ".h2." in source_rel:
+            continue
+
+        for raw_item in leaf[1:]:
+            if not isinstance(raw_item, list) or len(raw_item) != 3:
+                continue
+            raw_url, raw_references, raw_extras = raw_item
+            if not isinstance(raw_references, list) or not isinstance(raw_extras, dict):
+                continue
+            if raw_extras.get("testdriver"):
+                continue
+            test_url = _manifest_test_url(source_rel, raw_url)
+            if test_url is None:
+                continue
+            if not include_tentative and ".tentative." in test_url:
+                continue
+            test_supported, source_timeout_multiplier = _layout_document_is_static(
+                wpt_root,
+                test_url,
+                document_cache,
+            )
+            if not test_supported:
+                continue
+
+            references: list[ReftestReference] = []
+            references_supported = True
+            for raw_reference in raw_references:
+                if not isinstance(raw_reference, list) or len(raw_reference) != 2:
+                    references_supported = False
+                    break
+                raw_reference_url, relation = raw_reference
+                if relation not in {"==", "!="}:
+                    references_supported = False
+                    break
+                reference_url = _manifest_reference_url(test_url, raw_reference_url)
+                if reference_url is None:
+                    references_supported = False
+                    break
+                reference_supported, _ = _layout_document_is_static(
+                    wpt_root,
+                    reference_url,
+                    document_cache,
+                )
+                if not reference_supported:
+                    references_supported = False
+                    break
+                references.append(
+                    ReftestReference(
+                        reference_path=reference_url,
+                        relation=relation,
+                        fuzzy=_manifest_fuzzy_tolerance(
+                            raw_extras,
+                            test_url=test_url,
+                            reference_url=reference_url,
+                            relation=relation,
+                        ),
+                    )
+                )
+            if not references_supported or not references:
+                continue
+            timeout_multiplier = (
+                LONG_TIMEOUT_MULTIPLIER
+                if raw_extras.get("timeout") == "long"
+                else source_timeout_multiplier
+            )
+            found.append(
+                WptCase(
+                    case_path=test_url,
+                    timeout_multiplier=timeout_multiplier,
+                    test_type="reftest",
+                    references=tuple(references),
+                )
+            )
+
+    found.sort(key=lambda case: case.case_path)
+    if limit is not None:
+        found = found[:limit]
+    return found
+
+
+def explicit_reftest_case(wpt_root: Path, case_path: str) -> WptCase:
+    normalized = case_path.lstrip("/")
+    file_path = urlsplit(normalized).path
+    parent = str(Path(file_path).parent).replace("\\", "/")
+    if parent == ".":
+        parent = ""
+    for case in enumerate_reftest_cases(
+        wpt_root,
+        dir_prefixes=(parent,),
+        include_tentative=True,
+    ):
+        if case.case_path == normalized:
+            return case
+    raise RuntimeError(f"WPT reftest is not selectable: {case_path}")
 
 
 def explicit_case(wpt_root: Path, case_path: str) -> WptCase:

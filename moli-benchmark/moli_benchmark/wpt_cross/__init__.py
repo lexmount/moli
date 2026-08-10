@@ -1,8 +1,9 @@
 """Cross-engine WPT runner.
 
 Runs identical Web Platform Tests cases against multiple headless engines
-(Moli, Lightpanda, Obscura) using the same fixture server, the same
-upstream WPT case URLs, and the same CDP-based testharness completion bridge.
+(Moli, Lightpanda, Chrome, Obscura) using the same fixture server and upstream
+WPT case URLs. It supports both testharness completion and manifest-backed
+layout reftest screenshots.
 
 The goal is to produce an objective WebAPI coverage matrix: same case set,
 same harness, same timeout, no per-engine source patches.
