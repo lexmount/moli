@@ -2179,10 +2179,14 @@ fn html_image_data_svg_exposes_intrinsic_dimensions() {
   const noSize = new Image();
   noSize.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg"/>';
 
+  const fractionalConcreteHeight = new Image();
+  fractionalConcreteHeight.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 12"/>';
+
   return [
     [sized.naturalWidth, sized.naturalHeight].join('x'),
     [ratioWidth.naturalWidth, ratioWidth.naturalHeight].join('x'),
-    [noSize.naturalWidth, noSize.naturalHeight].join('x')
+    [noSize.naturalWidth, noSize.naturalHeight].join('x'),
+    [fractionalConcreteHeight.naturalWidth, fractionalConcreteHeight.naturalHeight].join('x')
   ].join('|');
 })()
 "#,
@@ -2191,7 +2195,9 @@ fn html_image_data_svg_exposes_intrinsic_dimensions() {
 
     // Blink resolves an external SVG with neither dimensions nor a viewBox
     // against the replaced-element default object size.
-    assert_eq!(result, "500x400|400x300|300x150");
+    // Its DOM natural dimensions remain integers even when layout retains the
+    // precise fractional concrete object size for aspect-ratio calculations.
+    assert_eq!(result, "500x400|400x300|300x150|300x38");
 }
 
 #[test]

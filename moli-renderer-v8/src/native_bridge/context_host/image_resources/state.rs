@@ -313,8 +313,48 @@ pub(super) fn intrinsic_dimensions(resource: &ReadyImageResource) -> (f32, f32) 
     } else {
         1.0
     };
-    (
-        resource.descriptor.width as f32 / density,
-        resource.descriptor.height as f32 / density,
-    )
+    // `ImageResponseDescriptor::{width,height}` deliberately stores integer
+    // dimensions for the HTMLImageElement naturalWidth/naturalHeight surface.
+    // SVG layout cannot reuse those rounded values: a viewBox-only 96:12 SVG
+    // has a 300x37.5 concrete object size even though the DOM reports 300x38.
+    // Preserve the metadata's fractional concrete size until the DOM getter's
+    // explicit integer conversion boundary.
+    let (width, height) = match resource.descriptor.decode_metadata {
+        super::ImageDecodeMetadata::Raster(_) => (
+            resource.descriptor.width as f32,
+            resource.descriptor.height as f32,
+        ),
+        super::ImageDecodeMetadata::Svg(metadata) => {
+            (metadata.concrete_width, metadata.concrete_height)
+        }
+    };
+    (width / density, height / density)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn svg_layout_dimensions_preserve_fractional_concrete_size() {
+        let metadata =
+            moli_image::svg_image_metadata_from_root_attributes(None, None, Some("0 0 96 12"));
+        let descriptor = ImageResponseDescriptor::svg(metadata).expect("valid SVG descriptor");
+        assert_eq!((descriptor.width, descriptor.height), (300, 38));
+
+        let resource = ReadyImageResource {
+            descriptor,
+            density: 1.0,
+            pixels: None,
+            svg: None,
+            _decoded_bytes_permit: None,
+        };
+        assert_eq!(intrinsic_dimensions(&resource), (300.0, 37.5));
+
+        let high_density_resource = ReadyImageResource {
+            density: 2.0,
+            ..resource
+        };
+        assert_eq!(intrinsic_dimensions(&high_density_resource), (150.0, 18.75));
+    }
 }

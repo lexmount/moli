@@ -606,28 +606,17 @@ impl ResolvedLayoutStyle {
             }
         };
         let mut taffy = stylo_taffy::to_taffy_style(&computed);
-        taffy.size.width = match &position_style.width {
-            GenericSize::MinContent => taffy::Dimension::min_content(),
-            GenericSize::MaxContent => taffy::Dimension::max_content(),
-            GenericSize::FitContent => taffy::Dimension::fit_content(),
-            GenericSize::Stretch | GenericSize::WebkitFillAvailable => taffy::Dimension::stretch(),
-            _ => taffy.size.width,
+        taffy.size = Size {
+            width: taffy_size_dimension(&position_style.width, taffy.size.width),
+            height: taffy_size_dimension(&position_style.height, taffy.size.height),
         };
-        taffy.min_size.width = match &position_style.min_width {
-            GenericSize::MinContent => taffy::Dimension::min_content(),
-            GenericSize::MaxContent => taffy::Dimension::max_content(),
-            GenericSize::FitContent => taffy::Dimension::fit_content(),
-            GenericSize::Stretch | GenericSize::WebkitFillAvailable => taffy::Dimension::stretch(),
-            _ => taffy.min_size.width,
+        taffy.min_size = Size {
+            width: taffy_size_dimension(&position_style.min_width, taffy.min_size.width),
+            height: taffy_size_dimension(&position_style.min_height, taffy.min_size.height),
         };
-        taffy.max_size.width = match &position_style.max_width {
-            GenericMaxSize::MinContent => taffy::Dimension::min_content(),
-            GenericMaxSize::MaxContent => taffy::Dimension::max_content(),
-            GenericMaxSize::FitContent => taffy::Dimension::fit_content(),
-            GenericMaxSize::Stretch | GenericMaxSize::WebkitFillAvailable => {
-                taffy::Dimension::stretch()
-            }
-            _ => taffy.max_size.width,
+        taffy.max_size = Size {
+            width: taffy_max_size_dimension(&position_style.max_width, taffy.max_size.width),
+            height: taffy_max_size_dimension(&position_style.max_height, taffy.max_size.height),
         };
         // Taffy's generic leaf algorithm transfers aspect ratios before a
         // replaced-element measure callback runs. CSS Sizing 4 defines zero,
@@ -1567,6 +1556,34 @@ impl ResolvedLayoutStyle {
 
 fn usable_aspect_ratio(ratio: Option<f32>) -> Option<f32> {
     ratio.filter(|ratio| ratio.is_finite() && *ratio > 0.0)
+}
+
+fn taffy_size_dimension(
+    size: &GenericSize<style::values::computed::NonNegativeLengthPercentage>,
+    fallback: taffy::Dimension,
+) -> taffy::Dimension {
+    match size {
+        GenericSize::MinContent => taffy::Dimension::min_content(),
+        GenericSize::MaxContent => taffy::Dimension::max_content(),
+        GenericSize::FitContent => taffy::Dimension::fit_content(),
+        GenericSize::Stretch | GenericSize::WebkitFillAvailable => taffy::Dimension::stretch(),
+        _ => fallback,
+    }
+}
+
+fn taffy_max_size_dimension(
+    size: &GenericMaxSize<style::values::computed::NonNegativeLengthPercentage>,
+    fallback: taffy::Dimension,
+) -> taffy::Dimension {
+    match size {
+        GenericMaxSize::MinContent => taffy::Dimension::min_content(),
+        GenericMaxSize::MaxContent => taffy::Dimension::max_content(),
+        GenericMaxSize::FitContent => taffy::Dimension::fit_content(),
+        GenericMaxSize::Stretch | GenericMaxSize::WebkitFillAvailable => {
+            taffy::Dimension::stretch()
+        }
+        _ => fallback,
+    }
 }
 
 fn taffy_display(display: LayoutDisplay) -> TaffyDisplay {

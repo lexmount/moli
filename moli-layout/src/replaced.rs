@@ -220,13 +220,45 @@ pub(crate) fn measure_replaced(
         .min_size
         .maybe_resolve(parent_size, resolve_stylo_calc_value)
         .maybe_sub(box_sizing_adjustment);
-    let max_size = style
+    let mut max_size = style
         .max_size
         .maybe_resolve(preferred_basis, resolve_stylo_calc_value)
         .or(available_space.into_options())
         .maybe_min(available_space.into_options())
         .maybe_max(min_size)
         .maybe_sub(box_sizing_adjustment);
+
+    // A replaced element's intrinsic min/max-content constraint transfers a
+    // definite preferred size in the opposite axis through its preferred
+    // aspect ratio. It must not fall back to the resource's natural width or
+    // height. For example, a 60x60 image with `height:40px; width:30px;
+    // min-width:min-content` has a transferred min-width of 40px, not 60px.
+    // Taffy's generic horizontal intrinsic probe cannot preserve this once it
+    // reaches the complete replaced-element measure callback, and it has no
+    // vertical intrinsic-keyword resolver, so resolve both physical axes at
+    // this browser-owned sizing boundary.
+    if let Some(ratio) = aspect_ratio {
+        let transferred_width = preferred_size
+            .height
+            .map(|height| height * ratio)
+            .filter(|width| width.is_finite() && *width >= 0.0);
+        let transferred_height = preferred_size
+            .width
+            .map(|width| width / ratio)
+            .filter(|height| height.is_finite() && *height >= 0.0);
+        if is_min_or_max_content(style.min_size.width) {
+            min_size.width = transferred_width;
+        }
+        if is_min_or_max_content(style.min_size.height) {
+            min_size.height = transferred_height;
+        }
+        if is_min_or_max_content(style.max_size.width) {
+            max_size.width = transferred_width;
+        }
+        if is_min_or_max_content(style.max_size.height) {
+            max_size.height = transferred_height;
+        }
+    }
 
     if sizing_mode == SizingMode::ContentSize {
         match requested_axis {
@@ -358,4 +390,155 @@ pub(crate) fn measure_replaced(
         },
     };
     size + padding_border_sum
+}
+
+fn is_min_or_max_content(dimension: taffy::Dimension) -> bool {
+    dimension.is_min_content() || dimension.is_max_content()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn image_context() -> ReplacedContext {
+        ReplacedContext::for_element(
+            LayoutReplacedKind::Image,
+            Some(ReplacedMetrics {
+                intrinsic_width: Some(60.0),
+                intrinsic_height: Some(60.0),
+                intrinsic_ratio: Some(1.0),
+                ..ReplacedMetrics::default()
+            }),
+        )
+    }
+
+    fn measure(style: &taffy::Style<Atom>) -> Size<f32> {
+        measure_replaced(
+            Size::NONE,
+            Size::NONE,
+            Size {
+                width: AvailableSpace::MaxContent,
+                height: AvailableSpace::MaxContent,
+            },
+            &image_context(),
+            style,
+            SizingMode::InherentSize,
+            RequestedAxis::Both,
+        )
+    }
+
+    #[test]
+    fn intrinsic_min_max_constraints_transfer_the_opposite_preferred_axis() {
+        let mut min_width = taffy::Style::<Atom> {
+            size: Size {
+                width: taffy::Dimension::length(30.0),
+                height: taffy::Dimension::length(40.0),
+            },
+            min_size: Size {
+                width: taffy::Dimension::min_content(),
+                height: taffy::Dimension::auto(),
+            },
+            ..taffy::Style::default()
+        };
+        assert_eq!(
+            measure(&min_width),
+            Size {
+                width: 40.0,
+                height: 40.0
+            }
+        );
+
+        min_width.min_size.width = taffy::Dimension::max_content();
+        assert_eq!(
+            measure(&min_width),
+            Size {
+                width: 40.0,
+                height: 40.0
+            }
+        );
+
+        let mut max_width = taffy::Style::<Atom> {
+            size: Size {
+                width: taffy::Dimension::length(80.0),
+                height: taffy::Dimension::length(70.0),
+            },
+            max_size: Size {
+                width: taffy::Dimension::min_content(),
+                height: taffy::Dimension::auto(),
+            },
+            ..taffy::Style::default()
+        };
+        assert_eq!(
+            measure(&max_width),
+            Size {
+                width: 70.0,
+                height: 70.0
+            }
+        );
+
+        max_width.max_size.width = taffy::Dimension::max_content();
+        assert_eq!(
+            measure(&max_width),
+            Size {
+                width: 70.0,
+                height: 70.0
+            }
+        );
+
+        let mut min_height = taffy::Style::<Atom> {
+            size: Size {
+                width: taffy::Dimension::length(40.0),
+                height: taffy::Dimension::length(30.0),
+            },
+            min_size: Size {
+                width: taffy::Dimension::auto(),
+                height: taffy::Dimension::min_content(),
+            },
+            ..taffy::Style::default()
+        };
+        assert_eq!(
+            measure(&min_height),
+            Size {
+                width: 40.0,
+                height: 40.0
+            }
+        );
+
+        min_height.min_size.height = taffy::Dimension::max_content();
+        assert_eq!(
+            measure(&min_height),
+            Size {
+                width: 40.0,
+                height: 40.0
+            }
+        );
+
+        let mut max_height = taffy::Style::<Atom> {
+            size: Size {
+                width: taffy::Dimension::length(70.0),
+                height: taffy::Dimension::length(80.0),
+            },
+            max_size: Size {
+                width: taffy::Dimension::auto(),
+                height: taffy::Dimension::min_content(),
+            },
+            ..taffy::Style::default()
+        };
+        assert_eq!(
+            measure(&max_height),
+            Size {
+                width: 70.0,
+                height: 70.0
+            }
+        );
+
+        max_height.max_size.height = taffy::Dimension::max_content();
+        assert_eq!(
+            measure(&max_height),
+            Size {
+                width: 70.0,
+                height: 70.0
+            }
+        );
+    }
 }
