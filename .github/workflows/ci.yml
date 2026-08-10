@@ -64,7 +64,7 @@ jobs:
   nextest:
     name: Nextest
     if: github.event_name != 'pull_request' || github.event.action != 'closed'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, moli-ci]
     container: rust:1.96.1-bookworm
     steps:
       - name: Checkout repository
