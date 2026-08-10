@@ -34,14 +34,9 @@ jobs:
       github.event_name != 'pull_request' ||
       (github.event.pull_request.head.repo.full_name == github.repository &&
       github.actor != 'dependabot[bot]')
-    runs-on: [self-hosted, moli-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 90
-    container:
-      image: rust:1.96.1-bookworm
-      env:
-        CARGO_HOME: /cargo-home
-      volumes:
-        - moli-ci-cargo-home-v1:/cargo-home
+    container: rust:1.96.1-bookworm
     env:
       BENCHMARK_OUTPUT: spider-bench-results
       BINARY_DIR: /tmp/moli-spider-bench-binaries

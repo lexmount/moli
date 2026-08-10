@@ -34,7 +34,7 @@ jobs:
   format:
     name: Format
     if: github.event_name != 'pull_request' || github.event.action != 'closed'
-    runs-on: [self-hosted, moli-ci]
+    runs-on: ubuntu-latest
     container: rust:1.96.1-bookworm
     steps:
       - name: Checkout repository
@@ -49,15 +49,8 @@ jobs:
   clippy:
     name: Clippy
     if: github.event_name != 'pull_request' || github.event.action != 'closed'
-    runs-on: [self-hosted, moli-ci]
-    container:
-      image: rust:1.96.1-bookworm
-      env:
-        CARGO_HOME: /cargo-home
-      # Keep Cargo's cache and its root-level lock files together across job containers.
-      # Build artifacts remain in the checkout's target directory and are not persisted.
-      volumes:
-        - moli-ci-cargo-home-v1:/cargo-home
+    runs-on: ubuntu-latest
+    container: rust:1.96.1-bookworm
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -71,14 +64,8 @@ jobs:
   nextest:
     name: Nextest
     if: github.event_name != 'pull_request' || github.event.action != 'closed'
-    runs-on: [self-hosted, moli-ci]
-    container:
-      image: rust:1.96.1-bookworm
-      env:
-        CARGO_HOME: /cargo-home
-      # Use the same Cargo home as Clippy so concurrent Cargo processes share cache locks.
-      volumes:
-        - moli-ci-cargo-home-v1:/cargo-home
+    runs-on: ubuntu-latest
+    container: rust:1.96.1-bookworm
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -96,14 +83,9 @@ jobs:
   protocol-smoke:
     name: CDP and WebDriver smoke
     if: github.event_name != 'pull_request' || github.event.action != 'closed'
-    runs-on: [self-hosted, moli-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 60
-    container:
-      image: rust:1.96.1-bookworm
-      env:
-        CARGO_HOME: /cargo-home
-      volumes:
-        - moli-ci-cargo-home-v1:/cargo-home
+    container: rust:1.96.1-bookworm
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
