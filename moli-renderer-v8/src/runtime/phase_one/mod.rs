@@ -987,6 +987,44 @@ td{padding:0;border:0;height:10px}
     }
 
     #[test]
+    fn table_grid_preserves_percentage_padding_until_constraint_resolution() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+#host{width:200px}
+table{border-spacing:0;table-layout:fixed;width:100px;padding-left:10%}
+td{border:0;padding:0;height:10px}
+#default-cell{background:rgb(27,28,29)}
+#content-box{box-sizing:content-box}#content-cell{background:rgb(37,38,39)}
+</style></head><body><div id=host>
+<table><tr><td id=default-cell></td></tr></table>
+<table id=content-box><tr><td id=content-cell></td></tr></table>
+</div></body></html>"#,
+            )
+            .await;
+
+            // Chromium resolves the table's 10% padding against the 200px
+            // containing block, leaving an 80px grid content box at x=20.
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(27, 28, 29)),
+                moli_layout::PaintRect::new(20.0, 0.0, 80.0, 10.0),
+            );
+            // An author override remains authoritative: content-box keeps a
+            // 100px grid and adds the same 20px padding outside it.
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(37, 38, 39)),
+                moli_layout::PaintRect::new(20.0, 10.0, 100.0, 10.0),
+            );
+        }));
+    }
+
+    #[test]
     fn fixed_table_layout_shrinks_overconstrained_length_columns() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()

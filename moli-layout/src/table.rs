@@ -66,6 +66,8 @@ struct TableContext {
     column_constraints: Vec<TableColumnConstraint>,
     fixed_layout: bool,
     inline_border_spacing: f32,
+    outer_border_spacing: Size<f32>,
+    writing_mode: taffy::WritingMode,
 }
 
 pub(crate) fn prepare_table_layout_trees<N>(world: &mut LayoutWorld<N>)
@@ -129,6 +131,7 @@ where
     N: Copy + Debug + Eq + Hash,
 {
     let mut context = build_table_context(world, root);
+    context.resolve_used_table_box(inputs);
     context.resolve_column_tracks(inputs);
     let mut output = {
         let mut wrapper = TableTreeWrapper {
@@ -151,15 +154,17 @@ where
             .copied()
             .filter(|caption| world.boxes[caption.index()].style.caption_is_bottom())
             .collect::<Vec<_>>();
-        let top_height = layout_captions(world, &top_captions, output.size.width, 0.0);
+        let writing_mode = world.boxes[root.index()].style.writing_mode();
+        let top_height = layout_captions(world, &top_captions, output.size, writing_mode, 0.0);
         shift_grid_children(world, &context.cells, top_height);
         let bottom_height = layout_captions(
             world,
             &bottom_captions,
-            output.size.width,
+            output.size,
+            writing_mode,
             top_height + output.size.height,
         );
-        apply_structural_layout(world, root, &context, top_height, output.size);
+        apply_structural_layout(world, root, &context, inputs, top_height);
         if let Some(first_baseline) = &mut output.first_baselines.y {
             *first_baseline += top_height;
         }
@@ -188,11 +193,6 @@ where
     let mut style = root_style.taffy.clone();
     style.display = Display::Grid;
     style.item_is_table = true;
-    // CSS table used width constrains the table grid border box (including
-    // outer border-spacing), even though ordinary `box-sizing` defaults to
-    // content-box. Feeding the wrapper to generic grid as content-box would
-    // add the two outer spacing gutters a second time.
-    style.box_sizing = taffy::BoxSizing::BorderBox;
     style.grid_auto_flow = GridAutoFlow::RowDense;
     style.grid_auto_columns.clear();
     style.grid_auto_rows.clear();
@@ -253,17 +253,6 @@ where
         width: style_helpers::length(spacing.width),
         height: style_helpers::length(spacing.height),
     };
-    if !collapsed {
-        let padding = style
-            .padding
-            .resolve_or_zero(None, resolve_stylo_calc_value);
-        style.padding = Rect {
-            left: style_helpers::length(padding.left + spacing.width),
-            right: style_helpers::length(padding.right + spacing.width),
-            top: style_helpers::length(padding.top + spacing.height),
-            bottom: style_helpers::length(padding.bottom + spacing.height),
-        };
-    }
     TableContext {
         style,
         cells,
@@ -276,10 +265,37 @@ where
         column_constraints: column_tracks,
         fixed_layout,
         inline_border_spacing: spacing.width,
+        outer_border_spacing: spacing,
+        writing_mode: root_style.writing_mode(),
     }
 }
 
 impl TableContext {
+    /// Materialize the numeric Grid adapter only after the containing-block
+    /// constraint space is available. The authored table padding remains
+    /// unresolved in `build_table_context`; resolving it there would turn
+    /// every percentage into zero before the table knows its percentage basis.
+    fn resolve_used_table_box(&mut self, inputs: LayoutInput) {
+        if self.collapsed_borders {
+            return;
+        }
+
+        let percentage_basis = inputs
+            .constraint_space(self.writing_mode)
+            .margin_padding_percentage_basis();
+        let padding = self
+            .style
+            .padding
+            .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
+        let spacing = self.outer_border_spacing;
+        self.style.padding = Rect {
+            left: style_helpers::length(padding.left + spacing.width),
+            right: style_helpers::length(padding.right + spacing.width),
+            top: style_helpers::length(padding.top + spacing.height),
+            bottom: style_helpers::length(padding.bottom + spacing.height),
+        };
+    }
+
     /// Resolve table column semantics before invoking the numeric Grid backend.
     /// Grid receives final lengths for a definite fixed-layout table and never
     /// participates in the table free-space distribution algorithm.
@@ -302,34 +318,49 @@ impl TableContext {
             return None;
         }
 
-        let percentage_basis = inputs.parent_size.width;
+        // Physical width properties and box decorations intentionally use
+        // different percentage bases. CSS width/min-width/max-width resolve
+        // in physical axes, while all regular margin/padding percentages use
+        // the containing block's logical inline size.
+        let width_percentage_basis = inputs.parent_size.width;
+        let decoration_percentage_basis = inputs
+            .constraint_space(self.writing_mode)
+            .margin_padding_percentage_basis();
+        let padding = self
+            .style
+            .padding
+            .resolve_or_zero(decoration_percentage_basis, resolve_stylo_calc_value);
+        let border = self
+            .style
+            .border
+            .resolve_or_zero(decoration_percentage_basis, resolve_stylo_calc_value);
+        let inline_insets = padding.left + padding.right + border.left + border.right;
+        let box_sizing_adjustment = if self.style.box_sizing == taffy::BoxSizing::ContentBox {
+            inline_insets
+        } else {
+            0.0
+        };
         let (preferred, min_size, max_size) = if inputs.sizing_mode == SizingMode::InherentSize {
             (
                 self.style
                     .size
                     .width
-                    .maybe_resolve(percentage_basis, resolve_stylo_calc_value),
+                    .maybe_resolve(width_percentage_basis, resolve_stylo_calc_value)
+                    .map(|size| size + box_sizing_adjustment),
                 self.style
                     .min_size
                     .width
-                    .maybe_resolve(percentage_basis, resolve_stylo_calc_value),
+                    .maybe_resolve(width_percentage_basis, resolve_stylo_calc_value)
+                    .map(|size| size + box_sizing_adjustment),
                 self.style
                     .max_size
                     .width
-                    .maybe_resolve(percentage_basis, resolve_stylo_calc_value),
+                    .maybe_resolve(width_percentage_basis, resolve_stylo_calc_value)
+                    .map(|size| size + box_sizing_adjustment),
             )
         } else {
             (None, None, None)
         };
-        let padding = self
-            .style
-            .padding
-            .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
-        let border = self
-            .style
-            .border
-            .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
-        let inline_insets = padding.left + padding.right + border.left + border.right;
         let border_box_size = inputs
             .known_dimensions
             .width
@@ -562,18 +593,21 @@ fn table_cell_width_track(style: &Style<Atom>, fixed: bool) -> TableColumnConstr
 fn layout_captions<N>(
     world: &mut LayoutWorld<N>,
     captions: &[LayoutBoxId],
-    width: f32,
+    containing_size: Size<f32>,
+    parent_writing_mode: taffy::WritingMode,
     mut y: f32,
 ) -> f32
 where
     N: Copy + Debug + Eq + Hash,
 {
     let start = y;
+    let width = containing_size.width;
+    let percentage_basis = parent_writing_mode.to_logical(containing_size).inline_size;
     for (order, caption) in captions.iter().copied().enumerate() {
         let style = world.boxes[caption.index()].style.taffy.clone();
         let margin = style
             .margin
-            .resolve_or_zero(Some(width), resolve_stylo_calc_value);
+            .resolve_or_zero(Some(percentage_basis), resolve_stylo_calc_value);
         y += margin.top;
         let inputs = LayoutInput {
             known_dimensions: Size {
@@ -584,10 +618,8 @@ where
                 width: Some((width - margin.left - margin.right).max(0.0)),
                 height: None,
             },
-            parent_size: Size {
-                width: Some(width),
-                height: None,
-            },
+            parent_size: containing_size.map(Some),
+            parent_writing_mode,
             available_space: Size {
                 width: AvailableSpace::Definite(width),
                 height: AvailableSpace::MaxContent,
@@ -605,7 +637,7 @@ where
             Point { x: margin.left, y },
             output,
             order,
-            Some(width),
+            Some(percentage_basis),
         );
         y += output.size.height + margin.bottom;
     }
@@ -628,18 +660,21 @@ fn apply_structural_layout<N>(
     world: &mut LayoutWorld<N>,
     root: LayoutBoxId,
     context: &TableContext,
+    inputs: LayoutInput,
     top_offset: f32,
-    grid_size: Size<f32>,
 ) where
     N: Copy + Debug + Eq + Hash,
 {
     let root_style = &context.style;
+    let root_percentage_basis = inputs
+        .constraint_space(context.writing_mode)
+        .margin_padding_percentage_basis();
     let padding = root_style
         .padding
-        .resolve_or_zero(Some(grid_size.width), resolve_stylo_calc_value);
+        .resolve_or_zero(root_percentage_basis, resolve_stylo_calc_value);
     let border = root_style
         .border
-        .resolve_or_zero(Some(grid_size.width), resolve_stylo_calc_value);
+        .resolve_or_zero(root_percentage_basis, resolve_stylo_calc_value);
     let origin = Point {
         x: border.left + padding.left,
         y: top_offset + border.top + padding.top,
@@ -651,6 +686,13 @@ fn apply_structural_layout<N>(
     let column_starts = track_starts(origin.x, &detailed.columns.sizes, &detailed.columns.gutters);
     let content_width = track_extent(&detailed.columns.sizes, &detailed.columns.gutters);
     let content_height = track_extent(&detailed.rows.sizes, &detailed.rows.gutters);
+    let structural_percentage_basis = context
+        .writing_mode
+        .to_logical(Size {
+            width: content_width,
+            height: content_height,
+        })
+        .inline_size;
     if context.collapsed_borders {
         let mut row_lines = row_starts.clone();
         row_lines.push(origin.y + content_height);
@@ -669,7 +711,7 @@ fn apply_structural_layout<N>(
             y,
             content_width,
             height,
-            grid_size.width,
+            structural_percentage_basis,
         );
     }
     let mut groups = context
@@ -698,7 +740,7 @@ fn apply_structural_layout<N>(
                 y,
                 content_width,
                 height,
-                grid_size.width,
+                structural_percentage_basis,
             );
         }
     }
@@ -717,7 +759,7 @@ fn apply_structural_layout<N>(
             origin.y,
             width,
             content_height,
-            grid_size.width,
+            structural_percentage_basis,
         );
     }
     let mut column_groups = context
@@ -753,7 +795,7 @@ fn apply_structural_layout<N>(
                 origin.y,
                 width,
                 content_height,
-                grid_size.width,
+                structural_percentage_basis,
             );
         }
     }
@@ -796,17 +838,17 @@ fn set_structural_rect<N>(
     y: f32,
     width: f32,
     height: f32,
-    parent_width: f32,
+    percentage_basis: f32,
 ) where
     N: Copy + Debug + Eq + Hash,
 {
     let style = &world.boxes[id.index()].style.taffy;
     let padding = style
         .padding
-        .resolve_or_zero(Some(parent_width), resolve_stylo_calc_value);
+        .resolve_or_zero(Some(percentage_basis), resolve_stylo_calc_value);
     let border = style
         .border
-        .resolve_or_zero(Some(parent_width), resolve_stylo_calc_value);
+        .resolve_or_zero(Some(percentage_basis), resolve_stylo_calc_value);
     world.boxes[id.index()].unrounded_layout = Layout {
         order: 0,
         location: Point { x, y },
@@ -825,20 +867,20 @@ fn set_box_layout<N>(
     location: Point<f32>,
     output: LayoutOutput,
     order: usize,
-    parent_width: Option<f32>,
+    percentage_basis: Option<f32>,
 ) where
     N: Copy + Debug + Eq + Hash,
 {
     let style = &world.boxes[id.index()].style.taffy;
     let padding = style
         .padding
-        .resolve_or_zero(parent_width, resolve_stylo_calc_value);
+        .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
     let border = style
         .border
-        .resolve_or_zero(parent_width, resolve_stylo_calc_value);
+        .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
     let margin = style
         .margin
-        .resolve_or_zero(parent_width, resolve_stylo_calc_value);
+        .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
     world.boxes[id.index()].unrounded_layout = Layout {
         order: u32::try_from(order).unwrap_or(u32::MAX),
         location,
