@@ -167,6 +167,24 @@ mod tests {
         }
     }
 
+    fn rgb(red: u8, green: u8, blue: u8) -> moli_layout::PaintColor {
+        moli_layout::PaintColor::new(
+            f32::from(red) / 255.0,
+            f32::from(green) / 255.0,
+            f32::from(blue) / 255.0,
+            1.0,
+        )
+    }
+
+    async fn render_test_snapshot(html: &'static str) -> moli_layout::PaintSnapshot {
+        let mut page = parse_phase_one_html_into_page_vm_for_test(html).await;
+        page.vm_mut().sync_live_document_style_sources();
+        page.vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0))
+            .expect("test layout should succeed")
+            .expect("test fixture should have a document element")
+    }
+
     fn glyph_min_x(snapshot: &moli_layout::PaintSnapshot, color: moli_layout::PaintColor) -> f32 {
         snapshot
             .fragments
@@ -906,6 +924,208 @@ html,body{margin:0;padding:0}
     }
 
     #[test]
+    fn fixed_table_layout_distributes_unresolved_columns_equally() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+table{border-spacing:0;width:300px;table-layout:fixed}
+td{padding:0;border:0;height:10px}
+#calc-cell{width:calc(50% - 20px);background:rgb(61,62,63)}
+#remaining-cell{background:rgb(71,72,73)}
+</style></head><body><table><tr><td id=calc-cell></td><td id=remaining-cell></td></tr></table></body></html>"#,
+            )
+            .await;
+
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(61, 62, 63)),
+                moli_layout::PaintRect::new(0.0, 0.0, 150.0, 10.0),
+            );
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(71, 72, 73)),
+                moli_layout::PaintRect::new(150.0, 0.0, 150.0, 10.0),
+            );
+        }));
+    }
+
+    #[test]
+    fn fixed_table_layout_grows_to_its_definite_column_minimum() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+table{border-spacing:0;width:300px;table-layout:fixed}
+col{width:200px}td{padding:0;border:0;height:10px}
+#first{background:rgb(81,82,83)}#second{background:rgb(91,92,93)}
+#collapsed{border-collapse:collapse}
+#collapsed-first{background:rgb(171,172,173)}#collapsed-second{background:rgb(181,182,183)}
+</style></head><body>
+<table><col><col><tr><td id=first></td><td id=second></td></tr></table>
+<table id=collapsed><col><col><tr><td id=collapsed-first></td><td id=collapsed-second></td></tr></table>
+</body></html>"#,
+            )
+            .await;
+
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(81, 82, 83)),
+                moli_layout::PaintRect::new(0.0, 0.0, 200.0, 10.0),
+            );
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(91, 92, 93)),
+                moli_layout::PaintRect::new(200.0, 0.0, 200.0, 10.0),
+            );
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(171, 172, 173)),
+                moli_layout::PaintRect::new(0.0, 10.0, 200.0, 10.0),
+            );
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(181, 182, 183)),
+                moli_layout::PaintRect::new(200.0, 10.0, 200.0, 10.0),
+            );
+        }));
+    }
+
+    #[test]
+    fn fixed_table_layout_grows_fixed_columns_when_no_auto_column_remains() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+table{border-spacing:0;width:400px;table-layout:fixed}
+td{padding:0;border:0;height:10px}
+#first{width:50px;background:rgb(101,102,103)}
+#second{width:100px;background:rgb(111,112,113)}
+#third{width:25%;background:rgb(121,122,123)}
+</style></head><body><table><tr><td id=first></td><td id=second></td><td id=third></td></tr></table></body></html>"#,
+            )
+            .await;
+
+            for (color, expected) in [
+                (rgb(101, 102, 103), (0.0, 100.0)),
+                (rgb(111, 112, 113), (100.0, 200.0)),
+                (rgb(121, 122, 123), (300.0, 100.0)),
+            ] {
+                assert_paint_rect(
+                    solid_paint_rect(&snapshot, color),
+                    moli_layout::PaintRect::new(expected.0, 0.0, expected.1, 10.0),
+                );
+            }
+        }));
+    }
+
+    #[test]
+    fn fixed_table_layout_adds_content_box_padding_to_percent_cell_measure() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+table{border-spacing:0;width:300px;table-layout:fixed}
+td{border:0;height:10px;padding-top:0;padding-bottom:0}
+#first{box-sizing:content-box;width:50%;padding-left:10px;padding-right:10px;background:rgb(131,132,133)}
+#second{padding-left:0;padding-right:0;background:rgb(141,142,143)}
+</style></head><body><table><tr><td id=first></td><td id=second></td></tr></table></body></html>"#,
+            )
+            .await;
+
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(131, 132, 133)),
+                moli_layout::PaintRect::new(0.0, 0.0, 170.0, 10.0),
+            );
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(141, 142, 143)),
+                moli_layout::PaintRect::new(170.0, 0.0, 130.0, 10.0),
+            );
+        }));
+    }
+
+    #[test]
+    fn fixed_table_layout_clamps_border_box_cell_width_to_its_insets() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+table{border-spacing:0;width:100px;table-layout:fixed}
+td{border:0;height:10px;padding-top:0;padding-bottom:0}
+#first{box-sizing:border-box;width:10px;padding-left:20px;padding-right:20px;background:rgb(151,152,153)}
+#second{padding-left:0;padding-right:0;background:rgb(161,162,163)}
+</style></head><body><table><tr><td id=first></td><td id=second></td></tr></table></body></html>"#,
+            )
+            .await;
+
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(151, 152, 153)),
+                moli_layout::PaintRect::new(0.0, 0.0, 40.0, 10.0),
+            );
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(161, 162, 163)),
+                moli_layout::PaintRect::new(40.0, 0.0, 60.0, 10.0),
+            );
+        }));
+    }
+
+    #[test]
+    fn fixed_table_layout_preserves_native_and_explicit_box_sizing() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+table{position:absolute;left:0;border:4px solid black;border-spacing:0;width:100px;table-layout:fixed}
+td{padding:0;border:0;height:10px}
+#native{top:0}#content{top:30px;box-sizing:content-box}
+#native-first{background:rgb(191,192,193)}#native-second{background:rgb(201,202,203)}
+#content-first{background:rgb(211,212,213)}#content-second{background:rgb(221,222,223)}
+</style></head><body>
+<table id=native><tr><td id=native-first></td><td id=native-second></td></tr></table>
+<table id=content><tr><td id=content-first></td><td id=content-second></td></tr></table>
+</body></html>"#,
+            )
+            .await;
+
+            for (color, expected) in [
+                (rgb(191, 192, 193), (4.0, 4.0, 46.0)),
+                (rgb(201, 202, 203), (50.0, 4.0, 46.0)),
+                (rgb(211, 212, 213), (4.0, 34.0, 50.0)),
+                (rgb(221, 222, 223), (54.0, 34.0, 50.0)),
+            ] {
+                assert_paint_rect(
+                    solid_paint_rect(&snapshot, color),
+                    moli_layout::PaintRect::new(expected.0, expected.1, expected.2, 10.0),
+                );
+            }
+        }));
+    }
+
+    #[test]
     fn layout_renderer_projects_current_blitz_taffy_parity_from_stylo() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -993,35 +1213,25 @@ html,body{margin:0;padding:0}
                 );
             }
 
-            let mut replaced_table_page = parse_phase_one_html_into_page_vm_for_test(
+            let mut replaced_page = parse_phase_one_html_into_page_vm_for_test(
                 r#"<!doctype html><html><head><style>
-html,body{margin:0;padding:0}table{border-spacing:0;width:300px;table-layout:fixed}td{padding:0;border:0;height:10px}
-#calc-cell{width:calc(50% - 20px);background:rgb(61,62,63)}#remaining-cell{background:rgb(71,72,73)}
+html,body{margin:0;padding:0}
 #image{display:block;width:120px;height:auto;aspect-ratio:0/1;background:rgb(81,82,83)}
-</style></head><body><table><tr><td id=calc-cell></td><td id=remaining-cell></td></tr></table>
-<svg id=image width=80 height=40 viewBox="0 0 80 40"></svg></body></html>"#,
+</style></head><body><svg id=image width=80 height=40 viewBox="0 0 80 40"></svg></body></html>"#,
             )
             .await;
-            replaced_table_page
+            replaced_page
                 .vm_mut()
                 .sync_live_document_style_sources();
-            let replaced_table = replaced_table_page
+            let replaced = replaced_page
                 .vm_mut()
                 .screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0))
-                .expect("table calc/replaced ratio layout should succeed")
-                .expect("table calc/replaced ratio fixture should have a document element");
-            for (color, expected) in [
-                (rgb(61, 62, 63), (0.0, 0.0, 150.0, 10.0)),
-                (rgb(71, 72, 73), (150.0, 0.0, 150.0, 10.0)),
-                (rgb(81, 82, 83), (0.0, 10.0, 120.0, 60.0)),
-            ] {
-                assert_paint_rect(
-                    solid_paint_rect(&replaced_table, color),
-                    moli_layout::PaintRect::new(
-                        expected.0, expected.1, expected.2, expected.3,
-                    ),
-                );
-            }
+                .expect("replaced ratio layout should succeed")
+                .expect("replaced ratio fixture should have a document element");
+            assert_paint_rect(
+                solid_paint_rect(&replaced, rgb(81, 82, 83)),
+                moli_layout::PaintRect::new(0.0, 0.0, 120.0, 60.0),
+            );
         }));
     }
 

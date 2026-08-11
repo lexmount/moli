@@ -76,6 +76,7 @@ figure {
 
 table {
   display: table;
+  box-sizing: border-box;
 }
 
 thead {
