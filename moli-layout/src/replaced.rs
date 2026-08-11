@@ -11,7 +11,10 @@ use taffy::{
     ResolveOrZero as _, Size, SizingMode,
 };
 
-use crate::{LayoutReplacedKind, ReplacedMetrics, style::resolve_stylo_calc_value};
+use crate::{
+    LayoutReplacedKind, ReplacedMetrics,
+    style::{ResolvedAspectRatio, resolve_stylo_calc_value},
+};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ReplacedContext {
@@ -113,6 +116,10 @@ impl ReplacedContext {
             inherent_ratio: None,
         }
     }
+
+    pub(crate) const fn inherent_ratio(&self) -> Option<f32> {
+        self.inherent_ratio
+    }
 }
 
 fn concrete_object_size(
@@ -167,11 +174,69 @@ enum Violation {
     Max,
 }
 
+fn content_width_from_height(
+    height: f32,
+    aspect_ratio: ResolvedAspectRatio,
+    padding_border: Size<f32>,
+) -> Option<f32> {
+    let ratio = aspect_ratio.ratio?;
+    let width = match aspect_ratio.box_sizing {
+        BoxSizing::ContentBox => height * ratio,
+        BoxSizing::BorderBox => (height + padding_border.height) * ratio - padding_border.width,
+    };
+    width.is_finite().then_some(width.max(0.0))
+}
+
+fn content_height_from_width(
+    width: f32,
+    aspect_ratio: ResolvedAspectRatio,
+    padding_border: Size<f32>,
+) -> Option<f32> {
+    let ratio = aspect_ratio.ratio?;
+    let height = match aspect_ratio.box_sizing {
+        BoxSizing::ContentBox => width / ratio,
+        BoxSizing::BorderBox => (width + padding_border.width) / ratio - padding_border.height,
+    };
+    height.is_finite().then_some(height.max(0.0))
+}
+
+fn apply_aspect_ratio_to_content_size(
+    size: Size<Option<f32>>,
+    aspect_ratio: ResolvedAspectRatio,
+    padding_border: Size<f32>,
+) -> Size<Option<f32>> {
+    match size {
+        Size {
+            width: Some(width),
+            height: None,
+        } => Size {
+            width: Some(width),
+            height: content_height_from_width(width, aspect_ratio, padding_border),
+        },
+        Size {
+            width: None,
+            height: Some(height),
+        } => Size {
+            width: content_width_from_height(height, aspect_ratio, padding_border),
+            height: Some(height),
+        },
+        _ => size,
+    }
+}
+
+fn ratio_basis_scale(constrained: f32, original: f32, inset: f32, box_sizing: BoxSizing) -> f32 {
+    match box_sizing {
+        BoxSizing::ContentBox => constrained / original,
+        BoxSizing::BorderBox => (constrained + inset) / (original + inset),
+    }
+}
+
 pub(crate) fn measure_replaced(
     known_dimensions: Size<Option<f32>>,
     parent_size: Size<Option<f32>>,
     available_space: Size<AvailableSpace>,
     context: &ReplacedContext,
+    resolved_aspect_ratio: ResolvedAspectRatio,
     style: &taffy::Style<Atom>,
     sizing_mode: SizingMode,
     requested_axis: RequestedAxis,
@@ -192,14 +257,10 @@ pub(crate) fn measure_replaced(
     } else {
         Size::ZERO
     };
-    // CSS Sizing 4 makes zero, infinite and NaN ratios degenerate. Filter the
-    // author ratio before falling back to the resource's intrinsic ratio so
-    // `aspect-ratio: 0 / 1` behaves like `auto` on a replaced element.
-    let is_usable_ratio = |ratio: &f32| ratio.is_finite() && *ratio > 0.0;
-    let aspect_ratio = style
-        .aspect_ratio
-        .filter(is_usable_ratio)
-        .or(context.inherent_ratio.filter(is_usable_ratio));
+    // The browser-owned style seam has already resolved the three CSS states
+    // (`auto`, `<ratio>`, and `auto <ratio>`) against the natural ratio. Do not
+    // reconstruct that precedence from Taffy's lossy numeric field here.
+    let aspect_ratio = resolved_aspect_ratio.ratio;
     let preferred_basis = Size {
         width: if available_space.width == AvailableSpace::MinContent {
             Some(0.0)
@@ -239,15 +300,13 @@ pub(crate) fn measure_replaced(
     // reaches the complete replaced-element measure callback, and it has no
     // vertical intrinsic-keyword resolver, so resolve both physical axes at
     // this browser-owned sizing boundary.
-    if let Some(ratio) = aspect_ratio {
-        let transferred_width = preferred_size
-            .height
-            .map(|height| height * ratio)
-            .filter(|width| width.is_finite() && *width >= 0.0);
-        let transferred_height = preferred_size
-            .width
-            .map(|width| width / ratio)
-            .filter(|height| height.is_finite() && *height >= 0.0);
+    if aspect_ratio.is_some() {
+        let transferred_width = preferred_size.height.and_then(|height| {
+            content_width_from_height(height, resolved_aspect_ratio, padding_border_sum)
+        });
+        let transferred_height = preferred_size.width.and_then(|width| {
+            content_height_from_width(width, resolved_aspect_ratio, padding_border_sum)
+        });
         if is_min_or_max_content(style.min_size.width) {
             min_size.width = transferred_width;
         }
@@ -283,23 +342,30 @@ pub(crate) fn measure_replaced(
             .maybe_sub(box_sizing_adjustment)
             .maybe_max(min_size);
         let content_known = known_dimensions.maybe_sub(padding_border_sum);
-        let transferred = content_known
-            .maybe_clamp(min_size, style_max_size)
-            .maybe_apply_aspect_ratio(aspect_ratio)
-            .unwrap_or(context.inherent_size);
+        let transferred = apply_aspect_ratio_to_content_size(
+            content_known.maybe_clamp(min_size, style_max_size),
+            resolved_aspect_ratio,
+            padding_border_sum,
+        )
+        .unwrap_or(context.inherent_size);
         let size = content_known.unwrap_or(transferred.maybe_clamp(min_size, style_max_size));
         return size.map(|value| value.max(0.0)) + padding_border_sum;
     }
 
     let unclamped = if preferred_size.width.is_some() || preferred_size.height.is_some() {
-        preferred_size
-            .maybe_apply_aspect_ratio(aspect_ratio)
-            .unwrap_or(context.inherent_size)
+        apply_aspect_ratio_to_content_size(
+            preferred_size,
+            resolved_aspect_ratio,
+            padding_border_sum,
+        )
+        .unwrap_or(context.inherent_size)
     } else if context.attribute_size.width.is_some() || context.attribute_size.height.is_some() {
-        context
-            .attribute_size
-            .maybe_apply_aspect_ratio(aspect_ratio)
-            .unwrap_or(context.inherent_size)
+        apply_aspect_ratio_to_content_size(
+            context.attribute_size,
+            resolved_aspect_ratio,
+            padding_border_sum,
+        )
+        .unwrap_or(context.inherent_size)
     } else {
         context.inherent_size
     };
@@ -318,51 +384,80 @@ pub(crate) fn measure_replaced(
     } else {
         Violation::None
     };
-    let Some(aspect_ratio) = aspect_ratio else {
+    let Some(_) = aspect_ratio else {
         return size.maybe_clamp(min_size, max_size) + padding_border_sum;
     };
-    let inverse_ratio = 1.0 / aspect_ratio;
     let size = match (width_violation, height_violation) {
         (Violation::None, Violation::None) => size,
         (Violation::Max, Violation::None) => {
             let width = max_size.width.expect("max-width violation has a bound");
             Size {
                 width,
-                height: (width * inverse_ratio).maybe_max(min_size.height),
+                height: content_height_from_width(width, resolved_aspect_ratio, padding_border_sum)
+                    .expect("a resolved ratio transfers width to height")
+                    .maybe_max(min_size.height),
             }
         }
         (Violation::Min, Violation::None) => {
             let width = min_size.width.expect("min-width violation has a bound");
             Size {
                 width,
-                height: (width * inverse_ratio).maybe_min(max_size.height),
+                height: content_height_from_width(width, resolved_aspect_ratio, padding_border_sum)
+                    .expect("a resolved ratio transfers width to height")
+                    .maybe_min(max_size.height),
             }
         }
         (Violation::None, Violation::Max) => {
             let height = max_size.height.expect("max-height violation has a bound");
             Size {
-                width: (height * aspect_ratio).maybe_max(min_size.width),
+                width: content_width_from_height(height, resolved_aspect_ratio, padding_border_sum)
+                    .expect("a resolved ratio transfers height to width")
+                    .maybe_max(min_size.width),
                 height,
             }
         }
         (Violation::None, Violation::Min) => {
             let height = min_size.height.expect("min-height violation has a bound");
             Size {
-                width: (height * aspect_ratio).maybe_min(max_size.width),
+                width: content_width_from_height(height, resolved_aspect_ratio, padding_border_sum)
+                    .expect("a resolved ratio transfers height to width")
+                    .maybe_min(max_size.width),
                 height,
             }
         }
         (Violation::Max, Violation::Max) => {
             let width = max_size.width.expect("max-width violation has a bound");
             let height = max_size.height.expect("max-height violation has a bound");
-            if width / size.width <= height / size.height {
+            if ratio_basis_scale(
+                width,
+                size.width,
+                padding_border_sum.width,
+                resolved_aspect_ratio.box_sizing,
+            ) <= ratio_basis_scale(
+                height,
+                size.height,
+                padding_border_sum.height,
+                resolved_aspect_ratio.box_sizing,
+            ) {
                 Size {
                     width,
-                    height: (width * inverse_ratio).maybe_max(min_size.height),
+                    height: content_height_from_width(
+                        width,
+                        resolved_aspect_ratio,
+                        padding_border_sum,
+                    )
+                    .expect("a resolved ratio transfers width to height")
+                    .maybe_max(min_size.height),
                 }
             } else {
                 Size {
-                    width: (height * aspect_ratio).maybe_max(min_size.width),
+                    width: content_width_from_height(
+                        height,
+                        resolved_aspect_ratio,
+                        padding_border_sum,
+                    )
+                    .expect("a resolved ratio transfers height to width")
+                    .maybe_max(min_size.width),
                     height,
                 }
             }
@@ -370,15 +465,37 @@ pub(crate) fn measure_replaced(
         (Violation::Min, Violation::Min) => {
             let width = min_size.width.expect("min-width violation has a bound");
             let height = min_size.height.expect("min-height violation has a bound");
-            if width / size.width <= height / size.height {
+            if ratio_basis_scale(
+                width,
+                size.width,
+                padding_border_sum.width,
+                resolved_aspect_ratio.box_sizing,
+            ) <= ratio_basis_scale(
+                height,
+                size.height,
+                padding_border_sum.height,
+                resolved_aspect_ratio.box_sizing,
+            ) {
                 Size {
-                    width: (height * aspect_ratio).maybe_min(max_size.width),
+                    width: content_width_from_height(
+                        height,
+                        resolved_aspect_ratio,
+                        padding_border_sum,
+                    )
+                    .expect("a resolved ratio transfers height to width")
+                    .maybe_min(max_size.width),
                     height,
                 }
             } else {
                 Size {
                     width,
-                    height: (width * inverse_ratio).maybe_min(max_size.height),
+                    height: content_height_from_width(
+                        width,
+                        resolved_aspect_ratio,
+                        padding_border_sum,
+                    )
+                    .expect("a resolved ratio transfers width to height")
+                    .maybe_min(max_size.height),
                 }
             }
         }
@@ -423,10 +540,69 @@ mod tests {
                 height: AvailableSpace::MaxContent,
             },
             &image_context(),
+            ResolvedAspectRatio {
+                ratio: style
+                    .aspect_ratio
+                    .filter(|ratio| ratio.is_finite() && *ratio > 0.0)
+                    .or(Some(1.0)),
+                box_sizing: style.box_sizing,
+            },
             style,
             SizingMode::InherentSize,
             RequestedAxis::Both,
         )
+    }
+
+    #[test]
+    fn preferred_ratio_uses_its_selected_box_sizing_basis() {
+        let style = taffy::Style::<Atom> {
+            box_sizing: BoxSizing::BorderBox,
+            size: Size {
+                width: taffy::Dimension::length(100.0),
+                height: taffy::Dimension::auto(),
+            },
+            padding: taffy::Rect {
+                left: taffy::LengthPercentage::length(10.0),
+                right: taffy::LengthPercentage::length(10.0),
+                top: taffy::LengthPercentage::length(10.0),
+                bottom: taffy::LengthPercentage::length(10.0),
+            },
+            aspect_ratio: Some(2.0),
+            ..taffy::Style::default()
+        };
+        let measure_with_basis = |box_sizing| {
+            measure_replaced(
+                Size::NONE,
+                Size::NONE,
+                Size {
+                    width: AvailableSpace::MaxContent,
+                    height: AvailableSpace::MaxContent,
+                },
+                &image_context(),
+                ResolvedAspectRatio {
+                    ratio: Some(2.0),
+                    box_sizing,
+                },
+                &style,
+                SizingMode::InherentSize,
+                RequestedAxis::Both,
+            )
+        };
+
+        assert_eq!(
+            measure_with_basis(BoxSizing::BorderBox),
+            Size {
+                width: 100.0,
+                height: 50.0,
+            }
+        );
+        assert_eq!(
+            measure_with_basis(BoxSizing::ContentBox),
+            Size {
+                width: 100.0,
+                height: 60.0,
+            }
+        );
     }
 
     #[test]
