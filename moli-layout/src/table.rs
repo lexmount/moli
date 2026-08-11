@@ -227,6 +227,17 @@ where
     collect_captions(world, root, &mut captions);
     max_columns = max_columns.max(column_tracks.len()).max(1);
     column_tracks.resize(max_columns, style_helpers::auto());
+    if root_style.table_layout_is_fixed() {
+        // The fixed table algorithm ignores cell content when distributing
+        // space to columns without a <col> or first-row width. Model those
+        // columns as equal flexible tracks instead of CSS Grid `auto` tracks,
+        // whose content-based bases can produce unequal fractional widths.
+        for track in &mut column_tracks {
+            if *track == style_helpers::auto() {
+                *track = style_helpers::flex(1.0);
+            }
+        }
+    }
     let fixed_track_min_width = column_tracks
         .iter()
         .map(|track| track.min_sizing_function().into_raw())
