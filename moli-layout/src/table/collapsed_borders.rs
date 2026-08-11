@@ -452,7 +452,6 @@ where
 
     let table_strut = borders.table_strut();
     set_layout_border(world, root, table_strut);
-    set_table_wrapper_width_contract(world, root, context.fixed_track_min_width);
     world.boxes[root.index()].collapsed_table_border_part = true;
     for cell in &context.cells {
         let strut = borders.cell_strut(cell);
@@ -496,33 +495,6 @@ where
         bottom: style_helpers::length(widths.bottom),
         left: style_helpers::length(widths.left),
     };
-}
-
-fn set_table_wrapper_width_contract<N>(
-    world: &mut LayoutWorld<N>,
-    root: LayoutBoxId,
-    fixed_track_min_width: f32,
-) where
-    N: Copy + Debug + Eq + Hash,
-{
-    let style = &mut world.boxes[root.index()].style.taffy;
-    // CSS table width constrains the grid border box, while a fixed-layout
-    // table must still grow enough to contain definite column tracks. This
-    // must be visible to the parent formatting context before it resolves the
-    // child's known dimensions; expanding LayoutOutput afterwards is too late.
-    style.box_sizing = taffy::BoxSizing::BorderBox;
-    let padding = style
-        .padding
-        .resolve_or_zero(None, resolve_stylo_calc_value);
-    let border = style.border.resolve_or_zero(None, resolve_stylo_calc_value);
-    let fixed_border_box_min =
-        fixed_track_min_width + padding.left + padding.right + border.left + border.right;
-    let current = style.min_size.width;
-    if current.is_auto() {
-        style.min_size.width = taffy::Dimension::length(fixed_border_box_min);
-    } else if current.tag() == taffy::CompactLength::LENGTH_TAG {
-        style.min_size.width = taffy::Dimension::length(current.value().max(fixed_border_box_min));
-    }
 }
 
 fn border_edge(

@@ -14,17 +14,19 @@ use std::{fmt::Debug, hash::Hash};
 use style::Atom;
 use taffy::{
     AvailableSpace, DetailedGridInfo, Dimension, Display, GridAutoFlow, IntrinsicSizeResult,
-    Layout, LayoutGridContainer, LayoutInput, LayoutOutput, LayoutPartialTree, Line, NodeId, Point,
-    Rect, ResolveOrZero, RunMode, Size, SizingMode, SizingPurpose, Style, TraversePartialTree,
-    TraverseTree, compute_grid_layout, style_helpers,
+    Layout, LayoutGridContainer, LayoutInput, LayoutOutput, LayoutPartialTree, Line, MaybeMath,
+    MaybeResolve, NodeId, Point, Rect, ResolveOrZero, RunMode, Size, SizingMode, SizingPurpose,
+    Style, TraversePartialTree, TraverseTree, compute_grid_layout, style_helpers,
 };
 
 use crate::{LayoutBoxId, LayoutBoxKind, LayoutWorld, style::resolve_stylo_calc_value};
 
 mod collapsed_borders;
+mod columns;
 
 pub(crate) use collapsed_borders::CollapsedTableBorders;
 use collapsed_borders::{prepare_collapsed_table_borders, set_collapsed_border_geometry};
+use columns::{TableColumnConstraint, distribute_fixed_columns};
 
 #[derive(Clone)]
 struct TableCell {
@@ -61,7 +63,9 @@ struct TableContext {
     detailed: Option<DetailedGridInfo>,
     collapsed_borders: bool,
     column_count: usize,
-    fixed_track_min_width: f32,
+    column_constraints: Vec<TableColumnConstraint>,
+    fixed_layout: bool,
+    inline_border_spacing: f32,
 }
 
 pub(crate) fn prepare_table_layout_trees<N>(world: &mut LayoutWorld<N>)
@@ -125,6 +129,7 @@ where
     N: Copy + Debug + Eq + Hash,
 {
     let mut context = build_table_context(world, root);
+    context.resolve_column_tracks(inputs);
     let mut output = {
         let mut wrapper = TableTreeWrapper {
             world,
@@ -212,11 +217,11 @@ where
         };
         if cell.row == 0 && cell.column_span == 1 {
             if cell.column >= column_tracks.len() {
-                column_tracks.resize(cell.column + 1, style_helpers::auto());
+                column_tracks.resize(cell.column + 1, TableColumnConstraint::auto());
             }
             // An explicit <col>/<colgroup> width wins over the first-row
             // cell width in the fixed table algorithm.
-            if column_tracks[cell.column] == style_helpers::auto() {
+            if column_tracks[cell.column].is_auto() {
                 column_tracks[cell.column] =
                     table_cell_width_track(&cell.style, root_style.table_layout_is_fixed());
             }
@@ -232,25 +237,13 @@ where
     }
     collect_captions(world, root, &mut captions);
     max_columns = max_columns.max(column_tracks.len()).max(1);
-    column_tracks.resize(max_columns, style_helpers::auto());
-    if root_style.table_layout_is_fixed() {
-        // The fixed table algorithm ignores cell content when distributing
-        // space to columns without a <col> or first-row width. Model those
-        // columns as equal flexible tracks instead of CSS Grid `auto` tracks,
-        // whose content-based bases can produce unequal fractional widths.
-        for track in &mut column_tracks {
-            if *track == style_helpers::auto() {
-                *track = style_helpers::flex(1.0);
-            }
-        }
-    }
-    let fixed_track_min_width = column_tracks
+    column_tracks.resize(max_columns, TableColumnConstraint::auto());
+    let fixed_layout = root_style.table_layout_is_fixed();
+    style.grid_template_columns = column_tracks
         .iter()
-        .map(|track| track.min_sizing_function().into_raw())
-        .filter(|track| track.tag() == taffy::CompactLength::LENGTH_TAG)
-        .map(|track| track.value().max(0.0))
-        .sum();
-    style.grid_template_columns = column_tracks.into_iter().map(Into::into).collect();
+        .copied()
+        .map(|track| track.intrinsic_grid_track().into())
+        .collect();
     style.grid_template_rows = if rows.is_empty() {
         vec![style_helpers::auto()]
     } else {
@@ -280,7 +273,73 @@ where
         detailed: None,
         collapsed_borders: collapsed,
         column_count: max_columns,
-        fixed_track_min_width,
+        column_constraints: column_tracks,
+        fixed_layout,
+        inline_border_spacing: spacing.width,
+    }
+}
+
+impl TableContext {
+    /// Resolve table column semantics before invoking the numeric Grid backend.
+    /// Grid receives final lengths for a definite fixed-layout table and never
+    /// participates in the table free-space distribution algorithm.
+    fn resolve_column_tracks(&mut self, inputs: LayoutInput) {
+        let Some(assignable_inline_size) = self.fixed_assignable_inline_size(inputs) else {
+            return;
+        };
+        self.style.grid_template_columns =
+            distribute_fixed_columns(assignable_inline_size, &self.column_constraints)
+                .into_iter()
+                .map(|size| {
+                    let track: taffy::TrackSizingFunction = style_helpers::length(size);
+                    track.into()
+                })
+                .collect();
+    }
+
+    fn fixed_assignable_inline_size(&self, inputs: LayoutInput) -> Option<f32> {
+        if !self.fixed_layout {
+            return None;
+        }
+
+        let percentage_basis = inputs.parent_size.width;
+        let (preferred, min_size, max_size) = if inputs.sizing_mode == SizingMode::InherentSize {
+            (
+                self.style
+                    .size
+                    .width
+                    .maybe_resolve(percentage_basis, resolve_stylo_calc_value),
+                self.style
+                    .min_size
+                    .width
+                    .maybe_resolve(percentage_basis, resolve_stylo_calc_value),
+                self.style
+                    .max_size
+                    .width
+                    .maybe_resolve(percentage_basis, resolve_stylo_calc_value),
+            )
+        } else {
+            (None, None, None)
+        };
+        let padding = self
+            .style
+            .padding
+            .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
+        let border = self
+            .style
+            .border
+            .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
+        let inline_insets = padding.left + padding.right + border.left + border.right;
+        let border_box_size = inputs
+            .known_dimensions
+            .width
+            .or(preferred)
+            .maybe_clamp(min_size, max_size)
+            .maybe_max(Some(inline_insets))?;
+        let internal_spacing =
+            self.inline_border_spacing.max(0.0) * self.column_count.saturating_sub(1) as f32;
+
+        Some((border_box_size - inline_insets - internal_spacing).max(0.0))
     }
 }
 
@@ -300,7 +359,7 @@ fn collect_columns<N>(
     current: LayoutBoxId,
     group: Option<LayoutBoxId>,
     columns: &mut Vec<TableColumn>,
-    tracks: &mut Vec<taffy::TrackSizingFunction>,
+    tracks: &mut Vec<TableColumnConstraint>,
 ) where
     N: Copy + Debug + Eq + Hash,
 {
@@ -447,11 +506,11 @@ where
         .unwrap_or_default()
 }
 
-fn dimension_track(dimension: Dimension) -> taffy::TrackSizingFunction {
+fn dimension_track(dimension: Dimension) -> TableColumnConstraint {
     match dimension.tag() {
-        taffy::CompactLength::LENGTH_TAG => style_helpers::length(dimension.value()),
-        taffy::CompactLength::PERCENT_TAG => style_helpers::percent(dimension.value()),
-        _ => style_helpers::auto(),
+        taffy::CompactLength::LENGTH_TAG => TableColumnConstraint::length(dimension.value()),
+        taffy::CompactLength::PERCENT_TAG => TableColumnConstraint::percent(dimension.value(), 0.0),
+        _ => TableColumnConstraint::auto(),
     }
 }
 
@@ -469,24 +528,34 @@ fn minimum_dimension_track(dimension: Dimension) -> taffy::TrackSizingFunction {
     }
 }
 
-fn table_cell_width_track(style: &Style<Atom>, fixed: bool) -> taffy::TrackSizingFunction {
+fn table_cell_width_track(style: &Style<Atom>, fixed: bool) -> TableColumnConstraint {
     match style.size.width.tag() {
         taffy::CompactLength::LENGTH_TAG => {
             let padding = style
                 .padding
                 .resolve_or_zero(None, resolve_stylo_calc_value);
             let border = style.border.resolve_or_zero(None, resolve_stylo_calc_value);
-            let adjustment = if style.box_sizing == taffy::BoxSizing::ContentBox {
+            let border_padding = padding.left + padding.right + border.left + border.right;
+            let outer_width = if style.box_sizing == taffy::BoxSizing::ContentBox {
+                style.size.width.value() + border_padding
+            } else {
+                style.size.width.value().max(border_padding)
+            };
+            TableColumnConstraint::length(outer_width)
+        }
+        taffy::CompactLength::PERCENT_TAG if fixed => {
+            let border_padding = if style.box_sizing == taffy::BoxSizing::ContentBox {
+                let padding = style
+                    .padding
+                    .resolve_or_zero(None, resolve_stylo_calc_value);
+                let border = style.border.resolve_or_zero(None, resolve_stylo_calc_value);
                 padding.left + padding.right + border.left + border.right
             } else {
                 0.0
             };
-            style_helpers::length(style.size.width.value() + adjustment)
+            TableColumnConstraint::percent(style.size.width.value(), border_padding)
         }
-        taffy::CompactLength::PERCENT_TAG if fixed => {
-            style_helpers::percent(style.size.width.value())
-        }
-        _ => style_helpers::auto(),
+        _ => TableColumnConstraint::auto(),
     }
 }
 
