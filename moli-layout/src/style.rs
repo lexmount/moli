@@ -17,6 +17,7 @@ use style::{
     properties::generated::longhands::{
         direction::computed_value::T as StyloDirection,
         unicode_bidi::computed_value::T as StyloUnicodeBidi,
+        writing_mode::computed_value::T as StyloWritingMode,
     },
     servo_arc::Arc as ServoArc,
     values::{
@@ -406,6 +407,7 @@ pub struct ResolvedLayoutStyle {
     text_transform: InlineTextTransform,
     text_align: parley::Alignment,
     direction: InlineDirection,
+    writing_mode: taffy::WritingMode,
     unicode_bidi: InlineUnicodeBidi,
     vertical_align: InlineVerticalAlign,
     text_projection_deferred: bool,
@@ -454,6 +456,7 @@ impl std::fmt::Debug for ResolvedLayoutStyle {
             .field("text_transform", &self.text_transform)
             .field("text_align", &self.text_align)
             .field("direction", &self.direction)
+            .field("writing_mode", &self.writing_mode)
             .field("unicode_bidi", &self.unicode_bidi)
             .field("vertical_align", &self.vertical_align)
             .field("text_projection_deferred", &self.text_projection_deferred)
@@ -544,6 +547,11 @@ impl ResolvedLayoutStyle {
         let direction = match computed.clone_direction() {
             StyloDirection::Ltr => InlineDirection::Ltr,
             StyloDirection::Rtl => InlineDirection::Rtl,
+        };
+        let writing_mode = match computed.clone_writing_mode() {
+            StyloWritingMode::HorizontalTb => taffy::WritingMode::HorizontalTb,
+            StyloWritingMode::VerticalRl => taffy::WritingMode::VerticalRl,
+            StyloWritingMode::VerticalLr => taffy::WritingMode::VerticalLr,
         };
         let unicode_bidi = match computed.clone_unicode_bidi() {
             StyloUnicodeBidi::Normal => InlineUnicodeBidi::Normal,
@@ -752,6 +760,7 @@ impl ResolvedLayoutStyle {
             text_transform,
             text_align,
             direction,
+            writing_mode,
             unicode_bidi,
             vertical_align,
             text_projection_deferred,
@@ -819,6 +828,7 @@ impl ResolvedLayoutStyle {
             text_transform: InlineTextTransform::None,
             text_align: parley::Alignment::Start,
             direction: InlineDirection::Ltr,
+            writing_mode: taffy::WritingMode::HorizontalTb,
             unicode_bidi: InlineUnicodeBidi::Normal,
             vertical_align: InlineVerticalAlign::default(),
             text_projection_deferred: false,
@@ -887,6 +897,17 @@ impl ResolvedLayoutStyle {
     pub fn with_inline_alignment(mut self, alignment: LayoutInlineAlignment) -> Self {
         self.vertical_align.kind = alignment;
         self
+    }
+
+    /// Overrides the flow-relative axes used by deterministic layout tests.
+    pub fn with_writing_mode(mut self, writing_mode: taffy::WritingMode) -> Self {
+        self.writing_mode = writing_mode;
+        self
+    }
+
+    /// Returns the inherited writing mode retained for layout.
+    pub(crate) fn writing_mode(&self) -> taffy::WritingMode {
+        self.writing_mode
     }
 
     /// Overrides the CSS-pixel baseline shift for a synthetic inline style.
@@ -1523,6 +1544,7 @@ impl ResolvedLayoutStyle {
             text_transform: parent.text_transform,
             text_align: parent.text_align,
             direction: parent.direction,
+            writing_mode: parent.writing_mode,
             unicode_bidi: InlineUnicodeBidi::Normal,
             vertical_align: parent.vertical_align,
             text_projection_deferred: parent.text_projection_deferred,
@@ -1582,6 +1604,7 @@ impl ResolvedLayoutStyle {
             text_transform: parent.text_transform,
             text_align: parent.text_align,
             direction: parent.direction,
+            writing_mode: parent.writing_mode,
             unicode_bidi: InlineUnicodeBidi::Normal,
             vertical_align: parent.vertical_align,
             text_projection_deferred: parent.text_projection_deferred,
