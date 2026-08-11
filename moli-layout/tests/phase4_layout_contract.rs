@@ -11,7 +11,9 @@ use moli_layout::{
     build_screenshot_snapshot,
 };
 use style::Atom;
-use taffy::{BoxSizing, Clear, Dimension, Float, Overflow, Point, Rect, Size, Style};
+use taffy::{
+    BoxSizing, Clear, Dimension, FlexDirection, Float, Overflow, Point, Rect, Size, Style,
+};
 
 const RED: PaintColor = PaintColor::new(0.9, 0.1, 0.1, 1.0);
 const GREEN: PaintColor = PaintColor::new(0.1, 0.7, 0.2, 1.0);
@@ -1040,6 +1042,83 @@ fn inline_blocks_use_their_internal_last_line_baseline_and_overflow_fallback() {
     assert_close(rect(&fallback, RED).y, 45.0);
     assert_close(rect(&fallback, GREEN).y, 45.0);
     assert_close(rect(&fallback, BLUE).y, 19.0);
+}
+
+#[test]
+fn inline_flex_and_grid_use_their_first_container_baseline() {
+    for atomic_display in [LayoutDisplay::InlineFlex, LayoutDisplay::InlineGrid] {
+        let source = Source(vec![
+            Node::element(
+                "root",
+                "div",
+                LayoutElementCategory::Generic,
+                None,
+                vec![1, 4],
+            ),
+            Node::element(
+                "atomic",
+                "span",
+                LayoutElementCategory::Generic,
+                None,
+                vec![2, 3],
+            ),
+            Node::element(
+                "first-item",
+                "span",
+                LayoutElementCategory::Generic,
+                None,
+                Vec::new(),
+            ),
+            Node::element(
+                "last-item",
+                "span",
+                LayoutElementCategory::Generic,
+                None,
+                Vec::new(),
+            ),
+            Node::element(
+                "tail",
+                "span",
+                LayoutElementCategory::Generic,
+                None,
+                Vec::new(),
+            ),
+        ]);
+        let mut styles = Styles::default();
+        styles.primary.insert(
+            0,
+            style(LayoutDisplay::Block, PaintColor::TRANSPARENT)
+                .tap_taffy(|taffy| taffy.size.width = Dimension::length(100.0))
+                .with_text_metrics(0.0, 0.0),
+        );
+        styles.primary.insert(
+            1,
+            style(atomic_display, YELLOW).tap_taffy(|taffy| {
+                taffy.size.width = Dimension::length(10.0);
+                if atomic_display == LayoutDisplay::InlineFlex {
+                    taffy.flex_direction = FlexDirection::Column;
+                } else {
+                    taffy.grid_template_columns = vec![taffy::style_helpers::length(10.0)];
+                }
+            }),
+        );
+        styles
+            .primary
+            .insert(2, sized(LayoutDisplay::Block, 10.0, 10.0, GREEN));
+        styles
+            .primary
+            .insert(3, sized(LayoutDisplay::Block, 10.0, 10.0, BLUE));
+        styles
+            .primary
+            .insert(4, sized(LayoutDisplay::InlineBlock, 10.0, 10.0, RED));
+
+        let snapshot = render(&source, &mut styles, 100, 60);
+        let atomic = rect(&snapshot, YELLOW);
+        let tail = rect(&snapshot, RED);
+        assert_close(atomic.width, 10.0);
+        assert_close(atomic.height, 20.0);
+        assert_close(tail.y, atomic.y);
+    }
 }
 
 #[test]

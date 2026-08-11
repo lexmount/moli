@@ -1972,15 +1972,26 @@ where
 
     fn atomic_inline_baseline(&self, id: LayoutBoxId, output: LayoutOutput) -> Option<f32> {
         let layout_box = &self.boxes[id.index()];
-        if !matches!(
-            layout_box.style.display(),
-            crate::LayoutDisplay::InlineBlock | crate::LayoutDisplay::InlineListItem
-        ) || layout_box.style.taffy.overflow.x != taffy::Overflow::Visible
-            || layout_box.style.taffy.overflow.y != taffy::Overflow::Visible
-        {
-            return None;
+        match layout_box.style.display() {
+            // Blink's block layout marks these atomic fragments to use their
+            // last baseline. A scrolling inline-block instead forces baseline
+            // synthesis from its margin-box edge.
+            crate::LayoutDisplay::InlineBlock | crate::LayoutDisplay::InlineListItem => {
+                (layout_box.style.taffy.overflow.x == taffy::Overflow::Visible
+                    && layout_box.style.taffy.overflow.y == taffy::Overflow::Visible)
+                    .then_some(output.last_baselines.y)
+                    .flatten()
+            }
+            // Flex, grid, and table formatting contexts expose their first
+            // baseline as the automatic inline-level baseline. Do not apply
+            // the inline-block overflow exception to these fragment types.
+            crate::LayoutDisplay::InlineFlex
+            | crate::LayoutDisplay::InlineGrid
+            | crate::LayoutDisplay::InlineTable => output.first_baselines.y,
+            // Replaced and other atomic inline-level boxes synthesize their
+            // baseline at the appropriate box edge in the caller.
+            _ => None,
         }
-        output.last_baselines.y
     }
 
     fn break_inline_lines_with_floats(
