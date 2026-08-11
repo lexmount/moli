@@ -7,7 +7,7 @@ use taffy::{
     BlockFormattingContext, BoxSizing, CacheTree, Clear, Dimension, Display, FloatDirection,
     Layout, LayoutBlockContainer, LayoutFlexboxContainer, LayoutGridContainer, LayoutInput,
     LayoutOutput, LayoutPartialTree, Line, MaybeMath, MaybeResolve, NodeId, Point, ResolveOrZero,
-    RoundTree, RunMode, Size, SizingMode, Style, TraversePartialTree, TraverseTree,
+    RoundTree, RunMode, Size, SizingMode, SizingPurpose, Style, TraversePartialTree, TraverseTree,
     compute_block_layout, compute_cached_layout, compute_flexbox_layout, compute_grid_layout,
     compute_hidden_layout, compute_leaf_layout, compute_root_layout, round_layout,
 };
@@ -32,12 +32,6 @@ where
     N: Copy + Debug + Eq + Hash,
 {
     for layout_box in &mut world.boxes {
-        let is_replaced = layout_box
-            .element_semantics
-            .as_ref()
-            .is_some_and(crate::LayoutElementSemantics::is_replaced);
-        layout_box.block_intrinsic_style =
-            block_intrinsic_style(&layout_box.style.taffy, is_replaced);
         layout_box.cache.clear();
         layout_box.unrounded_layout = Layout::with_order(0);
         layout_box.final_layout = Layout::with_order(0);
@@ -49,7 +43,6 @@ where
 
     world.viewport_layout.children.clear();
     world.viewport_layout.cache.clear();
-    world.block_child_intrinsic_zero_min_width = false;
     world.viewport_layout.unrounded_layout = Layout::with_order(0);
     world.viewport_layout.final_layout = Layout::with_order(0);
     world.viewport_layout.style = Style {
@@ -313,6 +306,7 @@ where
                 height: AvailableSpace::MaxContent,
             },
             sizing_mode: SizingMode::InherentSize,
+            sizing_purpose: SizingPurpose::Layout,
             run_mode: RunMode::PerformLayout,
             axis: taffy::RequestedAxis::Both,
             vertical_margins_are_collapsible: Line::FALSE,
@@ -398,6 +392,7 @@ where
                 height: AvailableSpace::MaxContent,
             },
             sizing_mode: SizingMode::InherentSize,
+            sizing_purpose: SizingPurpose::Layout,
             run_mode: RunMode::PerformLayout,
             axis: taffy::RequestedAxis::Both,
             vertical_margins_are_collapsible: Line::FALSE,
@@ -930,6 +925,7 @@ fn layout_inline_absolute_child<N>(
                 parent_size: area.size.map(Some),
                 available_space,
                 sizing_mode: SizingMode::ContentSize,
+                sizing_purpose: SizingPurpose::IntrinsicContribution,
                 run_mode: RunMode::ComputeSize,
                 axis: taffy::RequestedAxis::Horizontal,
                 vertical_margins_are_collapsible: Line::FALSE,
@@ -949,6 +945,7 @@ fn layout_inline_absolute_child<N>(
                 parent_size: area.size.map(Some),
                 available_space,
                 sizing_mode: SizingMode::ContentSize,
+                sizing_purpose: SizingPurpose::Layout,
                 run_mode: RunMode::ComputeSize,
                 axis: taffy::RequestedAxis::Both,
                 vertical_margins_are_collapsible: Line::FALSE,
@@ -966,6 +963,7 @@ fn layout_inline_absolute_child<N>(
             parent_size: area.size.map(Some),
             available_space,
             sizing_mode: SizingMode::ContentSize,
+            sizing_purpose: SizingPurpose::Layout,
             run_mode: RunMode::PerformLayout,
             axis: taffy::RequestedAxis::Both,
             vertical_margins_are_collapsible: Line::FALSE,
@@ -1177,7 +1175,7 @@ where
         };
         if self.is_viewport_taffy_node(node_id) {
             return compute_cached_layout(self, node_id, inputs, |world, node_id, inputs| {
-                world.compute_block_layout_with_cyclic_min_width(node_id, inputs, None)
+                compute_block_layout(world, node_id, inputs, None)
             });
         }
         if self.should_hide(node_id, inputs) {
@@ -1242,14 +1240,7 @@ where
     }
 
     fn get_block_child_style(&self, child_node_id: NodeId) -> Self::BlockItemStyle<'_> {
-        let id = LayoutBoxId::from_taffy(child_node_id);
-        let child = &self.boxes[id.index()];
-        if self.block_child_intrinsic_zero_min_width {
-            if let Some(style) = child.block_intrinsic_style.as_ref() {
-                return style;
-            }
-        }
-        &child.style.taffy
+        self.get_core_container_style(child_node_id)
     }
 
     fn compute_block_child_layout(
@@ -1336,44 +1327,6 @@ impl<N> LayoutWorld<N>
 where
     N: Copy + Debug + Eq + Hash,
 {
-    fn compute_block_layout_with_cyclic_min_width(
-        &mut self,
-        node_id: NodeId,
-        inputs: LayoutInput,
-        block_context: Option<&mut BlockContext<'_>>,
-    ) -> LayoutOutput {
-        let width_is_definite = {
-            let style = self.get_core_container_style(node_id);
-            let resolved_preferred = style
-                .size
-                .width
-                .maybe_resolve(inputs.parent_size.width, resolve_stylo_calc_value);
-            let resolved_min = style
-                .min_size
-                .width
-                .maybe_resolve(inputs.parent_size.width, resolve_stylo_calc_value);
-            let resolved_max = style
-                .max_size
-                .width
-                .maybe_resolve(inputs.parent_size.width, resolve_stylo_calc_value);
-            let min_max_determine_width =
-                matches!((resolved_min, resolved_max), (Some(min), Some(max)) if max <= min);
-            inputs
-                .known_dimensions
-                .maybe_apply_aspect_ratio(style.aspect_ratio)
-                .width
-                .or(resolved_preferred)
-                .is_some()
-                || min_max_determine_width
-        };
-        let previous = self.block_child_intrinsic_zero_min_width;
-        self.block_child_intrinsic_zero_min_width =
-            inputs.sizing_mode == SizingMode::InherentSize && !width_is_definite;
-        let output = compute_block_layout(self, node_id, inputs, block_context);
-        self.block_child_intrinsic_zero_min_width = previous;
-        output
-    }
-
     fn should_hide(&self, node_id: NodeId, inputs: LayoutInput) -> bool {
         inputs.run_mode == RunMode::PerformHiddenLayout
             || self.boxes[LayoutBoxId::from_taffy(node_id).index()]
@@ -1423,7 +1376,7 @@ where
             return compute_table_layout(self, id, inputs);
         }
         if display.is_table() {
-            return self.compute_block_layout_with_cyclic_min_width(node_id, inputs, block_context);
+            return compute_block_layout(self, node_id, inputs, block_context);
         }
 
         match kind {
@@ -1455,7 +1408,7 @@ where
             | LayoutBoxKind::AnonymousTableRowGroup
             | LayoutBoxKind::AnonymousTableRow
             | LayoutBoxKind::AnonymousTableCell => {
-                self.compute_block_layout_with_cyclic_min_width(node_id, inputs, block_context)
+                compute_block_layout(self, node_id, inputs, block_context)
             }
             LayoutBoxKind::PrincipalInline
             | LayoutBoxKind::InlineContinuation
@@ -1672,6 +1625,7 @@ where
         let child_inputs = LayoutInput {
             run_mode: inputs.run_mode,
             sizing_mode: SizingMode::InherentSize,
+            sizing_purpose: inputs.sizing_purpose,
             axis: inputs.axis,
             known_dimensions: Size::NONE,
             definite_dimensions: Size::NONE,
@@ -1695,7 +1649,8 @@ where
         // entire calc expression, including its absolute term (for example
         // `calc(0% + 30px)`). A final definite-width layout still supplies its
         // actual basis here.
-        let percentage_basis = inline_percentage_basis(available_space.width);
+        let percentage_basis =
+            inline_percentage_basis(available_space.width, inputs.sizing_purpose);
         let mut layout = context.unbroken.clone();
         let mut atomic = vec![None; context.objects.len()];
         let mut atomic_baseline_ascents = vec![None; context.objects.len()];
@@ -1790,10 +1745,8 @@ where
                     let display = self.boxes[parent.index()].style.display();
                     display.is_flex_container() || display.is_grid_container()
                 });
-        let is_intrinsic_contribution_probe = inputs.run_mode == RunMode::ComputeSize
-            && inputs.axis == taffy::RequestedAxis::Horizontal
-            && inputs.parent_size.width.is_none()
-            && known_dimensions.width.is_none();
+        let is_intrinsic_contribution =
+            inputs.sizing_purpose == SizingPurpose::IntrinsicContribution;
         let shrink_to_fit = !has_definite_width
             && (is_floated
                 // A content-based block parent can probe this IFC with a
@@ -1801,7 +1754,7 @@ where
                 // unknown. That is an intrinsic contribution, so clamp the
                 // available width between the IFC's min/max-content sizes
                 // instead of stretching to the probe constraint.
-                || is_intrinsic_contribution_probe
+                || is_intrinsic_contribution
                 // Flex/grid layout passes an auto inline size as unknown when
                 // cross-axis stretch does not apply. In final layout that item
                 // must return its fit-content width within the definite area.
@@ -2246,46 +2199,43 @@ where
     }
 }
 
-fn inline_percentage_basis(available: AvailableSpace) -> Option<f32> {
-    Some(available.into_option().unwrap_or(0.0))
-}
-
-fn block_intrinsic_style(style: &Style<Atom>, is_replaced: bool) -> Option<Style<Atom>> {
-    if is_replaced || !style.min_size.width.into_raw().is_calc() {
-        return None;
-    }
-
-    // When this box's containing block depends on its contribution, CSS
-    // Sizing resolves a cyclic percentage in min-width against zero. Retain a
-    // separate projection for that probe so final layout still uses the
-    // original expression against the now-known containing-block width.
-    let width = style
-        .min_size
-        .width
-        .maybe_resolve(Some(0.0), resolve_stylo_calc_value)?;
-    let mut projected = style.clone();
-    projected.min_size.width = Dimension::length(width);
-    Some(projected)
+fn inline_percentage_basis(
+    available: AvailableSpace,
+    sizing_purpose: SizingPurpose,
+) -> Option<f32> {
+    available
+        .into_option()
+        .or_else(|| (sizing_purpose == SizingPurpose::IntrinsicContribution).then_some(0.0))
 }
 
 #[cfg(test)]
 mod tests {
     use super::inline_percentage_basis;
-    use taffy::AvailableSpace;
+    use taffy::{AvailableSpace, SizingPurpose};
 
     #[test]
     fn intrinsic_inline_percentages_use_a_zero_basis() {
         assert_eq!(
-            inline_percentage_basis(AvailableSpace::MinContent),
+            inline_percentage_basis(
+                AvailableSpace::MinContent,
+                SizingPurpose::IntrinsicContribution,
+            ),
             Some(0.0)
         );
         assert_eq!(
-            inline_percentage_basis(AvailableSpace::MaxContent),
+            inline_percentage_basis(
+                AvailableSpace::MaxContent,
+                SizingPurpose::IntrinsicContribution,
+            ),
             Some(0.0)
         );
         assert_eq!(
-            inline_percentage_basis(AvailableSpace::Definite(240.0)),
+            inline_percentage_basis(AvailableSpace::Definite(240.0), SizingPurpose::Layout),
             Some(240.0)
+        );
+        assert_eq!(
+            inline_percentage_basis(AvailableSpace::MaxContent, SizingPurpose::Layout),
+            None
         );
     }
 }

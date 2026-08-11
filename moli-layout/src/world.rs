@@ -211,9 +211,6 @@ pub struct LayoutBox<N> {
     /// Static position emitted by the shared IFC's out-of-flow placeholder.
     pub(crate) inline_static_position: Option<InlineStaticPosition>,
     pub(crate) style: ResolvedLayoutStyle,
-    /// Optional style projection used only while this box contributes to an
-    /// intrinsically sized block containing block.
-    pub(crate) block_intrinsic_style: Option<Style<Atom>>,
     pub(crate) text: Option<Arc<str>>,
     pub(crate) text_selection: Option<crate::LayoutTextSelection>,
     /// Shared text/inline layout owned by this formatting-context root.
@@ -350,7 +347,6 @@ where
     pub(crate) display_contents_mapping: HashMap<N, Vec<LayoutBoxId>>,
     pub(crate) root: LayoutBoxId,
     pub(crate) viewport_layout: ViewportLayoutState,
-    pub(crate) block_child_intrinsic_zero_min_width: bool,
 }
 
 impl<N> LayoutWorld<N>
@@ -364,7 +360,6 @@ where
             display_contents_mapping: HashMap::new(),
             root: LayoutBoxId::from_index(0),
             viewport_layout: ViewportLayoutState::default(),
-            block_child_intrinsic_zero_min_width: false,
         }
     }
 
@@ -684,7 +679,6 @@ where
             positioned_containing_block: None,
             inline_static_position: None,
             style,
-            block_intrinsic_style: None,
             text,
             text_selection: None,
             inline_layout: None,

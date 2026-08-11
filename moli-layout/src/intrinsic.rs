@@ -9,6 +9,7 @@ use std::{fmt::Debug, hash::Hash};
 
 use taffy::{
     AvailableSpace, LayoutInput, LayoutOutput, LayoutPartialTree, RequestedAxis, RunMode, Size,
+    SizingPurpose,
 };
 
 use crate::{LayoutBoxId, LayoutDisplay, LayoutWorld};
@@ -36,6 +37,7 @@ where
                 height: inputs.available_space.height,
             },
             run_mode: RunMode::ComputeSize,
+            sizing_purpose: SizingPurpose::IntrinsicContribution,
             axis: RequestedAxis::Horizontal,
             ..inputs
         };

@@ -839,6 +839,78 @@ html,body{margin:0;padding:0}
     }
 
     #[test]
+    fn layout_renderer_resolves_cyclic_preferred_width_after_parent_contribution() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let mut page_vm = parse_phase_one_html_into_page_vm_for_test(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+.host{display:flow-root;width:0}.outer{float:left;width:auto;height:30px}
+.inner{height:20px}.raw{width:50%}.calc{width:calc(40px + 0%)}
+.atom{display:inline-block;width:60px;height:20px}
+#raw-outer{background:rgb(151,152,153)}#raw-inner{background:rgb(161,162,163)}
+#calc-outer{background:rgb(171,172,173)}#calc-inner{background:rgb(181,182,183)}
+</style></head><body>
+<div class=host><div id=raw-outer class=outer><div id=raw-inner class="inner raw"><span class=atom></span></div></div></div>
+<div class=host><div id=calc-outer class=outer><div id=calc-inner class="inner calc"><span class=atom></span></div></div></div>
+</body></html>"#,
+            )
+            .await;
+            page_vm.vm_mut().sync_live_document_style_sources();
+
+            let snapshot = page_vm
+                .vm_mut()
+                .screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0))
+                .expect("cyclic preferred-width layout should succeed")
+                .expect("fixture should have a document element");
+            for (color, expected) in [
+                (
+                    moli_layout::PaintColor::new(
+                        151.0 / 255.0,
+                        152.0 / 255.0,
+                        153.0 / 255.0,
+                        1.0,
+                    ),
+                    moli_layout::PaintRect::new(0.0, 0.0, 60.0, 30.0),
+                ),
+                (
+                    moli_layout::PaintColor::new(
+                        161.0 / 255.0,
+                        162.0 / 255.0,
+                        163.0 / 255.0,
+                        1.0,
+                    ),
+                    moli_layout::PaintRect::new(0.0, 0.0, 30.0, 20.0),
+                ),
+                (
+                    moli_layout::PaintColor::new(
+                        171.0 / 255.0,
+                        172.0 / 255.0,
+                        173.0 / 255.0,
+                        1.0,
+                    ),
+                    moli_layout::PaintRect::new(0.0, 30.0, 60.0, 30.0),
+                ),
+                (
+                    moli_layout::PaintColor::new(
+                        181.0 / 255.0,
+                        182.0 / 255.0,
+                        183.0 / 255.0,
+                        1.0,
+                    ),
+                    moli_layout::PaintRect::new(0.0, 30.0, 40.0, 20.0),
+                ),
+            ] {
+                assert_paint_rect(solid_paint_rect(&snapshot, color), expected);
+            }
+        }));
+    }
+
+    #[test]
     fn layout_renderer_projects_current_blitz_taffy_parity_from_stylo() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
