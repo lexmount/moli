@@ -1122,6 +1122,70 @@ fn inline_flex_and_grid_use_their_first_container_baseline() {
 }
 
 #[test]
+fn inline_table_baseline_includes_top_caption_offset() {
+    use LayoutElementCategory::Table;
+    use LayoutTableRole::{BodyGroup, Caption, Cell, Row, Table as Root};
+
+    let source = Source(vec![
+        Node::element(
+            "root",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            vec![1, 6],
+        ),
+        Node::element("table", "table", Table(Root), None, vec![2, 3]),
+        Node::element("caption", "caption", Table(Caption), None, Vec::new()),
+        Node::element("tbody", "tbody", Table(BodyGroup), None, vec![4]),
+        Node::element("row", "tr", Table(Row), None, vec![5]),
+        Node::element("cell", "td", Table(Cell), None, Vec::new()),
+        Node::element(
+            "tail",
+            "span",
+            LayoutElementCategory::Generic,
+            None,
+            Vec::new(),
+        ),
+    ]);
+    let mut styles = Styles::default();
+    styles.primary.insert(
+        0,
+        style(LayoutDisplay::Block, PaintColor::TRANSPARENT)
+            .tap_taffy(|taffy| taffy.size.width = Dimension::length(100.0))
+            .with_text_metrics(0.0, 0.0),
+    );
+    styles.primary.insert(
+        1,
+        style(LayoutDisplay::InlineTable, YELLOW)
+            .tap_taffy(|taffy| taffy.size.width = Dimension::length(10.0)),
+    );
+    styles
+        .primary
+        .insert(2, sized(LayoutDisplay::TableCaption, 10.0, 10.0, GREEN));
+    styles.primary.insert(
+        3,
+        style(LayoutDisplay::TableRowGroup, PaintColor::TRANSPARENT),
+    );
+    styles
+        .primary
+        .insert(4, style(LayoutDisplay::TableRow, PaintColor::TRANSPARENT));
+    styles
+        .primary
+        .insert(5, sized(LayoutDisplay::TableCell, 10.0, 10.0, BLUE));
+    styles
+        .primary
+        .insert(6, sized(LayoutDisplay::InlineBlock, 10.0, 10.0, RED));
+
+    let snapshot = render(&source, &mut styles, 100, 60);
+    let table = rect(&snapshot, YELLOW);
+    let cell = rect(&snapshot, BLUE);
+    let tail = rect(&snapshot, RED);
+    assert_close(table.height, 20.0);
+    assert_close(cell.y, table.y + 10.0);
+    assert_close(tail.y, table.y + 10.0);
+}
+
+#[test]
 fn inline_block_propagates_scroll_block_end_baseline_through_block_children() {
     let render_variant = |inner_display, inner_overflow, margin_bottom| {
         let source = Source(vec![

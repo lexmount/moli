@@ -155,6 +155,12 @@ where
             top_height + output.size.height,
         );
         apply_structural_layout(world, root, &context, top_height, output.size);
+        if let Some(first_baseline) = &mut output.first_baselines.y {
+            *first_baseline += top_height;
+        }
+        if let Some(last_baseline) = &mut output.last_baselines.y {
+            *last_baseline += top_height;
+        }
         output.size.height += top_height + bottom_height;
         output.content_size.height += top_height + bottom_height;
         output.content_size.width = output.content_size.width.min(output.size.width);
