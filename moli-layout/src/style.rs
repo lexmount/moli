@@ -44,7 +44,9 @@ use style::{
         },
     },
 };
-use taffy::{BoxSizing, Display as TaffyDisplay, Position as TaffyPosition, Size, Style};
+use taffy::{
+    BoxSizing, Display as TaffyDisplay, Position as TaffyPosition, ResolvedAspectRatio, Size, Style,
+};
 
 use crate::{
     LayoutPoint, LayoutRect, LayoutTransform2D, PaintBlendMode, PaintBorderColors,
@@ -170,13 +172,6 @@ pub(crate) enum PreferredAspectRatio {
     AutoAndRatio(f32),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct ResolvedAspectRatio {
-    pub(crate) ratio: Option<f32>,
-    /// The box whose dimensions the ratio constrains.
-    pub(crate) box_sizing: BoxSizing,
-}
-
 impl PreferredAspectRatio {
     fn from_components(auto: bool, ratio: Option<f32>) -> Self {
         match (auto, usable_aspect_ratio(ratio)) {
@@ -197,26 +192,26 @@ impl PreferredAspectRatio {
         }
     }
 
-    fn resolve_for_replaced(
+    fn resolve(
         self,
-        inherent_ratio: Option<f32>,
+        natural_ratio: Option<f32>,
         authored_box_sizing: BoxSizing,
     ) -> ResolvedAspectRatio {
-        let inherent_ratio = usable_aspect_ratio(inherent_ratio);
+        let natural_ratio = usable_aspect_ratio(natural_ratio);
         match self {
             Self::Ratio(ratio) => ResolvedAspectRatio {
                 ratio: Some(ratio),
                 box_sizing: authored_box_sizing,
             },
             Self::Auto => ResolvedAspectRatio {
-                ratio: inherent_ratio,
+                ratio: natural_ratio,
                 box_sizing: BoxSizing::ContentBox,
             },
             // Blink's BoxSizingForAspectRatio() uses content-box for the
             // combined `auto <ratio>` value, including when its ratio is used
             // as the fallback because no natural ratio is available.
             Self::AutoAndRatio(fallback) => ResolvedAspectRatio {
-                ratio: inherent_ratio.or(Some(fallback)),
+                ratio: natural_ratio.or(Some(fallback)),
                 box_sizing: BoxSizing::ContentBox,
             },
         }
@@ -1615,20 +1610,13 @@ impl ResolvedLayoutStyle {
         }
     }
 
-    pub(crate) fn mark_replaced(&mut self, inherent_ratio: Option<f32>) {
+    pub(crate) fn mark_replaced(&mut self) {
         self.taffy.item_is_replaced = true;
-        self.taffy.aspect_ratio = self
-            .preferred_aspect_ratio
-            .resolve_for_replaced(inherent_ratio, self.taffy.box_sizing)
-            .ratio;
     }
 
-    pub(crate) fn resolved_replaced_aspect_ratio(
-        &self,
-        inherent_ratio: Option<f32>,
-    ) -> ResolvedAspectRatio {
+    pub(crate) fn resolved_aspect_ratio(&self, natural_ratio: Option<f32>) -> ResolvedAspectRatio {
         self.preferred_aspect_ratio
-            .resolve_for_replaced(inherent_ratio, self.taffy.box_sizing)
+            .resolve(natural_ratio, self.taffy.box_sizing)
     }
 
     pub(crate) fn mark_intrinsic_form_control_container(&mut self) {
@@ -1662,18 +1650,16 @@ mod aspect_ratio_tests {
 
     #[test]
     fn replaced_ratio_resolution_preserves_auto_precedence_and_box_basis() {
-        let specified =
-            PreferredAspectRatio::Ratio(1.0).resolve_for_replaced(Some(2.0), BoxSizing::BorderBox);
+        let specified = PreferredAspectRatio::Ratio(1.0).resolve(Some(2.0), BoxSizing::BorderBox);
         assert_eq!(specified.ratio, Some(1.0));
         assert_eq!(specified.box_sizing, BoxSizing::BorderBox);
 
-        let natural = PreferredAspectRatio::AutoAndRatio(1.0)
-            .resolve_for_replaced(Some(2.0), BoxSizing::BorderBox);
+        let natural =
+            PreferredAspectRatio::AutoAndRatio(1.0).resolve(Some(2.0), BoxSizing::BorderBox);
         assert_eq!(natural.ratio, Some(2.0));
         assert_eq!(natural.box_sizing, BoxSizing::ContentBox);
 
-        let fallback = PreferredAspectRatio::AutoAndRatio(1.0)
-            .resolve_for_replaced(None, BoxSizing::BorderBox);
+        let fallback = PreferredAspectRatio::AutoAndRatio(1.0).resolve(None, BoxSizing::BorderBox);
         assert_eq!(fallback.ratio, Some(1.0));
         assert_eq!(fallback.box_sizing, BoxSizing::ContentBox);
     }
