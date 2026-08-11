@@ -41,6 +41,7 @@ use style::{
         specified::box_::{DisplayInside, DisplayOutside},
         specified::{
             TextAlignKeyword, WillChangeBits,
+            align::AlignFlags,
             text::{TextTransform, TextTransformCase},
         },
     },
@@ -707,6 +708,15 @@ impl ResolvedLayoutStyle {
             specified_aspect_ratio,
         );
         let mut taffy = stylo_taffy::to_taffy_style(&computed);
+        // Alignment keywords are layout protocol, not merely numeric style.
+        // Keep their lossless projection at Moli's browser boundary: the
+        // pinned generic converter predates Taffy's first/last-baseline model
+        // and intentionally reduces `last baseline` to its `end` fallback.
+        // Flex and Grid now consume the actual preference and sharing group.
+        taffy.align_items = taffy_item_alignment(position_style.align_items.0);
+        taffy.align_self = taffy_item_alignment(position_style.align_self.0);
+        taffy.justify_items = taffy_item_alignment((position_style.justify_items.computed.0).0);
+        taffy.justify_self = taffy_item_alignment(position_style.justify_self.0);
         taffy.size = Size {
             width: taffy_size_dimension(&position_style.width, taffy.size.width),
             height: taffy_size_dimension(&position_style.height, taffy.size.height),
@@ -1748,6 +1758,33 @@ fn taffy_max_size_dimension(
     }
 }
 
+/// Losslessly project the CSS self-alignment grammar into Taffy's typed
+/// alignment protocol.
+///
+/// This is deliberately complete rather than a `last baseline` special case:
+/// all four item/self properties cross one stable browser-layout boundary,
+/// including writing-mode-relative self edges and overflow safety.
+fn taffy_item_alignment(input: AlignFlags) -> Option<taffy::AlignItems> {
+    let mut alignment = match input.value() {
+        AlignFlags::AUTO => None,
+        AlignFlags::NORMAL | AlignFlags::STRETCH => Some(taffy::AlignItems::STRETCH),
+        AlignFlags::FLEX_START => Some(taffy::AlignItems::FLEX_START),
+        AlignFlags::FLEX_END => Some(taffy::AlignItems::FLEX_END),
+        AlignFlags::SELF_START => Some(taffy::AlignItems::SELF_START),
+        AlignFlags::SELF_END => Some(taffy::AlignItems::SELF_END),
+        AlignFlags::START | AlignFlags::LEFT => Some(taffy::AlignItems::START),
+        AlignFlags::END | AlignFlags::RIGHT => Some(taffy::AlignItems::END),
+        AlignFlags::CENTER => Some(taffy::AlignItems::CENTER),
+        AlignFlags::BASELINE => Some(taffy::AlignItems::BASELINE),
+        AlignFlags::LAST_BASELINE => Some(taffy::AlignItems::LAST_BASELINE),
+        _ => None,
+    }?;
+    if input.flags().contains(AlignFlags::SAFE) {
+        alignment.safety = taffy::AlignmentSafety::Safe;
+    }
+    Some(alignment)
+}
+
 fn taffy_display(display: LayoutDisplay) -> TaffyDisplay {
     match display {
         LayoutDisplay::None => TaffyDisplay::None,
@@ -2147,5 +2184,27 @@ mod aspect_ratio_tests {
         let fallback = PreferredAspectRatio::AutoAndRatio(1.0).resolve(None, BoxSizing::BorderBox);
         assert_eq!(fallback.ratio, Some(1.0));
         assert_eq!(fallback.box_sizing, BoxSizing::ContentBox);
+    }
+}
+
+#[cfg(test)]
+mod alignment_tests {
+    use super::*;
+
+    #[test]
+    fn stylo_item_alignment_preserves_layout_protocol_values() {
+        assert_eq!(
+            taffy_item_alignment(AlignFlags::LAST_BASELINE),
+            Some(taffy::AlignItems::LAST_BASELINE)
+        );
+        assert_eq!(
+            taffy_item_alignment(AlignFlags::SELF_START),
+            Some(taffy::AlignItems::SELF_START)
+        );
+
+        let safe_center = taffy_item_alignment(AlignFlags::CENTER | AlignFlags::SAFE)
+            .expect("safe center should project");
+        assert_eq!(safe_center.keyword, taffy::AlignItemsKeyword::Center);
+        assert_eq!(safe_center.safety, taffy::AlignmentSafety::Safe);
     }
 }

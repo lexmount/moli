@@ -7,12 +7,13 @@ use taffy::{
     AlignContent, AlignContentKeyword, AlignmentSafety, AvailableSpace, BlockContext,
     BlockFormattingContext, BoxSizing, CacheTree, Clear, Dimension, Display, FloatDirection,
     IntrinsicSizeResult, Layout, LayoutBlockContainer, LayoutFlexboxContainer, LayoutGridContainer,
-    LayoutInput, LayoutOutput, LayoutPartialTree, Line, MaybeMath, MaybeResolve, NodeId, Point,
-    ResolveOrZero, RoundTree, RunMode, Size, SizingMode, SizingPurpose, Style, TraversePartialTree,
-    TraverseTree, compute_block_layout, compute_cached_layout, compute_cached_size,
-    compute_flexbox_layout, compute_grid_layout, compute_hidden_layout,
-    compute_leaf_layout_with_aspect_ratio_and_writing_mode, compute_root_layout,
-    resolve_intrinsic_width_inputs_with_provenance, round_layout_with_scale_factor,
+    LayoutInput, LayoutOutput, LayoutPartialTree, Line, LogicalOffset, MaybeMath, MaybeResolve,
+    NodeId, Point, ResolveOrZero, RoundTree, RunMode, Size, SizingMode, SizingPurpose, Style,
+    TraversePartialTree, TraverseTree, WritingDirection, compute_block_layout,
+    compute_cached_layout, compute_cached_size, compute_flexbox_layout, compute_grid_layout,
+    compute_hidden_layout, compute_leaf_layout_with_aspect_ratio_and_writing_mode,
+    compute_root_layout, resolve_intrinsic_width_inputs_with_provenance,
+    round_layout_with_scale_factor,
 };
 
 use crate::{
@@ -363,7 +364,7 @@ where
             sizing_purpose: SizingPurpose::Layout,
             run_mode: RunMode::PerformLayout,
             axis: taffy::RequestedAxis::Both,
-            vertical_margins_are_collapsible: Line::FALSE,
+            block_margins_are_collapsible: Line::FALSE,
         };
         let output = world.compute_child_layout(marker.to_taffy(), inputs);
         let marker_style = &world.boxes[marker.index()].style;
@@ -458,7 +459,7 @@ where
             sizing_purpose: SizingPurpose::Layout,
             run_mode: RunMode::PerformLayout,
             axis: taffy::RequestedAxis::Both,
-            vertical_margins_are_collapsible: Line::FALSE,
+            block_margins_are_collapsible: Line::FALSE,
         };
         let output = world.compute_child_layout(content.to_taffy(), inputs);
         let x = control_layout.border.left + control_layout.padding.left + 4.0;
@@ -997,7 +998,7 @@ fn layout_inline_absolute_child<N>(
                 sizing_purpose: SizingPurpose::IntrinsicContribution,
                 run_mode: RunMode::ComputeSize,
                 axis: taffy::RequestedAxis::Horizontal,
-                vertical_margins_are_collapsible: Line::FALSE,
+                block_margins_are_collapsible: Line::FALSE,
             },
             available_width,
         ));
@@ -1018,7 +1019,7 @@ fn layout_inline_absolute_child<N>(
                 sizing_purpose: SizingPurpose::Layout,
                 run_mode: RunMode::ComputeSize,
                 axis: taffy::RequestedAxis::Both,
-                vertical_margins_are_collapsible: Line::FALSE,
+                block_margins_are_collapsible: Line::FALSE,
             },
         )
         .size;
@@ -1037,7 +1038,7 @@ fn layout_inline_absolute_child<N>(
             sizing_purpose: SizingPurpose::Layout,
             run_mode: RunMode::PerformLayout,
             axis: taffy::RequestedAxis::Both,
-            vertical_margins_are_collapsible: Line::FALSE,
+            block_margins_are_collapsible: Line::FALSE,
         },
     );
 
@@ -1751,6 +1752,7 @@ where
                         y: padding.top + border.top,
                     },
                     content_box_size,
+                    writing_mode,
                     self.boxes[id.index()].style.direction(),
                 );
                 inline_context.fragments = measurement.fragments;
@@ -1788,7 +1790,7 @@ where
             parent_size: available_space.into_options(),
             parent_writing_mode,
             available_space,
-            vertical_margins_are_collapsible: Line::FALSE,
+            block_margins_are_collapsible: Line::FALSE,
         };
         // A float's max-content contribution is measured independently from
         // the finite line slot it will eventually occupy. Final fit-content
@@ -2054,52 +2056,60 @@ where
                 resolve_stylo_calc_value,
             );
             let padding_border = padding + border;
+            let writing_direction = WritingDirection::new(
+                parent_writing_mode,
+                self.boxes[owner.index()].style.taffy.direction,
+            );
+            let logical_padding_border = writing_direction.to_logical_box_strut(padding_border);
+            let line_insets = if writing_direction.direction == taffy::Direction::Rtl {
+                [
+                    logical_padding_border.inline_end,
+                    logical_padding_border.inline_start,
+                ]
+            } else {
+                [
+                    logical_padding_border.inline_start,
+                    logical_padding_border.inline_end,
+                ]
+            };
+            let outer_inline_size =
+                width + logical_padding_border.inline_start + logical_padding_border.inline_end;
             if let Some(block_context) = block_context {
                 let contains_floats = block_context.is_bfc_root();
                 if contains_floats {
-                    block_context.set_width(width + padding_border.left + padding_border.right);
+                    block_context.set_inline_size(outer_inline_size);
                 }
-                let mut content_context = block_context.sub_context(
-                    padding_border.top,
-                    [padding_border.left, padding_border.right],
-                );
+                let mut content_context =
+                    block_context.sub_context(logical_padding_border.block_start, line_insets);
                 self.break_inline_lines_with_floats(
                     context,
                     &mut layout,
                     width,
                     child_inputs,
                     &mut content_context,
-                    Point {
-                        x: padding_border.left,
-                        y: padding_border.top,
-                    },
+                    writing_direction,
                     &mut floats,
                 );
-                alignment_float_height = content_context.floated_content_height_contribution();
+                alignment_float_height = content_context.floated_block_size_contribution();
                 if contains_floats {
                     float_height = Some(alignment_float_height);
                 }
             } else {
                 let mut formatting_context = BlockFormattingContext::new();
                 let mut root_context = formatting_context.root_block_context();
-                root_context.set_width(width + padding_border.left + padding_border.right);
-                let mut content_context = root_context.sub_context(
-                    padding_border.top,
-                    [padding_border.left, padding_border.right],
-                );
+                root_context.set_inline_size(outer_inline_size);
+                let mut content_context =
+                    root_context.sub_context(logical_padding_border.block_start, line_insets);
                 self.break_inline_lines_with_floats(
                     context,
                     &mut layout,
                     width,
                     child_inputs,
                     &mut content_context,
-                    Point {
-                        x: padding_border.left,
-                        y: padding_border.top,
-                    },
+                    writing_direction,
                     &mut floats,
                 );
-                alignment_float_height = content_context.floated_content_height_contribution();
+                alignment_float_height = content_context.floated_block_size_contribution();
                 float_height = Some(alignment_float_height);
             }
         } else {
@@ -2182,7 +2192,7 @@ where
         width: f32,
         child_inputs: LayoutInput,
         block_context: &mut BlockContext<'_>,
-        content_offset: Point<f32>,
+        writing_direction: WritingDirection,
         floats: &mut Vec<InlineFloatPlacement>,
     ) {
         let mut breaker = layout.break_lines();
@@ -2234,6 +2244,7 @@ where
                         box_model_percentage_basis(child_inputs, child_inputs.parent_writing_mode),
                         resolve_stylo_calc_value,
                     );
+                    let logical_margin = writing_direction.to_logical_box_strut(margin);
                     // A non-replaced float's formatting-context algorithm
                     // owns its content size; pass it the slot remaining after
                     // margins just like Taffy's block-float parent does. A
@@ -2251,18 +2262,25 @@ where
                     };
                     let output = self.compute_child_layout(child.to_taffy(), layout_inputs);
                     let state = breaker.state_mut();
+                    let margin_box_size =
+                        writing_direction.mode.to_logical(output.size) + logical_margin.sum_axes();
                     let position = block_context.place_floated_box(
-                        output.size + margin.sum_axes(),
+                        margin_box_size,
                         state.line_y() as f32,
                         direction,
                         style.clear,
                         false,
                     );
+                    let inline_offset = if writing_direction.direction == taffy::Direction::Rtl {
+                        width - position.line_offset - margin_box_size.inline_size
+                    } else {
+                        position.line_offset
+                    };
                     floats.push(InlineFloatPlacement {
                         child,
-                        location: Point {
-                            x: content_offset.x + position.x + margin.left,
-                            y: content_offset.y + position.y + margin.top,
+                        location: LogicalOffset {
+                            inline_offset: inline_offset + logical_margin.inline_start,
+                            block_offset: position.block_offset + logical_margin.block_start,
                         },
                         output,
                         order: usize::try_from(data.inline_box_id).unwrap_or(usize::MAX),
@@ -2290,12 +2308,24 @@ where
         measurement: &InlineMeasurement,
         content_offset: Point<f32>,
         containing_block_size: Size<f32>,
+        container_writing_mode: taffy::WritingMode,
         container_direction: InlineDirection,
     ) {
+        let container_taffy_direction = match container_direction {
+            InlineDirection::Ltr => taffy::Direction::Ltr,
+            InlineDirection::Rtl => taffy::Direction::Rtl,
+        };
+        let converter = WritingDirection::new(container_writing_mode, container_taffy_direction)
+            .converter(containing_block_size);
         for floated in &measurement.floats {
+            let relative_location =
+                converter.to_physical_point(floated.location, floated.output.size);
             self.set_inline_child_layout(
                 floated.child,
-                floated.location,
+                Point {
+                    x: content_offset.x + relative_location.x,
+                    y: content_offset.y + relative_location.y,
+                },
                 floated.output,
                 floated.order,
                 floated.percentage_basis,
@@ -2494,7 +2524,7 @@ struct AtomicMeasurement {
 #[derive(Clone, Copy)]
 struct InlineFloatPlacement {
     child: LayoutBoxId,
-    location: Point<f32>,
+    location: LogicalOffset<f32>,
     output: LayoutOutput,
     order: usize,
     percentage_basis: Option<f32>,
@@ -2539,7 +2569,7 @@ impl InlineMeasurement {
             placement.translate_block_axis(offset);
         }
         for floated in &mut self.floats {
-            floated.location.y += offset;
+            floated.location.block_offset += offset;
         }
         self.fragments.translate_block_axis(offset);
     }

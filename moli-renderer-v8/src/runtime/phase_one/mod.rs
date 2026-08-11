@@ -1009,6 +1009,54 @@ html,body{margin:0;padding:0}
     }
 
     #[test]
+    fn flex_and_grid_share_first_and_last_baselines_in_logical_axes() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+.case{width:200px;height:100px}
+.last-flex{display:flex;align-items:last baseline}
+.last-grid{display:grid;grid-template-columns:40px 40px;grid-template-rows:100px;align-items:last baseline}
+.tall,.short{display:flex;flex-direction:column;width:40px}
+.tall{padding-bottom:10px}.line-a{width:10px;height:10px}.line-b{width:10px;height:20px}.short-line{width:10px;height:10px}
+#flex-tall{background:rgb(31,41,51)}#flex-short{background:rgb(32,42,52)}
+#grid-tall{background:rgb(33,43,53)}#grid-short{background:rgb(34,44,54)}
+.vertical-flex{display:flex;flex-direction:row;align-items:baseline;writing-mode:vertical-rl;width:30px;height:20px}
+.vertical-flex>div{writing-mode:vertical-rl;height:10px;flex-shrink:0}
+#narrow{width:10px;background:rgb(35,45,55)}#wide{width:20px;background:rgb(36,46,56)}
+</style></head><body>
+<div class="case last-flex"><div id=flex-tall class=tall><div class=line-a></div><div class=line-b></div></div><div id=flex-short class=short><div class=short-line></div></div></div>
+<div class="case last-grid"><div id=grid-tall class=tall><div class=line-a></div><div class=line-b></div></div><div id=grid-short class=short><div class=short-line></div></div></div>
+<div class=vertical-flex><div id=narrow></div><div id=wide></div></div>
+</body></html>"#,
+            )
+            .await;
+
+            // Chromium keeps first/last baseline preference and the baseline
+            // sharing group in layout state. Empty boxes synthesize a stable
+            // baseline, so this matrix isolates geometry from font metrics.
+            for (color, expected) in [
+                (rgb(31, 41, 51), (0.0, 60.0, 40.0, 40.0)),
+                (rgb(32, 42, 52), (40.0, 80.0, 40.0, 10.0)),
+                (rgb(33, 43, 53), (0.0, 160.0, 40.0, 40.0)),
+                (rgb(34, 44, 54), (40.0, 180.0, 40.0, 10.0)),
+                (rgb(35, 45, 55), (15.0, 200.0, 10.0, 10.0)),
+                (rgb(36, 46, 56), (10.0, 210.0, 20.0, 10.0)),
+            ] {
+                assert_paint_rect(
+                    solid_paint_rect(&snapshot, color),
+                    moli_layout::PaintRect::new(expected.0, expected.1, expected.2, expected.3),
+                );
+            }
+        }));
+    }
+
+    #[test]
     fn fixed_table_layout_distributes_unresolved_columns_equally() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
