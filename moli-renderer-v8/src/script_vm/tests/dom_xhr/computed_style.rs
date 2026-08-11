@@ -55,6 +55,30 @@ fn rendered_text_elements_use_chromium_user_agent_defaults() {
 }
 
 #[test]
+fn center_uses_legacy_centering_user_agent_default() {
+    let mut vm = new_parsed_test_vm(
+        "https://center-user-agent-default.test/",
+        r#"<!doctype html>
+<html><head><style>#overridden { text-align: right; }</style></head><body>
+  <center id="default">default</center>
+  <center id="overridden">overridden</center>
+</body></html>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+['default', 'overridden']
+  .map(id => getComputedStyle(document.getElementById(id)).textAlign)
+  .join('|')
+"#,
+        )
+        .expect("center user-agent alignment should evaluate");
+
+    assert_eq!(result, "-moz-center|right");
+}
+
+#[test]
 fn list_items_and_first_details_summary_use_user_agent_display_defaults() {
     let mut vm = new_parsed_test_vm(
         "https://list-item-user-agent-display.test/",

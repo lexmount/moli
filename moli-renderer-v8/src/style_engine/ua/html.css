@@ -35,6 +35,11 @@ ul, ol, menu, h1, h2, h3, h4, h5, h6, hr, listing, plaintext, pre, xmp {
   display: block;
 }
 
+center {
+  /* Stylo's legacy-centering equivalent of Blink's -webkit-center. */
+  text-align: -moz-center;
+}
+
 marquee,
 input, textarea, select, button {
   display: inline-block;

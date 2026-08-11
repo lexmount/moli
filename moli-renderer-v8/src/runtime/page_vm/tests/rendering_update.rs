@@ -1109,6 +1109,57 @@ document.body.innerHTML = `
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn center_user_agent_alignment_centers_atomic_inline_children() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/center-user-agent-alignment.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0}
+#host{width:584px;margin-left:100px;font-size:0}
+#first,#second{display:inline-block;height:20px}
+#first{width:120px}
+#second{width:100px}
+</style>`;
+document.body.innerHTML = `<center id=host><span id=first></span><span id=second></span></center>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries(['host','first','second'].map(id=>{const r=document.getElementById(id).getBoundingClientRect();return [id,[r.x,r.y,r.width,r.height]]})))"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        for (id, expected) in [
+            ("host", [100.0, 0.0, 584.0, 20.0]),
+            ("first", [282.0, 0.0, 120.0, 20.0]),
+            ("second", [402.0, 0.0, 100.0, 20.0]),
+        ] {
+            let actual = geometry[id]
+                .as_array()
+                .unwrap_or_else(|| panic!("missing geometry for {id}: {geometry}"));
+            for (index, expected) in expected.into_iter().enumerate() {
+                let actual = actual[index].as_f64().expect("numeric geometry") as f32;
+                assert!(
+                    (actual - expected).abs() <= 0.05,
+                    "{id}[{index}]: expected {expected}, got {actual}; geometry={geometry}"
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("center user-agent alignment fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn absolute_auto_width_from_an_inline_formatting_context_shrinks_to_fit() {
     run_page_vm_async_test(async move {
         let loader =
