@@ -339,9 +339,15 @@ impl<N> LayoutBox<N> {
     /// Resolve the used ratio at the layout-node boundary, after both authored
     /// style and natural replaced-element sizing are available.
     pub(crate) fn resolved_aspect_ratio(&self) -> taffy::ResolvedAspectRatio {
-        let natural_ratio = self
-            .replaced_context
-            .and_then(|context| context.inherent_ratio());
+        // Blink drops a replaced element's natural ratio when any applicable
+        // size containment is active. An explicit authored ratio still wins,
+        // and `auto <ratio>` can still use its authored fallback.
+        let natural_ratio = (!self.applies_any_size_containment())
+            .then(|| {
+                self.replaced_context
+                    .and_then(|context| context.inherent_ratio())
+            })
+            .flatten();
         self.style.resolved_aspect_ratio(natural_ratio)
     }
 }
