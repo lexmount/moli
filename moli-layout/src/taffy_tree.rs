@@ -1471,6 +1471,7 @@ where
                 size,
                 content_size: size,
                 first_baselines: Point::NONE,
+                last_baselines: Point::NONE,
                 top_margin: taffy::tree::CollapsibleMarginSet::ZERO,
                 bottom_margin: taffy::tree::CollapsibleMarginSet::ZERO,
                 margins_can_collapse_through: false,
@@ -1531,7 +1532,6 @@ where
             .inline_layout
             .take()
             .unwrap_or_else(empty_inline_context);
-        inline_context.last_baseline = None;
         let mut measurement = None;
         let mut output = compute_leaf_layout(
             leaf_inputs,
@@ -1587,9 +1587,12 @@ where
             output.first_baselines.y = measurement
                 .first_baseline
                 .map(|baseline| baseline + padding.top + border.top);
-            inline_context.last_baseline = measurement
+            output.last_baselines.y = measurement
                 .last_baseline
                 .map(|baseline| baseline + padding.top + border.top);
+            if measurement.line_placements.iter().any(|line| !line.phantom) {
+                output.margins_can_collapse_through = false;
+            }
             if inputs.run_mode == RunMode::PerformLayout {
                 self.position_inline_objects(
                     &inline_context,
@@ -1654,6 +1657,7 @@ where
         let mut layout = context.unbroken.clone();
         let mut atomic = vec![None; context.objects.len()];
         let mut atomic_baseline_ascents = vec![None; context.objects.len()];
+        let mut structural_edge_contributions = vec![false; context.objects.len()];
         let mut floats = Vec::new();
 
         for (inline_box, object) in layout.inline_boxes_mut().iter_mut().zip(&context.objects) {
@@ -1676,7 +1680,7 @@ where
                     let object_index = usize::try_from(inline_box.id)
                         .expect("Parley returned an inline object id outside usize");
                     atomic_baseline_ascents[object_index] = self
-                        .atomic_inline_baseline(object.box_id)
+                        .atomic_inline_baseline(object.box_id, child_output)
                         .map(|baseline| margins.top.max(0.0) + baseline);
                     atomic[object_index] = Some(AtomicMeasurement {
                         output: child_output,
@@ -1708,13 +1712,17 @@ where
                     let logical_start = object.role == InlineObjectRole::StartEdge;
                     let physical_left =
                         logical_start == (child_style.direction() == InlineDirection::Ltr);
-                    inline_box.width = if physical_left {
-                        margins.left + padding.left + border.left
+                    let (margin, padding, border) = if physical_left {
+                        (margins.left, padding.left, border.left)
                     } else {
-                        margins.right + padding.right + border.right
-                    }
-                    .max(0.0);
+                        (margins.right, padding.right, border.right)
+                    };
+                    inline_box.width = (margin + padding + border).max(0.0);
                     inline_box.height = 0.0;
+                    let object_index = usize::try_from(inline_box.id)
+                        .expect("Parley returned an inline object id outside usize");
+                    structural_edge_contributions[object_index] =
+                        margin != 0.0 || padding != 0.0 || border != 0.0;
                 }
             }
         }
@@ -1924,21 +1932,26 @@ where
             },
         );
 
-        let (line_placements, line_expansion) =
-            build_inline_line_placements(context, &layout, &atomic_baseline_ascents);
+        let (line_placements, line_expansion) = build_inline_line_placements(
+            context,
+            &layout,
+            &atomic_baseline_ascents,
+            &structural_edge_contributions,
+        );
         let mut height = layout.height() + line_expansion;
         if let Some(float_height) = float_height {
             height = height.max(float_height);
         }
-        if ends_with_forced_break(context)
-            && let Some(last) = layout.lines().last()
-            && last.items().next().is_none()
-        {
-            height = (height - last.metrics().line_height).max(0.0);
-        }
         let alignment_block_size = height.max(alignment_float_height);
-        let first_baseline = line_placements.first().map(|line| line.baseline);
-        let last_baseline = line_placements.last().map(|line| line.baseline);
+        let first_baseline = line_placements
+            .iter()
+            .find(|line| !line.phantom)
+            .map(|line| line.baseline);
+        let last_baseline = line_placements
+            .iter()
+            .rev()
+            .find(|line| !line.phantom)
+            .map(|line| line.baseline);
         let fragments = build_inline_fragments(context, &layout, &line_placements);
         InlineMeasurement {
             size: Size {
@@ -1957,7 +1970,7 @@ where
         }
     }
 
-    fn atomic_inline_baseline(&self, id: LayoutBoxId) -> Option<f32> {
+    fn atomic_inline_baseline(&self, id: LayoutBoxId, output: LayoutOutput) -> Option<f32> {
         let layout_box = &self.boxes[id.index()];
         if !matches!(
             layout_box.style.display(),
@@ -1967,7 +1980,7 @@ where
         {
             return None;
         }
-        layout_box.inline_layout.as_ref()?.last_baseline
+        output.last_baselines.y
     }
 
     fn break_inline_lines_with_floats(
@@ -2330,7 +2343,6 @@ fn single_subject_block_alignment_offset(alignment: Option<AlignContent>, free_s
 
 fn empty_inline_context() -> InlineFormattingContext {
     InlineFormattingContext {
-        text: String::new(),
         unbroken: parley::Layout::default(),
         laid_out: None,
         text_units: Vec::new(),
@@ -2340,19 +2352,9 @@ fn empty_inline_context() -> InlineFormattingContext {
         font_metrics: Vec::new(),
         parent_strut: None,
         object_alignment_parent_struts: Vec::new(),
-        last_baseline: None,
         line_placements: Vec::new(),
         fragments: InlineFragments::default(),
     }
-}
-
-fn ends_with_forced_break(context: &InlineFormattingContext) -> bool {
-    context
-        .text_units
-        .iter()
-        .rev()
-        .find(|unit| !unit.control)
-        .is_some_and(|unit| &context.text[unit.output_range.clone()] == "\n")
 }
 
 fn measure_text(

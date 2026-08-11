@@ -11,7 +11,7 @@ use moli_layout::{
     build_screenshot_snapshot,
 };
 use style::Atom;
-use taffy::{Clear, Dimension, Float, Overflow, Point, Rect, Size, Style};
+use taffy::{BoxSizing, Clear, Dimension, Float, Overflow, Point, Rect, Size, Style};
 
 const RED: PaintColor = PaintColor::new(0.9, 0.1, 0.1, 1.0);
 const GREEN: PaintColor = PaintColor::new(0.1, 0.7, 0.2, 1.0);
@@ -1040,6 +1040,175 @@ fn inline_blocks_use_their_internal_last_line_baseline_and_overflow_fallback() {
     assert_close(rect(&fallback, RED).y, 45.0);
     assert_close(rect(&fallback, GREEN).y, 45.0);
     assert_close(rect(&fallback, BLUE).y, 19.0);
+}
+
+#[test]
+fn inline_block_propagates_scroll_block_end_baseline_through_block_children() {
+    let render_variant = |inner_display, inner_overflow, margin_bottom| {
+        let source = Source(vec![
+            Node::element(
+                "root",
+                "div",
+                LayoutElementCategory::Generic,
+                None,
+                vec![1, 4],
+            ),
+            Node::element(
+                "outer",
+                "span",
+                LayoutElementCategory::Generic,
+                None,
+                vec![2],
+            ),
+            Node::element(
+                "inner",
+                "div",
+                LayoutElementCategory::Generic,
+                None,
+                vec![3],
+            ),
+            Node::text("inner-text", "X"),
+            Node::element(
+                "tail",
+                "span",
+                LayoutElementCategory::Generic,
+                None,
+                Vec::new(),
+            ),
+        ]);
+        let mut styles = Styles::default();
+        styles.primary.insert(
+            0,
+            style(LayoutDisplay::Block, PaintColor::TRANSPARENT)
+                .tap_taffy(|taffy| {
+                    taffy.size.width = Dimension::length(200.0);
+                })
+                .with_text_metrics(16.0, 20.0),
+        );
+        styles.primary.insert(
+            1,
+            style(LayoutDisplay::InlineBlock, YELLOW)
+                .tap_taffy(|taffy| {
+                    taffy.box_sizing = BoxSizing::ContentBox;
+                    if inner_display == LayoutDisplay::InlineBlock {
+                        taffy.size.height = Dimension::length(30.0 + margin_bottom);
+                    }
+                    taffy.padding.bottom = taffy::LengthPercentage::length(20.0);
+                })
+                .with_text_metrics(16.0, 20.0),
+        );
+        styles.primary.insert(
+            2,
+            style(inner_display, BLUE)
+                .tap_taffy(|taffy| {
+                    taffy.size = Size {
+                        width: Dimension::length(30.0),
+                        height: Dimension::length(30.0),
+                    };
+                    taffy.margin.bottom = taffy::LengthPercentageAuto::length(margin_bottom);
+                    taffy.overflow = Point {
+                        x: inner_overflow,
+                        y: inner_overflow,
+                    };
+                })
+                .with_text_metrics(16.0, 20.0),
+        );
+        styles
+            .primary
+            .insert(4, sized(LayoutDisplay::InlineBlock, 10.0, 10.0, RED));
+
+        render(&source, &mut styles, 200, 120)
+    };
+
+    for margin_bottom in [0.0, 30.0] {
+        let test = render_variant(LayoutDisplay::Block, Overflow::Hidden, margin_bottom);
+        let reference = render_variant(LayoutDisplay::InlineBlock, Overflow::Hidden, margin_bottom);
+
+        assert_eq!(rect(&test, YELLOW), rect(&reference, YELLOW));
+        assert_eq!(rect(&test, BLUE), rect(&reference, BLUE));
+        assert_eq!(rect(&test, RED), rect(&reference, RED));
+    }
+}
+
+#[test]
+fn phantom_inline_line_does_not_supply_an_inline_block_baseline() {
+    let source = Source(vec![
+        Node::element(
+            "wrapper",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            vec![1, 2],
+        ),
+        Node::element(
+            "empty-atomic",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            Vec::new(),
+        ),
+        Node::element(
+            "block-atomic",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            vec![3, 4],
+        ),
+        Node::element(
+            "empty-inline",
+            "span",
+            LayoutElementCategory::Generic,
+            None,
+            Vec::new(),
+        ),
+        Node::element(
+            "green-block",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            Vec::new(),
+        ),
+    ]);
+    let mut styles = Styles::default();
+    styles.primary.insert(
+        0,
+        style(LayoutDisplay::Block, RED)
+            .tap_taffy(|taffy| {
+                taffy.size.width = Dimension::length(200.0);
+            })
+            .with_text_metrics(0.0, 0.0),
+    );
+    styles
+        .primary
+        .insert(1, sized(LayoutDisplay::InlineBlock, 100.0, 200.0, GREEN));
+    styles.primary.insert(
+        2,
+        style(LayoutDisplay::InlineBlock, PaintColor::TRANSPARENT).with_text_metrics(0.0, 0.0),
+    );
+    styles.primary.insert(
+        3,
+        style(LayoutDisplay::Inline, PaintColor::TRANSPARENT).with_text_metrics(0.0, 0.0),
+    );
+    styles
+        .primary
+        .insert(4, sized(LayoutDisplay::Block, 100.0, 200.0, GREEN));
+
+    let snapshot = render(&source, &mut styles, 240, 240);
+    let mut green_rects = snapshot
+        .fragments
+        .iter()
+        .filter_map(PaintFragment::solid_fill_in_surface)
+        .filter_map(|(rect, color)| (color == GREEN).then_some(rect))
+        .collect::<Vec<_>>();
+    green_rects.sort_by(|left, right| left.x.total_cmp(&right.x));
+
+    assert_eq!(
+        green_rects,
+        vec![
+            PaintRect::new(0.0, 0.0, 100.0, 200.0),
+            PaintRect::new(100.0, 0.0, 100.0, 200.0),
+        ]
+    );
 }
 
 #[test]

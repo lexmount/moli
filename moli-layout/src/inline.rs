@@ -113,7 +113,6 @@ pub(crate) struct InlineObject {
 
 #[derive(Clone, Debug)]
 pub(crate) struct InlineFormattingContext {
-    pub(crate) text: String,
     pub(crate) unbroken: Layout<TextBrush>,
     pub(crate) laid_out: Option<Layout<TextBrush>>,
     pub(crate) text_units: Vec<InlineTextUnit>,
@@ -132,10 +131,6 @@ pub(crate) struct InlineFormattingContext {
     /// non-baseline alignment is relative to that parent inline box, not
     /// necessarily to the IFC owner.
     pub(crate) object_alignment_parent_struts: Vec<Option<InlineStrutMetrics>>,
-    /// Baseline of the last in-flow line, relative to the border-box block
-    /// start. Atomic inline parents use this instead of synthesizing every
-    /// inline-block baseline from its margin-box end.
-    pub(crate) last_baseline: Option<f32>,
     pub(crate) line_placements: Vec<InlineLinePlacement>,
     pub(crate) fragments: InlineFragments,
 }
@@ -160,6 +155,10 @@ pub(crate) struct InlineLinePlacement {
     pub(crate) line_index: usize,
     pub(crate) rect: PaintRect,
     pub(crate) baseline: f32,
+    /// CSS phantom line boxes retain positions for their inline descendants,
+    /// but do not contribute height, baselines, or block margin-collapse
+    /// barriers.
+    pub(crate) phantom: bool,
     content_offset: f32,
     item_offsets: Vec<f32>,
     glyph_offsets: Vec<InlineGlyphOffset>,
@@ -521,6 +520,7 @@ pub(crate) fn build_inline_line_placements(
     context: &InlineFormattingContext,
     layout: &Layout<TextBrush>,
     atomic_baseline_ascents: &[Option<f32>],
+    structural_edge_contributions: &[bool],
 ) -> (Vec<InlineLinePlacement>, f32) {
     let mut placements = Vec::with_capacity(layout.lines().len());
     let mut preceding_adjustment = 0.0;
@@ -577,6 +577,7 @@ pub(crate) fn build_inline_line_placements(
                         // style but no glyph geometry and is not in-flow line
                         // content by itself.
                         contributes_to_line: paint && style_index.is_some(),
+                        creates_line: paint && style_index.is_some(),
                         alignment_parent_strut: None,
                         glyph_key: if paint {
                             style_index.map(|index| (run.index(), index))
@@ -587,9 +588,10 @@ pub(crate) fn build_inline_line_placements(
                 }
                 PositionedLayoutItem::InlineBox(positioned) => {
                     let object = context.object(positioned.id);
+                    let object_index = usize::try_from(positioned.id).ok();
                     let internal_baseline_ascent = object
                         .filter(|object| object.role == InlineObjectRole::Atomic)
-                        .and_then(|_| usize::try_from(positioned.id).ok())
+                        .and(object_index)
                         .and_then(|index| atomic_baseline_ascents.get(index).copied().flatten());
                     let is_atomic =
                         object.is_some_and(|object| object.role == InlineObjectRole::Atomic);
@@ -608,6 +610,14 @@ pub(crate) fn build_inline_line_placements(
                             .unwrap_or_default(),
                         contributes_to_line: object
                             .is_some_and(|object| object.role == InlineObjectRole::Atomic),
+                        creates_line: object.is_some_and(|object| match object.role {
+                            InlineObjectRole::Atomic => true,
+                            InlineObjectRole::StartEdge | InlineObjectRole::EndEdge => object_index
+                                .and_then(|index| structural_edge_contributions.get(index))
+                                .copied()
+                                .unwrap_or(false),
+                            InlineObjectRole::Float | InlineObjectRole::OutOfFlow => false,
+                        }),
                         alignment_parent_strut: context
                             .object_alignment_parent_strut(positioned.id),
                         glyph_key: None,
@@ -615,15 +625,12 @@ pub(crate) fn build_inline_line_placements(
                 }
             })
             .collect::<Vec<_>>();
-        // Every CSS line starts with the IFC owner's zero-width font strut.
+        let phantom = !geometries.iter().any(|geometry| geometry.creates_line);
+        // Every non-phantom CSS line starts with the IFC owner's zero-width font strut.
         // Reconstruct it explicitly whenever this sidecar owns in-flow
         // vertical geometry. Float and out-of-flow placeholders do not create
         // a normal-flow line contribution and retain Parley's raw position.
-        let reconstructs_parent_strut = context.parent_strut.is_some()
-            && geometries.iter().any(|geometry| {
-                geometry.contributes_to_line
-                    || geometry.vertical_align.kind != LayoutInlineAlignment::Baseline
-            });
+        let reconstructs_parent_strut = !phantom && context.parent_strut.is_some();
         let root_parent_x_height = context
             .parent_strut
             .filter(|_| reconstructs_parent_strut)
@@ -733,15 +740,19 @@ pub(crate) fn build_inline_line_placements(
         // First position baseline-, text-edge-, and middle-aligned content.
         // Top/bottom depend on the resulting aligned subtree and are resolved
         // in the second pass, matching the ordering used by browser IFCs.
-        let (mut min_y, mut max_y) = context
-            .parent_strut
-            .filter(|_| reconstructs_parent_strut)
-            .map_or((raw_top, raw_bottom), |strut| {
-                (
-                    parent_baseline - strut.line_ascent,
-                    parent_baseline + strut.line_descent,
-                )
-            });
+        let (mut min_y, mut max_y) = if phantom {
+            (raw_top, raw_top)
+        } else {
+            context
+                .parent_strut
+                .filter(|_| reconstructs_parent_strut)
+                .map_or((raw_top, raw_bottom), |strut| {
+                    (
+                        parent_baseline - strut.line_ascent,
+                        parent_baseline + strut.line_descent,
+                    )
+                })
+        };
         let mut item_offsets = base_offsets;
         for (item_index, geometry) in geometries.iter().enumerate() {
             if matches!(
@@ -817,6 +828,7 @@ pub(crate) fn build_inline_line_placements(
                 line_height,
             ),
             baseline: parent_baseline + line_content_offset,
+            phantom,
             content_offset: parley_baseline_adjustment
                 + parent_baseline_adjustment
                 + line_content_offset,
@@ -838,7 +850,12 @@ struct InlineItemVerticalGeometry {
     uses_internal_atomic_baseline: bool,
     intrinsic_baseline_adjustment: f32,
     vertical_align: InlineVerticalAlign,
+    /// Whether this item supplies block-axis geometry to the line.
     contributes_to_line: bool,
+    /// Whether this item prevents the line from being a CSS phantom line box.
+    /// Structural inline edges with non-zero inline-axis decorations create a
+    /// line without themselves affecting its block-axis height.
+    creates_line: bool,
     alignment_parent_strut: Option<InlineStrutMetrics>,
     glyph_key: Option<(usize, usize)>,
 }
@@ -1078,7 +1095,6 @@ impl InlineBuildInput {
             .map(|(_, object, _)| object)
             .collect();
         InlineFormattingContext {
-            text: self.text,
             unbroken: layout,
             laid_out: None,
             text_units: self.units,
@@ -1088,7 +1104,6 @@ impl InlineBuildInput {
             font_metrics,
             parent_strut,
             object_alignment_parent_struts,
-            last_baseline: None,
             line_placements: Vec::new(),
             fragments: InlineFragments::default(),
         }
