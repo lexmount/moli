@@ -4583,7 +4583,7 @@ fn box_metrics_round_fractional_computed_px_values() {
         )
         .expect("box metrics should round fractional computed px values");
 
-    assert_eq!(result, "80|80|80|31|31|31|80|31");
+    assert_eq!(result, "80|80|80|31|31|31|79.59375|30.59375");
 }
 
 #[test]

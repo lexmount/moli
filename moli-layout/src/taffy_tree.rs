@@ -9,7 +9,8 @@ use taffy::{
     LayoutOutput, LayoutPartialTree, Line, MaybeMath, MaybeResolve, NodeId, Point, ResolveOrZero,
     RoundTree, RunMode, Size, SizingMode, SizingPurpose, Style, TraversePartialTree, TraverseTree,
     compute_block_layout, compute_cached_layout, compute_flexbox_layout, compute_grid_layout,
-    compute_hidden_layout, compute_leaf_layout, compute_root_layout, round_layout,
+    compute_hidden_layout, compute_leaf_layout, compute_root_layout,
+    round_layout_with_scale_factor,
 };
 
 use crate::{
@@ -26,6 +27,9 @@ use crate::{
     table::{compute_table_layout, prepare_table_layout_trees},
     world::InlineStaticPosition,
 };
+
+// Blink stores box geometry in 1/64 CSS-pixel LayoutUnits.
+const LAYOUT_SUBPIXELS_PER_CSS_PIXEL: f32 = 64.0;
 
 pub(crate) fn compute_world_layout<N>(world: &mut LayoutWorld<N>, viewport: PaintViewport)
 where
@@ -78,7 +82,7 @@ where
     finish_form_control_contents(world);
     finish_outside_list_markers(world);
     finish_sticky_positioning(world, viewport);
-    round_layout(world, root);
+    round_layout_with_scale_factor(world, root, LAYOUT_SUBPIXELS_PER_CSS_PIXEL);
     // Outside markers deliberately are not numeric children of the list item,
     // otherwise Taffy would allocate them a normal-flow row. Round each
     // detached numeric root explicitly so paint consumes the geometry written
@@ -88,7 +92,7 @@ where
         .filter(|id| world.boxes[id.index()].outside_list_marker)
         .collect::<Vec<_>>();
     for marker in outside_markers {
-        round_layout(world, marker.to_taffy());
+        round_layout_with_scale_factor(world, marker.to_taffy(), LAYOUT_SUBPIXELS_PER_CSS_PIXEL);
     }
 }
 

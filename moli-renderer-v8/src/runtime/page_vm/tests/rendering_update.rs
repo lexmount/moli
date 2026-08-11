@@ -751,9 +751,8 @@ document.body.innerHTML = `<div id=centered></div><div id=definite-parent><div i
         )?;
         let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
         for (id, expected) in [
-            // Taffy's final device-pixel rounding maps Chromium's 232.5px
-            // computed origin to the 233px paint/geometry edge.
-            ("centered", [233.0, 0.0, 975.0, 20.0]),
+            // Chromium retains the half-pixel origin in DOM geometry.
+            ("centered", [232.5, 0.0, 975.0, 20.0]),
             ("definite-parent", [0.0, 30.0, 100.0, 400.0]),
             ("definite-child", [0.0, 227.0, 10.0, 10.0]),
             ("indefinite-parent", [0.0, 500.0, 100.0, 100.0]),
@@ -781,7 +780,7 @@ document.body.innerHTML = `<div id=centered></div><div id=definite-parent><div i
             <[u8; 4]>::try_from(&image.rgba[index..index + 4]).expect("RGBA pixel")
         };
         assert_eq!(pixel(233, 10), [255, 0, 0, 255]);
-        assert_eq!(pixel(232, 10), [255, 255, 255, 255]);
+        assert_eq!(pixel(232, 10), [255, 127, 127, 255]);
         assert_eq!(pixel(5, 230), [0, 0, 255, 255]);
         assert_eq!(pixel(5, 505), [0, 255, 0, 255]);
         Ok::<_, anyhow::Error>(())
@@ -2419,9 +2418,9 @@ document.body.innerHTML = `<div id=bar><header id=header><div id=wrapper><span i
         let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
         for (id, expected) in [
             ("bar", [0.0, 0.0, 200.0, 60.0]),
-            ("header", [6.0, 5.0, 48.0, 51.0]),
-            ("wrapper", [6.0, 5.0, 48.0, 51.0]),
-            ("atomic", [6.0, 5.0, 48.0, 48.0]),
+            ("header", [6.0, 4.5, 48.0, 51.0]),
+            ("wrapper", [6.0, 4.5, 48.0, 51.0]),
+            ("atomic", [6.0, 4.5, 48.0, 48.0]),
         ] {
             let actual = geometry[id]
                 .as_array()
@@ -2438,6 +2437,66 @@ document.body.innerHTML = `<div id=bar><header id=header><div id=wrapper><span i
     })
     .await
     .expect("baseline atomic strut fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn atomic_inline_location_uses_the_global_layout_unit_grid() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/atomic-inline-layout-unit.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0}
+#line{margin:0;white-space:nowrap;font:16px/75px sans-serif}
+#atomic{display:inline-block;position:relative;left:.1px}
+</style>`;
+document.body.innerHTML = `<p id=line>All the <span id=atomic>words</span> after</p>`;
+'installed'
+"#,
+        )?;
+        page_vm
+            .vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify((()=>{const line=document.getElementById('line');const atomic=document.getElementById('atomic');const rect=node=>{const range=document.createRange();range.selectNodeContents(node);const value=range.getBoundingClientRect();return [value.x,value.right]};const box=atomic.getBoundingClientRect();return {preceding:rect(line.firstChild),atomic:[box.x,box.right],text:rect(atomic)}})())"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        let number = |group: &str, index: usize| {
+            geometry[group][index]
+                .as_f64()
+                .unwrap_or_else(|| panic!("missing {group}[{index}] in {geometry}"))
+                as f32
+        };
+        let preceding_right = number("preceding", 1);
+        let atomic_x = number("atomic", 0);
+        let text_x = number("text", 0);
+        let geometry_epsilon = 0.0001;
+        let unrounded_atomic_x = preceding_right + 0.1;
+        let expected_atomic_x = (unrounded_atomic_x * 64.0).round() / 64.0;
+
+        assert!(
+            (unrounded_atomic_x * 64.0 - (unrounded_atomic_x * 64.0).round()).abs() > 0.05,
+            "fixture must place the unrounded atomic origin away from the 1/64 grid: {geometry}"
+        );
+        assert!(
+            (atomic_x - expected_atomic_x).abs() <= geometry_epsilon,
+            "the atomic outer placement must use the global 1/64 layout grid; expected {expected_atomic_x}: {geometry}"
+        );
+        assert!(
+            (text_x - atomic_x).abs() <= geometry_epsilon,
+            "the atomic IFC must paint its first glyph at the rounded box origin: {geometry}"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("atomic inline layout-unit fixture should run");
 }
 
 #[tokio::test(flavor = "current_thread")]
