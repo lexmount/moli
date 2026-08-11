@@ -9,20 +9,19 @@ use taffy::{
     LayoutOutput, LayoutPartialTree, Line, MaybeMath, MaybeResolve, NodeId, Point, ResolveOrZero,
     RoundTree, RunMode, Size, SizingMode, SizingPurpose, Style, TraversePartialTree, TraverseTree,
     compute_block_layout, compute_cached_layout, compute_flexbox_layout, compute_grid_layout,
-    compute_hidden_layout, compute_leaf_layout, compute_root_layout,
+    compute_hidden_layout, compute_leaf_layout_with_aspect_ratio, compute_root_layout,
     round_layout_with_scale_factor,
 };
 
 use crate::{
     LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic, LayoutWorld, PaintRect, PaintViewport,
-    form::form_control_context,
     inline::{
         InlineFormattingContext, InlineFragments, InlineLinePlacement, InlineObjectRole,
         break_inline_lines, build_inline_fragments, build_inline_line_placements,
         relative_atomic_inset_offset,
     },
     positioned::resolve_absolute_axis_margins,
-    replaced::{ReplacedContext, measure_replaced},
+    replaced::measure_replaced,
     style::{InlineDirection, resolve_stylo_calc_value},
     table::{compute_table_layout, prepare_table_layout_trees},
     world::InlineStaticPosition,
@@ -205,7 +204,6 @@ where
                     None,
                     LayoutBoxKind::PrincipalBlock,
                     placeholder_style,
-                    None,
                     None,
                 );
                 placeholder.capability_diagnostics.clear();
@@ -1160,6 +1158,16 @@ where
         }
     }
 
+    fn get_resolved_aspect_ratio(&self, node_id: NodeId) -> taffy::ResolvedAspectRatio {
+        if self.is_viewport_taffy_node(node_id) {
+            return taffy::ResolvedAspectRatio {
+                ratio: self.viewport_layout.style.aspect_ratio,
+                box_sizing: self.viewport_layout.style.box_sizing,
+            };
+        }
+        self.boxes[LayoutBoxId::from_taffy(node_id).index()].resolved_aspect_ratio()
+    }
+
     fn resolve_calc_value(&self, value: *const (), basis: f32) -> f32 {
         resolve_stylo_calc_value(value, basis)
     }
@@ -1464,27 +1472,8 @@ where
         let text = layout_box.text.clone();
         let font_size = layout_box.style.font_size();
         let line_height = layout_box.style.line_height();
-        let replaced_context = layout_box.element_semantics.as_ref().and_then(|semantics| {
-            if matches!(
-                semantics.category,
-                crate::LayoutElementCategory::FormControl(crate::LayoutFormControlKind::Input(
-                    crate::LayoutInputControlKind::Image
-                ))
-            ) {
-                // Image buttons use ordinary image replaced sizing, including
-                // HTML width/height hints. They remain classified as form
-                // controls for DOM state and paint diagnostics only.
-                return Some(ReplacedContext::for_element(
-                    crate::LayoutReplacedKind::Image,
-                    layout_box.replaced_metrics,
-                ));
-            }
-            form_control_context(semantics, font_size, line_height).or_else(|| {
-                semantics
-                    .replaced
-                    .map(|kind| ReplacedContext::for_element(kind, layout_box.replaced_metrics))
-            })
-        });
+        let replaced_context = layout_box.replaced_context;
+        let resolved_aspect_ratio = layout_box.resolved_aspect_ratio();
 
         if let Some(context) = replaced_context {
             // `measure_replaced` is the complete CSS replaced-element sizing
@@ -1494,9 +1483,6 @@ where
             // adds CSS padding and borders itself. Routing the complete
             // replaced result through that helper would therefore apply the
             // box model twice (most visibly on padded form controls).
-            let resolved_aspect_ratio = layout_box
-                .style
-                .resolved_replaced_aspect_ratio(context.inherent_ratio());
             let size = measure_replaced(
                 inputs.known_dimensions,
                 inputs.parent_size,
@@ -1518,9 +1504,10 @@ where
             };
         }
 
-        compute_leaf_layout(
+        compute_leaf_layout_with_aspect_ratio(
             inputs,
             &style,
+            resolved_aspect_ratio,
             resolve_stylo_calc_value,
             |known_dimensions, available_space| {
                 if let Some(text) = text.as_deref() {
@@ -1548,6 +1535,7 @@ where
         block_context: Option<&mut BlockContext<'_>>,
     ) -> LayoutOutput {
         let style = self.boxes[id.index()].style.taffy.clone();
+        let resolved_aspect_ratio = self.boxes[id.index()].resolved_aspect_ratio();
         let is_floated = box_is_effectively_floated(self, id);
         // Both Taffy's block-float parent and Moli's IFC float parent
         // pass the border-box space left after horizontal margins. Taffy's
@@ -1573,9 +1561,10 @@ where
             .take()
             .unwrap_or_else(empty_inline_context);
         let mut measurement = None;
-        let mut output = compute_leaf_layout(
+        let mut output = compute_leaf_layout_with_aspect_ratio(
             leaf_inputs,
             &style,
+            resolved_aspect_ratio,
             resolve_stylo_calc_value,
             |known_dimensions, available_space| {
                 let result = self.measure_inline_context(
