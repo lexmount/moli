@@ -9785,12 +9785,14 @@ fn mouse_event_offsets_follow_retargeted_shadow_targets() {
 (() => {
   const pageStyle = document.createElement('style');
   pageStyle.textContent =
-    'html, body { padding: 0; margin: 0; font-family: Arial, sans-serif; } ' +
+    'html, body { padding: 0; margin: 0; } ' +
     'my-host { display: block; width: 180px; height: 80px; margin: 10px 20px; padding: 10px; }';
   document.documentElement.firstChild.appendChild(pageStyle);
+  // Keep the span non-atomic while fixing its line-box top independently of
+  // whichever default font the host has installed.
   const shadowStyle =
     '#container { width: 160px; height: 60px; padding: 10px; } ' +
-    '#target { margin-left: 5px; }';
+    '#target { line-height: 20px; vertical-align: top; margin-left: 5px; }';
 
   function makeHost(id) {
     for (const host of document.querySelectorAll('my-host')) {

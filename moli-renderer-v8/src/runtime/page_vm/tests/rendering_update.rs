@@ -2335,7 +2335,7 @@ getComputedStyle(document.getElementById('inline-gradient')).getPropertyValue('-
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn baseline_atomic_inline_keeps_parent_font_descent_in_flex_header() {
+async fn baseline_atomic_inline_keeps_parent_strut_descent_in_flex_header() {
     run_page_vm_async_test(async move {
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
@@ -2350,7 +2350,8 @@ document.head.innerHTML = `<style>
 html,body{margin:0}
 #bar{display:flex;align-items:center;box-sizing:border-box;width:200px;height:60px;padding:6px}
 #header{display:flex;align-items:center}
-#wrapper{display:block;font:14px/normal Arial,sans-serif}
+/* A zero-size font makes the 3px half-leading below the baseline deterministic. */
+#wrapper{display:block;font-size:0;line-height:6px}
 #atomic{display:inline-block;width:48px;height:48px;background:blue}
 </style>`;
 document.body.innerHTML = `<div id=bar><header id=header><div id=wrapper><span id=atomic></span></div></header></div>`;
@@ -2442,7 +2443,7 @@ document.body.innerHTML = `<div class=row><div class=item id=ask><i class=icon><
                 .as_array()
                 .unwrap_or_else(|| panic!("missing geometry for {id}: {geometry}"));
             for (index, expected) in expected.into_iter().enumerate() {
-                let actual = actual[index].as_f64().expect("numeric geometry") as f32;
+                let actual = actual[index].as_f64().expect("numeric geometry");
                 assert!(
                     (actual - expected).abs() <= 0.05,
                     "{id}[{index}]: expected {expected}, got {actual}; geometry={geometry}"

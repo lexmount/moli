@@ -991,7 +991,8 @@ li::marker { color: rgb(201,202,203) }
 
             let mut flow_page = parse_phase_one_html_into_page_vm_for_test(
                 r#"<!doctype html><html><head><style>
-html, body { margin: 0; padding: 0; font-family: Arial, sans-serif }
+/* A zero-size font makes the 4px half-leading below the baseline deterministic. */
+html, body { margin: 0; padding: 0; font-size: 0; line-height: 8px }
 #flow { display: flow-root; width: 200px }
 #left { float: left; width: 60px; height: 40px; background: rgb(1,2,3) }
 #right { float: right; width: 50px; height: 30px; background: rgb(11,12,13) }
