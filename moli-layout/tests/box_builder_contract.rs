@@ -2048,6 +2048,9 @@ fn nested_inline_baseline_shift_expands_the_line_once_for_text_and_atomic_conten
                 Style::default(),
                 PaintColor::new(0.0, 1.0, 0.0, 1.0),
             )
+            // Synthetic styles do not run CSS inheritance; mirror the
+            // structural inline's inherited parent font metrics explicitly.
+            .with_text_metrics(20.0, 20.0)
             .with_inline_baseline_shift(baseline_shift),
         );
         styles.primary.insert(
@@ -2100,9 +2103,80 @@ fn nested_inline_baseline_shift_expands_the_line_once_for_text_and_atomic_conten
     let baseline_after = solid_rect(&baseline, red);
     let raised_after = solid_rect(&raised, red);
 
-    assert!((raised_atomic.y - baseline_atomic.y).abs() < 0.01);
+    assert!(
+        (raised_atomic.y - baseline_atomic.y).abs() < 0.01,
+        "baseline={baseline_atomic:?}, raised={raised_atomic:?}"
+    );
     assert_eq!(raised_inline, baseline_inline);
-    assert!((raised_after.y - baseline_after.y - 10.0).abs() < 0.01);
+    assert!(
+        (raised_after.y - baseline_after.y - 10.0).abs() < 0.01,
+        "baseline={baseline_after:?}, raised={raised_after:?}"
+    );
+}
+
+#[test]
+fn baseline_atomic_inline_keeps_the_parent_strut_descent_in_the_line_box() {
+    let source = TestSource {
+        root: 0,
+        nodes: vec![
+            TestNode::element("root", vec![1, 2]),
+            TestNode::element("atomic", Vec::new()),
+            TestNode::element("after", Vec::new()),
+        ],
+    };
+    let atomic_color = PaintColor::new(0.0, 0.0, 1.0, 1.0);
+    let after_color = PaintColor::new(1.0, 0.0, 0.0, 1.0);
+    let mut styles = TestStyles::default();
+    styles.primary.insert(
+        0,
+        ResolvedLayoutStyle::synthetic(
+            LayoutDisplay::Block,
+            Style {
+                size: Size {
+                    width: length(100.0),
+                    height: Dimension::auto(),
+                },
+                ..Style::default()
+            },
+            PaintColor::TRANSPARENT,
+        )
+        .with_text_metrics(14.0, 16.0),
+    );
+    styles.primary.insert(
+        1,
+        colored_box(LayoutDisplay::InlineBlock, 48.0, 48.0, atomic_color),
+    );
+    styles
+        .primary
+        .insert(2, colored_box(LayoutDisplay::Block, 10.0, 5.0, after_color));
+
+    let snapshot = build_screenshot_snapshot(
+        &source,
+        &mut styles,
+        &mut DocumentLayoutServices::new(),
+        ScreenshotLayoutRequest::new(PaintViewport::new(100, 100, 1.0)),
+    )
+    .unwrap();
+    let rect_for = |color| {
+        snapshot
+            .fragments
+            .iter()
+            .find_map(|fragment| {
+                fragment
+                    .solid_fill_in_surface()
+                    .filter(|(_, actual)| *actual == color)
+                    .map(|(rect, _)| rect)
+            })
+            .expect("colored fixture box")
+    };
+    let atomic = rect_for(atomic_color);
+    let after = rect_for(after_color);
+
+    assert!(
+        after.y > atomic.y + atomic.height,
+        "the parent font descent must remain below a baseline-aligned atomic inline: \
+         atomic={atomic:?}, after={after:?}"
+    );
 }
 
 #[test]

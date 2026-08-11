@@ -572,7 +572,11 @@ pub(crate) fn build_inline_line_placements(
                         uses_internal_atomic_baseline: false,
                         intrinsic_baseline_adjustment: 0.0,
                         vertical_align: glyph_run.style().brush.vertical_align,
-                        contributes_to_line: paint,
+                        // Parley may expose an empty root-style run next to
+                        // float/out-of-flow placeholders. It carries the font
+                        // style but no glyph geometry and is not in-flow line
+                        // content by itself.
+                        contributes_to_line: paint && style_index.is_some(),
                         alignment_parent_strut: None,
                         glyph_key: if paint {
                             style_index.map(|index| (run.index(), index))
@@ -611,26 +615,18 @@ pub(crate) fn build_inline_line_placements(
                 }
             })
             .collect::<Vec<_>>();
-        let has_shifted_baseline_content = geometries.iter().any(|geometry| {
-            geometry.contributes_to_line
-                && geometry.vertical_align.kind == LayoutInlineAlignment::Baseline
-                && geometry.vertical_align.baseline_shift != 0.0
-        });
-        let has_baseline_atomic_content = geometries.iter().any(|geometry| {
-            geometry.contributes_to_line
-                && geometry.glyph_key.is_none()
-                && geometry.vertical_align.kind == LayoutInlineAlignment::Baseline
-        });
-        let uses_parent_strut = context.parent_strut.is_some()
+        // Every CSS line starts with the IFC owner's zero-width font strut.
+        // Reconstruct it explicitly whenever this sidecar owns in-flow
+        // vertical geometry. Float and out-of-flow placeholders do not create
+        // a normal-flow line contribution and retain Parley's raw position.
+        let reconstructs_parent_strut = context.parent_strut.is_some()
             && geometries.iter().any(|geometry| {
-                geometry.vertical_align.kind != LayoutInlineAlignment::Baseline
-                    || (geometry.glyph_key.is_some()
-                        && !has_shifted_baseline_content
-                        && !has_baseline_atomic_content)
+                geometry.contributes_to_line
+                    || geometry.vertical_align.kind != LayoutInlineAlignment::Baseline
             });
         let root_parent_x_height = context
             .parent_strut
-            .filter(|_| uses_parent_strut)
+            .filter(|_| reconstructs_parent_strut)
             .map(|strut| strut.x_height)
             .or_else(|| {
                 line.items().find_map(|item| match item {
@@ -673,7 +669,8 @@ pub(crate) fn build_inline_line_placements(
                 && geometry.vertical_align.kind == LayoutInlineAlignment::Baseline
                 && geometry.vertical_align.baseline_shift == 0.0
         });
-        let reconstructs_parent_baseline = consumes_internal_atomic_baseline || uses_parent_strut;
+        let reconstructs_parent_baseline =
+            consumes_internal_atomic_baseline || reconstructs_parent_strut;
         let baseline_ascent = reconstructs_parent_baseline
             .then(|| {
                 geometries
@@ -687,7 +684,7 @@ pub(crate) fn build_inline_line_placements(
                     .fold(
                         context
                             .parent_strut
-                            .filter(|_| uses_parent_strut)
+                            .filter(|_| reconstructs_parent_strut)
                             .map(|strut| strut.line_ascent),
                         |maximum, ascent| {
                             Some(maximum.map_or(ascent, |maximum| maximum.max(ascent)))
@@ -714,7 +711,7 @@ pub(crate) fn build_inline_line_placements(
         let parent_baseline = parley_parent_baseline + parent_baseline_adjustment;
         let (parent_text_top, parent_text_bottom) = context
             .parent_strut
-            .filter(|_| uses_parent_strut)
+            .filter(|_| reconstructs_parent_strut)
             .map(|strut| {
                 (
                     parent_baseline - strut.text_ascent,
@@ -736,15 +733,15 @@ pub(crate) fn build_inline_line_placements(
         // First position baseline-, text-edge-, and middle-aligned content.
         // Top/bottom depend on the resulting aligned subtree and are resolved
         // in the second pass, matching the ordering used by browser IFCs.
-        let (mut min_y, mut max_y) = context.parent_strut.filter(|_| uses_parent_strut).map_or(
-            (raw_top, raw_bottom),
-            |strut| {
+        let (mut min_y, mut max_y) = context
+            .parent_strut
+            .filter(|_| reconstructs_parent_strut)
+            .map_or((raw_top, raw_bottom), |strut| {
                 (
                     parent_baseline - strut.line_ascent,
                     parent_baseline + strut.line_descent,
                 )
-            },
-        );
+            });
         let mut item_offsets = base_offsets;
         for (item_index, geometry) in geometries.iter().enumerate() {
             if matches!(

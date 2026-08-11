@@ -417,9 +417,11 @@ fn float_descendant_of_structural_inline_rounds_with_its_ifc_owner() {
         2,
         sized(LayoutDisplay::Block, 60.0, 20.0, BLUE).with_float(Float::Left, Clear::None),
     );
-    styles
-        .primary
-        .insert(3, sized(LayoutDisplay::Inline, 55.0, 14.0, GREEN));
+    styles.primary.insert(
+        3,
+        sized(LayoutDisplay::Inline, 55.0, 14.0, GREEN)
+            .with_inline_alignment(moli_layout::LayoutInlineAlignment::Top),
+    );
 
     let snapshot = render(&source, &mut styles, 200, 40);
     let floated = rect(&snapshot, BLUE);
@@ -484,9 +486,11 @@ fn block_content_alignment_moves_the_inline_float_fragment_group() {
     styles
         .primary
         .insert(2, sized(LayoutDisplay::Block, 10.0, 5.0, RED));
-    styles
-        .primary
-        .insert(3, sized(LayoutDisplay::InlineBlock, 20.0, 10.0, GREEN));
+    styles.primary.insert(
+        3,
+        sized(LayoutDisplay::InlineBlock, 20.0, 10.0, GREEN)
+            .with_inline_alignment(moli_layout::LayoutInlineAlignment::Top),
+    );
 
     let snapshot = render(&source, &mut styles, 200, 100);
     let floated = rect(&snapshot, BLUE);

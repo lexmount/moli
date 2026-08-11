@@ -2335,6 +2335,60 @@ getComputedStyle(document.getElementById('inline-gradient')).getPropertyValue('-
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn baseline_atomic_inline_keeps_parent_font_descent_in_flex_header() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/baseline-atomic-strut.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0}
+#bar{display:flex;align-items:center;box-sizing:border-box;width:200px;height:60px;padding:6px}
+#header{display:flex;align-items:center}
+#wrapper{display:block;font:14px/normal Arial,sans-serif}
+#atomic{display:inline-block;width:48px;height:48px;background:blue}
+</style>`;
+document.body.innerHTML = `<div id=bar><header id=header><div id=wrapper><span id=atomic></span></div></header></div>`;
+'installed'
+"#,
+        )?;
+        page_vm
+            .vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries(['bar','header','wrapper','atomic'].map(id=>{const r=document.getElementById(id).getBoundingClientRect();return [id,[r.x,r.y,r.width,r.height]]})))"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        for (id, expected) in [
+            ("bar", [0.0, 0.0, 200.0, 60.0]),
+            ("header", [6.0, 5.0, 48.0, 51.0]),
+            ("wrapper", [6.0, 5.0, 48.0, 51.0]),
+            ("atomic", [6.0, 5.0, 48.0, 48.0]),
+        ] {
+            let actual = geometry[id]
+                .as_array()
+                .unwrap_or_else(|| panic!("missing geometry for {id}: {geometry}"));
+            for (index, expected) in expected.into_iter().enumerate() {
+                let actual = actual[index].as_f64().expect("numeric geometry") as f32;
+                assert!(
+                    (actual - expected).abs() <= 0.05,
+                    "{id}[{index}]: expected {expected}, got {actual}; geometry={geometry}"
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("baseline atomic strut fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn rounded_flex_max_content_width_does_not_rewrap_its_text() {
     run_page_vm_async_test(async move {
         let loader =

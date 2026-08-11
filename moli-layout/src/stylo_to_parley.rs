@@ -95,7 +95,7 @@ pub(crate) fn text_style(
     let inherited_text = computed.get_inherited_text();
     let font_size = font.font_size.used_size.0.px();
     let line_height = match font.line_height {
-        style::values::computed::font::LineHeight::Normal => LineHeight::FontSizeRelative(1.2),
+        style::values::computed::font::LineHeight::Normal => LineHeight::MetricsRelative(1.0),
         style::values::computed::font::LineHeight::Number(number) => {
             LineHeight::FontSizeRelative(number.0)
         }
