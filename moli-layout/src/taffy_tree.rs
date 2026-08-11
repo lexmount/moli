@@ -2,6 +2,7 @@ use std::{fmt::Debug, hash::Hash};
 
 use parley::{AlignmentOptions, PositionedLayoutItem, YieldData};
 use style::Atom;
+use taffy::compute::ResolvedIntrinsicWidthInputs;
 use taffy::{
     AlignContent, AlignContentKeyword, AlignmentSafety, AvailableSpace, BlockContext,
     BlockFormattingContext, BoxSizing, CacheTree, Clear, Dimension, Display, FloatDirection,
@@ -1182,7 +1183,7 @@ where
     }
 
     fn compute_child_layout(&mut self, node_id: NodeId, inputs: LayoutInput) -> LayoutOutput {
-        let (inputs, _) = self.resolve_intrinsic_child_inputs(node_id, inputs);
+        let inputs = self.resolve_intrinsic_child_inputs(node_id, inputs).inputs;
         if self.is_viewport_taffy_node(node_id) {
             return compute_cached_layout(self, node_id, inputs, |world, node_id, inputs| {
                 compute_block_layout(world, node_id, inputs, None)
@@ -1197,12 +1198,16 @@ where
     }
 
     fn compute_child_size(&mut self, node_id: NodeId, inputs: LayoutInput) -> IntrinsicSizeResult {
-        let (inputs, intrinsic_dependency) = self.resolve_intrinsic_child_inputs(node_id, inputs);
+        let resolved = self.resolve_intrinsic_child_inputs(node_id, inputs);
+        let inputs = resolved.inputs;
+        let intrinsic_dependency = resolved.depends_on_block_constraints;
+        let intrinsic_applied_aspect_ratio = resolved.applied_aspect_ratio;
         if self.is_viewport_taffy_node(node_id) {
             return compute_cached_size(self, node_id, inputs, |world, node_id, inputs| {
                 let mut result =
                     compute_block_layout(world, node_id, inputs, None).into_intrinsic_size_result();
                 result.depends_on_block_constraints |= intrinsic_dependency;
+                result.applied_aspect_ratio |= intrinsic_applied_aspect_ratio;
                 result
             });
         }
@@ -1212,6 +1217,7 @@ where
         compute_cached_size(self, node_id, inputs, |world, node_id, inputs| {
             let mut result = world.compute_child_size_uncached(node_id, inputs);
             result.depends_on_block_constraints |= intrinsic_dependency;
+            result.applied_aspect_ratio |= intrinsic_applied_aspect_ratio;
             result
         })
     }
@@ -1386,7 +1392,7 @@ where
         &mut self,
         node_id: NodeId,
         inputs: LayoutInput,
-    ) -> (LayoutInput, bool) {
+    ) -> ResolvedIntrinsicWidthInputs {
         // Float parents own horizontal margin subtraction in both the Taffy
         // block path and Moli's Parley IFC path. The intrinsic resolver follows
         // Taffy's ordinary child-input contract and subtracts the child's
@@ -1412,16 +1418,17 @@ where
         };
         let resolved =
             resolve_intrinsic_width_inputs_with_provenance(self, node_id, intrinsic_inputs);
-        (
-            LayoutInput {
+        ResolvedIntrinsicWidthInputs {
+            inputs: LayoutInput {
                 // The float parent has already removed horizontal margins from
                 // the child's available space. Only the resolved border-box
                 // width crosses this seam.
                 known_dimensions: resolved.inputs.known_dimensions,
                 ..inputs
             },
-            resolved.depends_on_block_constraints,
-        )
+            depends_on_block_constraints: resolved.depends_on_block_constraints,
+            applied_aspect_ratio: resolved.applied_aspect_ratio,
+        }
     }
 
     fn should_hide(&self, node_id: NodeId, inputs: LayoutInput) -> bool {
