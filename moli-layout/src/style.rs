@@ -1687,27 +1687,6 @@ fn usable_aspect_ratio(ratio: Option<f32>) -> Option<f32> {
     ratio.filter(|ratio| ratio.is_finite() && *ratio > 0.0)
 }
 
-#[cfg(test)]
-mod aspect_ratio_tests {
-    use super::*;
-
-    #[test]
-    fn replaced_ratio_resolution_preserves_auto_precedence_and_box_basis() {
-        let specified = PreferredAspectRatio::Ratio(1.0).resolve(Some(2.0), BoxSizing::BorderBox);
-        assert_eq!(specified.ratio, Some(1.0));
-        assert_eq!(specified.box_sizing, BoxSizing::BorderBox);
-
-        let natural =
-            PreferredAspectRatio::AutoAndRatio(1.0).resolve(Some(2.0), BoxSizing::BorderBox);
-        assert_eq!(natural.ratio, Some(2.0));
-        assert_eq!(natural.box_sizing, BoxSizing::ContentBox);
-
-        let fallback = PreferredAspectRatio::AutoAndRatio(1.0).resolve(None, BoxSizing::BorderBox);
-        assert_eq!(fallback.ratio, Some(1.0));
-        assert_eq!(fallback.box_sizing, BoxSizing::ContentBox);
-    }
-}
-
 fn taffy_size_dimension(
     size: &GenericSize<style::values::computed::NonNegativeLengthPercentage>,
     fallback: taffy::Dimension,
@@ -2115,4 +2094,25 @@ pub(crate) fn resolve_stylo_calc_value(calc_ptr: *const (), parent_size: f32) ->
     // originating `ComputedValues` until the containing `LayoutWorld` drops.
     let calc = unsafe { &*(calc_ptr as *const CalcLengthPercentage) };
     calc.resolve(CSSPixelLength::new(parent_size)).px()
+}
+
+#[cfg(test)]
+mod aspect_ratio_tests {
+    use super::*;
+
+    #[test]
+    fn replaced_ratio_resolution_preserves_auto_precedence_and_box_basis() {
+        let specified = PreferredAspectRatio::Ratio(1.0).resolve(Some(2.0), BoxSizing::BorderBox);
+        assert_eq!(specified.ratio, Some(1.0));
+        assert_eq!(specified.box_sizing, BoxSizing::BorderBox);
+
+        let natural =
+            PreferredAspectRatio::AutoAndRatio(1.0).resolve(Some(2.0), BoxSizing::BorderBox);
+        assert_eq!(natural.ratio, Some(2.0));
+        assert_eq!(natural.box_sizing, BoxSizing::ContentBox);
+
+        let fallback = PreferredAspectRatio::AutoAndRatio(1.0).resolve(None, BoxSizing::BorderBox);
+        assert_eq!(fallback.ratio, Some(1.0));
+        assert_eq!(fallback.box_sizing, BoxSizing::ContentBox);
+    }
 }
