@@ -957,6 +957,58 @@ html,body{margin:0;padding:0}
     }
 
     #[test]
+    fn flex_auto_position_uses_the_padding_box_across_writing_directions() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+.flex{display:flex;position:relative;width:100px;height:60px;border:solid white;border-left-width:20px;left:-20px;border-top-width:5px;top:-5px;border-right-width:10px;border-bottom-width:15px;background:rgb(200,1,2)}
+.flex>div{position:absolute;width:100%;height:100%}
+#htb-ltr{writing-mode:horizontal-tb;direction:ltr}#htb-ltr>div{background:rgb(3,128,4)}
+#htb-rtl{writing-mode:horizontal-tb;direction:rtl}#htb-rtl>div{background:rgb(5,128,6)}
+#vlr-ltr{writing-mode:vertical-lr;direction:ltr}#vlr-ltr>div{background:rgb(7,128,8)}
+#vlr-rtl{writing-mode:vertical-lr;direction:rtl}#vlr-rtl>div{background:rgb(9,128,10)}
+#vrl-ltr{writing-mode:vertical-rl;direction:ltr}#vrl-ltr>div{background:rgb(11,128,12)}
+#vrl-rtl{writing-mode:vertical-rl;direction:rtl}#vrl-rtl>div{background:rgb(13,128,14)}
+</style></head><body>
+<div class=flex id=htb-ltr><div></div></div>
+<div class=flex id=htb-rtl><div></div></div>
+<div class=flex id=vlr-ltr><div></div></div>
+<div class=flex id=vlr-rtl><div></div></div>
+<div class=flex id=vrl-ltr><div></div></div>
+<div class=flex id=vrl-rtl><div></div></div>
+</body></html>"#,
+            )
+            .await;
+
+            // This is the six-case writing-mode/direction matrix from WPT's
+            // css-flexbox/abspos/abspos-autopos-*.html family. The relative
+            // offset puts each padding-box origin on its normal-flow row.
+            for (index, color) in [
+                rgb(3, 128, 4),
+                rgb(5, 128, 6),
+                rgb(7, 128, 8),
+                rgb(9, 128, 10),
+                rgb(11, 128, 12),
+                rgb(13, 128, 14),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                assert_paint_rect(
+                    solid_paint_rect(&snapshot, color),
+                    moli_layout::PaintRect::new(0.0, index as f32 * 80.0, 100.0, 60.0),
+                );
+            }
+        }));
+    }
+
+    #[test]
     fn fixed_table_layout_distributes_unresolved_columns_equally() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
