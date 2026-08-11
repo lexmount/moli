@@ -9,8 +9,8 @@ use style::{
     Atom,
     color::ColorSpace,
     computed_values::{
-        content_visibility::T as StyloContentVisibility, isolation::T as StyloIsolation,
-        mix_blend_mode::T as StyloMixBlendMode,
+        content_visibility::T as StyloContentVisibility, flex_direction::T as StyloFlexDirection,
+        isolation::T as StyloIsolation, mix_blend_mode::T as StyloMixBlendMode,
     },
     properties::ComputedValues,
     properties::generated::longhands::position::computed_value::T as StyloPosition,
@@ -41,7 +41,7 @@ use style::{
         specified::box_::{DisplayInside, DisplayOutside},
         specified::{
             TextAlignKeyword, WillChangeBits,
-            align::AlignFlags,
+            align::{AlignFlags, ContentDistribution},
             text::{TextTransform, TextTransformCase},
         },
     },
@@ -710,9 +710,15 @@ impl ResolvedLayoutStyle {
         let mut taffy = stylo_taffy::to_taffy_style(&computed);
         // Alignment keywords are layout protocol, not merely numeric style.
         // Keep their lossless projection at Moli's browser boundary: the
-        // pinned generic converter predates Taffy's first/last-baseline model
-        // and intentionally reduces `last baseline` to its `end` fallback.
-        // Flex and Grid now consume the actual preference and sharing group.
+        // pinned generic converter predates Taffy's first/last-baseline model.
+        // Layout algorithms, rather than style conversion, choose the
+        // context-dependent fallback or baseline-sharing group.
+        taffy.align_content = taffy_content_alignment(position_style.align_content);
+        taffy.justify_content = taffy_justify_content(
+            position_style.justify_content,
+            position_style.flex_direction,
+            computed.clone_direction(),
+        );
         taffy.align_items = taffy_item_alignment(position_style.align_items.0);
         taffy.align_self = taffy_item_alignment(position_style.align_self.0);
         taffy.justify_items = taffy_item_alignment((position_style.justify_items.computed.0).0);
@@ -1785,6 +1791,63 @@ fn taffy_item_alignment(input: AlignFlags) -> Option<taffy::AlignItems> {
     Some(alignment)
 }
 
+/// Losslessly project the CSS content-distribution grammar into Taffy's typed
+/// alignment protocol. Baseline preference is retained; it is not equivalent
+/// to its positional fallback until a layout context determines that no
+/// baseline-sharing group exists.
+fn taffy_content_alignment(input: ContentDistribution) -> Option<taffy::AlignContent> {
+    let primary = input.primary();
+    let mut alignment = match primary.value() {
+        AlignFlags::NORMAL | AlignFlags::AUTO => None,
+        AlignFlags::START | AlignFlags::LEFT => Some(taffy::AlignContent::START),
+        AlignFlags::END | AlignFlags::RIGHT => Some(taffy::AlignContent::END),
+        AlignFlags::FLEX_START => Some(taffy::AlignContent::FLEX_START),
+        AlignFlags::FLEX_END => Some(taffy::AlignContent::FLEX_END),
+        AlignFlags::CENTER => Some(taffy::AlignContent::CENTER),
+        AlignFlags::BASELINE => Some(taffy::AlignContent::BASELINE),
+        AlignFlags::LAST_BASELINE => Some(taffy::AlignContent::LAST_BASELINE),
+        AlignFlags::STRETCH => Some(taffy::AlignContent::STRETCH),
+        AlignFlags::SPACE_BETWEEN => Some(taffy::AlignContent::SPACE_BETWEEN),
+        AlignFlags::SPACE_AROUND => Some(taffy::AlignContent::SPACE_AROUND),
+        AlignFlags::SPACE_EVENLY => Some(taffy::AlignContent::SPACE_EVENLY),
+        _ => None,
+    }?;
+    if primary.flags().contains(AlignFlags::SAFE) {
+        alignment.safety = taffy::AlignmentSafety::Safe;
+    }
+    Some(alignment)
+}
+
+/// Resolve physical `left`/`right` for `justify-content` before preserving the
+/// rest of the content-alignment protocol. Physical sides only apply when the
+/// Flex main axis is inline; on a column axis both values fall back to start.
+fn taffy_justify_content(
+    input: ContentDistribution,
+    flex_direction: StyloFlexDirection,
+    direction: StyloDirection,
+) -> Option<taffy::JustifyContent> {
+    let primary = input.primary();
+    let is_right = match primary.value() {
+        AlignFlags::LEFT => false,
+        AlignFlags::RIGHT => true,
+        _ => return taffy_content_alignment(input),
+    };
+    let is_row = matches!(
+        flex_direction,
+        StyloFlexDirection::Row | StyloFlexDirection::RowReverse
+    );
+    let is_rtl = direction == StyloDirection::Rtl;
+    let mut alignment = if is_row && is_right != is_rtl {
+        taffy::AlignContent::END
+    } else {
+        taffy::AlignContent::START
+    };
+    if primary.flags().contains(AlignFlags::SAFE) {
+        alignment.safety = taffy::AlignmentSafety::Safe;
+    }
+    Some(alignment)
+}
+
 fn taffy_display(display: LayoutDisplay) -> TaffyDisplay {
     match display {
         LayoutDisplay::None => TaffyDisplay::None,
@@ -2206,5 +2269,49 @@ mod alignment_tests {
             .expect("safe center should project");
         assert_eq!(safe_center.keyword, taffy::AlignItemsKeyword::Center);
         assert_eq!(safe_center.safety, taffy::AlignmentSafety::Safe);
+    }
+
+    #[test]
+    fn stylo_content_alignment_preserves_layout_protocol_values() {
+        assert_eq!(
+            taffy_content_alignment(ContentDistribution::new(AlignFlags::BASELINE)),
+            Some(taffy::AlignContent::BASELINE)
+        );
+        assert_eq!(
+            taffy_content_alignment(ContentDistribution::new(AlignFlags::LAST_BASELINE)),
+            Some(taffy::AlignContent::LAST_BASELINE)
+        );
+
+        let safe_center = taffy_content_alignment(ContentDistribution::new(
+            AlignFlags::CENTER | AlignFlags::SAFE,
+        ))
+        .expect("safe center should project");
+        assert_eq!(safe_center.keyword, taffy::AlignContentKeyword::Center);
+        assert_eq!(safe_center.safety, taffy::AlignmentSafety::Safe);
+
+        assert_eq!(
+            taffy_justify_content(
+                ContentDistribution::new(AlignFlags::RIGHT),
+                StyloFlexDirection::Row,
+                StyloDirection::Ltr,
+            ),
+            Some(taffy::JustifyContent::END)
+        );
+        assert_eq!(
+            taffy_justify_content(
+                ContentDistribution::new(AlignFlags::RIGHT),
+                StyloFlexDirection::Row,
+                StyloDirection::Rtl,
+            ),
+            Some(taffy::JustifyContent::START)
+        );
+        assert_eq!(
+            taffy_justify_content(
+                ContentDistribution::new(AlignFlags::RIGHT),
+                StyloFlexDirection::Column,
+                StyloDirection::Ltr,
+            ),
+            Some(taffy::JustifyContent::START)
+        );
     }
 }

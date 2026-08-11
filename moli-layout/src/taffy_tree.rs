@@ -4,16 +4,16 @@ use parley::{AlignmentOptions, PositionedLayoutItem, YieldData};
 use style::Atom;
 use taffy::compute::ResolvedIntrinsicWidthInputs;
 use taffy::{
-    AlignContent, AlignContentKeyword, AlignmentSafety, AvailableSpace, BlockContext,
-    BlockFormattingContext, BoxSizing, CacheTree, Clear, Dimension, Display, FloatDirection,
-    IntrinsicSizeResult, Layout, LayoutBlockContainer, LayoutFlexboxContainer, LayoutGridContainer,
-    LayoutInput, LayoutOutput, LayoutPartialTree, Line, LogicalOffset, MaybeMath, MaybeResolve,
-    NodeId, Point, ResolveOrZero, RoundTree, RunMode, Size, SizingMode, SizingPurpose, Style,
-    TraversePartialTree, TraverseTree, WritingDirection, compute_block_layout,
-    compute_cached_layout, compute_cached_size, compute_flexbox_layout, compute_grid_layout,
+    AlignContent, AvailableSpace, BlockContext, BlockFormattingContext, BoxSizing, CacheTree,
+    Clear, Dimension, Display, FloatDirection, IntrinsicSizeResult, Layout, LayoutBlockContainer,
+    LayoutFlexboxContainer, LayoutGridContainer, LayoutInput, LayoutOutput, LayoutPartialTree,
+    Line, LogicalOffset, MaybeMath, MaybeResolve, NodeId, Point, ResolveOrZero, RoundTree, RunMode,
+    Size, SizingMode, SizingPurpose, Style, TraversePartialTree, TraverseTree, WritingDirection,
+    compute_block_layout, compute_cached_layout, compute_cached_size,
+    compute_content_alignment_offset, compute_flexbox_layout, compute_grid_layout,
     compute_hidden_layout, compute_leaf_layout_with_aspect_ratio_and_writing_mode,
-    compute_root_layout, resolve_intrinsic_width_inputs_with_provenance,
-    round_layout_with_scale_factor,
+    compute_root_layout, resolve_content_alignment_fallback,
+    resolve_intrinsic_width_inputs_with_provenance, round_layout_with_scale_factor,
 };
 
 use crate::{
@@ -2587,28 +2587,8 @@ fn single_subject_block_alignment_offset(alignment: Option<AlignContent>, free_s
     let Some(alignment) = alignment else {
         return 0.0;
     };
-    let (mut keyword, safe) = match alignment.keyword {
-        AlignContentKeyword::Stretch | AlignContentKeyword::SpaceBetween => {
-            (AlignContentKeyword::FlexStart, true)
-        }
-        AlignContentKeyword::SpaceAround | AlignContentKeyword::SpaceEvenly => {
-            (AlignContentKeyword::Center, true)
-        }
-        keyword => (keyword, alignment.safety == AlignmentSafety::Safe),
-    };
-    if free_space <= 0.0 && safe {
-        keyword = AlignContentKeyword::Start;
-    }
-    match keyword {
-        AlignContentKeyword::Start
-        | AlignContentKeyword::FlexStart
-        | AlignContentKeyword::Stretch
-        | AlignContentKeyword::SpaceBetween => 0.0,
-        AlignContentKeyword::End | AlignContentKeyword::FlexEnd => free_space,
-        AlignContentKeyword::Center
-        | AlignContentKeyword::SpaceAround
-        | AlignContentKeyword::SpaceEvenly => free_space / 2.0,
-    }
+    let keyword = resolve_content_alignment_fallback(free_space, 1, alignment);
+    compute_content_alignment_offset(free_space, 1, 0.0, keyword, false, true)
 }
 
 fn empty_inline_context() -> InlineFormattingContext {

@@ -1057,6 +1057,64 @@ html,body{margin:0;padding:0}
     }
 
     #[test]
+    fn content_baselines_use_safe_logical_fallbacks_without_a_sharing_context() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+.case{width:40px;height:100px}
+.first{align-content:baseline}.last{align-content:last baseline}
+.block>div{width:10px;height:20px}
+.flex{display:flex;flex-wrap:wrap}.flex>div{width:40px;height:10px;flex:none}
+.grid{display:grid;grid-template-columns:40px;grid-template-rows:auto auto}
+.grid>div{width:40px;height:10px}
+#block-first-child{background:rgb(41,51,61)}#block-last-child{background:rgb(42,52,62)}
+#flex-first-a{background:rgb(43,53,63)}#flex-first-b{background:rgb(44,54,64)}
+#flex-last-a{background:rgb(45,55,65)}#flex-last-b{background:rgb(46,56,66)}
+#grid-first-a{background:rgb(47,57,67)}#grid-first-b{background:rgb(48,58,68)}
+#grid-last-a{background:rgb(49,59,69)}#grid-last-b{background:rgb(50,60,70)}
+</style></head><body>
+<div class="case block first"><div id=block-first-child></div></div>
+<div class="case block last"><div id=block-last-child></div></div>
+<div class="case flex first"><div id=flex-first-a></div><div id=flex-first-b></div></div>
+<div class="case flex last"><div id=flex-last-a></div><div id=flex-last-b></div></div>
+<div class="case grid first"><div id=grid-first-a></div><div id=grid-first-b></div></div>
+<div class="case grid last"><div id=grid-last-a></div><div id=grid-last-b></div></div>
+</body></html>"#,
+            )
+            .await;
+
+            // A box with no baseline-sharing context uses the CSS Align
+            // fallback: first baseline is safe start and last baseline is
+            // safe end. These container-level distribution sites have no
+            // external sharing context, so neither preference becomes the
+            // layout mode's default `stretch` value.
+            for (color, expected) in [
+                (rgb(41, 51, 61), (0.0, 0.0, 10.0, 20.0)),
+                (rgb(42, 52, 62), (0.0, 180.0, 10.0, 20.0)),
+                (rgb(43, 53, 63), (0.0, 200.0, 40.0, 10.0)),
+                (rgb(44, 54, 64), (0.0, 210.0, 40.0, 10.0)),
+                (rgb(45, 55, 65), (0.0, 380.0, 40.0, 10.0)),
+                (rgb(46, 56, 66), (0.0, 390.0, 40.0, 10.0)),
+                (rgb(47, 57, 67), (0.0, 400.0, 40.0, 10.0)),
+                (rgb(48, 58, 68), (0.0, 410.0, 40.0, 10.0)),
+                (rgb(49, 59, 69), (0.0, 580.0, 40.0, 10.0)),
+                (rgb(50, 60, 70), (0.0, 590.0, 40.0, 10.0)),
+            ] {
+                assert_paint_rect(
+                    solid_paint_rect(&snapshot, color),
+                    moli_layout::PaintRect::new(expected.0, expected.1, expected.2, expected.3),
+                );
+            }
+        }));
+    }
+
+    #[test]
     fn fixed_table_layout_distributes_unresolved_columns_equally() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
