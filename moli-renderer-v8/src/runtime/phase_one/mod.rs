@@ -786,6 +786,59 @@ html,body{margin:0;padding:0}
     }
 
     #[test]
+    fn layout_renderer_clamps_definite_ifc_probes_to_intrinsic_contributions() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let mut page_vm = parse_phase_one_html_into_page_vm_for_test(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+.host{display:flow-root}.zero{width:0}.wide{width:400px}
+.outer{float:left;height:30px}.inner{height:20px}
+.atom{display:inline-block;width:60px;height:20px}
+#zero-outer{background:rgb(131,132,133)}#wide-outer{background:rgb(141,142,143)}
+</style></head><body>
+<div class="host zero"><div id=zero-outer class=outer><div class=inner><span class=atom></span></div></div></div>
+<div class="host wide"><div id=wide-outer class=outer><div class=inner><span class=atom></span></div></div></div>
+</body></html>"#,
+            )
+            .await;
+            page_vm.vm_mut().sync_live_document_style_sources();
+
+            let snapshot = page_vm
+                .vm_mut()
+                .screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0))
+                .expect("intrinsic IFC probe layout should succeed")
+                .expect("fixture should have a document element");
+            for (color, expected) in [
+                (
+                    moli_layout::PaintColor::new(
+                        131.0 / 255.0,
+                        132.0 / 255.0,
+                        133.0 / 255.0,
+                        1.0,
+                    ),
+                    moli_layout::PaintRect::new(0.0, 0.0, 60.0, 30.0),
+                ),
+                (
+                    moli_layout::PaintColor::new(
+                        141.0 / 255.0,
+                        142.0 / 255.0,
+                        143.0 / 255.0,
+                        1.0,
+                    ),
+                    moli_layout::PaintRect::new(0.0, 30.0, 60.0, 30.0),
+                ),
+            ] {
+                assert_paint_rect(solid_paint_rect(&snapshot, color), expected);
+            }
+        }));
+    }
+
+    #[test]
     fn layout_renderer_projects_current_blitz_taffy_parity_from_stylo() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()

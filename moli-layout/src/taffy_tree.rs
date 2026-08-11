@@ -1790,8 +1790,18 @@ where
                     let display = self.boxes[parent.index()].style.display();
                     display.is_flex_container() || display.is_grid_container()
                 });
+        let is_intrinsic_contribution_probe = inputs.run_mode == RunMode::ComputeSize
+            && inputs.axis == taffy::RequestedAxis::Horizontal
+            && inputs.parent_size.width.is_none()
+            && known_dimensions.width.is_none();
         let shrink_to_fit = !has_definite_width
             && (is_floated
+                // A content-based block parent can probe this IFC with a
+                // finite available width while its own content width is still
+                // unknown. That is an intrinsic contribution, so clamp the
+                // available width between the IFC's min/max-content sizes
+                // instead of stretching to the probe constraint.
+                || is_intrinsic_contribution_probe
                 // Flex/grid layout passes an auto inline size as unknown when
                 // cross-axis stretch does not apply. In final layout that item
                 // must return its fit-content width within the definite area.
