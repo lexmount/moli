@@ -2352,6 +2352,7 @@ fn empty_inline_context() -> InlineFormattingContext {
         font_metrics: Vec::new(),
         parent_strut: None,
         object_alignment_parent_struts: Vec::new(),
+        style_alignment_parent_struts: Vec::new(),
         line_placements: Vec::new(),
         fragments: InlineFragments::default(),
     }

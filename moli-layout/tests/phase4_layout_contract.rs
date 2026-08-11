@@ -1344,6 +1344,83 @@ fn middle_inline_block_uses_its_nearest_inline_parents_x_height() {
 }
 
 #[test]
+fn middle_aligned_text_uses_its_nearest_inline_parents_x_height() {
+    let source = Source(vec![
+        Node::element(
+            "root",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            vec![1, 4],
+        ),
+        Node::element(
+            "large-parent",
+            "span",
+            LayoutElementCategory::Generic,
+            None,
+            vec![2],
+        ),
+        Node::element(
+            "large-middle",
+            "span",
+            LayoutElementCategory::Generic,
+            None,
+            vec![3],
+        ),
+        Node::text("large-text", "A"),
+        Node::element(
+            "small-parent",
+            "span",
+            LayoutElementCategory::Generic,
+            None,
+            vec![5],
+        ),
+        Node::element(
+            "small-middle",
+            "span",
+            LayoutElementCategory::Generic,
+            None,
+            vec![6],
+        ),
+        Node::text("small-text", "A"),
+    ]);
+    let mut styles = Styles::default();
+    styles.primary.insert(
+        0,
+        sized(LayoutDisplay::Block, 300.0, 80.0, PaintColor::TRANSPARENT)
+            .with_text_metrics(10.0, 60.0),
+    );
+    styles.primary.insert(
+        1,
+        style(LayoutDisplay::Inline, PaintColor::TRANSPARENT).with_text_metrics(40.0, 60.0),
+    );
+    styles.primary.insert(
+        2,
+        style(LayoutDisplay::Inline, RED)
+            .with_text_metrics(10.0, 20.0)
+            .with_inline_alignment(moli_layout::LayoutInlineAlignment::Middle),
+    );
+    styles.primary.insert(
+        4,
+        style(LayoutDisplay::Inline, PaintColor::TRANSPARENT).with_text_metrics(10.0, 60.0),
+    );
+    styles.primary.insert(
+        5,
+        style(LayoutDisplay::Inline, BLUE)
+            .with_text_metrics(10.0, 20.0)
+            .with_inline_alignment(moli_layout::LayoutInlineAlignment::Middle),
+    );
+
+    let snapshot = render(&source, &mut styles, 300, 80);
+    let large_parent_text = rect(&snapshot, RED);
+    let small_parent_text = rect(&snapshot, BLUE);
+    assert!(
+        large_parent_text.y + 5.0 < small_parent_text.y,
+        "a larger nearest-parent x-height must raise middle-aligned text: large={large_parent_text:?}, small={small_parent_text:?}"
+    );
+}
+
+#[test]
 fn replaced_box_model_is_applied_exactly_once() {
     let source = Source(vec![
         Node::element(

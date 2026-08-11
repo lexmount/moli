@@ -109,6 +109,9 @@ pub(crate) struct InlineObject {
     pub(crate) role: InlineObjectRole,
     pub(crate) ancestors: Vec<LayoutBoxId>,
     pub(crate) vertical_align: InlineVerticalAlign,
+    /// Structural parent against whose font metrics the active non-baseline
+    /// keyword is resolved.
+    pub(crate) alignment_parent: LayoutBoxId,
 }
 
 #[derive(Clone, Debug)]
@@ -127,10 +130,13 @@ pub(crate) struct InlineFormattingContext {
     /// baselines. Fallback glyph fonts must not replace its line height or
     /// x-height.
     pub(crate) parent_strut: Option<InlineStrutMetrics>,
-    /// Font strut of each object's nearest structural inline parent. CSS
-    /// non-baseline alignment is relative to that parent inline box, not
-    /// necessarily to the IFC owner.
+    /// Font strut of the structural parent against which each object's active
+    /// non-baseline alignment keyword is resolved.
     pub(crate) object_alignment_parent_struts: Vec<Option<InlineStrutMetrics>>,
+    /// Equivalent parent strut for each shaped text style. Text inside a
+    /// structural inline follows the same parent-relative rules as atomic
+    /// inline boxes.
+    pub(crate) style_alignment_parent_struts: Vec<Option<InlineStrutMetrics>>,
     pub(crate) line_placements: Vec<InlineLinePlacement>,
     pub(crate) fragments: InlineFragments,
 }
@@ -210,6 +216,13 @@ impl InlineFormattingContext {
         usize::try_from(id)
             .ok()
             .and_then(|index| self.object_alignment_parent_struts.get(index))
+            .copied()
+            .flatten()
+    }
+
+    fn style_alignment_parent_strut(&self, index: usize) -> Option<InlineStrutMetrics> {
+        self.style_alignment_parent_struts
+            .get(index)
             .copied()
             .flatten()
     }
@@ -578,7 +591,8 @@ pub(crate) fn build_inline_line_placements(
                         // content by itself.
                         contributes_to_line: paint && style_index.is_some(),
                         creates_line: paint && style_index.is_some(),
-                        alignment_parent_strut: None,
+                        alignment_parent_strut: style_index
+                            .and_then(|index| context.style_alignment_parent_strut(index)),
                         glyph_key: if paint {
                             style_index.map(|index| (run.index(), index))
                         } else {
@@ -1009,6 +1023,7 @@ impl InlineBuildInput {
         parley.resolve_system_font_families(&mut root_text_style);
         let quantize = true;
         let mut styles = Vec::new();
+        let mut style_alignment_parents = Vec::new();
         let mut style_slots = Vec::with_capacity(self.units.len());
         for unit in &self.units {
             let mut style = world.boxes[unit.style_box.index()]
@@ -1018,16 +1033,21 @@ impl InlineBuildInput {
             // moves all of its descendants. Compose the structural inline
             // ancestry without forcing a shaping boundary for equivalent
             // paths.
-            style.brush.vertical_align =
-                compose_vertical_align(world, unit.ancestors.iter().copied());
+            let (vertical_align, alignment_parent) =
+                resolve_vertical_align(world, self.root_style, unit.ancestors.iter().copied());
+            style.brush.vertical_align = vertical_align;
             style.brush.paint = !unit.control;
             parley.resolve_system_font_families(&mut style);
             let style_slot = styles
                 .iter()
-                .position(|candidate| *candidate == style)
+                .enumerate()
+                .position(|(index, candidate)| {
+                    *candidate == style && style_alignment_parents[index] == alignment_parent
+                })
                 .unwrap_or_else(|| {
                     let index = styles.len();
                     styles.push(style);
+                    style_alignment_parents.push(alignment_parent);
                     index
                 });
             style_slots.push(style_slot);
@@ -1083,6 +1103,24 @@ impl InlineBuildInput {
             .map(|(style, sample)| parley.inline_font_metrics(style, sample))
             .collect();
         let parent_strut = measure_inline_strut(parley, root_text_style.clone(), quantize);
+        let style_alignment_parent_struts = styles
+            .iter()
+            .zip(&style_alignment_parents)
+            .map(|(style, parent)| {
+                if style.brush.vertical_align.kind == LayoutInlineAlignment::Baseline {
+                    None
+                } else {
+                    measure_alignment_parent_strut(
+                        parley,
+                        world,
+                        *parent,
+                        self.root_style,
+                        parent_strut,
+                        quantize,
+                    )
+                }
+            })
+            .collect();
         let object_alignment_parent_struts = self
             .objects
             .iter()
@@ -1090,13 +1128,14 @@ impl InlineBuildInput {
                 if object.vertical_align.kind == LayoutInlineAlignment::Baseline {
                     return None;
                 }
-                let parent = object.ancestors.last().copied().unwrap_or(self.root_style);
-                if parent == self.root_style {
-                    return parent_strut;
-                }
-                let mut style = world.boxes[parent.index()].style.parley_text_style();
-                parley.resolve_system_font_families(&mut style);
-                measure_inline_strut(parley, style, quantize)
+                measure_alignment_parent_strut(
+                    parley,
+                    world,
+                    object.alignment_parent,
+                    self.root_style,
+                    parent_strut,
+                    quantize,
+                )
             })
             .collect();
         let objects = self
@@ -1114,6 +1153,7 @@ impl InlineBuildInput {
             font_metrics,
             parent_strut,
             object_alignment_parent_struts,
+            style_alignment_parent_struts,
             line_placements: Vec::new(),
             fragments: InlineFragments::default(),
         }
@@ -1127,6 +1167,25 @@ fn measure_inline_strut(
 ) -> Option<InlineStrutMetrics> {
     let metrics = parley.inline_font_metrics(&style, None)?;
     Some(inline_strut_metrics(metrics, quantize))
+}
+
+fn measure_alignment_parent_strut<N>(
+    parley: &mut crate::text::ParleyDocumentServices,
+    world: &LayoutWorld<N>,
+    parent: LayoutBoxId,
+    root: LayoutBoxId,
+    root_strut: Option<InlineStrutMetrics>,
+    quantize: bool,
+) -> Option<InlineStrutMetrics>
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    if parent == root {
+        return root_strut;
+    }
+    let mut style = world.boxes[parent.index()].style.parley_text_style();
+    parley.resolve_system_font_families(&mut style);
+    measure_inline_strut(parley, style, quantize)
 }
 
 fn inline_strut_metrics(metrics: InlineFontMetrics, quantize: bool) -> InlineStrutMetrics {
@@ -1261,26 +1320,30 @@ fn collect_box<N>(
     }
 
     if world.boxes[id.index()].style.is_floated() {
-        let vertical_align = compose_vertical_align(world, ancestors.iter().copied());
+        let (vertical_align, alignment_parent) =
+            resolve_vertical_align(world, owner, ancestors.iter().copied());
         normalizer.push_object(
             id,
             InlineObjectRole::Float,
             InlineBoxKind::CustomOutOfFlow,
             ancestors,
             vertical_align,
+            alignment_parent,
         );
         return;
     }
 
     let out_of_flow = world.boxes[id.index()].style.is_out_of_flow();
     if out_of_flow {
-        let vertical_align = compose_vertical_align(world, ancestors.iter().copied());
+        let (vertical_align, alignment_parent) =
+            resolve_vertical_align(world, owner, ancestors.iter().copied());
         normalizer.push_object(
             id,
             InlineObjectRole::OutOfFlow,
             InlineBoxKind::OutOfFlow,
             ancestors,
             vertical_align,
+            alignment_parent,
         );
         return;
     }
@@ -1293,27 +1356,35 @@ fn collect_box<N>(
                 | LayoutBoxKind::InlineTableWrapper
         );
     if !structural_inline {
-        let vertical_align =
-            compose_vertical_align(world, ancestors.iter().copied().chain(std::iter::once(id)));
+        let (vertical_align, alignment_parent) = resolve_vertical_align(
+            world,
+            owner,
+            ancestors.iter().copied().chain(std::iter::once(id)),
+        );
         normalizer.push_object(
             id,
             InlineObjectRole::Atomic,
             InlineBoxKind::InFlow,
             ancestors,
             vertical_align,
+            alignment_parent,
         );
         return;
     }
 
     world.boxes[id.index()].inline_flattened = true;
-    let vertical_align =
-        compose_vertical_align(world, ancestors.iter().copied().chain(std::iter::once(id)));
+    let (vertical_align, alignment_parent) = resolve_vertical_align(
+        world,
+        owner,
+        ancestors.iter().copied().chain(std::iter::once(id)),
+    );
     normalizer.open_inline(
         id,
         world.boxes[id.index()].style.unicode_bidi(),
         world.boxes[id.index()].style.direction(),
         ancestors,
         vertical_align,
+        alignment_parent,
     );
     ancestors.push(id);
     let children = world.boxes[id.index()].children.clone();
@@ -1326,20 +1397,30 @@ fn collect_box<N>(
         world.boxes[id.index()].style.unicode_bidi(),
         ancestors,
         vertical_align,
+        alignment_parent,
     );
 }
 
-fn compose_vertical_align<N>(
+fn resolve_vertical_align<N>(
     world: &LayoutWorld<N>,
+    root: LayoutBoxId,
     path: impl IntoIterator<Item = LayoutBoxId>,
-) -> InlineVerticalAlign
+) -> (InlineVerticalAlign, LayoutBoxId)
 where
     N: Copy + Debug + Eq + Hash,
 {
-    path.into_iter()
-        .fold(InlineVerticalAlign::default(), |alignment, box_id| {
-            alignment.compose(world.boxes[box_id.index()].style.vertical_align())
-        })
+    let mut alignment = InlineVerticalAlign::default();
+    let mut structural_parent = root;
+    let mut alignment_parent = root;
+    for box_id in path {
+        let descendant = world.boxes[box_id.index()].style.vertical_align();
+        if descendant.kind != LayoutInlineAlignment::Baseline {
+            alignment_parent = structural_parent;
+        }
+        alignment = alignment.compose(descendant);
+        structural_parent = box_id;
+    }
+    (alignment, alignment_parent)
 }
 
 struct PendingWhitespace {
@@ -1608,6 +1689,7 @@ impl InlineNormalizer {
         direction: InlineDirection,
         ancestors: &[LayoutBoxId],
         vertical_align: InlineVerticalAlign,
+        alignment_parent: LayoutBoxId,
     ) {
         // CSS Writing Modes injects the opening bidi controls outside the
         // inline box boundary. Keep the opaque item order aligned with
@@ -1621,6 +1703,7 @@ impl InlineNormalizer {
             InlineBoxKind::InFlow,
             ancestors,
             vertical_align,
+            alignment_parent,
         );
     }
 
@@ -1630,6 +1713,7 @@ impl InlineNormalizer {
         bidi: InlineUnicodeBidi,
         ancestors: &[LayoutBoxId],
         vertical_align: InlineVerticalAlign,
+        alignment_parent: LayoutBoxId,
     ) {
         // Close the inline box before leaving its injected bidi context.
         self.push_object(
@@ -1638,6 +1722,7 @@ impl InlineNormalizer {
             InlineBoxKind::InFlow,
             ancestors,
             vertical_align,
+            alignment_parent,
         );
         for control in bidi_close(bidi) {
             self.append_unit(box_id, control, ancestors, Vec::new(), true);
@@ -1651,6 +1736,7 @@ impl InlineNormalizer {
         kind: InlineBoxKind,
         ancestors: &[LayoutBoxId],
         vertical_align: InlineVerticalAlign,
+        alignment_parent: LayoutBoxId,
     ) {
         self.flush_pending_carriage_return();
         if matches!(
@@ -1667,6 +1753,7 @@ impl InlineNormalizer {
                 role,
                 ancestors: ancestors.to_vec(),
                 vertical_align,
+                alignment_parent,
             },
             kind,
         ));
@@ -1955,6 +2042,7 @@ mod tests {
             InlineDirection::Ltr,
             &[],
             InlineVerticalAlign::default(),
+            root,
         );
         normalizer.push_text(
             first_text,
@@ -1968,6 +2056,7 @@ mod tests {
             InlineUnicodeBidi::Normal,
             &[],
             InlineVerticalAlign::default(),
+            root,
         );
         normalizer.push_text(
             outer_space,
@@ -1982,6 +2071,7 @@ mod tests {
             InlineDirection::Ltr,
             &[],
             InlineVerticalAlign::default(),
+            root,
         );
         normalizer.push_text(
             second_text,
@@ -1995,6 +2085,7 @@ mod tests {
             InlineUnicodeBidi::Embed,
             &[],
             InlineVerticalAlign::default(),
+            root,
         );
         normalizer.push_text(
             trailing_text,
