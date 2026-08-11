@@ -1343,6 +1343,9 @@ where
 }
 
 struct PendingWhitespace {
+    output_index: usize,
+    unit_index: usize,
+    object_index: usize,
     style_box: LayoutBoxId,
     ancestors: Vec<LayoutBoxId>,
     sources: Vec<SourceOrigin>,
@@ -1544,6 +1547,9 @@ impl InlineNormalizer {
         segment_break: bool,
     ) {
         let pending = self.pending.get_or_insert_with(|| PendingWhitespace {
+            output_index: self.text.len(),
+            unit_index: self.units.len(),
+            object_index: self.objects.len(),
             style_box,
             ancestors: ancestors.to_vec(),
             sources: Vec::new(),
@@ -1560,12 +1566,30 @@ impl InlineNormalizer {
         if !self.line_has_content {
             return;
         }
-        self.append_unit(
-            pending.style_box,
-            ' ',
-            &pending.ancestors,
-            pending.sources,
-            false,
+
+        // Inline boundaries and bidi controls can be collected while a
+        // collapsible space is still pending. If the space survives, it
+        // precedes all of those later items in DOM order. Insert it at the
+        // point where the collapsible sequence began instead of appending it
+        // after the deferred boundaries.
+        self.text.insert(pending.output_index, ' ');
+        for unit in &mut self.units[pending.unit_index..] {
+            unit.output_range.start += 1;
+            unit.output_range.end += 1;
+        }
+        for (byte_index, _, _) in &mut self.objects[pending.object_index..] {
+            *byte_index += 1;
+        }
+        self.units.insert(
+            pending.unit_index,
+            InlineTextUnit {
+                output_range: pending.output_index..pending.output_index + 1,
+                style_box: pending.style_box,
+                ancestors: pending.ancestors,
+                sources: pending.sources,
+                control: false,
+                break_spaces_opportunity: false,
+            },
         );
     }
 
@@ -1585,6 +1609,12 @@ impl InlineNormalizer {
         ancestors: &[LayoutBoxId],
         vertical_align: InlineVerticalAlign,
     ) {
+        // CSS Writing Modes injects the opening bidi controls outside the
+        // inline box boundary. Keep the opaque item order aligned with
+        // Blink's InlineItemsBuilder: enter bidi context, then open the tag.
+        for control in bidi_open(bidi, direction) {
+            self.append_unit(box_id, control, ancestors, Vec::new(), true);
+        }
         self.push_object(
             box_id,
             InlineObjectRole::StartEdge,
@@ -1592,9 +1622,6 @@ impl InlineNormalizer {
             ancestors,
             vertical_align,
         );
-        for control in bidi_open(bidi, direction) {
-            self.append_unit(box_id, control, ancestors, Vec::new(), true);
-        }
     }
 
     fn close_inline(
@@ -1604,9 +1631,7 @@ impl InlineNormalizer {
         ancestors: &[LayoutBoxId],
         vertical_align: InlineVerticalAlign,
     ) {
-        for control in bidi_close(bidi) {
-            self.append_unit(box_id, control, ancestors, Vec::new(), true);
-        }
+        // Close the inline box before leaving its injected bidi context.
         self.push_object(
             box_id,
             InlineObjectRole::EndEdge,
@@ -1614,6 +1639,9 @@ impl InlineNormalizer {
             ancestors,
             vertical_align,
         );
+        for control in bidi_close(bidi) {
+            self.append_unit(box_id, control, ancestors, Vec::new(), true);
+        }
     }
 
     fn push_object(
@@ -1908,6 +1936,93 @@ mod tests {
                 .iter()
                 .all(|entry| { &input.text[entry.output_range.clone()] != "\u{200B}" })
         );
+    }
+
+    #[test]
+    fn collapsed_spaces_remain_in_dom_order_across_inline_boundaries() {
+        let root = LayoutBoxId::from_index(0);
+        let first_inline = LayoutBoxId::from_index(1);
+        let first_text = LayoutBoxId::from_index(2);
+        let outer_space = LayoutBoxId::from_index(3);
+        let second_inline = LayoutBoxId::from_index(4);
+        let second_text = LayoutBoxId::from_index(5);
+        let trailing_text = LayoutBoxId::from_index(6);
+        let mut normalizer = InlineNormalizer::new(root);
+
+        normalizer.open_inline(
+            first_inline,
+            InlineUnicodeBidi::Normal,
+            InlineDirection::Ltr,
+            &[],
+            InlineVerticalAlign::default(),
+        );
+        normalizer.push_text(
+            first_text,
+            "A",
+            InlineWhiteSpaceCollapse::Collapse,
+            InlineTextTransform::None,
+            &[first_inline],
+        );
+        normalizer.close_inline(
+            first_inline,
+            InlineUnicodeBidi::Normal,
+            &[],
+            InlineVerticalAlign::default(),
+        );
+        normalizer.push_text(
+            outer_space,
+            " ",
+            InlineWhiteSpaceCollapse::Collapse,
+            InlineTextTransform::None,
+            &[],
+        );
+        normalizer.open_inline(
+            second_inline,
+            InlineUnicodeBidi::Embed,
+            InlineDirection::Ltr,
+            &[],
+            InlineVerticalAlign::default(),
+        );
+        normalizer.push_text(
+            second_text,
+            "B ",
+            InlineWhiteSpaceCollapse::Collapse,
+            InlineTextTransform::None,
+            &[second_inline],
+        );
+        normalizer.close_inline(
+            second_inline,
+            InlineUnicodeBidi::Embed,
+            &[],
+            InlineVerticalAlign::default(),
+        );
+        normalizer.push_text(
+            trailing_text,
+            "C",
+            InlineWhiteSpaceCollapse::Collapse,
+            InlineTextTransform::None,
+            &[],
+        );
+
+        let input = normalizer.finish();
+        assert_eq!(input.text, "A \u{202a}B \u{202c}C");
+        assert_eq!(
+            input
+                .objects
+                .iter()
+                .map(|(index, object, _)| (*index, object.box_id, object.role))
+                .collect::<Vec<_>>(),
+            vec![
+                (0, first_inline, InlineObjectRole::StartEdge),
+                (1, first_inline, InlineObjectRole::EndEdge),
+                (5, second_inline, InlineObjectRole::StartEdge),
+                (7, second_inline, InlineObjectRole::EndEdge),
+            ]
+        );
+        assert_eq!(input.units[1].output_range, 1..2);
+        assert!(input.units[1].ancestors.is_empty());
+        assert_eq!(input.units[4].output_range, 6..7);
+        assert_eq!(input.units[4].ancestors, vec![second_inline]);
     }
 
     #[test]
