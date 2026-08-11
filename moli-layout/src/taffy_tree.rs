@@ -32,6 +32,12 @@ where
     N: Copy + Debug + Eq + Hash,
 {
     for layout_box in &mut world.boxes {
+        let is_replaced = layout_box
+            .element_semantics
+            .as_ref()
+            .is_some_and(crate::LayoutElementSemantics::is_replaced);
+        layout_box.block_intrinsic_style =
+            block_intrinsic_style(&layout_box.style.taffy, is_replaced);
         layout_box.cache.clear();
         layout_box.unrounded_layout = Layout::with_order(0);
         layout_box.final_layout = Layout::with_order(0);
@@ -43,6 +49,7 @@ where
 
     world.viewport_layout.children.clear();
     world.viewport_layout.cache.clear();
+    world.block_child_intrinsic_zero_min_width = false;
     world.viewport_layout.unrounded_layout = Layout::with_order(0);
     world.viewport_layout.final_layout = Layout::with_order(0);
     world.viewport_layout.style = Style {
@@ -1170,7 +1177,7 @@ where
         };
         if self.is_viewport_taffy_node(node_id) {
             return compute_cached_layout(self, node_id, inputs, |world, node_id, inputs| {
-                compute_block_layout(world, node_id, inputs, None)
+                world.compute_block_layout_with_cyclic_min_width(node_id, inputs, None)
             });
         }
         if self.should_hide(node_id, inputs) {
@@ -1235,7 +1242,14 @@ where
     }
 
     fn get_block_child_style(&self, child_node_id: NodeId) -> Self::BlockItemStyle<'_> {
-        self.get_core_container_style(child_node_id)
+        let id = LayoutBoxId::from_taffy(child_node_id);
+        let child = &self.boxes[id.index()];
+        if self.block_child_intrinsic_zero_min_width {
+            if let Some(style) = child.block_intrinsic_style.as_ref() {
+                return style;
+            }
+        }
+        &child.style.taffy
     }
 
     fn compute_block_child_layout(
@@ -1322,6 +1336,44 @@ impl<N> LayoutWorld<N>
 where
     N: Copy + Debug + Eq + Hash,
 {
+    fn compute_block_layout_with_cyclic_min_width(
+        &mut self,
+        node_id: NodeId,
+        inputs: LayoutInput,
+        block_context: Option<&mut BlockContext<'_>>,
+    ) -> LayoutOutput {
+        let width_is_definite = {
+            let style = self.get_core_container_style(node_id);
+            let resolved_preferred = style
+                .size
+                .width
+                .maybe_resolve(inputs.parent_size.width, resolve_stylo_calc_value);
+            let resolved_min = style
+                .min_size
+                .width
+                .maybe_resolve(inputs.parent_size.width, resolve_stylo_calc_value);
+            let resolved_max = style
+                .max_size
+                .width
+                .maybe_resolve(inputs.parent_size.width, resolve_stylo_calc_value);
+            let min_max_determine_width =
+                matches!((resolved_min, resolved_max), (Some(min), Some(max)) if max <= min);
+            inputs
+                .known_dimensions
+                .maybe_apply_aspect_ratio(style.aspect_ratio)
+                .width
+                .or(resolved_preferred)
+                .is_some()
+                || min_max_determine_width
+        };
+        let previous = self.block_child_intrinsic_zero_min_width;
+        self.block_child_intrinsic_zero_min_width =
+            inputs.sizing_mode == SizingMode::InherentSize && !width_is_definite;
+        let output = compute_block_layout(self, node_id, inputs, block_context);
+        self.block_child_intrinsic_zero_min_width = previous;
+        output
+    }
+
     fn should_hide(&self, node_id: NodeId, inputs: LayoutInput) -> bool {
         inputs.run_mode == RunMode::PerformHiddenLayout
             || self.boxes[LayoutBoxId::from_taffy(node_id).index()]
@@ -1371,7 +1423,7 @@ where
             return compute_table_layout(self, id, inputs);
         }
         if display.is_table() {
-            return compute_block_layout(self, node_id, inputs, block_context);
+            return self.compute_block_layout_with_cyclic_min_width(node_id, inputs, block_context);
         }
 
         match kind {
@@ -1403,7 +1455,7 @@ where
             | LayoutBoxKind::AnonymousTableRowGroup
             | LayoutBoxKind::AnonymousTableRow
             | LayoutBoxKind::AnonymousTableCell => {
-                compute_block_layout(self, node_id, inputs, block_context)
+                self.compute_block_layout_with_cyclic_min_width(node_id, inputs, block_context)
             }
             LayoutBoxKind::PrincipalInline
             | LayoutBoxKind::InlineContinuation
@@ -2186,6 +2238,24 @@ where
 
 fn inline_percentage_basis(available: AvailableSpace) -> Option<f32> {
     Some(available.into_option().unwrap_or(0.0))
+}
+
+fn block_intrinsic_style(style: &Style<Atom>, is_replaced: bool) -> Option<Style<Atom>> {
+    if is_replaced || !style.min_size.width.into_raw().is_calc() {
+        return None;
+    }
+
+    // When this box's containing block depends on its contribution, CSS
+    // Sizing resolves a cyclic percentage in min-width against zero. Retain a
+    // separate projection for that probe so final layout still uses the
+    // original expression against the now-known containing-block width.
+    let width = style
+        .min_size
+        .width
+        .maybe_resolve(Some(0.0), resolve_stylo_calc_value)?;
+    let mut projected = style.clone();
+    projected.min_size.width = Dimension::length(width);
+    Some(projected)
 }
 
 #[cfg(test)]

@@ -735,6 +735,57 @@ html, body { display: block; margin: 0; padding: 0 }
     }
 
     #[test]
+    fn layout_renderer_preserves_calc_min_width_in_float_intrinsic_contribution() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let mut page_vm = parse_phase_one_html_into_page_vm_for_test(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+#host{width:0}
+#outer{float:left;height:30px;background:rgb(101,102,103)}
+#inner{width:40px;min-width:calc(160px + 0%);height:20px;background:rgb(111,112,113)}
+#definite{clear:both;width:200px;height:20px}
+#definite-child{width:40px;min-width:calc(20px + 50%);height:20px;background:rgb(121,122,123)}
+</style></head><body><div id=host><div id=outer><div id=inner></div></div></div>
+<div id=definite><div id=definite-child></div></div></body></html>"#,
+            )
+            .await;
+            page_vm.vm_mut().sync_live_document_style_sources();
+
+            let snapshot = page_vm
+                .vm_mut()
+                .screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0))
+                .expect("float intrinsic layout should succeed")
+                .expect("fixture should have a document element");
+            assert_paint_rect(
+                solid_paint_rect(
+                    &snapshot,
+                    moli_layout::PaintColor::new(101.0 / 255.0, 102.0 / 255.0, 103.0 / 255.0, 1.0),
+                ),
+                moli_layout::PaintRect::new(0.0, 0.0, 160.0, 30.0),
+            );
+            assert_paint_rect(
+                solid_paint_rect(
+                    &snapshot,
+                    moli_layout::PaintColor::new(111.0 / 255.0, 112.0 / 255.0, 113.0 / 255.0, 1.0),
+                ),
+                moli_layout::PaintRect::new(0.0, 0.0, 160.0, 20.0),
+            );
+            assert_paint_rect(
+                solid_paint_rect(
+                    &snapshot,
+                    moli_layout::PaintColor::new(121.0 / 255.0, 122.0 / 255.0, 123.0 / 255.0, 1.0),
+                ),
+                moli_layout::PaintRect::new(0.0, 30.0, 120.0, 20.0),
+            );
+        }));
+    }
+
+    #[test]
     fn layout_renderer_projects_current_blitz_taffy_parity_from_stylo() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
