@@ -2352,6 +2352,7 @@ fn empty_inline_context() -> InlineFormattingContext {
         objects: Vec::new(),
         font_metrics: Vec::new(),
         parent_strut: None,
+        root_includes_used_font_metrics: false,
         style_parents: Vec::new(),
         structural_boxes: Vec::new(),
         line_placements: Vec::new(),

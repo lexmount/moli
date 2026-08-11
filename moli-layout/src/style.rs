@@ -334,6 +334,9 @@ pub struct ResolvedLayoutStyle {
     generated_content: GeneratedContent,
     font_size: f32,
     line_height: f32,
+    /// Blink expands `line-height: normal` using every font actually selected
+    /// during shaping. Explicit line heights keep using the primary strut.
+    include_used_font_metrics: bool,
     text_color: PaintColor,
     white_space_collapse: InlineWhiteSpaceCollapse,
     text_transform: InlineTextTransform,
@@ -437,6 +440,10 @@ impl ResolvedLayoutStyle {
         let border_colors = stylo_border_colors(&computed);
         let generated_content = stylo_generated_content(&computed);
         let (font_size, line_height) = stylo_font_metrics(&computed);
+        let include_used_font_metrics = matches!(
+            computed.clone_line_height(),
+            style::values::computed::font::LineHeight::Normal
+        );
         let text_color = stylo_text_color(&computed);
         let white_space_collapse = match computed.clone_white_space_collapse() {
             style::computed_values::white_space_collapse::T::Collapse => {
@@ -654,6 +661,7 @@ impl ResolvedLayoutStyle {
             generated_content,
             font_size,
             line_height,
+            include_used_font_metrics,
             text_color,
             white_space_collapse,
             text_transform,
@@ -717,6 +725,7 @@ impl ResolvedLayoutStyle {
             generated_content: GeneratedContent::None,
             font_size: 16.0,
             line_height: 19.2,
+            include_used_font_metrics: false,
             text_color: PaintColor::BLACK,
             white_space_collapse: InlineWhiteSpaceCollapse::Collapse,
             text_transform: InlineTextTransform::None,
@@ -781,6 +790,7 @@ impl ResolvedLayoutStyle {
     pub fn with_text_metrics(mut self, font_size: f32, line_height: f32) -> Self {
         self.font_size = font_size;
         self.line_height = line_height;
+        self.include_used_font_metrics = false;
         self
     }
 
@@ -1317,6 +1327,10 @@ impl ResolvedLayoutStyle {
         self.line_height
     }
 
+    pub(crate) fn includes_used_font_metrics(&self) -> bool {
+        self.include_used_font_metrics
+    }
+
     pub(crate) fn white_space_collapse(&self) -> InlineWhiteSpaceCollapse {
         self.white_space_collapse
     }
@@ -1407,6 +1421,7 @@ impl ResolvedLayoutStyle {
             generated_content: GeneratedContent::None,
             font_size: parent.font_size,
             line_height: parent.line_height,
+            include_used_font_metrics: parent.include_used_font_metrics,
             text_color: parent.text_color,
             white_space_collapse: parent.white_space_collapse,
             text_transform: parent.text_transform,
@@ -1463,6 +1478,7 @@ impl ResolvedLayoutStyle {
             generated_content: GeneratedContent::None,
             font_size: parent.font_size,
             line_height: parent.line_height,
+            include_used_font_metrics: parent.include_used_font_metrics,
             text_color: parent.text_color,
             white_space_collapse: parent.white_space_collapse,
             text_transform: parent.text_transform,

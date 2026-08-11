@@ -125,6 +125,7 @@ pub(crate) struct InlineStructuralBox {
     pub(crate) parent: LayoutBoxId,
     pub(crate) vertical_align: InlineVerticalAlign,
     pub(crate) strut: Option<InlineStrutMetrics>,
+    pub(crate) include_used_font_metrics: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -137,13 +138,15 @@ pub(crate) struct InlineFormattingContext {
     pub(crate) selection: Option<InlineSelection>,
     pub(crate) objects: Vec<InlineObject>,
     /// Primary-font metrics indexed by Parley's style index. Glyph runs may
-    /// use fallback fonts, but their CSSOM rectangles must not inherit those
-    /// fallback metrics.
+    /// use fallback fonts, but their CSSOM rectangles and text-edge alignment
+    /// retain these primary metrics. Only `line-height: normal` additionally
+    /// unites the used font's metrics into the enclosing line box.
     pub(crate) font_metrics: Vec<Option<InlineFontMetrics>>,
     /// The IFC owner's primary-font strut used while reconstructing CSS line
     /// baselines. Fallback glyph fonts must not replace its line height or
     /// x-height.
     pub(crate) parent_strut: Option<InlineStrutMetrics>,
+    pub(crate) root_includes_used_font_metrics: bool,
     /// Direct structural parent of each shaped style. Including this identity
     /// in style deduplication prevents glyph runs from crossing a box-state
     /// boundary even when their paint/font properties are otherwise equal.
@@ -240,6 +243,14 @@ impl InlineFormattingContext {
             .get(index)
             .copied()
             .unwrap_or(self.root_style)
+    }
+
+    fn box_includes_used_font_metrics(&self, box_id: LayoutBoxId) -> bool {
+        if box_id == self.root_style {
+            return self.root_includes_used_font_metrics;
+        }
+        self.structural_box(box_id)
+            .is_some_and(|state| state.include_used_font_metrics)
     }
 
     fn structural_box(&self, id: LayoutBoxId) -> Option<&InlineStructuralBox> {
@@ -580,27 +591,20 @@ pub(crate) fn build_inline_line_placements(
                     let run_metrics = run.metrics();
                     let paint = glyph_run.style().brush.paint;
                     let style_index = glyph_run.glyphs().next().map(|glyph| glyph.style_index());
+                    let structural_parent =
+                        style_index.map_or(context.root_style, |index| context.style_parent(index));
                     let primary_strut = style_index
                         .and_then(|index| context.font_metrics.get(index).copied().flatten())
                         .map(|metrics| inline_strut_metrics(metrics, true));
-                    let bounds = primary_strut.map_or_else(
-                        || {
-                            let half_leading = (run_metrics.line_height
-                                - run_metrics.ascent
-                                - run_metrics.descent)
-                                * 0.5;
-                            InlineVerticalBounds {
-                                top: -run_metrics.ascent - half_leading,
-                                bottom: run_metrics.descent + half_leading,
-                            }
-                        },
-                        InlineVerticalBounds::from_strut,
+                    let bounds = glyph_line_bounds(
+                        primary_strut,
+                        run_metrics,
+                        context.box_includes_used_font_metrics(structural_parent),
                     );
                     InlineItemVerticalGeometry {
                         bounds,
                         initial_top: glyph_run.baseline() + bounds.top,
-                        structural_parent: style_index
-                            .map_or(context.root_style, |index| context.style_parent(index)),
+                        structural_parent,
                         edge_box: None,
                         vertical_align: InlineVerticalAlign::default(),
                         // Parley may expose an empty root-style run next to
@@ -975,6 +979,28 @@ impl InlineVerticalBounds {
         self.top = self.top.min(other.top);
         self.bottom = self.bottom.max(other.bottom);
     }
+}
+
+fn glyph_line_bounds(
+    primary_strut: Option<InlineStrutMetrics>,
+    used_font: &parley::layout::RunMetrics,
+    include_used_font_metrics: bool,
+) -> InlineVerticalBounds {
+    let used_strut = inline_strut_metrics(
+        InlineFontMetrics {
+            ascent: used_font.ascent,
+            descent: used_font.descent,
+            line_height: used_font.line_height,
+            x_height: used_font.x_height.unwrap_or(used_font.ascent * 0.56),
+        },
+        true,
+    );
+    let used_bounds = InlineVerticalBounds::from_strut(used_strut);
+    let mut bounds = primary_strut.map_or(used_bounds, InlineVerticalBounds::from_strut);
+    if include_used_font_metrics {
+        bounds.include(used_bounds);
+    }
+    bounds
 }
 
 fn build_line_inline_box_states(
@@ -1388,6 +1414,9 @@ impl InlineBuildInput {
                 parent: object.ancestors.last().copied().unwrap_or(self.root_style),
                 vertical_align: object.vertical_align,
                 strut: measure_inline_strut(parley, style, quantize),
+                include_used_font_metrics: world.boxes[object.box_id.index()]
+                    .style
+                    .includes_used_font_metrics(),
             });
         }
         let objects = self
@@ -1405,6 +1434,9 @@ impl InlineBuildInput {
             objects,
             font_metrics,
             parent_strut,
+            root_includes_used_font_metrics: world.boxes[self.root_style.index()]
+                .style
+                .includes_used_font_metrics(),
             style_parents,
             structural_boxes,
             line_placements: Vec::new(),
@@ -2039,6 +2071,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn normal_line_height_unites_metrics_from_the_shaped_fallback_font() {
+        let primary = InlineStrutMetrics {
+            line_ascent: 8.0,
+            line_descent: 2.0,
+            text_ascent: 8.0,
+            text_descent: 2.0,
+            x_height: 4.0,
+        };
+        let fallback = parley::layout::RunMetrics {
+            ascent: 18.0,
+            descent: 6.0,
+            line_height: 30.0,
+            ..parley::layout::RunMetrics::default()
+        };
+
+        let explicit = glyph_line_bounds(Some(primary), &fallback, false);
+        assert_eq!(explicit.top, -8.0);
+        assert_eq!(explicit.bottom, 2.0);
+
+        let normal = glyph_line_bounds(Some(primary), &fallback, true);
+        assert_eq!(normal.top, -21.0);
+        assert_eq!(normal.bottom, 9.0);
+    }
+
+    #[test]
     fn text_edge_alignment_excludes_line_height_leading() {
         let strut = inline_strut_metrics(
             InlineFontMetrics {
@@ -2061,12 +2118,11 @@ mod tests {
                     kind: LayoutInlineAlignment::TextTop,
                     baseline_shift: 0.0,
                 },
-                baseline,
-                baseline - strut.text_ascent,
-                baseline + strut.text_descent,
-                strut.x_height,
-                0.0,
-                8.0,
+                Some(strut),
+                InlineVerticalBounds {
+                    top: -baseline,
+                    bottom: 8.0 - baseline,
+                },
             ),
             4.0,
         );
