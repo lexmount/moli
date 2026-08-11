@@ -2430,15 +2430,25 @@ document.body.innerHTML = `<div class=row><div class=item id=ask><i class=icon><
             r#"JSON.stringify(Object.fromEntries(['ask','ask-text','constrained'].map(id=>{const r=document.getElementById(id).getBoundingClientRect();return [id,[r.width,r.height]]})))"#,
         )?;
         let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
-        // Chromium keeps the auto-sized label on one 11px line, leaving the
-        // icon and padding to establish the 42px pill height.
-        assert_eq!(geometry["ask"], serde_json::json!([139, 42]));
-        assert_eq!(geometry["ask-text"], serde_json::json!([81, 11]));
-        assert_eq!(
-            geometry["constrained"],
-            serde_json::json!([80, 22]),
-            "a genuinely narrower content box must still wrap; geometry={geometry}"
-        );
+        // Chromium's Ahem `normal` line-height follows the font metrics: 9px
+        // for one line and 18px after wrapping. The icon and padding, rather
+        // than an inflated synthetic line-height, establish the 42px pill.
+        for (id, expected) in [
+            ("ask", [139.015625, 42.0]),
+            ("ask-text", [81.015625, 9.0]),
+            ("constrained", [80.0, 18.0]),
+        ] {
+            let actual = geometry[id]
+                .as_array()
+                .unwrap_or_else(|| panic!("missing geometry for {id}: {geometry}"));
+            for (index, expected) in expected.into_iter().enumerate() {
+                let actual = actual[index].as_f64().expect("numeric geometry") as f32;
+                assert!(
+                    (actual - expected).abs() <= 0.05,
+                    "{id}[{index}]: expected {expected}, got {actual}; geometry={geometry}"
+                );
+            }
+        }
         Ok::<_, anyhow::Error>(())
     })
     .await

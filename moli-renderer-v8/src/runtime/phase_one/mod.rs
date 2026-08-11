@@ -991,7 +991,7 @@ li::marker { color: rgb(201,202,203) }
 
             let mut flow_page = parse_phase_one_html_into_page_vm_for_test(
                 r#"<!doctype html><html><head><style>
-html, body { margin: 0; padding: 0 }
+html, body { margin: 0; padding: 0; font-family: Arial, sans-serif }
 #flow { display: flow-root; width: 200px }
 #left { float: left; width: 60px; height: 40px; background: rgb(1,2,3) }
 #right { float: right; width: 50px; height: 30px; background: rgb(11,12,13) }
@@ -1014,9 +1014,9 @@ html, body { margin: 0; padding: 0 }
                 (rgb(1, 2, 3), (0.0, 0.0, 60.0, 40.0)),
                 (rgb(11, 12, 13), (150.0, 0.0, 50.0, 30.0)),
                 (rgb(21, 22, 23), (60.0, 0.0, 84.0, 20.0)),
-                (rgb(31, 32, 33), (60.0, 20.0, 60.0, 20.0)),
-                (rgb(41, 42, 43), (0.0, 40.0, 70.0, 35.0)),
-                (rgb(51, 52, 53), (0.0, 75.0, 200.0, 10.0)),
+                (rgb(31, 32, 33), (60.0, 24.0, 60.0, 20.0)),
+                (rgb(41, 42, 43), (0.0, 48.0, 70.0, 35.0)),
+                (rgb(51, 52, 53), (0.0, 83.0, 200.0, 10.0)),
             ] {
                 assert_paint_rect(
                     solid_paint_rect(&flow, color),

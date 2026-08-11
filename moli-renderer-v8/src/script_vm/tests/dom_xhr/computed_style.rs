@@ -9785,7 +9785,7 @@ fn mouse_event_offsets_follow_retargeted_shadow_targets() {
 (() => {
   const pageStyle = document.createElement('style');
   pageStyle.textContent =
-    'html, body { padding: 0; margin: 0; } ' +
+    'html, body { padding: 0; margin: 0; font-family: Arial, sans-serif; } ' +
     'my-host { display: block; width: 180px; height: 80px; margin: 10px 20px; padding: 10px; }';
   document.documentElement.firstChild.appendChild(pageStyle);
   const shadowStyle =
