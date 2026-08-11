@@ -1122,6 +1122,80 @@ fn inline_flex_and_grid_use_their_first_container_baseline() {
 }
 
 #[test]
+fn negative_atomic_block_margin_uses_signed_baseline_metrics() {
+    let source = Source(vec![
+        Node::element(
+            "root",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            vec![1, 4],
+        ),
+        Node::element(
+            "atomic",
+            "span",
+            LayoutElementCategory::Generic,
+            None,
+            vec![2, 3],
+        ),
+        Node::element(
+            "first-item",
+            "span",
+            LayoutElementCategory::Generic,
+            None,
+            Vec::new(),
+        ),
+        Node::element(
+            "last-item",
+            "span",
+            LayoutElementCategory::Generic,
+            None,
+            Vec::new(),
+        ),
+        Node::element(
+            "tail",
+            "span",
+            LayoutElementCategory::Generic,
+            None,
+            Vec::new(),
+        ),
+    ]);
+    let mut styles = Styles::default();
+    styles.primary.insert(
+        0,
+        style(LayoutDisplay::Block, GREEN)
+            .tap_taffy(|taffy| taffy.size.width = Dimension::length(100.0))
+            .with_text_metrics(0.0, 0.0),
+    );
+    styles.primary.insert(
+        1,
+        style(LayoutDisplay::InlineFlex, YELLOW).tap_taffy(|taffy| {
+            taffy.size.width = Dimension::length(10.0);
+            taffy.flex_direction = FlexDirection::Column;
+            taffy.margin.top = taffy::LengthPercentageAuto::length(-5.0);
+        }),
+    );
+    styles
+        .primary
+        .insert(2, sized(LayoutDisplay::Block, 10.0, 10.0, BLUE));
+    styles.primary.insert(
+        3,
+        sized(LayoutDisplay::Block, 10.0, 10.0, PaintColor::TRANSPARENT),
+    );
+    styles
+        .primary
+        .insert(4, sized(LayoutDisplay::InlineBlock, 10.0, 10.0, RED));
+
+    let snapshot = render(&source, &mut styles, 100, 60);
+    let root = rect(&snapshot, GREEN);
+    let atomic = rect(&snapshot, YELLOW);
+    let tail = rect(&snapshot, RED);
+    assert_close(root.height, 20.0);
+    assert_close(atomic.height, 20.0);
+    assert_close(atomic.y, tail.y);
+}
+
+#[test]
 fn inline_table_baseline_includes_top_caption_offset() {
     use LayoutElementCategory::Table;
     use LayoutTableRole::{BodyGroup, Caption, Cell, Row, Table as Root};

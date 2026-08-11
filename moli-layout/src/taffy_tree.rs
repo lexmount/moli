@@ -1681,7 +1681,7 @@ where
                         .expect("Parley returned an inline object id outside usize");
                     atomic_baseline_ascents[object_index] = self
                         .atomic_inline_baseline(object.box_id, child_output)
-                        .map(|baseline| margins.top.max(0.0) + baseline);
+                        .map(|baseline| margins.top + baseline);
                     atomic[object_index] = Some(AtomicMeasurement {
                         output: child_output,
                         margins,
@@ -2167,7 +2167,7 @@ where
                         x: content_offset.x + positioned.x + atomic.margins.left + inset_offset.x,
                         y: content_offset.y
                             + positioned.y
-                            + atomic.margins.top.max(0.0)
+                            + atomic.margins.top
                             + vertical_offset
                             + inset_offset.y,
                     },
