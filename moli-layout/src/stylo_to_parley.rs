@@ -28,10 +28,7 @@ use style::{
     },
 };
 
-use crate::{
-    PaintColor, PaintPoint, PaintTextDecorationStyle,
-    style::{InlineVerticalAlign, absolute_paint_color},
-};
+use crate::{PaintColor, PaintPoint, PaintTextDecorationStyle, style::absolute_paint_color};
 
 // Blink only requests synthetic bold for CSS weights at or above 600. Fontique
 // reports any requested weight above the selected face as embolden-able, which
@@ -61,7 +58,6 @@ pub(crate) struct TextShadowBrush {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TextBrush {
     pub(crate) color: PaintColor,
-    pub(crate) vertical_align: InlineVerticalAlign,
     /// Whether shaped glyphs from this run are observable paint content.
     ///
     /// Unicode bidi controls and synthetic line-break opportunities still
@@ -78,7 +74,6 @@ impl Default for TextBrush {
     fn default() -> Self {
         Self {
             color: PaintColor::default(),
-            vertical_align: InlineVerticalAlign::default(),
             paint: true,
             synthetic_bold: false,
             decoration: TextDecorationBrush::default(),
@@ -87,10 +82,7 @@ impl Default for TextBrush {
     }
 }
 
-pub(crate) fn text_style(
-    computed: &ComputedValues,
-    vertical_align: InlineVerticalAlign,
-) -> TextStyle<'static, 'static, TextBrush> {
+pub(crate) fn text_style(computed: &ComputedValues) -> TextStyle<'static, 'static, TextBrush> {
     let font = computed.get_font();
     let inherited_text = computed.get_inherited_text();
     let font_size = font.font_size.used_size.0.px();
@@ -203,7 +195,6 @@ pub(crate) fn text_style(
         },
         brush: TextBrush {
             color: fill_color,
-            vertical_align,
             paint: true,
             synthetic_bold: font.font_synthesis_weight == FontSynthesis::Auto
                 && font.font_weight.value() >= SYNTHETIC_BOLD_THRESHOLD,

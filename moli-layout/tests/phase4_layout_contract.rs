@@ -1421,6 +1421,221 @@ fn middle_aligned_text_uses_its_nearest_inline_parents_x_height() {
 }
 
 #[test]
+fn structural_inline_own_strut_contributes_without_direct_text() {
+    let source = Source(vec![
+        Node::element(
+            "root",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            vec![1, 5],
+        ),
+        Node::element("line", "div", LayoutElementCategory::Generic, None, vec![2]),
+        Node::element(
+            "large-structural-inline",
+            "span",
+            LayoutElementCategory::Generic,
+            None,
+            vec![3],
+        ),
+        Node::element(
+            "small-child",
+            "span",
+            LayoutElementCategory::Generic,
+            None,
+            vec![4],
+        ),
+        Node::text("text", "A"),
+        Node::element(
+            "following-block",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            vec![],
+        ),
+    ]);
+    let mut styles = Styles::default();
+    styles.primary.insert(
+        0,
+        sized(LayoutDisplay::Block, 200.0, 100.0, PaintColor::TRANSPARENT),
+    );
+    styles.primary.insert(
+        1,
+        style(LayoutDisplay::Block, BLUE).with_text_metrics(10.0, 10.0),
+    );
+    styles.primary.insert(
+        2,
+        style(LayoutDisplay::Inline, PaintColor::TRANSPARENT).with_text_metrics(40.0, 60.0),
+    );
+    styles.primary.insert(
+        3,
+        style(LayoutDisplay::Inline, PaintColor::TRANSPARENT).with_text_metrics(10.0, 10.0),
+    );
+    styles
+        .primary
+        .insert(5, sized(LayoutDisplay::Block, 10.0, 5.0, RED));
+
+    let snapshot = render(&source, &mut styles, 200, 100);
+    let line = rect(&snapshot, BLUE);
+    let following = rect(&snapshot, RED);
+    assert!(
+        line.height >= 59.0,
+        "a structural inline's own 60px strut must size the line even when all direct text is in a 10px child: {line:?}"
+    );
+    assert!(
+        following.y >= line.y + 59.0,
+        "following flow content must start after the structural strut: line={line:?}, following={following:?}"
+    );
+}
+
+#[test]
+fn nested_inline_alignments_move_each_structural_subtree_in_order() {
+    let source = Source(vec![
+        Node::element(
+            "root",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            vec![1, 4],
+        ),
+        Node::element(
+            "middle-outer",
+            "span",
+            LayoutElementCategory::Generic,
+            None,
+            vec![2],
+        ),
+        Node::element(
+            "text-top-inner",
+            "span",
+            LayoutElementCategory::Generic,
+            None,
+            vec![3],
+        ),
+        Node::text("middle-text", "A"),
+        Node::element(
+            "baseline-outer",
+            "span",
+            LayoutElementCategory::Generic,
+            None,
+            vec![5],
+        ),
+        Node::element(
+            "reference-text-top-inner",
+            "span",
+            LayoutElementCategory::Generic,
+            None,
+            vec![6],
+        ),
+        Node::text("reference-text", "A"),
+    ]);
+    let mut styles = Styles::default();
+    styles.primary.insert(
+        0,
+        sized(LayoutDisplay::Block, 300.0, 100.0, PaintColor::TRANSPARENT)
+            .with_text_metrics(10.0, 20.0),
+    );
+    styles.primary.insert(
+        1,
+        style(LayoutDisplay::Inline, PaintColor::TRANSPARENT)
+            .with_text_metrics(40.0, 50.0)
+            .with_inline_alignment(moli_layout::LayoutInlineAlignment::Middle),
+    );
+    styles.primary.insert(
+        2,
+        style(LayoutDisplay::Inline, RED)
+            .with_text_metrics(10.0, 10.0)
+            .with_inline_alignment(moli_layout::LayoutInlineAlignment::TextTop),
+    );
+    styles.primary.insert(
+        4,
+        style(LayoutDisplay::Inline, PaintColor::TRANSPARENT).with_text_metrics(40.0, 50.0),
+    );
+    styles.primary.insert(
+        5,
+        style(LayoutDisplay::Inline, BLUE)
+            .with_text_metrics(10.0, 10.0)
+            .with_inline_alignment(moli_layout::LayoutInlineAlignment::TextTop),
+    );
+
+    let snapshot = render(&source, &mut styles, 300, 100);
+    let nested = rect(&snapshot, RED);
+    let reference = rect(&snapshot, BLUE);
+    assert!(
+        (nested.y - reference.y).abs() > 2.0,
+        "the outer middle alignment must move the already text-top-aligned inner subtree: nested={nested:?}, reference={reference:?}"
+    );
+}
+
+#[test]
+fn nested_bottom_alignment_targets_the_nearest_top_or_bottom_subtree() {
+    let source = Source(vec![
+        Node::element(
+            "root",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            vec![1, 4],
+        ),
+        Node::element(
+            "top-outer",
+            "span",
+            LayoutElementCategory::Generic,
+            None,
+            vec![2],
+        ),
+        Node::element(
+            "nested-bottom",
+            "span",
+            LayoutElementCategory::Generic,
+            None,
+            vec![3],
+        ),
+        Node::text("nested-text", "A"),
+        Node::element(
+            "root-bottom",
+            "span",
+            LayoutElementCategory::Generic,
+            None,
+            vec![5],
+        ),
+        Node::text("root-text", "A"),
+    ]);
+    let mut styles = Styles::default();
+    styles.primary.insert(
+        0,
+        sized(LayoutDisplay::Block, 300.0, 120.0, PaintColor::TRANSPARENT)
+            .with_text_metrics(10.0, 100.0),
+    );
+    styles.primary.insert(
+        1,
+        style(LayoutDisplay::Inline, PaintColor::TRANSPARENT)
+            .with_text_metrics(20.0, 40.0)
+            .with_inline_alignment(moli_layout::LayoutInlineAlignment::Top),
+    );
+    styles.primary.insert(
+        2,
+        style(LayoutDisplay::Inline, RED)
+            .with_text_metrics(10.0, 10.0)
+            .with_inline_alignment(moli_layout::LayoutInlineAlignment::Bottom),
+    );
+    styles.primary.insert(
+        4,
+        style(LayoutDisplay::Inline, BLUE)
+            .with_text_metrics(10.0, 10.0)
+            .with_inline_alignment(moli_layout::LayoutInlineAlignment::Bottom),
+    );
+
+    let snapshot = render(&source, &mut styles, 300, 120);
+    let nested = rect(&snapshot, RED);
+    let root_aligned = rect(&snapshot, BLUE);
+    assert!(
+        nested.y + 30.0 < root_aligned.y,
+        "the nested bottom must align to its 40px top-aligned ancestor, while the direct bottom aligns to the 100px root line: nested={nested:?}, root={root_aligned:?}"
+    );
+}
+
+#[test]
 fn replaced_box_model_is_applied_exactly_once() {
     let source = Source(vec![
         Node::element(

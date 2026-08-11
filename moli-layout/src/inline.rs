@@ -108,14 +108,28 @@ pub(crate) struct InlineObject {
     pub(crate) box_id: LayoutBoxId,
     pub(crate) role: InlineObjectRole,
     pub(crate) ancestors: Vec<LayoutBoxId>,
+    /// The object's own computed `vertical-align`. Structural ancestor shifts
+    /// are applied by the per-line inline box-state tree.
     pub(crate) vertical_align: InlineVerticalAlign,
-    /// Structural parent against whose font metrics the active non-baseline
-    /// keyword is resolved.
-    pub(crate) alignment_parent: LayoutBoxId,
+}
+
+/// Pass-owned metadata for one non-atomic inline box flattened into Parley.
+///
+/// Parley owns shaping and inline-axis breaking, while this hierarchy restores
+/// the box states required by CSS line layout. It mirrors Blink's
+/// `InlineBoxState`: every inline keeps its own font strut, parent, and
+/// `vertical-align` instead of composing all ancestors onto each glyph run.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct InlineStructuralBox {
+    pub(crate) box_id: LayoutBoxId,
+    pub(crate) parent: LayoutBoxId,
+    pub(crate) vertical_align: InlineVerticalAlign,
+    pub(crate) strut: Option<InlineStrutMetrics>,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct InlineFormattingContext {
+    pub(crate) root_style: LayoutBoxId,
     pub(crate) unbroken: Layout<TextBrush>,
     pub(crate) laid_out: Option<Layout<TextBrush>>,
     pub(crate) text_units: Vec<InlineTextUnit>,
@@ -130,13 +144,11 @@ pub(crate) struct InlineFormattingContext {
     /// baselines. Fallback glyph fonts must not replace its line height or
     /// x-height.
     pub(crate) parent_strut: Option<InlineStrutMetrics>,
-    /// Font strut of the structural parent against which each object's active
-    /// non-baseline alignment keyword is resolved.
-    pub(crate) object_alignment_parent_struts: Vec<Option<InlineStrutMetrics>>,
-    /// Equivalent parent strut for each shaped text style. Text inside a
-    /// structural inline follows the same parent-relative rules as atomic
-    /// inline boxes.
-    pub(crate) style_alignment_parent_struts: Vec<Option<InlineStrutMetrics>>,
+    /// Direct structural parent of each shaped style. Including this identity
+    /// in style deduplication prevents glyph runs from crossing a box-state
+    /// boundary even when their paint/font properties are otherwise equal.
+    pub(crate) style_parents: Vec<LayoutBoxId>,
+    pub(crate) structural_boxes: Vec<InlineStructuralBox>,
     pub(crate) line_placements: Vec<InlineLinePlacement>,
     pub(crate) fragments: InlineFragments,
 }
@@ -212,19 +224,17 @@ impl InlineFormattingContext {
             .and_then(|index| self.objects.get(index))
     }
 
-    fn object_alignment_parent_strut(&self, id: u64) -> Option<InlineStrutMetrics> {
-        usize::try_from(id)
-            .ok()
-            .and_then(|index| self.object_alignment_parent_struts.get(index))
-            .copied()
-            .flatten()
-    }
-
-    fn style_alignment_parent_strut(&self, index: usize) -> Option<InlineStrutMetrics> {
-        self.style_alignment_parent_struts
+    fn style_parent(&self, index: usize) -> LayoutBoxId {
+        self.style_parents
             .get(index)
             .copied()
-            .flatten()
+            .unwrap_or(self.root_style)
+    }
+
+    fn structural_box(&self, id: LayoutBoxId) -> Option<&InlineStructuralBox> {
+        self.structural_boxes
+            .iter()
+            .find(|state| state.box_id == id)
     }
 }
 
@@ -541,10 +551,6 @@ pub(crate) fn build_inline_line_placements(
 
     for (line_index, line) in layout.lines().enumerate() {
         let metrics = line.metrics();
-        // Parley's block min/max coordinates are selection bounds and may
-        // extend outside the CSS line box when leading is negative. CSS
-        // top/bottom alignment and block sizing use the accumulated line
-        // height instead.
         let raw_top = unadjusted_line_top;
         let raw_bottom = raw_top + metrics.line_height.max(0.0);
         let mut geometries = line
@@ -558,46 +564,39 @@ pub(crate) fn build_inline_line_placements(
                     let primary_strut = style_index
                         .and_then(|index| context.font_metrics.get(index).copied().flatten())
                         .map(|metrics| inline_strut_metrics(metrics, true));
-                    let (top, bottom, baseline_ascent) = primary_strut.map_or_else(
+                    let bounds = primary_strut.map_or_else(
                         || {
                             let half_leading = (run_metrics.line_height
                                 - run_metrics.ascent
                                 - run_metrics.descent)
                                 * 0.5;
-                            (
-                                glyph_run.baseline() - run_metrics.ascent - half_leading,
-                                glyph_run.baseline() + run_metrics.descent + half_leading,
-                                run_metrics.ascent + half_leading,
-                            )
+                            InlineVerticalBounds {
+                                top: -run_metrics.ascent - half_leading,
+                                bottom: run_metrics.descent + half_leading,
+                            }
                         },
-                        |strut| {
-                            (
-                                glyph_run.baseline() - strut.line_ascent,
-                                glyph_run.baseline() + strut.line_descent,
-                                strut.line_ascent,
-                            )
-                        },
+                        InlineVerticalBounds::from_strut,
                     );
                     InlineItemVerticalGeometry {
-                        top,
-                        bottom,
-                        baseline_ascent: Some(baseline_ascent),
-                        uses_internal_atomic_baseline: false,
-                        intrinsic_baseline_adjustment: 0.0,
-                        vertical_align: glyph_run.style().brush.vertical_align,
+                        bounds,
+                        initial_top: glyph_run.baseline() + bounds.top,
+                        structural_parent: style_index
+                            .map_or(context.root_style, |index| context.style_parent(index)),
+                        edge_box: None,
+                        vertical_align: InlineVerticalAlign::default(),
                         // Parley may expose an empty root-style run next to
                         // float/out-of-flow placeholders. It carries the font
                         // style but no glyph geometry and is not in-flow line
                         // content by itself.
                         contributes_to_line: paint && style_index.is_some(),
                         creates_line: paint && style_index.is_some(),
-                        alignment_parent_strut: style_index
-                            .and_then(|index| context.style_alignment_parent_strut(index)),
                         glyph_key: if paint {
                             style_index.map(|index| (run.index(), index))
                         } else {
                             None
                         },
+                        anchor: LineVerticalAnchor::Root,
+                        relative_offset: 0.0,
                     }
                 }
                 PositionedLayoutItem::InlineBox(positioned) => {
@@ -609,21 +608,37 @@ pub(crate) fn build_inline_line_placements(
                         .and_then(|index| atomic_baseline_ascents.get(index).copied().flatten());
                     let is_atomic =
                         object.is_some_and(|object| object.role == InlineObjectRole::Atomic);
-                    let baseline_ascent =
-                        internal_baseline_ascent.or_else(|| is_atomic.then_some(positioned.height));
+                    let baseline_ascent = internal_baseline_ascent
+                        .or_else(|| is_atomic.then_some(positioned.height))
+                        .unwrap_or_default();
                     InlineItemVerticalGeometry {
-                        top: positioned.y,
-                        bottom: positioned.y + positioned.height,
-                        baseline_ascent,
-                        uses_internal_atomic_baseline: internal_baseline_ascent.is_some(),
-                        intrinsic_baseline_adjustment: internal_baseline_ascent
-                            .map(|ascent| positioned.height - ascent)
-                            .unwrap_or_default(),
-                        vertical_align: object
-                            .map(|object| object.vertical_align)
-                            .unwrap_or_default(),
-                        contributes_to_line: object
-                            .is_some_and(|object| object.role == InlineObjectRole::Atomic),
+                        bounds: if is_atomic {
+                            InlineVerticalBounds {
+                                top: -baseline_ascent,
+                                bottom: positioned.height - baseline_ascent,
+                            }
+                        } else {
+                            InlineVerticalBounds::ZERO
+                        },
+                        initial_top: positioned.y,
+                        structural_parent: object
+                            .and_then(|object| object.ancestors.last().copied())
+                            .unwrap_or(context.root_style),
+                        edge_box: object.and_then(|object| {
+                            matches!(
+                                object.role,
+                                InlineObjectRole::StartEdge | InlineObjectRole::EndEdge
+                            )
+                            .then_some(object.box_id)
+                        }),
+                        vertical_align: if is_atomic {
+                            object
+                                .map(|object| object.vertical_align)
+                                .unwrap_or_default()
+                        } else {
+                            InlineVerticalAlign::default()
+                        },
+                        contributes_to_line: is_atomic,
                         creates_line: object.is_some_and(|object| match object.role {
                             InlineObjectRole::Atomic => true,
                             InlineObjectRole::StartEdge | InlineObjectRole::EndEdge => object_index
@@ -632,9 +647,9 @@ pub(crate) fn build_inline_line_placements(
                                 .unwrap_or(false),
                             InlineObjectRole::Float | InlineObjectRole::OutOfFlow => false,
                         }),
-                        alignment_parent_strut: context
-                            .object_alignment_parent_strut(positioned.id),
                         glyph_key: None,
+                        anchor: LineVerticalAnchor::Root,
+                        relative_offset: 0.0,
                     }
                 }
             })
@@ -643,187 +658,169 @@ pub(crate) fn build_inline_line_placements(
             line.break_reason(),
             geometries.iter().any(|geometry| geometry.creates_line),
         );
-        // Every non-phantom CSS line starts with the IFC owner's zero-width font strut.
-        // Reconstruct it explicitly whenever this sidecar owns in-flow
-        // vertical geometry. Float and out-of-flow placeholders do not create
-        // a normal-flow line contribution and retain Parley's raw position.
-        let reconstructs_parent_strut = !phantom && context.parent_strut.is_some();
-        let root_parent_x_height = context
-            .parent_strut
-            .filter(|_| reconstructs_parent_strut)
-            .map(|strut| strut.x_height)
-            .or_else(|| {
-                line.items().find_map(|item| match item {
-                    PositionedLayoutItem::GlyphRun(glyph_run)
-                        if glyph_run.style().brush.paint
-                            && glyph_run.style().brush.vertical_align.kind
-                                == LayoutInlineAlignment::Baseline
-                            && glyph_run.style().brush.vertical_align.baseline_shift == 0.0 =>
-                    {
-                        glyph_run.run().metrics().x_height
-                    }
-                    PositionedLayoutItem::InlineBox(_) => None,
-                    PositionedLayoutItem::GlyphRun(_) => None,
-                })
-            })
-            .unwrap_or_else(|| (metrics.ascent * 0.5).max(0.0));
-        // Parley baseline-aligns every inline box before Moli applies
-        // CSS vertical-align. A tall atomic box can therefore inflate ascent
-        // and create synthetic negative leading, shifting the text baseline
-        // below the accumulated CSS line height. Undo only that atomic-box
-        // artifact; genuine negative font leading remains on the glyph run.
-        let has_atomic = line.items().any(|item| match item {
-            PositionedLayoutItem::InlineBox(positioned) => context
-                .object(positioned.id)
-                .is_some_and(|object| object.role == InlineObjectRole::Atomic),
-            PositionedLayoutItem::GlyphRun(_) => false,
-        });
-        let parley_baseline_adjustment = if has_atomic {
-            metrics.leading.min(0.0) * 0.5
-        } else {
-            0.0
-        };
-        for geometry in &mut geometries {
-            geometry.top += parley_baseline_adjustment;
-            geometry.bottom += parley_baseline_adjustment;
+        let mut states = build_line_inline_box_states(context, line.text_range(), &geometries);
+        let mut state_indices = BTreeMap::new();
+        for (index, state) in states.iter().enumerate() {
+            state_indices.insert(state.box_id.index(), index);
         }
-        let parley_parent_baseline = metrics.baseline + parley_baseline_adjustment;
-        let consumes_internal_atomic_baseline = geometries.iter().any(|geometry| {
-            geometry.uses_internal_atomic_baseline
-                && geometry.vertical_align.kind == LayoutInlineAlignment::Baseline
-                && geometry.vertical_align.baseline_shift == 0.0
-        });
-        let reconstructs_parent_baseline =
-            consumes_internal_atomic_baseline || reconstructs_parent_strut;
-        let baseline_ascent = reconstructs_parent_baseline
-            .then(|| {
-                geometries
-                    .iter()
-                    .filter(|geometry| {
-                        geometry.contributes_to_line
-                            && geometry.vertical_align.kind == LayoutInlineAlignment::Baseline
-                            && geometry.vertical_align.baseline_shift == 0.0
-                    })
-                    .filter_map(|geometry| geometry.baseline_ascent)
-                    .fold(
-                        context
-                            .parent_strut
-                            .filter(|_| reconstructs_parent_strut)
-                            .map(|strut| strut.line_ascent),
-                        |maximum, ascent| {
-                            Some(maximum.map_or(ascent, |maximum| maximum.max(ascent)))
-                        },
-                    )
-            })
-            .flatten();
-        let parent_baseline_adjustment = baseline_ascent
-            .map(|ascent| raw_top + ascent - parley_parent_baseline)
-            .unwrap_or_default();
-        let mut base_offsets = Vec::with_capacity(geometries.len());
-        for geometry in &mut geometries {
-            let intrinsic_baseline_adjustment =
-                if geometry.vertical_align.kind == LayoutInlineAlignment::Baseline {
-                    geometry.intrinsic_baseline_adjustment
-                } else {
-                    0.0
-                };
-            let offset = parent_baseline_adjustment + intrinsic_baseline_adjustment;
-            geometry.top += offset;
-            geometry.bottom += offset;
-            base_offsets.push(parley_baseline_adjustment + offset);
+        for state in &mut states {
+            state.parent = state_indices.get(&state.parent_box.index()).copied();
+            state.anchor = state
+                .parent
+                .map_or(LineVerticalAnchor::Root, LineVerticalAnchor::State);
         }
-        let parent_baseline = parley_parent_baseline + parent_baseline_adjustment;
-        let (parent_text_top, parent_text_bottom) = context
-            .parent_strut
-            .filter(|_| reconstructs_parent_strut)
-            .map(|strut| {
-                (
-                    parent_baseline - strut.text_ascent,
-                    parent_baseline + strut.text_descent,
-                )
-            })
-            .or_else(|| {
-                geometries
-                    .iter()
-                    .find(|geometry| {
-                        geometry.glyph_key.is_some()
-                            && geometry.vertical_align.kind == LayoutInlineAlignment::Baseline
-                            && geometry.vertical_align.baseline_shift == 0.0
-                    })
-                    .map(|geometry| (geometry.top, geometry.bottom))
-            })
-            .unwrap_or((raw_top, raw_bottom));
+        for geometry in &mut geometries {
+            geometry.anchor = geometry.edge_box.map_or_else(
+                || {
+                    state_indices
+                        .get(&geometry.structural_parent.index())
+                        .copied()
+                        .map_or(LineVerticalAnchor::Root, LineVerticalAnchor::State)
+                },
+                |box_id| {
+                    state_indices
+                        .get(&box_id.index())
+                        .copied()
+                        .map_or(LineVerticalAnchor::Root, LineVerticalAnchor::State)
+                },
+            );
+        }
 
-        // First position baseline-, text-edge-, and middle-aligned content.
-        // Top/bottom depend on the resulting aligned subtree and are resolved
-        // in the second pass, matching the ordering used by browser IFCs.
-        let (mut min_y, mut max_y) = if phantom {
-            (raw_top, raw_top)
-        } else {
+        let fallback_root_bounds = InlineVerticalBounds {
+            top: -metrics.ascent - metrics.leading * 0.5,
+            bottom: metrics.descent + metrics.leading * 0.5,
+        };
+        let mut root_bounds = (!phantom).then(|| {
             context
                 .parent_strut
-                .filter(|_| reconstructs_parent_strut)
-                .map_or((raw_top, raw_bottom), |strut| {
-                    (
-                        parent_baseline - strut.line_ascent,
-                        parent_baseline + strut.line_descent,
-                    )
-                })
-        };
-        let mut item_offsets = base_offsets;
-        for (item_index, geometry) in geometries.iter().enumerate() {
+                .map_or(fallback_root_bounds, InlineVerticalBounds::from_strut)
+        });
+        for state in &mut states {
+            state.metrics = (!phantom)
+                .then_some(state.strut)
+                .flatten()
+                .map(InlineVerticalBounds::from_strut);
+        }
+
+        // One pending list per structural target plus one for the root line
+        // box. Top/bottom descendants are resolved only after the target's
+        // other aligned descendants have established its subtree metrics.
+        let root_pending_index = states.len();
+        let mut pending = vec![Vec::<PendingLineAlignment>::new(); states.len() + 1];
+
+        for (item_index, geometry) in geometries.iter_mut().enumerate() {
+            if !geometry.contributes_to_line {
+                continue;
+            }
+            let parent = match geometry.anchor {
+                LineVerticalAnchor::State(index) => Some(index),
+                LineVerticalAnchor::Root => None,
+            };
             if matches!(
                 geometry.vertical_align.kind,
                 LayoutInlineAlignment::Top | LayoutInlineAlignment::Bottom
             ) {
+                let target =
+                    nearest_top_or_bottom_target(&states, parent).unwrap_or(root_pending_index);
+                pending[target].push(PendingLineAlignment {
+                    member: PendingLineMember::Item(item_index),
+                    bounds: geometry.bounds,
+                    vertical_align: geometry.vertical_align,
+                });
                 continue;
             }
-            let (alignment_text_top, alignment_text_bottom, alignment_x_height) = geometry
-                .alignment_parent_strut
-                .map(|strut| {
-                    (
-                        parent_baseline - strut.text_ascent,
-                        parent_baseline + strut.text_descent,
-                        strut.x_height,
-                    )
-                })
-                .unwrap_or((parent_text_top, parent_text_bottom, root_parent_x_height));
             let offset = non_edge_vertical_offset(
                 geometry.vertical_align,
-                parent_baseline,
-                alignment_text_top,
-                alignment_text_bottom,
-                alignment_x_height,
-                geometry.top,
-                geometry.bottom,
+                alignment_reference(context, &states, parent),
+                geometry.bounds,
             );
-            item_offsets[item_index] += offset;
-            if geometry.contributes_to_line {
-                min_y = min_y.min(geometry.top + offset);
-                max_y = max_y.max(geometry.bottom + offset);
-            }
+            geometry.relative_offset = offset;
+            include_in_parent(
+                geometry.bounds.shifted(offset),
+                parent,
+                &mut states,
+                &mut root_bounds,
+            );
         }
-        for (item_index, geometry) in geometries.iter().enumerate() {
-            let offset = match geometry.vertical_align.kind {
-                LayoutInlineAlignment::Top => {
-                    min_y - geometry.top - geometry.vertical_align.baseline_shift
-                }
-                LayoutInlineAlignment::Bottom => {
-                    max_y - geometry.bottom - geometry.vertical_align.baseline_shift
-                }
-                _ => continue,
+
+        let mut state_order = (0..states.len()).collect::<Vec<_>>();
+        state_order.sort_by_key(|index| std::cmp::Reverse(states[*index].depth));
+        for state_index in state_order.iter().copied() {
+            let target_pending = std::mem::take(&mut pending[state_index]);
+            let mut target_metrics = states[state_index].metrics.take();
+            resolve_pending_alignments(
+                target_pending,
+                LineVerticalAnchor::State(state_index),
+                &mut target_metrics,
+                &mut states,
+                &mut geometries,
+            );
+            states[state_index].metrics = target_metrics;
+
+            let Some(state_bounds) = states[state_index].metrics else {
+                continue;
             };
-            item_offsets[item_index] += offset;
-            if geometry.contributes_to_line {
-                min_y = min_y.min(geometry.top + offset);
-                max_y = max_y.max(geometry.bottom + offset);
+            let parent = states[state_index].parent;
+            let vertical_align = states[state_index].vertical_align;
+            if matches!(
+                vertical_align.kind,
+                LayoutInlineAlignment::Top | LayoutInlineAlignment::Bottom
+            ) {
+                let target =
+                    nearest_top_or_bottom_target(&states, parent).unwrap_or(root_pending_index);
+                pending[target].push(PendingLineAlignment {
+                    member: PendingLineMember::State(state_index),
+                    bounds: state_bounds,
+                    vertical_align,
+                });
+                continue;
             }
+            let offset = non_edge_vertical_offset(
+                vertical_align,
+                alignment_reference(context, &states, parent),
+                state_bounds,
+            );
+            states[state_index].relative_offset = offset;
+            include_in_parent(
+                state_bounds.shifted(offset),
+                parent,
+                &mut states,
+                &mut root_bounds,
+            );
         }
-        let line_height = (max_y - min_y).max(0.0);
-        let line_content_offset = preceding_adjustment + raw_top - min_y;
-        for offset in &mut item_offsets {
-            *offset += line_content_offset;
+
+        resolve_pending_alignments(
+            std::mem::take(&mut pending[root_pending_index]),
+            LineVerticalAnchor::Root,
+            &mut root_bounds,
+            &mut states,
+            &mut geometries,
+        );
+
+        let bounds = if phantom {
+            InlineVerticalBounds::ZERO
+        } else {
+            root_bounds.unwrap_or(fallback_root_bounds)
+        };
+        let line_height = bounds.height();
+        let root_baseline = raw_top + preceding_adjustment - bounds.top;
+
+        let mut ascending_states = (0..states.len()).collect::<Vec<_>>();
+        ascending_states.sort_by_key(|index| states[*index].depth);
+        for state_index in ascending_states {
+            states[state_index].global_offset = states[state_index].relative_offset
+                + anchor_global_offset(states[state_index].anchor, &states);
         }
+        let item_offsets = geometries
+            .iter()
+            .map(|geometry| {
+                let desired_top = root_baseline
+                    + anchor_global_offset(geometry.anchor, &states)
+                    + geometry.relative_offset
+                    + geometry.bounds.top;
+                desired_top - geometry.initial_top
+            })
+            .collect::<Vec<_>>();
         let glyph_offsets = geometries
             .iter()
             .zip(&item_offsets)
@@ -844,11 +841,9 @@ pub(crate) fn build_inline_line_placements(
                 metrics.advance,
                 line_height,
             ),
-            baseline: parent_baseline + line_content_offset,
+            baseline: root_baseline,
             phantom,
-            content_offset: parley_baseline_adjustment
-                + parent_baseline_adjustment
-                + line_content_offset,
+            content_offset: root_baseline - metrics.baseline,
             item_offsets,
             glyph_offsets,
         });
@@ -861,11 +856,14 @@ pub(crate) fn build_inline_line_placements(
 
 #[derive(Clone, Copy, Debug)]
 struct InlineItemVerticalGeometry {
-    top: f32,
-    bottom: f32,
-    baseline_ascent: Option<f32>,
-    uses_internal_atomic_baseline: bool,
-    intrinsic_baseline_adjustment: f32,
+    /// Line-height bounds relative to this item's own alignment baseline.
+    bounds: InlineVerticalBounds,
+    /// Parley's original block-start coordinate for converting the resolved
+    /// baseline back into an item delta.
+    initial_top: f32,
+    structural_parent: LayoutBoxId,
+    /// Structural edges track their own box baseline rather than their parent.
+    edge_box: Option<LayoutBoxId>,
     vertical_align: InlineVerticalAlign,
     /// Whether this item supplies block-axis geometry to the line.
     contributes_to_line: bool,
@@ -873,8 +871,247 @@ struct InlineItemVerticalGeometry {
     /// Structural inline edges with non-zero inline-axis decorations create a
     /// line without themselves affecting its block-axis height.
     creates_line: bool,
-    alignment_parent_strut: Option<InlineStrutMetrics>,
     glyph_key: Option<(usize, usize)>,
+    anchor: LineVerticalAnchor,
+    relative_offset: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct LineInlineBoxState {
+    box_id: LayoutBoxId,
+    parent_box: LayoutBoxId,
+    parent: Option<usize>,
+    depth: usize,
+    vertical_align: InlineVerticalAlign,
+    strut: Option<InlineStrutMetrics>,
+    metrics: Option<InlineVerticalBounds>,
+    anchor: LineVerticalAnchor,
+    relative_offset: f32,
+    global_offset: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum LineVerticalAnchor {
+    Root,
+    State(usize),
+}
+
+#[derive(Clone, Copy, Debug)]
+enum PendingLineMember {
+    State(usize),
+    Item(usize),
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PendingLineAlignment {
+    member: PendingLineMember,
+    bounds: InlineVerticalBounds,
+    vertical_align: InlineVerticalAlign,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct InlineVerticalBounds {
+    top: f32,
+    bottom: f32,
+}
+
+impl InlineVerticalBounds {
+    const ZERO: Self = Self {
+        top: 0.0,
+        bottom: 0.0,
+    };
+
+    fn from_strut(strut: InlineStrutMetrics) -> Self {
+        Self {
+            top: -strut.line_ascent,
+            bottom: strut.line_descent,
+        }
+    }
+
+    fn shifted(self, offset: f32) -> Self {
+        Self {
+            top: self.top + offset,
+            bottom: self.bottom + offset,
+        }
+    }
+
+    fn height(self) -> f32 {
+        (self.bottom - self.top).max(0.0)
+    }
+
+    fn include(&mut self, other: Self) {
+        self.top = self.top.min(other.top);
+        self.bottom = self.bottom.max(other.bottom);
+    }
+}
+
+fn build_line_inline_box_states(
+    context: &InlineFormattingContext,
+    line_range: Range<usize>,
+    geometries: &[InlineItemVerticalGeometry],
+) -> Vec<LineInlineBoxState> {
+    let mut present = std::collections::BTreeSet::new();
+    for unit in &context.text_units {
+        if ranges_overlap(&unit.output_range, &line_range) {
+            for ancestor in &unit.ancestors {
+                mark_structural_path(context, *ancestor, &mut present);
+            }
+        }
+    }
+    for geometry in geometries {
+        mark_structural_path(context, geometry.structural_parent, &mut present);
+        if let Some(box_id) = geometry.edge_box {
+            mark_structural_path(context, box_id, &mut present);
+        }
+    }
+
+    context
+        .structural_boxes
+        .iter()
+        .filter(|state| present.contains(&state.box_id.index()))
+        .map(|state| LineInlineBoxState {
+            box_id: state.box_id,
+            parent_box: state.parent,
+            parent: None,
+            depth: structural_box_depth(context, state.box_id),
+            vertical_align: state.vertical_align,
+            strut: state.strut,
+            metrics: None,
+            anchor: LineVerticalAnchor::Root,
+            relative_offset: 0.0,
+            global_offset: 0.0,
+        })
+        .collect()
+}
+
+fn mark_structural_path(
+    context: &InlineFormattingContext,
+    mut box_id: LayoutBoxId,
+    present: &mut std::collections::BTreeSet<usize>,
+) {
+    while box_id != context.root_style {
+        let Some(state) = context.structural_box(box_id) else {
+            break;
+        };
+        present.insert(box_id.index());
+        box_id = state.parent;
+    }
+}
+
+fn structural_box_depth(context: &InlineFormattingContext, mut box_id: LayoutBoxId) -> usize {
+    let mut depth = 0;
+    while box_id != context.root_style {
+        let Some(state) = context.structural_box(box_id) else {
+            break;
+        };
+        depth += 1;
+        box_id = state.parent;
+    }
+    depth
+}
+
+fn alignment_reference(
+    context: &InlineFormattingContext,
+    states: &[LineInlineBoxState],
+    parent: Option<usize>,
+) -> Option<InlineStrutMetrics> {
+    parent
+        .and_then(|index| states.get(index).and_then(|state| state.strut))
+        .or_else(|| parent.is_none().then_some(context.parent_strut).flatten())
+}
+
+fn include_in_parent(
+    bounds: InlineVerticalBounds,
+    parent: Option<usize>,
+    states: &mut [LineInlineBoxState],
+    root_bounds: &mut Option<InlineVerticalBounds>,
+) {
+    let target = parent
+        .and_then(|index| states.get_mut(index).map(|state| &mut state.metrics))
+        .unwrap_or(root_bounds);
+    match target {
+        Some(metrics) => metrics.include(bounds),
+        None => *target = Some(bounds),
+    }
+}
+
+fn nearest_top_or_bottom_target(
+    states: &[LineInlineBoxState],
+    mut parent: Option<usize>,
+) -> Option<usize> {
+    while let Some(index) = parent {
+        let state = &states[index];
+        if matches!(
+            state.vertical_align.kind,
+            LayoutInlineAlignment::Top | LayoutInlineAlignment::Bottom
+        ) {
+            return Some(index);
+        }
+        parent = state.parent;
+    }
+    None
+}
+
+fn resolve_pending_alignments(
+    pending: Vec<PendingLineAlignment>,
+    target_anchor: LineVerticalAnchor,
+    target_metrics: &mut Option<InlineVerticalBounds>,
+    states: &mut [LineInlineBoxState],
+    geometries: &mut [InlineItemVerticalGeometry],
+) {
+    if pending.is_empty() {
+        return;
+    }
+    let aligned = target_metrics.unwrap_or(InlineVerticalBounds::ZERO);
+    let mut maximum = aligned;
+    for child in &pending {
+        let height = child.bounds.height();
+        if height <= maximum.height() {
+            continue;
+        }
+        maximum = match child.vertical_align.kind {
+            LayoutInlineAlignment::Top => InlineVerticalBounds {
+                top: aligned.top,
+                bottom: aligned.top + height,
+            },
+            LayoutInlineAlignment::Bottom => InlineVerticalBounds {
+                top: aligned.bottom - height,
+                bottom: aligned.bottom,
+            },
+            _ => maximum,
+        };
+    }
+    for child in pending {
+        let offset = match child.vertical_align.kind {
+            LayoutInlineAlignment::Top => maximum.top - child.bounds.top,
+            LayoutInlineAlignment::Bottom => maximum.bottom - child.bounds.bottom,
+            _ => 0.0,
+        } - child.vertical_align.baseline_shift;
+        match child.member {
+            PendingLineMember::State(index) => {
+                states[index].anchor = target_anchor;
+                states[index].relative_offset = offset;
+            }
+            PendingLineMember::Item(index) => {
+                geometries[index].anchor = target_anchor;
+                geometries[index].relative_offset = offset;
+            }
+        }
+        let shifted = child.bounds.shifted(offset);
+        match target_metrics {
+            Some(metrics) => metrics.include(shifted),
+            None => *target_metrics = Some(shifted),
+        }
+    }
+}
+
+fn anchor_global_offset(anchor: LineVerticalAnchor, states: &[LineInlineBoxState]) -> f32 {
+    match anchor {
+        LineVerticalAnchor::Root => 0.0,
+        LineVerticalAnchor::State(index) => {
+            states.get(index).map_or(0.0, |state| state.global_offset)
+        }
+    }
 }
 
 /// CSS line boxes ending in a preserved newline exist even when they contain
@@ -886,21 +1123,19 @@ fn css_line_is_phantom(break_reason: BreakReason, has_in_flow_content: bool) -> 
 
 fn non_edge_vertical_offset(
     vertical_align: InlineVerticalAlign,
-    parent_baseline: f32,
-    parent_text_top: f32,
-    parent_text_bottom: f32,
-    parent_x_height: f32,
-    item_top: f32,
-    item_bottom: f32,
+    parent: Option<InlineStrutMetrics>,
+    item: InlineVerticalBounds,
 ) -> f32 {
     let baseline_shift = -vertical_align.baseline_shift;
+    let (parent_text_top, parent_text_bottom, parent_x_height) = parent
+        .map_or((0.0, 0.0, 0.0), |strut| {
+            (-strut.text_ascent, strut.text_descent, strut.x_height)
+        });
     let alignment_shift = match vertical_align.kind {
         LayoutInlineAlignment::Baseline => 0.0,
-        LayoutInlineAlignment::TextTop => parent_text_top - item_top,
-        LayoutInlineAlignment::Middle => {
-            parent_baseline - parent_x_height * 0.5 - (item_top + item_bottom) * 0.5
-        }
-        LayoutInlineAlignment::TextBottom => parent_text_bottom - item_bottom,
+        LayoutInlineAlignment::TextTop => parent_text_top - item.top,
+        LayoutInlineAlignment::Middle => -parent_x_height * 0.5 - (item.top + item.bottom) * 0.5,
+        LayoutInlineAlignment::TextBottom => parent_text_bottom - item.bottom,
         LayoutInlineAlignment::Top | LayoutInlineAlignment::Bottom => 0.0,
     };
     alignment_shift + baseline_shift
@@ -1023,31 +1258,28 @@ impl InlineBuildInput {
         parley.resolve_system_font_families(&mut root_text_style);
         let quantize = true;
         let mut styles = Vec::new();
-        let mut style_alignment_parents = Vec::new();
+        let mut style_parents = Vec::new();
         let mut style_slots = Vec::with_capacity(self.units.len());
         for unit in &self.units {
             let mut style = world.boxes[unit.style_box.index()]
                 .style
                 .parley_text_style();
-            // `vertical-align` is not inherited, but moving an inline box
-            // moves all of its descendants. Compose the structural inline
-            // ancestry without forcing a shaping boundary for equivalent
-            // paths.
-            let (vertical_align, alignment_parent) =
-                resolve_vertical_align(world, self.root_style, unit.ancestors.iter().copied());
-            style.brush.vertical_align = vertical_align;
+            // `vertical-align` belongs to the structural inline box, not to
+            // each descendant glyph. Keep glyphs baseline-aligned within their
+            // direct box state; closing that state moves the complete subtree.
             style.brush.paint = !unit.control;
             parley.resolve_system_font_families(&mut style);
+            let structural_parent = unit.ancestors.last().copied().unwrap_or(self.root_style);
             let style_slot = styles
                 .iter()
                 .enumerate()
                 .position(|(index, candidate)| {
-                    *candidate == style && style_alignment_parents[index] == alignment_parent
+                    *candidate == style && style_parents[index] == structural_parent
                 })
                 .unwrap_or_else(|| {
                     let index = styles.len();
                     styles.push(style);
-                    style_alignment_parents.push(alignment_parent);
+                    style_parents.push(structural_parent);
                     index
                 });
             style_slots.push(style_slot);
@@ -1103,47 +1335,31 @@ impl InlineBuildInput {
             .map(|(style, sample)| parley.inline_font_metrics(style, sample))
             .collect();
         let parent_strut = measure_inline_strut(parley, root_text_style.clone(), quantize);
-        let style_alignment_parent_struts = styles
-            .iter()
-            .zip(&style_alignment_parents)
-            .map(|(style, parent)| {
-                if style.brush.vertical_align.kind == LayoutInlineAlignment::Baseline {
-                    None
-                } else {
-                    measure_alignment_parent_strut(
-                        parley,
-                        world,
-                        *parent,
-                        self.root_style,
-                        parent_strut,
-                        quantize,
-                    )
-                }
-            })
-            .collect();
-        let object_alignment_parent_struts = self
-            .objects
-            .iter()
-            .map(|(_, object, _)| {
-                if object.vertical_align.kind == LayoutInlineAlignment::Baseline {
-                    return None;
-                }
-                measure_alignment_parent_strut(
-                    parley,
-                    world,
-                    object.alignment_parent,
-                    self.root_style,
-                    parent_strut,
-                    quantize,
-                )
-            })
-            .collect();
+        let mut structural_boxes = Vec::new();
+        for (_, object, _) in &self.objects {
+            if object.role != InlineObjectRole::StartEdge
+                || structural_boxes
+                    .iter()
+                    .any(|state: &InlineStructuralBox| state.box_id == object.box_id)
+            {
+                continue;
+            }
+            let mut style = world.boxes[object.box_id.index()].style.parley_text_style();
+            parley.resolve_system_font_families(&mut style);
+            structural_boxes.push(InlineStructuralBox {
+                box_id: object.box_id,
+                parent: object.ancestors.last().copied().unwrap_or(self.root_style),
+                vertical_align: object.vertical_align,
+                strut: measure_inline_strut(parley, style, quantize),
+            });
+        }
         let objects = self
             .objects
             .drain(..)
             .map(|(_, object, _)| object)
             .collect();
         InlineFormattingContext {
+            root_style: self.root_style,
             unbroken: layout,
             laid_out: None,
             text_units: self.units,
@@ -1152,8 +1368,8 @@ impl InlineBuildInput {
             objects,
             font_metrics,
             parent_strut,
-            object_alignment_parent_struts,
-            style_alignment_parent_struts,
+            style_parents,
+            structural_boxes,
             line_placements: Vec::new(),
             fragments: InlineFragments::default(),
         }
@@ -1167,25 +1383,6 @@ fn measure_inline_strut(
 ) -> Option<InlineStrutMetrics> {
     let metrics = parley.inline_font_metrics(&style, None)?;
     Some(inline_strut_metrics(metrics, quantize))
-}
-
-fn measure_alignment_parent_strut<N>(
-    parley: &mut crate::text::ParleyDocumentServices,
-    world: &LayoutWorld<N>,
-    parent: LayoutBoxId,
-    root: LayoutBoxId,
-    root_strut: Option<InlineStrutMetrics>,
-    quantize: bool,
-) -> Option<InlineStrutMetrics>
-where
-    N: Copy + Debug + Eq + Hash,
-{
-    if parent == root {
-        return root_strut;
-    }
-    let mut style = world.boxes[parent.index()].style.parley_text_style();
-    parley.resolve_system_font_families(&mut style);
-    measure_inline_strut(parley, style, quantize)
 }
 
 fn inline_strut_metrics(metrics: InlineFontMetrics, quantize: bool) -> InlineStrutMetrics {
@@ -1320,30 +1517,24 @@ fn collect_box<N>(
     }
 
     if world.boxes[id.index()].style.is_floated() {
-        let (vertical_align, alignment_parent) =
-            resolve_vertical_align(world, owner, ancestors.iter().copied());
         normalizer.push_object(
             id,
             InlineObjectRole::Float,
             InlineBoxKind::CustomOutOfFlow,
             ancestors,
-            vertical_align,
-            alignment_parent,
+            world.boxes[id.index()].style.vertical_align(),
         );
         return;
     }
 
     let out_of_flow = world.boxes[id.index()].style.is_out_of_flow();
     if out_of_flow {
-        let (vertical_align, alignment_parent) =
-            resolve_vertical_align(world, owner, ancestors.iter().copied());
         normalizer.push_object(
             id,
             InlineObjectRole::OutOfFlow,
             InlineBoxKind::OutOfFlow,
             ancestors,
-            vertical_align,
-            alignment_parent,
+            world.boxes[id.index()].style.vertical_align(),
         );
         return;
     }
@@ -1356,35 +1547,24 @@ fn collect_box<N>(
                 | LayoutBoxKind::InlineTableWrapper
         );
     if !structural_inline {
-        let (vertical_align, alignment_parent) = resolve_vertical_align(
-            world,
-            owner,
-            ancestors.iter().copied().chain(std::iter::once(id)),
-        );
         normalizer.push_object(
             id,
             InlineObjectRole::Atomic,
             InlineBoxKind::InFlow,
             ancestors,
-            vertical_align,
-            alignment_parent,
+            world.boxes[id.index()].style.vertical_align(),
         );
         return;
     }
 
     world.boxes[id.index()].inline_flattened = true;
-    let (vertical_align, alignment_parent) = resolve_vertical_align(
-        world,
-        owner,
-        ancestors.iter().copied().chain(std::iter::once(id)),
-    );
+    let vertical_align = world.boxes[id.index()].style.vertical_align();
     normalizer.open_inline(
         id,
         world.boxes[id.index()].style.unicode_bidi(),
         world.boxes[id.index()].style.direction(),
         ancestors,
         vertical_align,
-        alignment_parent,
     );
     ancestors.push(id);
     let children = world.boxes[id.index()].children.clone();
@@ -1397,30 +1577,7 @@ fn collect_box<N>(
         world.boxes[id.index()].style.unicode_bidi(),
         ancestors,
         vertical_align,
-        alignment_parent,
     );
-}
-
-fn resolve_vertical_align<N>(
-    world: &LayoutWorld<N>,
-    root: LayoutBoxId,
-    path: impl IntoIterator<Item = LayoutBoxId>,
-) -> (InlineVerticalAlign, LayoutBoxId)
-where
-    N: Copy + Debug + Eq + Hash,
-{
-    let mut alignment = InlineVerticalAlign::default();
-    let mut structural_parent = root;
-    let mut alignment_parent = root;
-    for box_id in path {
-        let descendant = world.boxes[box_id.index()].style.vertical_align();
-        if descendant.kind != LayoutInlineAlignment::Baseline {
-            alignment_parent = structural_parent;
-        }
-        alignment = alignment.compose(descendant);
-        structural_parent = box_id;
-    }
-    (alignment, alignment_parent)
 }
 
 struct PendingWhitespace {
@@ -1689,7 +1846,6 @@ impl InlineNormalizer {
         direction: InlineDirection,
         ancestors: &[LayoutBoxId],
         vertical_align: InlineVerticalAlign,
-        alignment_parent: LayoutBoxId,
     ) {
         // CSS Writing Modes injects the opening bidi controls outside the
         // inline box boundary. Keep the opaque item order aligned with
@@ -1703,7 +1859,6 @@ impl InlineNormalizer {
             InlineBoxKind::InFlow,
             ancestors,
             vertical_align,
-            alignment_parent,
         );
     }
 
@@ -1713,7 +1868,6 @@ impl InlineNormalizer {
         bidi: InlineUnicodeBidi,
         ancestors: &[LayoutBoxId],
         vertical_align: InlineVerticalAlign,
-        alignment_parent: LayoutBoxId,
     ) {
         // Close the inline box before leaving its injected bidi context.
         self.push_object(
@@ -1722,7 +1876,6 @@ impl InlineNormalizer {
             InlineBoxKind::InFlow,
             ancestors,
             vertical_align,
-            alignment_parent,
         );
         for control in bidi_close(bidi) {
             self.append_unit(box_id, control, ancestors, Vec::new(), true);
@@ -1736,7 +1889,6 @@ impl InlineNormalizer {
         kind: InlineBoxKind,
         ancestors: &[LayoutBoxId],
         vertical_align: InlineVerticalAlign,
-        alignment_parent: LayoutBoxId,
     ) {
         self.flush_pending_carriage_return();
         if matches!(
@@ -1753,7 +1905,6 @@ impl InlineNormalizer {
                 role,
                 ancestors: ancestors.to_vec(),
                 vertical_align,
-                alignment_parent,
             },
             kind,
         ));
@@ -2042,7 +2193,6 @@ mod tests {
             InlineDirection::Ltr,
             &[],
             InlineVerticalAlign::default(),
-            root,
         );
         normalizer.push_text(
             first_text,
@@ -2056,7 +2206,6 @@ mod tests {
             InlineUnicodeBidi::Normal,
             &[],
             InlineVerticalAlign::default(),
-            root,
         );
         normalizer.push_text(
             outer_space,
@@ -2071,7 +2220,6 @@ mod tests {
             InlineDirection::Ltr,
             &[],
             InlineVerticalAlign::default(),
-            root,
         );
         normalizer.push_text(
             second_text,
@@ -2085,7 +2233,6 @@ mod tests {
             InlineUnicodeBidi::Embed,
             &[],
             InlineVerticalAlign::default(),
-            root,
         );
         normalizer.push_text(
             trailing_text,

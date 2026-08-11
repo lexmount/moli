@@ -155,19 +155,6 @@ pub(crate) struct InlineVerticalAlign {
     pub(crate) baseline_shift: f32,
 }
 
-impl InlineVerticalAlign {
-    pub(crate) fn compose(self, descendant: Self) -> Self {
-        Self {
-            kind: if descendant.kind == LayoutInlineAlignment::Baseline {
-                self.kind
-            } else {
-                descendant.kind
-            },
-            baseline_shift: self.baseline_shift + descendant.baseline_shift,
-        }
-    }
-}
-
 /// CSS display classification retained across box construction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LayoutDisplay {
@@ -1358,14 +1345,13 @@ impl ResolvedLayoutStyle {
         &self,
     ) -> parley::TextStyle<'static, 'static, crate::stylo_to_parley::TextBrush> {
         if let Some(computed) = self.computed.as_ref() {
-            return crate::stylo_to_parley::text_style(computed, self.vertical_align);
+            return crate::stylo_to_parley::text_style(computed);
         }
         parley::TextStyle {
             font_size: self.font_size,
             line_height: parley::LineHeight::Absolute(self.line_height),
             brush: crate::stylo_to_parley::TextBrush {
                 color: self.text_color,
-                vertical_align: self.vertical_align,
                 paint: true,
                 synthetic_bold: false,
                 decoration: crate::stylo_to_parley::TextDecorationBrush::default(),

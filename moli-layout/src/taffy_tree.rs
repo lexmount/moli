@@ -2343,6 +2343,7 @@ fn single_subject_block_alignment_offset(alignment: Option<AlignContent>, free_s
 
 fn empty_inline_context() -> InlineFormattingContext {
     InlineFormattingContext {
+        root_style: LayoutBoxId::from_index(0),
         unbroken: parley::Layout::default(),
         laid_out: None,
         text_units: Vec::new(),
@@ -2351,8 +2352,8 @@ fn empty_inline_context() -> InlineFormattingContext {
         objects: Vec::new(),
         font_metrics: Vec::new(),
         parent_strut: None,
-        object_alignment_parent_struts: Vec::new(),
-        style_alignment_parent_struts: Vec::new(),
+        style_parents: Vec::new(),
+        structural_boxes: Vec::new(),
         line_placements: Vec::new(),
         fragments: InlineFragments::default(),
     }
