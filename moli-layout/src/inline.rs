@@ -9,7 +9,7 @@
 
 use std::{collections::BTreeMap, fmt::Debug, hash::Hash, ops::Range};
 
-use parley::{InlineBox, InlineBoxKind, Layout, PositionedLayoutItem, TextStyle};
+use parley::{BreakReason, InlineBox, InlineBoxKind, Layout, PositionedLayoutItem, TextStyle};
 use taffy::{MaybeResolve as _, Point, Size};
 
 use crate::{
@@ -625,7 +625,10 @@ pub(crate) fn build_inline_line_placements(
                 }
             })
             .collect::<Vec<_>>();
-        let phantom = !geometries.iter().any(|geometry| geometry.creates_line);
+        let phantom = css_line_is_phantom(
+            line.break_reason(),
+            geometries.iter().any(|geometry| geometry.creates_line),
+        );
         // Every non-phantom CSS line starts with the IFC owner's zero-width font strut.
         // Reconstruct it explicitly whenever this sidecar owns in-flow
         // vertical geometry. Float and out-of-flow placeholders do not create
@@ -858,6 +861,13 @@ struct InlineItemVerticalGeometry {
     creates_line: bool,
     alignment_parent_strut: Option<InlineStrutMetrics>,
     glyph_key: Option<(usize, usize)>,
+}
+
+/// CSS line boxes ending in a preserved newline exist even when they contain
+/// no paintable item. Parley's explicit break reason covers both preserved
+/// segment breaks and the normalized `<br>` control.
+fn css_line_is_phantom(break_reason: BreakReason, has_in_flow_content: bool) -> bool {
+    !has_in_flow_content && break_reason != BreakReason::Explicit
 }
 
 fn non_edge_vertical_offset(
@@ -1757,6 +1767,40 @@ mod tests {
             ),
             4.0,
         );
+    }
+
+    #[test]
+    fn explicit_break_prevents_an_otherwise_empty_line_from_being_phantom() {
+        assert!(!css_line_is_phantom(BreakReason::Explicit, false));
+        assert!(css_line_is_phantom(BreakReason::None, false));
+        assert!(!css_line_is_phantom(BreakReason::None, true));
+    }
+
+    #[test]
+    fn parley_forced_break_and_optional_editor_tail_map_to_css_phantom_lines() {
+        let text = "\n";
+        let mut font_context = parley::FontContext::new();
+        let mut layout_context = parley::LayoutContext::<TextBrush>::new();
+        let mut builder = layout_context.style_run_builder(&mut font_context, text, 1.0, true);
+        let style = builder.push_style(TextStyle::default());
+        builder.push_style_run(style, ..);
+        let mut layout = builder.build(text);
+        layout.break_all_lines(None);
+
+        let mut lines = layout.lines();
+        let forced_break_line = lines.next().expect("preserved newline must create a line");
+        assert_eq!(forced_break_line.break_reason(), BreakReason::Explicit);
+        assert!(!css_line_is_phantom(
+            forced_break_line.break_reason(),
+            false,
+        ));
+        for editor_tail in lines {
+            let break_reason = editor_tail.break_reason();
+            assert!(
+                css_line_is_phantom(break_reason, false),
+                "Parley editor tail must not become an extra CSS line box: {break_reason:?}"
+            );
+        }
     }
 
     fn normalize(

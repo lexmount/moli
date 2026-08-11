@@ -3246,6 +3246,16 @@ html,body{{margin:0;padding:0}}
             r#"#wrap-root{width:40px;word-break:break-all}#wrap{padding:0 1px;border-left:1px solid;border-right:1px solid;background:rgb(91,92,93);color:rgb(101,102,103)}"#,
             "<div id=wrap-root class=fixed><span id=wrap>ABCDE</span></div>",
         )?;
+        let preserved_break_baseline = render(
+            &mut page_vm,
+            r#"
+#baseline-wrapper{width:200px;font-size:0;line-height:0;background:rgb(111,112,113)}
+#baseline-text,#baseline-break{display:inline-block;width:100px;height:200px}
+#baseline-text{background:rgb(121,122,123)}
+#baseline-break{white-space:pre;background:rgb(131,132,133)}
+"#,
+            "<div id=baseline-wrapper><div id=baseline-text>text</div><div id=baseline-break>\n</div></div>",
+        )?;
         let rgb = |red: u8, green: u8, blue: u8| {
             moli_layout::PaintColor::new(
                 f32::from(red) / 255.0,
@@ -3483,6 +3493,16 @@ html,body{{margin:0;padding:0}}
                 (0.0, 36.0),
                 (12.0, 36.0),
             ],
+        );
+        assert_rects(
+            "zero-sized text inline-block baseline",
+            &solid_rects(&preserved_break_baseline, rgb(121, 122, 123)),
+            &[(0.0, 0.0, 100.0, 200.0)],
+        );
+        assert_rects(
+            "preserved-break inline-block baseline",
+            &solid_rects(&preserved_break_baseline, rgb(131, 132, 133)),
+            &[(100.0, 0.0, 100.0, 200.0)],
         );
         assert_eq!(
             page_vm.vm_mut().document_web_font_counts_for_test(),

@@ -16,6 +16,7 @@ use crate::{
     LayoutAnonymousReason, LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic, LayoutDisplay,
     LayoutElementCategory, LayoutElementSemantics, LayoutError, LayoutPseudo, LayoutSource,
     LayoutSourceKind, LayoutStyleResolver, LayoutWorld, ResolvedLayoutStyle,
+    style::InlineWhiteSpaceCollapse,
 };
 use style::values::generics::image::GenericImage;
 
@@ -588,13 +589,13 @@ where
             }
             return Ok(children
                 .into_iter()
-                .filter(|id| !self.is_whitespace_text(world, *id))
+                .filter(|id| !self.is_ignorable_whitespace_text(world, *id))
                 .collect());
         }
         if !has_inline {
             return Ok(children
                 .into_iter()
-                .filter(|id| !self.is_whitespace_text(world, *id))
+                .filter(|id| !self.is_ignorable_whitespace_text(world, *id))
                 .collect());
         }
 
@@ -697,7 +698,10 @@ where
         if run.is_empty() {
             return Ok(());
         }
-        if run.iter().all(|id| self.is_whitespace_text(world, *id)) {
+        if run
+            .iter()
+            .all(|id| self.is_ignorable_whitespace_text(world, *id))
+        {
             run.clear();
             return Ok(());
         }
@@ -756,7 +760,7 @@ where
             // whitespace in the same anonymous table wrapper. A real text run
             // still terminates that wrapper. This mirrors LayoutObject's
             // anonymous-table reuse after whitespace suppression.
-            if self.is_whitespace_text(world, child)
+            if self.is_ignorable_whitespace_text(world, child)
                 && output.last().copied().is_some_and(|last| {
                     world.box_by_id(last).is_some_and(|layout_box| {
                         layout_box.kind == LayoutBoxKind::AnonymousTableWrapper
@@ -768,7 +772,7 @@ where
                 let next_table_part = children[index + 1..]
                     .iter()
                     .copied()
-                    .find(|next| !self.is_whitespace_text(world, *next))
+                    .find(|next| !self.is_ignorable_whitespace_text(world, *next))
                     .map(|next| self.table_role(world, next))
                     .transpose()?
                     .flatten()
@@ -827,7 +831,7 @@ where
     ) -> Result<Vec<LayoutBoxId>, LayoutError> {
         let mut output = Vec::new();
         for child in children {
-            if self.is_whitespace_text(world, child) {
+            if self.is_ignorable_whitespace_text(world, child) {
                 continue;
             }
             self.insert_table_child(world, owner, parent_style, parent_role, &mut output, child)?;
@@ -1058,7 +1062,7 @@ where
         world: &LayoutWorld<S::NodeId>,
         id: LayoutBoxId,
     ) -> bool {
-        self.is_inline_in_flow(world, id) && !self.is_whitespace_text(world, id)
+        self.is_inline_in_flow(world, id) && !self.is_ignorable_whitespace_text(world, id)
     }
 
     fn is_block_in_flow(&self, world: &LayoutWorld<S::NodeId>, id: LayoutBoxId) -> bool {
@@ -1069,16 +1073,19 @@ where
         })
     }
 
-    fn is_whitespace_text(&self, world: &LayoutWorld<S::NodeId>, id: LayoutBoxId) -> bool {
+    fn is_ignorable_whitespace_text(
+        &self,
+        world: &LayoutWorld<S::NodeId>,
+        id: LayoutBoxId,
+    ) -> bool {
         world.box_by_id(id).is_some_and(|layout_box| {
             layout_box.kind.is_text()
                 && !layout_box
                     .capability_diagnostics
                     .contains(&LayoutCapabilityDiagnostic::GeneratedContentUnsupported)
-                && layout_box
-                    .text
-                    .as_deref()
-                    .is_none_or(|text| text.trim().is_empty())
+                && layout_box.text.as_deref().is_none_or(|text| {
+                    whitespace_text_is_ignorable(text, layout_box.style.white_space_collapse())
+                })
         })
     }
 
@@ -1168,6 +1175,25 @@ where
             ));
         }
         Ok(())
+    }
+}
+
+fn whitespace_text_is_ignorable(text: &str, mode: InlineWhiteSpaceCollapse) -> bool {
+    if text.is_empty() {
+        return true;
+    }
+    if !text
+        .chars()
+        .all(|character| matches!(character, ' ' | '\t' | '\n' | '\r' | '\u{000C}'))
+    {
+        return false;
+    }
+    match mode {
+        InlineWhiteSpaceCollapse::Collapse => true,
+        InlineWhiteSpaceCollapse::PreserveBreaks => !text
+            .chars()
+            .any(|character| matches!(character, '\n' | '\r' | '\u{000C}')),
+        InlineWhiteSpaceCollapse::Preserve | InlineWhiteSpaceCollapse::BreakSpaces => false,
     }
 }
 
@@ -1264,5 +1290,38 @@ fn push_diagnostic(
 ) {
     if !diagnostics.contains(&diagnostic) {
         diagnostics.push(diagnostic);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{InlineWhiteSpaceCollapse, whitespace_text_is_ignorable};
+
+    #[test]
+    fn only_collapsible_whitespace_is_ignorable_during_box_construction() {
+        assert!(whitespace_text_is_ignorable(
+            " \t\n",
+            InlineWhiteSpaceCollapse::Collapse,
+        ));
+        assert!(whitespace_text_is_ignorable(
+            " \t",
+            InlineWhiteSpaceCollapse::PreserveBreaks,
+        ));
+        assert!(!whitespace_text_is_ignorable(
+            "\n",
+            InlineWhiteSpaceCollapse::PreserveBreaks,
+        ));
+        assert!(!whitespace_text_is_ignorable(
+            "\n",
+            InlineWhiteSpaceCollapse::Preserve,
+        ));
+        assert!(!whitespace_text_is_ignorable(
+            " ",
+            InlineWhiteSpaceCollapse::BreakSpaces,
+        ));
+        assert!(!whitespace_text_is_ignorable(
+            "\u{00a0}",
+            InlineWhiteSpaceCollapse::Collapse,
+        ));
     }
 }
