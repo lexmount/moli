@@ -1495,6 +1495,7 @@ where
             );
             return LayoutOutput {
                 size,
+                depends_on_block_constraints: false,
                 content_size: size,
                 first_baselines: Point::NONE,
                 last_baselines: Point::NONE,
