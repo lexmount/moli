@@ -1160,6 +1160,16 @@ where
         }
     }
 
+    fn get_writing_mode(&self, node_id: NodeId) -> taffy::WritingMode {
+        if self.is_viewport_taffy_node(node_id) {
+            taffy::WritingMode::HorizontalTb
+        } else {
+            self.boxes[LayoutBoxId::from_taffy(node_id).index()]
+                .style
+                .writing_mode()
+        }
+    }
+
     fn get_resolved_aspect_ratio(&self, node_id: NodeId) -> taffy::ResolvedAspectRatio {
         if self.is_viewport_taffy_node(node_id) {
             return taffy::ResolvedAspectRatio {
