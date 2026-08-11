@@ -1489,6 +1489,87 @@ fn structural_inline_own_strut_contributes_without_direct_text() {
 }
 
 #[test]
+fn inline_fragment_uses_its_own_font_box_instead_of_descendant_union() {
+    let source = Source(vec![
+        Node::element("root", "div", LayoutElementCategory::Generic, None, vec![1]),
+        Node::element(
+            "small-parent",
+            "span",
+            LayoutElementCategory::Generic,
+            None,
+            vec![2],
+        ),
+        Node::element(
+            "large-child",
+            "span",
+            LayoutElementCategory::Generic,
+            None,
+            vec![3],
+        ),
+        Node::text("text", "A"),
+    ]);
+    let mut styles = Styles::default();
+    styles.primary.insert(
+        0,
+        sized(LayoutDisplay::Block, 200.0, 100.0, PaintColor::TRANSPARENT)
+            .with_text_metrics(10.0, 60.0),
+    );
+    styles.primary.insert(
+        1,
+        style(LayoutDisplay::Inline, RED).with_text_metrics(10.0, 10.0),
+    );
+    styles.primary.insert(
+        2,
+        style(LayoutDisplay::Inline, BLUE).with_text_metrics(40.0, 40.0),
+    );
+
+    let snapshot = render(&source, &mut styles, 200, 100);
+    let parent = rect(&snapshot, RED);
+    let child = rect(&snapshot, BLUE);
+    assert!(
+        parent.height + 10.0 < child.height,
+        "an inline fragment's block size comes from its own primary font, not the union of a larger descendant: parent={parent:?}, child={child:?}"
+    );
+}
+
+#[test]
+fn empty_decorated_inline_fragment_does_not_fill_the_line_height() {
+    let source = Source(vec![
+        Node::element("root", "div", LayoutElementCategory::Generic, None, vec![1]),
+        Node::element(
+            "empty-inline",
+            "span",
+            LayoutElementCategory::Generic,
+            None,
+            vec![],
+        ),
+    ]);
+    let mut styles = Styles::default();
+    styles.primary.insert(
+        0,
+        sized(LayoutDisplay::Block, 200.0, 100.0, PaintColor::TRANSPARENT)
+            .with_text_metrics(10.0, 60.0),
+    );
+    styles.primary.insert(
+        1,
+        style(LayoutDisplay::Inline, RED)
+            .tap_taffy(|taffy| {
+                taffy.padding.left = taffy::LengthPercentage::length(4.0);
+                taffy.padding.right = taffy::LengthPercentage::length(4.0);
+            })
+            .with_text_metrics(10.0, 10.0),
+    );
+
+    let snapshot = render(&source, &mut styles, 200, 100);
+    let empty = rect(&snapshot, RED);
+    assert!(empty.width >= 7.9, "missing inline-axis padding: {empty:?}");
+    assert!(
+        empty.height < 30.0,
+        "an empty decorated inline uses its own font box rather than the root's 60px line box: {empty:?}"
+    );
+}
+
+#[test]
 fn nested_inline_alignments_move_each_structural_subtree_in_order() {
     let source = Source(vec![
         Node::element(

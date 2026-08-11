@@ -180,6 +180,7 @@ pub(crate) struct InlineLinePlacement {
     content_offset: f32,
     item_offsets: Vec<f32>,
     glyph_offsets: Vec<InlineGlyphOffset>,
+    box_block_placements: Vec<InlineBoxBlockPlacement>,
 }
 
 impl InlineLinePlacement {
@@ -207,6 +208,9 @@ impl InlineLinePlacement {
         for glyph_offset in &mut self.glyph_offsets {
             glyph_offset.offset += offset;
         }
+        for box_placement in &mut self.box_block_placements {
+            box_placement.top += offset;
+        }
     }
 }
 
@@ -215,6 +219,13 @@ struct InlineGlyphOffset {
     run_index: usize,
     style_index: usize,
     offset: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct InlineBoxBlockPlacement {
+    box_id: LayoutBoxId,
+    top: f32,
+    height: f32,
 }
 
 impl InlineFormattingContext {
@@ -316,6 +327,14 @@ pub(crate) fn build_inline_fragments(
             rect: line_rect,
             baseline: placement.map_or(metrics.baseline, |placement| placement.baseline),
         });
+        if let Some(placement) = placement {
+            for box_placement in &placement.box_block_placements {
+                box_fragments
+                    .entry((box_placement.box_id.index(), line_index))
+                    .or_default()
+                    .include_block_axis(box_placement.top, box_placement.height);
+            }
+        }
 
         for run in line.runs() {
             let run_metrics = run.metrics();
@@ -357,7 +376,7 @@ pub(crate) fn build_inline_fragments(
                         box_fragments
                             .entry((ancestor.index(), line_index))
                             .or_default()
-                            .include(rect);
+                            .include_inline_axis(rect.x, rect.width);
                     }
                 }
                 for source in context
@@ -402,7 +421,7 @@ pub(crate) fn build_inline_fragments(
                     .entry((ancestor.index(), line_index))
                     .or_default();
                 if let Some(rect) = rect {
-                    accumulator.include(rect);
+                    accumulator.include_inline_axis(rect.x, rect.width);
                 } else if matches!(
                     object.role,
                     InlineObjectRole::StartEdge | InlineObjectRole::EndEdge
@@ -833,6 +852,18 @@ pub(crate) fn build_inline_line_placements(
                 })
             })
             .collect();
+        let box_block_placements = states
+            .iter()
+            .filter_map(|state| {
+                let strut = state.strut?;
+                let baseline = root_baseline + state.global_offset;
+                Some(InlineBoxBlockPlacement {
+                    box_id: state.box_id,
+                    top: baseline - strut.text_ascent,
+                    height: (strut.text_ascent + strut.text_descent).max(0.0),
+                })
+            })
+            .collect();
         placements.push(InlineLinePlacement {
             line_index,
             rect: PaintRect::new(
@@ -846,6 +877,7 @@ pub(crate) fn build_inline_line_placements(
             content_offset: root_baseline - metrics.baseline,
             item_offsets,
             glyph_offsets,
+            box_block_placements,
         });
         preceding_adjustment += line_height - (raw_bottom - raw_top);
         unadjusted_line_top += metrics.line_height.max(0.0);
@@ -1174,6 +1206,11 @@ impl FragmentAccumulator {
     fn include_inline_axis(&mut self, x: f32, width: f32) {
         self.min_x = Some(self.min_x.map_or(x, |value| value.min(x)));
         self.max_x = Some(self.max_x.map_or(x + width, |value| value.max(x + width)));
+    }
+
+    fn include_block_axis(&mut self, y: f32, height: f32) {
+        self.min_y = Some(self.min_y.map_or(y, |value| value.min(y)));
+        self.max_y = Some(self.max_y.map_or(y + height, |value| value.max(y + height)));
     }
 
     fn rect(self, fallback_block_rect: PaintRect) -> Option<PaintRect> {
