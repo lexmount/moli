@@ -9,7 +9,8 @@ use taffy::{
     LayoutOutput, LayoutPartialTree, Line, MaybeMath, MaybeResolve, NodeId, Point, ResolveOrZero,
     RoundTree, RunMode, Size, SizingMode, SizingPurpose, Style, TraversePartialTree, TraverseTree,
     compute_block_layout, compute_cached_layout, compute_flexbox_layout, compute_grid_layout,
-    compute_hidden_layout, compute_leaf_layout, compute_root_layout, round_layout,
+    compute_hidden_layout, compute_leaf_layout, compute_root_layout,
+    round_layout_with_scale_factor,
 };
 
 use crate::{
@@ -26,6 +27,12 @@ use crate::{
     table::{compute_table_layout, prepare_table_layout_trees},
     world::InlineStaticPosition,
 };
+
+// Blink stores ordinary box geometry in 1/64 CSS-pixel LayoutUnits. Inline
+// positioning has a separate, finer precision domain; preserve that locally
+// at the atomic-inline seam rather than leaking it into every block box.
+const LAYOUT_SUBPIXELS_PER_CSS_PIXEL: f32 = 64.0;
+const INLINE_SUBPIXELS_PER_CSS_PIXEL: f32 = 65_536.0;
 
 pub(crate) fn compute_world_layout<N>(world: &mut LayoutWorld<N>, viewport: PaintViewport)
 where
@@ -78,7 +85,7 @@ where
     finish_form_control_contents(world);
     finish_outside_list_markers(world);
     finish_sticky_positioning(world, viewport);
-    round_layout(world, root);
+    round_layout_with_scale_factor(world, root, LAYOUT_SUBPIXELS_PER_CSS_PIXEL);
     // Outside markers deliberately are not numeric children of the list item,
     // otherwise Taffy would allocate them a normal-flow row. Round each
     // detached numeric root explicitly so paint consumes the geometry written
@@ -88,8 +95,37 @@ where
         .filter(|id| world.boxes[id.index()].outside_list_marker)
         .collect::<Vec<_>>();
     for marker in outside_markers {
-        round_layout(world, marker.to_taffy());
+        round_layout_with_scale_factor(world, marker.to_taffy(), LAYOUT_SUBPIXELS_PER_CSS_PIXEL);
     }
+    restore_atomic_inline_location_precision(world);
+}
+
+fn restore_atomic_inline_location_precision<N>(world: &mut LayoutWorld<N>)
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    let mut atomic_boxes = world
+        .boxes
+        .iter()
+        .filter_map(|layout_box| layout_box.inline_layout.as_ref())
+        .flat_map(|context| context.objects.iter())
+        .filter(|object| object.role == InlineObjectRole::Atomic)
+        .map(|object| object.box_id)
+        .collect::<Vec<_>>();
+    atomic_boxes.sort_by_key(|id| id.index());
+    atomic_boxes.dedup();
+
+    for id in atomic_boxes {
+        let location = world.boxes[id.index()].unrounded_layout.location;
+        world.boxes[id.index()].final_layout.location = Point {
+            x: round_to_subpixel_grid(location.x, INLINE_SUBPIXELS_PER_CSS_PIXEL),
+            y: round_to_subpixel_grid(location.y, INLINE_SUBPIXELS_PER_CSS_PIXEL),
+        };
+    }
+}
+
+fn round_to_subpixel_grid(value: f32, scale_factor: f32) -> f32 {
+    (value * scale_factor).round() / scale_factor
 }
 
 fn prepare_layout_tree<N>(world: &mut LayoutWorld<N>) -> Vec<PositionedStaticPlaceholder>
