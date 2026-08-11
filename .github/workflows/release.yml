@@ -1,0 +1,123 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version from moli/Cargo.toml (for example, 0.1.0)
+        required: true
+        type: string
+      prerelease:
+        description: Mark this release as a prerelease
+        required: true
+        default: false
+        type: boolean
+      draft:
+        description: Create a draft instead of publishing immediately
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  group: release-${{ inputs.version }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: safe.directory
+  GIT_CONFIG_VALUE_0: ${{ github.workspace }}
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    container: rust:1.96.1-bookworm
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate release request
+        id: release
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          version="${INPUT_VERSION#v}"
+          semver_pattern='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+          if [[ ! "$version" =~ $semver_pattern ]]; then
+            echo "Invalid semantic version: $INPUT_VERSION" >&2
+            exit 1
+          fi
+
+          manifest_version=$(awk '$1 == "version" && $2 == "=" { gsub(/"/, "", $3); print $3; exit }' moli/Cargo.toml)
+          if [[ "$version" != "$manifest_version" ]]; then
+            echo "Requested version $version does not match moli/Cargo.toml ($manifest_version)." >&2
+            exit 1
+          fi
+
+          tag="v$version"
+          if git show-ref --verify --quiet "refs/tags/$tag"; then
+            echo "Tag $tag already exists." >&2
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Build and package release
+        shell: bash
+        run: scripts/release.sh --version "${{ steps.release.outputs.version }}"
+
+      - name: Install GitHub CLI
+        shell: bash
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends gh
+
+      - name: Create GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_DRAFT: ${{ inputs.draft }}
+          RELEASE_PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          set -euo pipefail
+
+          shopt -s nullglob
+          assets=(dist/*.tar.gz dist/*.sha256)
+          if (( ${#assets[@]} != 2 )); then
+            echo "Expected one archive and one checksum, found ${#assets[@]} release assets." >&2
+            exit 1
+          fi
+
+          args=(
+            release create "$RELEASE_TAG"
+            "${assets[@]}"
+            --repo "$GITHUB_REPOSITORY"
+            --target "$GITHUB_SHA"
+            --title "Moli $RELEASE_TAG"
+            --generate-notes
+          )
+          if [[ "$RELEASE_PRERELEASE" == true ]]; then
+            args+=(--prerelease)
+          fi
+          if [[ "$RELEASE_DRAFT" == true ]]; then
+            args+=(--draft)
+          fi
+
+          release_url=$(gh "${args[@]}")
+          printf 'Created %s\n' "$release_url"
+          printf '### Release created\n\n[%s](%s)\n' \
+            "$RELEASE_TAG" "$release_url" >> "$GITHUB_STEP_SUMMARY"

@@ -1,4 +1,5 @@
 /target*
+/dist/
 /docs/wild-web-report/.wild-web-*
 /docs/wild-web-report/.compare-engines-run
 /docs/wild-web-report/.compare-engines-indexed.txt

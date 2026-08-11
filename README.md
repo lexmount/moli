@@ -276,6 +276,9 @@ Current intentional boundaries:
 Unsupported protocol paths fail explicitly — Moli never pretends a browser
 action, event, network observation, or visual result occurred when it didn't.
 
+Maintainers can publish a tagged binary release from GitHub Actions by following
+the [release guide](RELEASING.md).
+
 ## License
 
 Unless a file or directory carries a different notice, Moli is licensed under
