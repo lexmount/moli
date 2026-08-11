@@ -115,10 +115,19 @@ pub(super) fn project_replaced_image<N>(
             ImageRendering::CrispEdges | ImageRendering::Pixelated => PaintImageSampling::Nearest,
         }
     });
-    snapshot.push_fragment(PaintFragment::PushClip {
-        shape: areas.shape(BoxModelBox::Content),
-        transform,
-    });
+    // A clip identical to the image destination applies edge coverage twice
+    // in the raster backend: once while drawing the image quad and once while
+    // compositing the clip. That makes an opaque solid image observably
+    // lighter than a CSS background painted into the same fractional rect.
+    // Keep the content clip only when it has actual work to do: rounded
+    // corners or an object-fit/object-position result that escapes the box.
+    let content_clip_needed = replaced_content_clip_needed(areas, destination);
+    if content_clip_needed {
+        snapshot.push_fragment(PaintFragment::PushClip {
+            shape: areas.shape(BoxModelBox::Content),
+            transform,
+        });
+    }
     if let Some(pixels) = resource.pixels.clone() {
         let image = snapshot.add_image(pixels);
         snapshot.push_fragment(PaintFragment::Image(PaintImage {
@@ -135,7 +144,17 @@ pub(super) fn project_replaced_image<N>(
             transform,
         }));
     }
-    snapshot.push_fragment(PaintFragment::PopLayer);
+    if content_clip_needed {
+        snapshot.push_fragment(PaintFragment::PopLayer);
+    }
+}
+
+fn replaced_content_clip_needed(areas: BoxAreas, destination: LayoutRect) -> bool {
+    !areas.content_radii.is_zero()
+        || destination.x < areas.content_rect.x
+        || destination.y < areas.content_rect.y
+        || destination.right() > areas.content_rect.right()
+        || destination.bottom() > areas.content_rect.bottom()
 }
 
 fn project_unavailable_image<N>(
@@ -223,5 +242,25 @@ mod tests {
             compute_object_fit(container, object, ObjectFit::None),
             object
         );
+    }
+
+    #[test]
+    fn contained_rectangular_replaced_content_does_not_double_clip_its_edges() {
+        let content = LayoutRect::new(10.375, 20.0, 15.0, 15.0);
+        let areas = BoxAreas::for_rect(content);
+
+        assert!(!replaced_content_clip_needed(areas, content));
+        assert!(!replaced_content_clip_needed(
+            areas,
+            LayoutRect::new(11.0, 21.0, 10.0, 10.0),
+        ));
+        assert!(replaced_content_clip_needed(
+            areas,
+            LayoutRect::new(9.0, 20.0, 17.0, 15.0),
+        ));
+
+        let mut rounded = areas;
+        rounded.content_radii = PaintCornerRadii::all(crate::PaintCornerRadius::new(2.0, 2.0));
+        assert!(replaced_content_clip_needed(rounded, content));
     }
 }
