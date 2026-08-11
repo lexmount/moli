@@ -17,6 +17,57 @@ pub(super) struct TableColumnConstraint {
     pub(super) is_constrained: bool,
 }
 
+/// Inline-size information contributed by a table cell.
+///
+/// Keeping cell constraints separate from column constraints is important for
+/// wide cells: a `colspan` cell contributes one measure over a range and must
+/// not masquerade as a width authored on any individual column.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct TableCellInlineConstraint {
+    pub(super) min_inline_size: f32,
+    pub(super) max_inline_size: f32,
+    pub(super) percent: Option<f32>,
+    pub(super) percent_border_padding: f32,
+    pub(super) is_constrained: bool,
+}
+
+impl TableCellInlineConstraint {
+    pub(super) const fn auto() -> Self {
+        Self {
+            min_inline_size: 0.0,
+            max_inline_size: 0.0,
+            percent: None,
+            percent_border_padding: 0.0,
+            is_constrained: false,
+        }
+    }
+
+    pub(super) fn length(value: f32) -> Self {
+        Self {
+            max_inline_size: value.max(0.0),
+            is_constrained: true,
+            ..Self::auto()
+        }
+    }
+
+    pub(super) fn percent(ratio: f32, border_padding: f32) -> Self {
+        Self {
+            max_inline_size: border_padding.max(0.0),
+            percent: Some(ratio.max(0.0)),
+            percent_border_padding: border_padding.max(0.0),
+            ..Self::auto()
+        }
+    }
+}
+
+/// A cell constraint that covers more than one column.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct TableCellSpanConstraint {
+    pub(super) start_column: usize,
+    pub(super) span: usize,
+    pub(super) cell: TableCellInlineConstraint,
+}
+
 impl TableColumnConstraint {
     pub(super) const fn auto() -> Self {
         Self {
@@ -44,8 +95,24 @@ impl TableColumnConstraint {
         }
     }
 
-    pub(super) fn is_auto(self) -> bool {
-        self.max_inline_size.is_none() && self.percent.is_none()
+    /// Apply a single-column first-row cell while preserving the precedence of
+    /// an authored `<col>`/`<colgroup>` measure.
+    pub(super) fn encompass_first_row_cell(&mut self, cell: TableCellInlineConstraint) {
+        if self.is_constrained {
+            return;
+        }
+
+        self.min_inline_size = self.min_inline_size.max(cell.min_inline_size);
+        self.max_inline_size = Some(
+            self.max_inline_size
+                .unwrap_or(0.0)
+                .max(cell.max_inline_size),
+        );
+        if cell.percent > self.percent {
+            self.percent = cell.percent;
+            self.percent_border_padding = cell.percent_border_padding;
+        }
+        self.is_constrained |= cell.is_constrained;
     }
 
     /// Track used while the table has no definite assignable inline size, or
@@ -79,6 +146,72 @@ impl TableColumnConstraint {
 
     fn receives_auto_distribution(self) -> bool {
         self.percent.is_none() && self.fixed_inline_size().is_none()
+    }
+}
+
+/// Project first-row wide-cell constraints onto fixed-layout columns.
+///
+/// This mirrors Blink's `DistributeColspanCellToColumnsFixed`: shorter spans
+/// are applied first, inner border spacing is excluded from the cell measure,
+/// existing column measures retain priority, and percentage constraints are
+/// copied only to unconstrained columns. The final fixed-column allocator then
+/// operates solely on column constraints.
+pub(super) fn distribute_fixed_cell_spans(
+    column_constraints: &mut [TableColumnConstraint],
+    cell_spans: &mut [TableCellSpanConstraint],
+    inline_border_spacing: f32,
+) {
+    cell_spans.sort_by_key(|constraint| (constraint.span, constraint.start_column));
+
+    for constraint in cell_spans {
+        let Some(column_span) = column_constraints.get_mut(constraint.start_column..) else {
+            continue;
+        };
+        let effective_span = constraint.span.min(column_span.len());
+        if effective_span == 0 {
+            continue;
+        }
+        let column_span = &mut column_span[..effective_span];
+        let inner_spacing =
+            inline_border_spacing.max(0.0) * effective_span.saturating_sub(1) as f32;
+        let min_inline_size = if constraint.cell.is_constrained {
+            (constraint.cell.min_inline_size - inner_spacing).max(0.0)
+        } else {
+            0.0
+        };
+        let max_inline_size = (constraint.cell.max_inline_size - inner_spacing).max(0.0);
+        let min_share = min_inline_size / effective_span as f32;
+        let max_share = max_inline_size / effective_span as f32;
+        let percent_share = constraint
+            .cell
+            .percent
+            .map(|percent| percent / effective_span as f32);
+
+        for (index, column) in column_span.iter_mut().enumerate() {
+            let is_last = index + 1 == effective_span;
+            if column.max_inline_size.is_none() {
+                let distributed_min = if is_last {
+                    min_inline_size - min_share * index as f32
+                } else {
+                    min_share
+                };
+                let distributed_max = if is_last {
+                    max_inline_size - max_share * index as f32
+                } else {
+                    max_share
+                };
+                column.min_inline_size = column.min_inline_size.max(distributed_min);
+                column.max_inline_size = Some(distributed_max.max(column.min_inline_size));
+                column.is_constrained |= constraint.cell.is_constrained;
+            }
+            if column.percent.is_none() && !column.is_constrained {
+                column.percent = percent_share;
+                // A wide percentage cell contributes its percentage, but its
+                // border/padding belongs to the spanning cell rather than any
+                // one of the columns.
+                column.percent_border_padding = 0.0;
+            }
+        }
     }
 }
 
@@ -229,6 +362,73 @@ mod tests {
                 "column {index}: expected {expected}, got {actual}; all={actual_sizes:?}",
             );
         }
+    }
+
+    #[test]
+    fn fixed_cell_spans_apply_shorter_ranges_before_wider_ranges() {
+        let mut columns = [TableColumnConstraint::auto(); 3];
+        let mut spans = [
+            TableCellSpanConstraint {
+                start_column: 0,
+                span: 3,
+                cell: TableCellInlineConstraint::length(150.0),
+            },
+            TableCellSpanConstraint {
+                start_column: 0,
+                span: 2,
+                cell: TableCellInlineConstraint::length(80.0),
+            },
+        ];
+
+        distribute_fixed_cell_spans(&mut columns, &mut spans, 0.0);
+
+        assert_eq!(columns[0].max_inline_size, Some(40.0));
+        assert_eq!(columns[1].max_inline_size, Some(40.0));
+        assert_eq!(columns[2].max_inline_size, Some(50.0));
+    }
+
+    #[test]
+    fn fixed_cell_spans_preserve_columns_and_exclude_internal_spacing() {
+        let mut columns = [
+            TableColumnConstraint::length(80.0),
+            TableColumnConstraint::auto(),
+            TableColumnConstraint::auto(),
+        ];
+        let mut spans = [TableCellSpanConstraint {
+            start_column: 0,
+            span: 2,
+            cell: TableCellInlineConstraint::length(210.0),
+        }];
+
+        distribute_fixed_cell_spans(&mut columns, &mut spans, 10.0);
+
+        assert_eq!(columns[0].max_inline_size, Some(80.0));
+        assert_eq!(columns[1].max_inline_size, Some(100.0));
+        assert_sizes(
+            &distribute_fixed_columns(300.0, &columns),
+            &[80.0, 100.0, 120.0],
+        );
+    }
+
+    #[test]
+    fn fixed_cell_spans_divide_percent_without_cell_border_padding() {
+        let mut columns = [TableColumnConstraint::auto(); 3];
+        let mut spans = [TableCellSpanConstraint {
+            start_column: 0,
+            span: 2,
+            cell: TableCellInlineConstraint::percent(0.4, 20.0),
+        }];
+
+        distribute_fixed_cell_spans(&mut columns, &mut spans, 0.0);
+
+        assert_eq!(columns[0].percent, Some(0.2));
+        assert_eq!(columns[1].percent, Some(0.2));
+        assert_eq!(columns[0].percent_border_padding, 0.0);
+        assert_eq!(columns[1].percent_border_padding, 0.0);
+        assert_sizes(
+            &distribute_fixed_columns(500.0, &columns),
+            &[100.0, 100.0, 300.0],
+        );
     }
 
     #[test]

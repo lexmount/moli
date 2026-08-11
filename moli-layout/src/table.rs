@@ -26,7 +26,10 @@ mod columns;
 
 pub(crate) use collapsed_borders::CollapsedTableBorders;
 use collapsed_borders::{prepare_collapsed_table_borders, set_collapsed_border_geometry};
-use columns::{TableColumnConstraint, distribute_fixed_columns};
+use columns::{
+    TableCellInlineConstraint, TableCellSpanConstraint, TableColumnConstraint,
+    distribute_fixed_cell_spans, distribute_fixed_columns,
+};
 
 #[derive(Clone)]
 struct TableCell {
@@ -203,6 +206,8 @@ where
     let mut captions = Vec::new();
     let mut max_columns = 0usize;
     let mut column_tracks = Vec::new();
+    let mut cell_span_constraints = Vec::new();
+    let fixed_layout = root_style.table_layout_is_fixed();
     collect_columns(world, root, None, &mut columns, &mut column_tracks);
     collect_rows(world, root, None, &mut rows, &mut cells);
     place_table_cells(&mut cells, &rows, &mut max_columns);
@@ -215,15 +220,19 @@ where
             start: style_helpers::line((cell.row + 1).min(i16::MAX as usize) as i16),
             end: style_helpers::span(cell.row_span as u16),
         };
-        if cell.row == 0 && cell.column_span == 1 {
-            if cell.column >= column_tracks.len() {
-                column_tracks.resize(cell.column + 1, TableColumnConstraint::auto());
-            }
-            // An explicit <col>/<colgroup> width wins over the first-row
-            // cell width in the fixed table algorithm.
-            if column_tracks[cell.column].is_auto() {
-                column_tracks[cell.column] =
-                    table_cell_width_track(&cell.style, root_style.table_layout_is_fixed());
+        if cell.row == 0 {
+            let inline_constraint = table_cell_inline_constraint(&cell.style, fixed_layout);
+            if cell.column_span == 1 {
+                if cell.column >= column_tracks.len() {
+                    column_tracks.resize(cell.column + 1, TableColumnConstraint::auto());
+                }
+                column_tracks[cell.column].encompass_first_row_cell(inline_constraint);
+            } else if fixed_layout {
+                cell_span_constraints.push(TableCellSpanConstraint {
+                    start_column: cell.column,
+                    span: cell.column_span,
+                    cell: inline_constraint,
+                });
             }
         }
         cell.style.size.width = Dimension::auto();
@@ -238,7 +247,13 @@ where
     collect_captions(world, root, &mut captions);
     max_columns = max_columns.max(column_tracks.len()).max(1);
     column_tracks.resize(max_columns, TableColumnConstraint::auto());
-    let fixed_layout = root_style.table_layout_is_fixed();
+    if fixed_layout {
+        distribute_fixed_cell_spans(
+            &mut column_tracks,
+            &mut cell_span_constraints,
+            spacing.width,
+        );
+    }
     style.grid_template_columns = column_tracks
         .iter()
         .copied()
@@ -559,7 +574,7 @@ fn minimum_dimension_track(dimension: Dimension) -> taffy::TrackSizingFunction {
     }
 }
 
-fn table_cell_width_track(style: &Style<Atom>, fixed: bool) -> TableColumnConstraint {
+fn table_cell_inline_constraint(style: &Style<Atom>, fixed: bool) -> TableCellInlineConstraint {
     match style.size.width.tag() {
         taffy::CompactLength::LENGTH_TAG => {
             let padding = style
@@ -572,7 +587,7 @@ fn table_cell_width_track(style: &Style<Atom>, fixed: bool) -> TableColumnConstr
             } else {
                 style.size.width.value().max(border_padding)
             };
-            TableColumnConstraint::length(outer_width)
+            TableCellInlineConstraint::length(outer_width)
         }
         taffy::CompactLength::PERCENT_TAG if fixed => {
             let border_padding = if style.box_sizing == taffy::BoxSizing::ContentBox {
@@ -584,9 +599,9 @@ fn table_cell_width_track(style: &Style<Atom>, fixed: bool) -> TableColumnConstr
             } else {
                 0.0
             };
-            TableColumnConstraint::percent(style.size.width.value(), border_padding)
+            TableCellInlineConstraint::percent(style.size.width.value(), border_padding)
         }
-        _ => TableColumnConstraint::auto(),
+        _ => TableCellInlineConstraint::auto(),
     }
 }
 
