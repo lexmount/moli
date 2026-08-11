@@ -1531,11 +1531,15 @@ where
             // adds CSS padding and borders itself. Routing the complete
             // replaced result through that helper would therefore apply the
             // box model twice (most visibly on padded form controls).
+            let resolved_aspect_ratio = layout_box
+                .style
+                .resolved_replaced_aspect_ratio(context.inherent_ratio());
             let size = measure_replaced(
                 inputs.known_dimensions,
                 inputs.parent_size,
                 inputs.available_space,
                 &context,
+                resolved_aspect_ratio,
                 &style,
                 inputs.sizing_mode,
                 inputs.axis,

@@ -16,7 +16,7 @@ use crate::{
     LayoutAnonymousReason, LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic, LayoutDisplay,
     LayoutElementCategory, LayoutElementSemantics, LayoutError, LayoutPseudo, LayoutSource,
     LayoutSourceKind, LayoutStyleResolver, LayoutWorld, ResolvedLayoutStyle,
-    style::InlineWhiteSpaceCollapse,
+    replaced::ReplacedContext, style::InlineWhiteSpaceCollapse,
 };
 use style::values::generics::image::GenericImage;
 
@@ -91,7 +91,7 @@ where
             root_style.force_display_none();
         }
         if root_semantics.is_replaced() {
-            root_style.mark_replaced();
+            root_style.mark_replaced(natural_replaced_ratio(&root_semantics, root_metrics));
         } else if matches!(
             root_semantics.category,
             crate::LayoutElementCategory::FormControl(crate::LayoutFormControlKind::Button)
@@ -214,7 +214,7 @@ where
             };
             let metrics = self.source.replaced_metrics(source_node);
             if semantics.is_replaced() {
-                style.mark_replaced();
+                style.mark_replaced(natural_replaced_ratio(&semantics, metrics));
             } else if matches!(
                 semantics.category,
                 crate::LayoutElementCategory::FormControl(crate::LayoutFormControlKind::Button)
@@ -1176,6 +1176,23 @@ where
         }
         Ok(())
     }
+}
+
+fn natural_replaced_ratio(
+    semantics: &LayoutElementSemantics,
+    metrics: Option<crate::ReplacedMetrics>,
+) -> Option<f32> {
+    let sizing_kind = if matches!(
+        semantics.category,
+        crate::LayoutElementCategory::FormControl(crate::LayoutFormControlKind::Input(
+            crate::LayoutInputControlKind::Image
+        ))
+    ) {
+        crate::LayoutReplacedKind::Image
+    } else {
+        semantics.replaced?
+    };
+    ReplacedContext::for_element(sizing_kind, metrics).inherent_ratio()
 }
 
 fn whitespace_text_is_ignorable(text: &str, mode: InlineWhiteSpaceCollapse) -> bool {

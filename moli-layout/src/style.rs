@@ -34,6 +34,7 @@ use style::{
             grid::GenericGridTemplateComponent,
             image::GenericImage,
             length::{GenericMaxSize, GenericSize},
+            position::PreferredRatio,
             transform::{Rotate, Scale, Translate},
         },
         specified::box_::{DisplayInside, DisplayOutside},
@@ -43,7 +44,7 @@ use style::{
         },
     },
 };
-use taffy::{Display as TaffyDisplay, Position as TaffyPosition, Size, Style};
+use taffy::{BoxSizing, Display as TaffyDisplay, Position as TaffyPosition, Size, Style};
 
 use crate::{
     LayoutPoint, LayoutRect, LayoutTransform2D, PaintBlendMode, PaintBorderColors,
@@ -153,6 +154,73 @@ pub enum LayoutInlineAlignment {
 pub(crate) struct InlineVerticalAlign {
     pub(crate) kind: LayoutInlineAlignment,
     pub(crate) baseline_shift: f32,
+}
+
+/// The two independent components retained from CSS `aspect-ratio`.
+///
+/// Taffy's public style currently stores only the numeric ratio. Keeping the
+/// `auto` component here is essential for replaced elements: `1 / 1` replaces
+/// an image's natural ratio, while `auto 1 / 1` uses that natural ratio and
+/// only falls back to 1:1 when no natural ratio exists.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) enum PreferredAspectRatio {
+    #[default]
+    Auto,
+    Ratio(f32),
+    AutoAndRatio(f32),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ResolvedAspectRatio {
+    pub(crate) ratio: Option<f32>,
+    /// The box whose dimensions the ratio constrains.
+    pub(crate) box_sizing: BoxSizing,
+}
+
+impl PreferredAspectRatio {
+    fn from_components(auto: bool, ratio: Option<f32>) -> Self {
+        match (auto, usable_aspect_ratio(ratio)) {
+            (_, None) => Self::Auto,
+            (false, Some(ratio)) => Self::Ratio(ratio),
+            (true, Some(ratio)) => Self::AutoAndRatio(ratio),
+        }
+    }
+
+    fn from_taffy(ratio: Option<f32>) -> Self {
+        Self::from_components(false, ratio)
+    }
+
+    fn numeric_ratio(self) -> Option<f32> {
+        match self {
+            Self::Auto => None,
+            Self::Ratio(ratio) | Self::AutoAndRatio(ratio) => Some(ratio),
+        }
+    }
+
+    fn resolve_for_replaced(
+        self,
+        inherent_ratio: Option<f32>,
+        authored_box_sizing: BoxSizing,
+    ) -> ResolvedAspectRatio {
+        let inherent_ratio = usable_aspect_ratio(inherent_ratio);
+        match self {
+            Self::Ratio(ratio) => ResolvedAspectRatio {
+                ratio: Some(ratio),
+                box_sizing: authored_box_sizing,
+            },
+            Self::Auto => ResolvedAspectRatio {
+                ratio: inherent_ratio,
+                box_sizing: BoxSizing::ContentBox,
+            },
+            // Blink's BoxSizingForAspectRatio() uses content-box for the
+            // combined `auto <ratio>` value, including when its ratio is used
+            // as the fallback because no natural ratio is available.
+            Self::AutoAndRatio(fallback) => ResolvedAspectRatio {
+                ratio: inherent_ratio.or(Some(fallback)),
+                box_sizing: BoxSizing::ContentBox,
+            },
+        }
+    }
 }
 
 /// CSS display classification retained across box construction.
@@ -330,6 +398,7 @@ impl ResolvedLayoutTransform {
 pub struct ResolvedLayoutStyle {
     pub(crate) computed: Option<ServoArc<ComputedValues>>,
     pub(crate) taffy: Style<Atom>,
+    preferred_aspect_ratio: PreferredAspectRatio,
     display: LayoutDisplay,
     background_color: PaintColor,
     border_colors: PaintBorderColors,
@@ -380,6 +449,7 @@ impl std::fmt::Debug for ResolvedLayoutStyle {
             .debug_struct("ResolvedLayoutStyle")
             .field("has_computed_values", &self.computed.is_some())
             .field("display", &self.display)
+            .field("preferred_aspect_ratio", &self.preferred_aspect_ratio)
             .field("background_color", &self.background_color)
             .field("border_colors", &self.border_colors)
             .field("generated_content", &self.generated_content)
@@ -601,6 +671,14 @@ impl ResolvedLayoutStyle {
                 LayoutListMarkerPosition::Outside
             }
         };
+        let specified_aspect_ratio = match position_style.aspect_ratio.ratio {
+            PreferredRatio::None => None,
+            PreferredRatio::Ratio(ratio) => Some(ratio.0.0 / ratio.1.0),
+        };
+        let preferred_aspect_ratio = PreferredAspectRatio::from_components(
+            position_style.aspect_ratio.auto,
+            specified_aspect_ratio,
+        );
         let mut taffy = stylo_taffy::to_taffy_style(&computed);
         taffy.size = Size {
             width: taffy_size_dimension(&position_style.width, taffy.size.width),
@@ -618,7 +696,7 @@ impl ResolvedLayoutStyle {
         // replaced-element measure callback runs. CSS Sizing 4 defines zero,
         // infinite and NaN ratios as degenerate, so normalize them at the
         // Stylo/Taffy seam instead of relying only on replaced measurement.
-        taffy.aspect_ratio = usable_aspect_ratio(taffy.aspect_ratio);
+        taffy.aspect_ratio = preferred_aspect_ratio.numeric_ratio();
         if matches!(position_style.flex_basis, GenericFlexBasis::Content) {
             // Blitz's fixed stylo_taffy revision predates Taffy's typed
             // `content` flex-basis. Preserve the Stylo distinction here so
@@ -657,6 +735,7 @@ impl ResolvedLayoutStyle {
         Self {
             computed: Some(computed),
             taffy,
+            preferred_aspect_ratio,
             display,
             background_color,
             border_colors,
@@ -707,6 +786,7 @@ impl ResolvedLayoutStyle {
         background_color: PaintColor,
     ) -> Self {
         taffy.aspect_ratio = usable_aspect_ratio(taffy.aspect_ratio);
+        let preferred_aspect_ratio = PreferredAspectRatio::from_taffy(taffy.aspect_ratio);
         taffy.display = taffy_display(display);
         taffy.item_is_table = matches!(display, LayoutDisplay::Table | LayoutDisplay::InlineTable);
         let overflow_clips = taffy.overflow.x != taffy::Overflow::Visible
@@ -721,6 +801,7 @@ impl ResolvedLayoutStyle {
         Self {
             computed: None,
             taffy,
+            preferred_aspect_ratio,
             display,
             background_color,
             border_colors: PaintBorderColors::all(PaintColor::BLACK),
@@ -1279,6 +1360,7 @@ impl ResolvedLayoutStyle {
             bottom: zero_length,
         };
         placeholder.taffy.aspect_ratio = None;
+        placeholder.preferred_aspect_ratio = PreferredAspectRatio::Auto;
         placeholder.background_color = PaintColor::TRANSPARENT;
         placeholder.border_colors = PaintBorderColors::all(PaintColor::TRANSPARENT);
         placeholder.generated_content = GeneratedContent::None;
@@ -1421,6 +1503,7 @@ impl ResolvedLayoutStyle {
                 display: TaffyDisplay::Block,
                 ..Style::default()
             },
+            preferred_aspect_ratio: PreferredAspectRatio::Auto,
             display: LayoutDisplay::Inline,
             background_color: PaintColor::TRANSPARENT,
             border_colors: PaintBorderColors::default(),
@@ -1478,6 +1561,7 @@ impl ResolvedLayoutStyle {
                 display: taffy_display(display),
                 ..Style::default()
             },
+            preferred_aspect_ratio: PreferredAspectRatio::Auto,
             display,
             background_color: PaintColor::TRANSPARENT,
             border_colors: PaintBorderColors::default(),
@@ -1537,8 +1621,20 @@ impl ResolvedLayoutStyle {
         }
     }
 
-    pub(crate) fn mark_replaced(&mut self) {
+    pub(crate) fn mark_replaced(&mut self, inherent_ratio: Option<f32>) {
         self.taffy.item_is_replaced = true;
+        self.taffy.aspect_ratio = self
+            .preferred_aspect_ratio
+            .resolve_for_replaced(inherent_ratio, self.taffy.box_sizing)
+            .ratio;
+    }
+
+    pub(crate) fn resolved_replaced_aspect_ratio(
+        &self,
+        inherent_ratio: Option<f32>,
+    ) -> ResolvedAspectRatio {
+        self.preferred_aspect_ratio
+            .resolve_for_replaced(inherent_ratio, self.taffy.box_sizing)
     }
 
     pub(crate) fn mark_intrinsic_form_control_container(&mut self) {
@@ -1974,4 +2070,27 @@ pub(crate) fn resolve_stylo_calc_value(calc_ptr: *const (), parent_size: f32) ->
     // originating `ComputedValues` until the containing `LayoutWorld` drops.
     let calc = unsafe { &*(calc_ptr as *const CalcLengthPercentage) };
     calc.resolve(CSSPixelLength::new(parent_size)).px()
+}
+
+#[cfg(test)]
+mod aspect_ratio_tests {
+    use super::*;
+
+    #[test]
+    fn replaced_ratio_resolution_preserves_auto_precedence_and_box_basis() {
+        let specified =
+            PreferredAspectRatio::Ratio(1.0).resolve_for_replaced(Some(2.0), BoxSizing::BorderBox);
+        assert_eq!(specified.ratio, Some(1.0));
+        assert_eq!(specified.box_sizing, BoxSizing::BorderBox);
+
+        let natural = PreferredAspectRatio::AutoAndRatio(1.0)
+            .resolve_for_replaced(Some(2.0), BoxSizing::BorderBox);
+        assert_eq!(natural.ratio, Some(2.0));
+        assert_eq!(natural.box_sizing, BoxSizing::ContentBox);
+
+        let fallback = PreferredAspectRatio::AutoAndRatio(1.0)
+            .resolve_for_replaced(None, BoxSizing::BorderBox);
+        assert_eq!(fallback.ratio, Some(1.0));
+        assert_eq!(fallback.box_sizing, BoxSizing::ContentBox);
+    }
 }
