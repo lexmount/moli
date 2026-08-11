@@ -375,6 +375,13 @@ pub(crate) struct ResolvedLayoutTransform {
     pub(crate) has_unsupported_3d: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum TableLayoutPreference {
+    #[default]
+    Automatic,
+    Fixed,
+}
+
 impl ResolvedLayoutTransform {
     const IDENTITY: Self = Self {
         transform: LayoutTransform2D::IDENTITY,
@@ -422,6 +429,7 @@ pub struct ResolvedLayoutStyle {
     order: i32,
     intrinsic_sizing_deferred: bool,
     grid_template_mode_deferred: bool,
+    table_layout: TableLayoutPreference,
     explicit_z_index: Option<i32>,
     opacity: f32,
     blend_mode: PaintBlendMode,
@@ -479,6 +487,7 @@ impl std::fmt::Debug for ResolvedLayoutStyle {
                 "grid_template_mode_deferred",
                 &self.grid_template_mode_deferred,
             )
+            .field("table_layout", &self.table_layout)
             .field("explicit_z_index", &self.explicit_z_index)
             .field("opacity", &self.opacity)
             .field("blend_mode", &self.blend_mode)
@@ -620,6 +629,12 @@ impl ResolvedLayoutStyle {
                 GenericGridTemplateComponent::Subgrid(_) | GenericGridTemplateComponent::Masonry
             )
         });
+        let table_layout =
+            if computed.clone_table_layout() == style::computed_values::table_layout::T::Fixed {
+                TableLayoutPreference::Fixed
+            } else {
+                TableLayoutPreference::Automatic
+            };
         let out_of_flow = !matches!(
             stylo_position,
             StyloPosition::Static | StyloPosition::Relative | StyloPosition::Sticky
@@ -775,6 +790,7 @@ impl ResolvedLayoutStyle {
             order,
             intrinsic_sizing_deferred,
             grid_template_mode_deferred,
+            table_layout,
             explicit_z_index,
             opacity,
             blend_mode,
@@ -843,6 +859,7 @@ impl ResolvedLayoutStyle {
             order: 0,
             intrinsic_sizing_deferred: false,
             grid_template_mode_deferred: false,
+            table_layout: TableLayoutPreference::Automatic,
             explicit_z_index: None,
             opacity: 1.0,
             blend_mode: PaintBlendMode::Normal,
@@ -902,6 +919,14 @@ impl ResolvedLayoutStyle {
     /// Overrides the flow-relative axes used by deterministic layout tests.
     pub fn with_writing_mode(mut self, writing_mode: taffy::WritingMode) -> Self {
         self.writing_mode = writing_mode;
+        self
+    }
+
+    /// Selects the fixed CSS table algorithm for a synthetic style. The
+    /// effective mode still depends on this style having a non-auto logical
+    /// inline size, exactly as it does for a Stylo-backed style.
+    pub fn with_fixed_table_layout(mut self) -> Self {
+        self.table_layout = TableLayoutPreference::Fixed;
         self
     }
 
@@ -1308,9 +1333,15 @@ impl ResolvedLayoutStyle {
     }
 
     pub(crate) fn table_layout_is_fixed(&self) -> bool {
-        self.computed.as_ref().is_some_and(|computed| {
-            computed.clone_table_layout() == style::computed_values::table_layout::T::Fixed
-        })
+        if self.table_layout != TableLayoutPreference::Fixed {
+            return false;
+        }
+
+        // CSS Tables applies the fixed algorithm only when the table has a
+        // non-auto logical width. Blink additionally treats max-content as
+        // automatic under the stable (non TableIsAutoFixedLayout) behavior.
+        let logical_width = self.writing_mode.to_logical(self.taffy.size).inline_size;
+        !logical_width.is_auto() && !logical_width.is_max_content()
     }
 
     pub(crate) fn table_border_is_collapsed(&self) -> bool {
@@ -1564,6 +1595,7 @@ impl ResolvedLayoutStyle {
             order: 0,
             intrinsic_sizing_deferred: false,
             grid_template_mode_deferred: false,
+            table_layout: TableLayoutPreference::Automatic,
             explicit_z_index: None,
             opacity: 1.0,
             blend_mode: PaintBlendMode::Normal,
@@ -1624,6 +1656,7 @@ impl ResolvedLayoutStyle {
             order: 0,
             intrinsic_sizing_deferred: false,
             grid_template_mode_deferred: false,
+            table_layout: TableLayoutPreference::Automatic,
             explicit_z_index: None,
             opacity: 1.0,
             blend_mode: PaintBlendMode::Normal,
