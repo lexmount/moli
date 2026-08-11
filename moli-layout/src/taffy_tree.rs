@@ -11,7 +11,7 @@ use taffy::{
     ResolveOrZero, RoundTree, RunMode, Size, SizingMode, SizingPurpose, Style, TraversePartialTree,
     TraverseTree, compute_block_layout, compute_cached_layout, compute_cached_size,
     compute_flexbox_layout, compute_grid_layout, compute_hidden_layout,
-    compute_leaf_layout_with_aspect_ratio, compute_root_layout,
+    compute_leaf_layout_with_aspect_ratio_and_writing_mode, compute_root_layout,
     resolve_intrinsic_width_inputs_with_provenance, round_layout_with_scale_factor,
 };
 
@@ -34,6 +34,16 @@ use crate::{
 // at the atomic-inline seam rather than leaking it into every block box.
 const LAYOUT_SUBPIXELS_PER_CSS_PIXEL: f32 = 64.0;
 const INLINE_SUBPIXELS_PER_CSS_PIXEL: f32 = 65_536.0;
+
+#[inline]
+fn box_model_percentage_basis(
+    inputs: LayoutInput,
+    writing_mode: taffy::WritingMode,
+) -> Option<f32> {
+    inputs
+        .constraint_space(writing_mode)
+        .margin_padding_percentage_basis()
+}
 
 pub(crate) fn compute_world_layout<N>(world: &mut LayoutWorld<N>, viewport: PaintViewport)
 where
@@ -324,19 +334,27 @@ where
             continue;
         };
         let item_layout = world.boxes[item.index()].unrounded_layout;
-        let parent_width = (item_layout.size.width
-            - item_layout.border.left
-            - item_layout.border.right
-            - item_layout.padding.left
-            - item_layout.padding.right)
-            .max(0.0);
+        let parent_size = Size {
+            width: (item_layout.size.width
+                - item_layout.border.left
+                - item_layout.border.right
+                - item_layout.padding.left
+                - item_layout.padding.right)
+                .max(0.0),
+            height: (item_layout.size.height
+                - item_layout.border.top
+                - item_layout.border.bottom
+                - item_layout.padding.top
+                - item_layout.padding.bottom)
+                .max(0.0),
+        };
+        let parent_writing_mode = world.boxes[item.index()].style.writing_mode();
+        let percentage_basis = parent_writing_mode.to_logical(parent_size).inline_size;
         let inputs = LayoutInput {
             known_dimensions: Size::NONE,
             definite_dimensions: Size::NONE,
-            parent_size: Size {
-                width: Some(parent_width),
-                height: None,
-            },
+            parent_size: parent_size.map(Some),
+            parent_writing_mode,
             available_space: Size {
                 width: AvailableSpace::MaxContent,
                 height: AvailableSpace::MaxContent,
@@ -352,7 +370,7 @@ where
         let marker_margin = marker_style
             .taffy
             .margin
-            .resolve_or_zero(Some(parent_width), resolve_stylo_calc_value);
+            .resolve_or_zero(Some(percentage_basis), resolve_stylo_calc_value);
         let gap = marker_style.font_size() * 0.5;
         let direction = world.boxes[item.index()].style.direction();
         let x = match direction {
@@ -387,7 +405,7 @@ where
             Point { x, y },
             output,
             marker.index(),
-            Some(parent_width),
+            Some(percentage_basis),
         );
     }
 }
@@ -409,20 +427,29 @@ where
             continue;
         };
         let control_layout = world.boxes[control.index()].unrounded_layout;
-        let content_width = (control_layout.size.width
-            - control_layout.border.left
-            - control_layout.border.right
-            - control_layout.padding.left
-            - control_layout.padding.right
-            - 8.0)
-            .max(0.0);
+        let content_size = Size {
+            width: (control_layout.size.width
+                - control_layout.border.left
+                - control_layout.border.right
+                - control_layout.padding.left
+                - control_layout.padding.right
+                - 8.0)
+                .max(0.0),
+            height: (control_layout.size.height
+                - control_layout.border.top
+                - control_layout.border.bottom
+                - control_layout.padding.top
+                - control_layout.padding.bottom)
+                .max(0.0),
+        };
+        let content_width = content_size.width;
+        let parent_writing_mode = world.boxes[control.index()].style.writing_mode();
+        let percentage_basis = parent_writing_mode.to_logical(content_size).inline_size;
         let inputs = LayoutInput {
             known_dimensions: Size::NONE,
             definite_dimensions: Size::NONE,
-            parent_size: Size {
-                width: Some(content_width),
-                height: None,
-            },
+            parent_size: content_size.map(Some),
+            parent_writing_mode,
             available_space: Size {
                 width: AvailableSpace::Definite(content_width),
                 height: AvailableSpace::MaxContent,
@@ -442,7 +469,7 @@ where
             Point { x, y },
             output,
             content.index(),
-            Some(content_width),
+            Some(percentage_basis),
         );
     }
 }
@@ -594,6 +621,7 @@ struct PositionedContainingArea {
     origin: Point<f32>,
     size: Size<f32>,
     direction: taffy::Direction,
+    writing_mode: taffy::WritingMode,
     requires_inline_layout: bool,
 }
 
@@ -730,6 +758,7 @@ where
                 height: viewport.css_height as f32,
             },
             direction: world.boxes[world.root.index()].style.taffy.direction,
+            writing_mode: world.boxes[world.root.index()].style.writing_mode(),
             requires_inline_layout: false,
         };
     };
@@ -751,6 +780,7 @@ where
                 height: rect.height,
             },
             direction: containing_box.style.taffy.direction,
+            writing_mode: containing_box.style.writing_mode(),
             requires_inline_layout: true,
         };
     }
@@ -768,6 +798,7 @@ where
         },
         size: padding_box_size,
         direction: containing_box.style.taffy.direction,
+        writing_mode: containing_box.style.writing_mode(),
         requires_inline_layout: containing_box.inline_formatting_context,
     }
 }
@@ -866,16 +897,17 @@ fn layout_inline_absolute_child<N>(
 
     let area_width = area.size.width;
     let area_height = area.size.height;
+    let percentage_basis = area.writing_mode.to_logical(area.size).inline_size;
     let aspect_ratio = style.aspect_ratio;
     let margin = style
         .margin
-        .map(|value| value.maybe_resolve(area_width, resolve_stylo_calc_value));
+        .map(|value| value.maybe_resolve(percentage_basis, resolve_stylo_calc_value));
     let padding = style
         .padding
-        .resolve_or_zero(Some(area_width), resolve_stylo_calc_value);
+        .resolve_or_zero(Some(percentage_basis), resolve_stylo_calc_value);
     let border = style
         .border
-        .resolve_or_zero(Some(area_width), resolve_stylo_calc_value);
+        .resolve_or_zero(Some(percentage_basis), resolve_stylo_calc_value);
     let padding_border_sum = (padding + border).sum_axes();
     let box_sizing_adjustment = if style.box_sizing == BoxSizing::ContentBox {
         padding_border_sum
@@ -959,6 +991,7 @@ fn layout_inline_absolute_child<N>(
                 known_dimensions,
                 definite_dimensions: known_dimensions,
                 parent_size: area.size.map(Some),
+                parent_writing_mode: area.writing_mode,
                 available_space,
                 sizing_mode: SizingMode::ContentSize,
                 sizing_purpose: SizingPurpose::IntrinsicContribution,
@@ -979,6 +1012,7 @@ fn layout_inline_absolute_child<N>(
                 known_dimensions,
                 definite_dimensions: known_dimensions,
                 parent_size: area.size.map(Some),
+                parent_writing_mode: area.writing_mode,
                 available_space,
                 sizing_mode: SizingMode::ContentSize,
                 sizing_purpose: SizingPurpose::Layout,
@@ -997,6 +1031,7 @@ fn layout_inline_absolute_child<N>(
             known_dimensions: final_size.map(Some),
             definite_dimensions: known_dimensions,
             parent_size: area.size.map(Some),
+            parent_writing_mode: area.writing_mode,
             available_space,
             sizing_mode: SizingMode::ContentSize,
             sizing_purpose: SizingPurpose::Layout,
@@ -1411,9 +1446,11 @@ where
             let id = LayoutBoxId::from_taffy(node_id);
             if box_is_effectively_floated(self, id) {
                 let style = &self.boxes[id.index()].style.taffy;
+                let percentage_basis =
+                    box_model_percentage_basis(inputs, self.boxes[id.index()].style.writing_mode());
                 let margin = style
                     .margin
-                    .resolve_or_zero(inputs.parent_size.width, resolve_stylo_calc_value);
+                    .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
                 LayoutInput {
                     available_space: inputs
                         .available_space
@@ -1560,6 +1597,7 @@ where
         let text = layout_box.text.clone();
         let font_size = layout_box.style.font_size();
         let line_height = layout_box.style.line_height();
+        let writing_mode = layout_box.style.writing_mode();
         let replaced_context = layout_box.replaced_context;
         let resolved_aspect_ratio = layout_box.resolved_aspect_ratio();
 
@@ -1572,21 +1610,18 @@ where
             // replaced result through that helper would therefore apply the
             // box model twice (most visibly on padded form controls).
             let size = measure_replaced(
-                inputs.known_dimensions,
-                inputs.parent_size,
-                inputs.available_space,
+                inputs.constraint_space(writing_mode),
                 &context,
                 resolved_aspect_ratio,
                 &style,
-                inputs.sizing_mode,
-                inputs.axis,
             );
             return LayoutOutput::from_sizes(size, size);
         }
 
-        compute_leaf_layout_with_aspect_ratio(
+        compute_leaf_layout_with_aspect_ratio_and_writing_mode(
             inputs,
             &style,
+            writing_mode,
             resolved_aspect_ratio,
             resolve_stylo_calc_value,
             |known_dimensions, available_space| {
@@ -1615,8 +1650,10 @@ where
         block_context: Option<&mut BlockContext<'_>>,
     ) -> InlineLayoutResult {
         let style = self.boxes[id.index()].style.taffy.clone();
+        let writing_mode = self.boxes[id.index()].style.writing_mode();
         let resolved_aspect_ratio = self.boxes[id.index()].resolved_aspect_ratio();
         let is_floated = box_is_effectively_floated(self, id);
+        let percentage_basis = box_model_percentage_basis(inputs, writing_mode);
         // Both Taffy's block-float parent and Moli's IFC float parent
         // pass the border-box space left after horizontal margins. Taffy's
         // generic leaf adapter normally subtracts a leaf's own margins, so
@@ -1625,7 +1662,7 @@ where
         let leaf_inputs = if is_floated {
             let margin = style
                 .margin
-                .resolve_or_zero(inputs.parent_size.width, resolve_stylo_calc_value);
+                .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
             LayoutInput {
                 available_space: inputs
                     .available_space
@@ -1641,9 +1678,10 @@ where
             .take()
             .unwrap_or_else(empty_inline_context);
         let mut measurement = None;
-        let mut output = compute_leaf_layout_with_aspect_ratio(
+        let mut output = compute_leaf_layout_with_aspect_ratio_and_writing_mode(
             leaf_inputs,
             &style,
+            writing_mode,
             resolved_aspect_ratio,
             resolve_stylo_calc_value,
             |known_dimensions, available_space| {
@@ -1668,10 +1706,10 @@ where
             depends_on_block_constraints = measurement.depends_on_block_constraints;
             let padding = style
                 .padding
-                .resolve_or_zero(inputs.parent_size.width, resolve_stylo_calc_value);
+                .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
             let border = style
                 .border
-                .resolve_or_zero(inputs.parent_size.width, resolve_stylo_calc_value);
+                .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
             let content_box_height =
                 (output.size.height - padding.top - padding.bottom - border.top - border.bottom)
                     .max(0.0);
@@ -1739,6 +1777,7 @@ where
         is_floated: bool,
         block_context: Option<&mut BlockContext<'_>>,
     ) -> InlineMeasurement {
+        let parent_writing_mode = self.boxes[owner.index()].style.writing_mode();
         let child_inputs = LayoutInput {
             run_mode: inputs.run_mode,
             sizing_mode: SizingMode::InherentSize,
@@ -1747,6 +1786,7 @@ where
             known_dimensions: Size::NONE,
             definite_dimensions: Size::NONE,
             parent_size: available_space.into_options(),
+            parent_writing_mode,
             available_space,
             vertical_margins_are_collapsible: Line::FALSE,
         };
@@ -1766,8 +1806,7 @@ where
         // entire calc expression, including its absolute term (for example
         // `calc(0% + 30px)`). A final definite-width layout still supplies its
         // actual basis here.
-        let percentage_basis =
-            inline_percentage_basis(available_space.width, inputs.sizing_purpose);
+        let percentage_basis = inline_percentage_basis(child_inputs, parent_writing_mode);
         let mut layout = context.unbroken.clone();
         let mut atomic = vec![None; context.objects.len()];
         let mut atomic_baseline_ascents = vec![None; context.objects.len()];
@@ -2006,12 +2045,14 @@ where
                 .is_some_and(|context| context.has_floats())
         {
             let container_style = &self.boxes[owner.index()].style.taffy;
-            let padding = container_style
-                .padding
-                .resolve_or_zero(inputs.parent_size.width, resolve_stylo_calc_value);
-            let border = container_style
-                .border
-                .resolve_or_zero(inputs.parent_size.width, resolve_stylo_calc_value);
+            let padding = container_style.padding.resolve_or_zero(
+                box_model_percentage_basis(inputs, parent_writing_mode),
+                resolve_stylo_calc_value,
+            );
+            let border = container_style.border.resolve_or_zero(
+                box_model_percentage_basis(inputs, parent_writing_mode),
+                resolve_stylo_calc_value,
+            );
             let padding_border = padding + border;
             if let Some(block_context) = block_context {
                 let contains_floats = block_context.is_bfc_root();
@@ -2189,9 +2230,10 @@ where
                         taffy::Float::Right => FloatDirection::Right,
                         taffy::Float::None => continue,
                     };
-                    let margin = style
-                        .margin
-                        .resolve_or_zero(child_inputs.parent_size.width, resolve_stylo_calc_value);
+                    let margin = style.margin.resolve_or_zero(
+                        box_model_percentage_basis(child_inputs, child_inputs.parent_writing_mode),
+                        resolve_stylo_calc_value,
+                    );
                     // A non-replaced float's formatting-context algorithm
                     // owns its content size; pass it the slot remaining after
                     // margins just like Taffy's block-float parent does. A
@@ -2224,7 +2266,10 @@ where
                         },
                         output,
                         order: usize::try_from(data.inline_box_id).unwrap_or(usize::MAX),
-                        parent_width: child_inputs.parent_size.width,
+                        percentage_basis: box_model_percentage_basis(
+                            child_inputs,
+                            child_inputs.parent_writing_mode,
+                        ),
                     });
                     let next_slot =
                         block_context.find_content_slot(state.line_y() as f32, Clear::None, None);
@@ -2253,7 +2298,7 @@ where
                 floated.location,
                 floated.output,
                 floated.order,
-                floated.parent_width,
+                floated.percentage_basis,
             );
         }
         for (line_index, line) in measurement.layout.lines().enumerate() {
@@ -2325,18 +2370,18 @@ where
         location: Point<f32>,
         output: LayoutOutput,
         order: usize,
-        parent_width: Option<f32>,
+        percentage_basis: Option<f32>,
     ) {
         let style = &self.boxes[child.index()].style.taffy;
         let padding = style
             .padding
-            .resolve_or_zero(parent_width, resolve_stylo_calc_value);
+            .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
         let border = style
             .border
-            .resolve_or_zero(parent_width, resolve_stylo_calc_value);
+            .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
         let margin = style
             .margin
-            .resolve_or_zero(parent_width, resolve_stylo_calc_value);
+            .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
         let scrollbar_size = Size {
             width: if style.overflow.y == taffy::Overflow::Scroll {
                 style.scrollbar_width
@@ -2363,43 +2408,79 @@ where
     }
 }
 
-fn inline_percentage_basis(
-    available: AvailableSpace,
-    sizing_purpose: SizingPurpose,
-) -> Option<f32> {
-    available
-        .into_option()
-        .or_else(|| (sizing_purpose == SizingPurpose::IntrinsicContribution).then_some(0.0))
+fn inline_percentage_basis(inputs: LayoutInput, writing_mode: taffy::WritingMode) -> Option<f32> {
+    box_model_percentage_basis(inputs, writing_mode)
+        .or_else(|| (inputs.sizing_purpose == SizingPurpose::IntrinsicContribution).then_some(0.0))
 }
 
 #[cfg(test)]
 mod tests {
     use super::inline_percentage_basis;
-    use taffy::{AvailableSpace, SizingPurpose};
+    use taffy::{LayoutInput, Size, SizingPurpose, WritingMode};
+
+    fn percentage_inputs(
+        parent_size: Size<Option<f32>>,
+        parent_writing_mode: WritingMode,
+        sizing_purpose: SizingPurpose,
+    ) -> LayoutInput {
+        LayoutInput {
+            parent_size,
+            parent_writing_mode,
+            sizing_purpose,
+            ..LayoutInput::HIDDEN
+        }
+    }
 
     #[test]
-    fn intrinsic_inline_percentages_use_a_zero_basis() {
+    fn intrinsic_inline_percentages_use_zero_when_the_parent_inline_size_is_indefinite() {
         assert_eq!(
             inline_percentage_basis(
-                AvailableSpace::MinContent,
-                SizingPurpose::IntrinsicContribution,
+                percentage_inputs(
+                    Size::NONE,
+                    WritingMode::HorizontalTb,
+                    SizingPurpose::IntrinsicContribution,
+                ),
+                WritingMode::HorizontalTb,
             ),
             Some(0.0)
         );
         assert_eq!(
             inline_percentage_basis(
-                AvailableSpace::MaxContent,
-                SizingPurpose::IntrinsicContribution,
+                percentage_inputs(
+                    Size {
+                        width: Some(240.0),
+                        height: None,
+                    },
+                    WritingMode::HorizontalTb,
+                    SizingPurpose::Layout,
+                ),
+                WritingMode::HorizontalTb,
             ),
-            Some(0.0)
-        );
-        assert_eq!(
-            inline_percentage_basis(AvailableSpace::Definite(240.0), SizingPurpose::Layout),
             Some(240.0)
         );
         assert_eq!(
-            inline_percentage_basis(AvailableSpace::MaxContent, SizingPurpose::Layout),
+            inline_percentage_basis(
+                percentage_inputs(Size::NONE, WritingMode::HorizontalTb, SizingPurpose::Layout,),
+                WritingMode::HorizontalTb,
+            ),
             None
+        );
+    }
+
+    #[test]
+    fn inline_box_percentages_follow_a_vertical_containing_blocks_inline_axis() {
+        let inputs = percentage_inputs(
+            Size {
+                width: Some(100.0),
+                height: Some(240.0),
+            },
+            WritingMode::VerticalRl,
+            SizingPurpose::Layout,
+        );
+
+        assert_eq!(
+            inline_percentage_basis(inputs, WritingMode::VerticalRl),
+            Some(240.0)
         );
     }
 }
@@ -2416,7 +2497,7 @@ struct InlineFloatPlacement {
     location: Point<f32>,
     output: LayoutOutput,
     order: usize,
-    parent_width: Option<f32>,
+    percentage_basis: Option<f32>,
 }
 
 struct InlineMeasurement {

@@ -929,6 +929,34 @@ html,body{margin:0;padding:0}
     }
 
     #[test]
+    fn replaced_percentage_padding_uses_vertical_containing_block_inline_size() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+#host{writing-mode:vertical-lr;width:100px;height:200px}
+#subject{display:block;box-sizing:content-box;width:10px;height:10px;padding-left:10%;padding-right:10%;background:rgb(17,18,19)}
+</style></head><body><div id=host><img id=subject></div></body></html>"#,
+            )
+            .await;
+
+            // Chromium resolves both physical padding sides against the
+            // vertical containing block's 200px logical inline-size. Use
+            // vertical-lr here so this regression isolates percentage
+            // resolution from vertical-rl's separate reversed block flow.
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(17, 18, 19)),
+                moli_layout::PaintRect::new(0.0, 0.0, 50.0, 10.0),
+            );
+        }));
+    }
+
+    #[test]
     fn fixed_table_layout_distributes_unresolved_columns_equally() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()

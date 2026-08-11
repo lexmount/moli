@@ -7,8 +7,8 @@
 
 use style::Atom;
 use taffy::{
-    AvailableSpace, BoxSizing, CoreStyle as _, MaybeMath, MaybeResolve, RequestedAxis,
-    ResolveOrZero as _, ResolvedAspectRatio, Size, SizingMode,
+    AvailableSpace, BoxSizing, ConstraintSpace, CoreStyle as _, LayoutInput, MaybeMath,
+    MaybeResolve, RequestedAxis, ResolveOrZero as _, ResolvedAspectRatio, Size, SizingMode,
 };
 
 use crate::{LayoutReplacedKind, ReplacedMetrics, style::resolve_stylo_calc_value};
@@ -217,21 +217,26 @@ fn ratio_basis_scale(constrained: f32, original: f32, inset: f32, box_sizing: Bo
 }
 
 pub(crate) fn measure_replaced(
-    known_dimensions: Size<Option<f32>>,
-    parent_size: Size<Option<f32>>,
-    available_space: Size<AvailableSpace>,
+    constraint_space: ConstraintSpace,
     context: &ReplacedContext,
     resolved_aspect_ratio: ResolvedAspectRatio,
     style: &taffy::Style<Atom>,
-    sizing_mode: SizingMode,
-    requested_axis: RequestedAxis,
 ) -> Size<f32> {
+    let percentage_basis = constraint_space.margin_padding_percentage_basis();
+    let LayoutInput {
+        known_dimensions,
+        parent_size,
+        available_space,
+        sizing_mode,
+        axis: requested_axis,
+        ..
+    } = constraint_space.into_layout_input();
     let padding = style
         .padding()
-        .resolve_or_zero(parent_size.width, resolve_stylo_calc_value);
+        .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
     let border = style
         .border()
-        .resolve_or_zero(parent_size.width, resolve_stylo_calc_value);
+        .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
     let padding_border = padding + border;
     let padding_border_sum = Size {
         width: padding_border.left + padding_border.right,
@@ -502,6 +507,26 @@ fn is_min_or_max_content(dimension: taffy::Dimension) -> bool {
 mod tests {
     use super::*;
 
+    fn measurement_space(
+        parent_size: Size<Option<f32>>,
+        parent_writing_mode: taffy::WritingMode,
+        writing_mode: taffy::WritingMode,
+    ) -> ConstraintSpace {
+        LayoutInput {
+            run_mode: taffy::RunMode::ComputeSize,
+            sizing_mode: SizingMode::InherentSize,
+            axis: RequestedAxis::Both,
+            parent_size,
+            parent_writing_mode,
+            available_space: Size {
+                width: AvailableSpace::MaxContent,
+                height: AvailableSpace::MaxContent,
+            },
+            ..LayoutInput::HIDDEN
+        }
+        .constraint_space(writing_mode)
+    }
+
     fn image_context() -> ReplacedContext {
         ReplacedContext::for_element(
             LayoutReplacedKind::Image,
@@ -516,12 +541,11 @@ mod tests {
 
     fn measure(style: &taffy::Style<Atom>) -> Size<f32> {
         measure_replaced(
-            Size::NONE,
-            Size::NONE,
-            Size {
-                width: AvailableSpace::MaxContent,
-                height: AvailableSpace::MaxContent,
-            },
+            measurement_space(
+                Size::NONE,
+                taffy::WritingMode::HorizontalTb,
+                taffy::WritingMode::HorizontalTb,
+            ),
             &image_context(),
             ResolvedAspectRatio {
                 ratio: style
@@ -531,8 +555,6 @@ mod tests {
                 box_sizing: style.box_sizing,
             },
             style,
-            SizingMode::InherentSize,
-            RequestedAxis::Both,
         )
     }
 
@@ -555,20 +577,17 @@ mod tests {
         };
         let measure_with_basis = |box_sizing| {
             measure_replaced(
-                Size::NONE,
-                Size::NONE,
-                Size {
-                    width: AvailableSpace::MaxContent,
-                    height: AvailableSpace::MaxContent,
-                },
+                measurement_space(
+                    Size::NONE,
+                    taffy::WritingMode::HorizontalTb,
+                    taffy::WritingMode::HorizontalTb,
+                ),
                 &image_context(),
                 ResolvedAspectRatio {
                     ratio: Some(2.0),
                     box_sizing,
                 },
                 &style,
-                SizingMode::InherentSize,
-                RequestedAxis::Both,
             )
         };
 
@@ -584,6 +603,49 @@ mod tests {
             Size {
                 width: 100.0,
                 height: 60.0,
+            }
+        );
+    }
+
+    #[test]
+    fn percentage_padding_uses_the_containing_blocks_logical_inline_size() {
+        let style = taffy::Style::<Atom> {
+            box_sizing: BoxSizing::ContentBox,
+            size: Size {
+                width: taffy::Dimension::length(10.0),
+                height: taffy::Dimension::length(10.0),
+            },
+            padding: taffy::Rect {
+                left: taffy::LengthPercentage::percent(0.1),
+                right: taffy::LengthPercentage::percent(0.1),
+                top: taffy::LengthPercentage::length(0.0),
+                bottom: taffy::LengthPercentage::length(0.0),
+            },
+            ..taffy::Style::default()
+        };
+
+        let size = measure_replaced(
+            measurement_space(
+                Size {
+                    width: Some(100.0),
+                    height: Some(200.0),
+                },
+                taffy::WritingMode::VerticalRl,
+                taffy::WritingMode::VerticalRl,
+            ),
+            &image_context(),
+            ResolvedAspectRatio {
+                ratio: None,
+                box_sizing: BoxSizing::ContentBox,
+            },
+            &style,
+        );
+
+        assert_eq!(
+            size,
+            Size {
+                width: 50.0,
+                height: 10.0,
             }
         );
     }
