@@ -4,16 +4,17 @@ use parley::{AlignmentOptions, PositionedLayoutItem, YieldData};
 use style::Atom;
 use taffy::compute::ResolvedIntrinsicWidthInputs;
 use taffy::{
-    AlignContent, AvailableSpace, BlockContext, BlockFormattingContext, BoxSizing, CacheTree,
-    Clear, Dimension, Display, FloatDirection, IntrinsicSizeResult, Layout, LayoutBlockContainer,
-    LayoutFlexboxContainer, LayoutGridContainer, LayoutInput, LayoutOutput, LayoutPartialTree,
-    Line, LogicalOffset, MaybeMath, MaybeResolve, NodeId, Point, ResolveOrZero, RoundTree, RunMode,
-    Size, SizingMode, SizingPurpose, Style, TraversePartialTree, TraverseTree, WritingDirection,
-    compute_block_layout, compute_cached_layout, compute_cached_size,
-    compute_content_alignment_offset, compute_flexbox_layout, compute_grid_layout,
-    compute_hidden_layout, compute_leaf_layout_with_aspect_ratio_and_writing_mode,
-    compute_root_layout, resolve_content_alignment_fallback,
-    resolve_intrinsic_width_inputs_with_provenance, round_layout_with_scale_factor,
+    AbsoluteAxis, AlignContent, AutoSizeBehavior, AvailableSpace, BlockContext,
+    BlockFormattingContext, BoxSizing, CacheTree, Clear, Dimension, Display, FloatDirection,
+    IntrinsicSizeResult, Layout, LayoutBlockContainer, LayoutFlexboxContainer, LayoutGridContainer,
+    LayoutInput, LayoutOutput, LayoutPartialTree, Line, LogicalOffset, MaybeMath, MaybeResolve,
+    NodeId, Point, ResolveOrZero, RoundTree, RunMode, Size, SizingMode, SizingPurpose, Style,
+    TraversePartialTree, TraverseTree, WritingDirection, compute_block_layout,
+    compute_cached_layout, compute_cached_size, compute_content_alignment_offset,
+    compute_flexbox_layout, compute_grid_layout, compute_hidden_layout,
+    compute_leaf_layout_with_aspect_ratio_and_writing_mode, compute_root_layout,
+    resolve_content_alignment_fallback, resolve_intrinsic_width_inputs_with_provenance,
+    round_layout_with_scale_factor,
 };
 
 use crate::{
@@ -364,6 +365,7 @@ where
             sizing_purpose: SizingPurpose::Layout,
             run_mode: RunMode::PerformLayout,
             axis: taffy::RequestedAxis::Both,
+            block_auto_behavior: AutoSizeBehavior::FitContent,
             block_margins_are_collapsible: Line::FALSE,
         };
         let output = world.compute_child_layout(marker.to_taffy(), inputs);
@@ -459,6 +461,7 @@ where
             sizing_purpose: SizingPurpose::Layout,
             run_mode: RunMode::PerformLayout,
             axis: taffy::RequestedAxis::Both,
+            block_auto_behavior: AutoSizeBehavior::FitContent,
             block_margins_are_collapsible: Line::FALSE,
         };
         let output = world.compute_child_layout(content.to_taffy(), inputs);
@@ -891,6 +894,7 @@ fn layout_inline_absolute_child<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
+    let child_writing_mode = world.boxes[child.index()].style.writing_mode();
     let style = world.boxes[child.index()].style.taffy.clone();
     if style.display == Display::None || style.position != taffy::Position::Absolute {
         return;
@@ -931,6 +935,15 @@ fn layout_inline_absolute_child<N>(
         .inset
         .bottom
         .maybe_resolve(area_height, resolve_stylo_calc_value);
+    let block_auto_behavior = match child_writing_mode.block_axis() {
+        AbsoluteAxis::Horizontal if left.is_some() && right.is_some() => {
+            AutoSizeBehavior::StretchExplicit
+        }
+        AbsoluteAxis::Vertical if top.is_some() && bottom.is_some() => {
+            AutoSizeBehavior::StretchExplicit
+        }
+        _ => AutoSizeBehavior::FitContent,
+    };
     let style_size = style
         .size
         .maybe_resolve(area.size, resolve_stylo_calc_value)
@@ -998,6 +1011,7 @@ fn layout_inline_absolute_child<N>(
                 sizing_purpose: SizingPurpose::IntrinsicContribution,
                 run_mode: RunMode::ComputeSize,
                 axis: taffy::RequestedAxis::Horizontal,
+                block_auto_behavior,
                 block_margins_are_collapsible: Line::FALSE,
             },
             available_width,
@@ -1019,6 +1033,7 @@ fn layout_inline_absolute_child<N>(
                 sizing_purpose: SizingPurpose::Layout,
                 run_mode: RunMode::ComputeSize,
                 axis: taffy::RequestedAxis::Both,
+                block_auto_behavior,
                 block_margins_are_collapsible: Line::FALSE,
             },
         )
@@ -1038,6 +1053,7 @@ fn layout_inline_absolute_child<N>(
             sizing_purpose: SizingPurpose::Layout,
             run_mode: RunMode::PerformLayout,
             axis: taffy::RequestedAxis::Both,
+            block_auto_behavior,
             block_margins_are_collapsible: Line::FALSE,
         },
     );
@@ -1785,6 +1801,7 @@ where
             sizing_mode: SizingMode::InherentSize,
             sizing_purpose: inputs.sizing_purpose,
             axis: inputs.axis,
+            block_auto_behavior: AutoSizeBehavior::FitContent,
             known_dimensions: Size::NONE,
             definite_dimensions: Size::NONE,
             parent_size: available_space.into_options(),

@@ -980,6 +980,46 @@ html,body{margin:0;padding:0}
     }
 
     #[test]
+    fn layout_renderer_orders_content_block_sizing_ratio_and_explicit_stretch() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+.target{width:100px;aspect-ratio:10}.content{height:25px}
+#ratio-auto{height:auto;background:rgb(231,1,1)}
+#ratio-max{height:auto;max-height:15px;background:rgb(232,2,2)}
+#ratio-scroll{height:auto;overflow:scroll;background:rgb(233,3,3)}
+#grid-host{display:grid;width:100px;height:100px;grid-template-columns:100px;grid-template-rows:100px}
+#grid-item{width:100px;height:auto;aspect-ratio:10;align-self:stretch;background:rgb(234,4,4)}
+</style></head><body>
+<div id=ratio-auto class=target><div class=content></div></div>
+<div id=ratio-max class=target><div class=content></div></div>
+<div id=ratio-scroll class=target><div class=content></div></div>
+<div id=grid-host><div id=grid-item><div class=content></div></div></div>
+</body></html>"#,
+            )
+            .await;
+
+            for (color, expected) in [
+                (rgb(231, 1, 1), (0.0, 0.0, 100.0, 25.0)),
+                (rgb(232, 2, 2), (0.0, 25.0, 100.0, 15.0)),
+                (rgb(233, 3, 3), (0.0, 40.0, 100.0, 10.0)),
+                (rgb(234, 4, 4), (0.0, 50.0, 100.0, 100.0)),
+            ] {
+                assert_paint_rect(
+                    solid_paint_rect(&snapshot, color),
+                    moli_layout::PaintRect::new(expected.0, expected.1, expected.2, expected.3),
+                );
+            }
+        }));
+    }
+
+    #[test]
     fn layout_renderer_resolves_cyclic_preferred_width_after_parent_contribution() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
