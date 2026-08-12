@@ -9862,8 +9862,9 @@ fn mouse_event_offsets_follow_retargeted_shadow_targets() {
     'html, body { padding: 0; margin: 0; } ' +
     'my-host { display: block; width: 180px; height: 80px; margin: 10px 20px; padding: 10px; }';
   document.documentElement.firstChild.appendChild(pageStyle);
-  // Keep the span non-atomic while fixing its line-box top independently of
-  // whichever default font the host has installed.
+  // Keep the span non-atomic while fixing the shared line-box top used by
+  // MouseEvent offsets. The span's own fragment top still depends on font
+  // metrics, so compare it only across equivalent light/shadow trees below.
   const shadowStyle =
     '#container { width: 160px; height: 60px; padding: 10px; } ' +
     '#target { line-height: 20px; vertical-align: top; margin-left: 5px; }';
@@ -9897,6 +9898,7 @@ fn mouse_event_offsets_follow_retargeted_shadow_targets() {
   light.innerHTML =
     '<style>' + shadowStyle + '</style><div id="container"><span id="target">Click</span></div>';
   const lightTarget = light.querySelector('#target');
+  const lightTargetOffsetTop = lightTarget.offsetTop;
   const lightContainer = light.querySelector('#container');
   const lightLogs = attachLoggers([lightTarget, lightContainer, light, document.body], 'light-down');
   const lightEvent = new MouseEvent('light-down', {
@@ -9919,7 +9921,6 @@ fn mouse_event_offsets_follow_retargeted_shadow_targets() {
     light.offsetLeft,
     light.offsetTop,
     lightTarget.offsetLeft,
-    lightTarget.offsetTop,
     Object.hasOwn(lightEvent, 'offsetX'),
     Object.hasOwn(lightEvent, 'offsetY'),
     Object.hasOwn(MouseEvent.prototype, 'offsetX'),
@@ -9948,7 +9949,7 @@ fn mouse_event_offsets_follow_retargeted_shadow_targets() {
   }));
   const closedResult = [
     closedTarget.offsetLeft,
-    closedTarget.offsetTop,
+    closedTarget.offsetTop === lightTargetOffsetTop,
     closedLogs.join(',')
   ].join('|');
 
@@ -9988,9 +9989,9 @@ fn mouse_event_offsets_follow_retargeted_shadow_targets() {
     assert_eq!(
         result,
         concat!(
-            "20|10|45|30|false|false|true|true|get offsetX|0|true|true|true|TypeError|",
+            "20|10|45|false|false|true|true|get offsetX|0|true|true|true|TypeError|",
             "span:span:21:17,div:span:21:17,my-host:span:21:17,body:span:21:17|",
-            "45|30|",
+            "45|true|",
             "span:span:21:17,div:span:21:17,#shadow-root:span:21:17,",
             "my-host:my-host:31:27,body:my-host:31:27|",
             "45|30|",
