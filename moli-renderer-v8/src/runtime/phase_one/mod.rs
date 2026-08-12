@@ -857,6 +857,75 @@ html,body{margin:0;padding:0}
     }
 
     #[test]
+    fn layout_renderer_preserves_parameterized_fit_content_sizing() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+.case,.target{height:10px;font-size:0}
+.host{width:200px}
+.atom{display:inline-block;height:0}
+.w50{width:50px}.w60{width:60px}.w100{width:100px}
+#between{width:fit-content(100px);background:rgb(201,1,1)}
+#below{width:fit-content(50px);background:rgb(202,2,2)}
+#above{width:fit-content(200px);background:rgb(203,3,3)}
+#percent{width:fit-content(50%);background:rgb(204,4,4)}
+#minimum{width:10px;min-width:fit-content(100px);background:rgb(205,5,5)}
+#maximum{width:200px;max-width:fit-content(100px);background:rgb(206,6,6)}
+#content-box{box-sizing:content-box;width:fit-content(100px);padding:0 10px;background:rgb(207,7,7)}
+#border-box{box-sizing:border-box;width:fit-content(100px);padding:0 10px;background:rgb(208,8,8)}
+#calculated{width:fit-content(calc(50% + 10px));background:rgb(209,9,9)}
+#cyclic-preferred-min{width:min-content;background:rgb(210,10,10)}
+#cyclic-preferred-max{width:max-content;background:rgb(211,11,11)}
+#cyclic-minimum{width:min-content;background:rgb(212,12,12)}
+#cyclic-maximum{width:min-content;background:rgb(213,13,13)}
+</style></head><body>
+<div id=between class=case><i class="atom w60"></i><i class="atom w60"></i></div>
+<div id=below class=case><i class="atom w100"></i><i class="atom w100"></i></div>
+<div id=above class=case><i class="atom w50"></i><i class="atom w50"></i></div>
+<div class=host><div id=percent class=target><i class="atom w60"></i><i class="atom w60"></i></div></div>
+<div id=minimum class=case><i class="atom w60"></i><i class="atom w60"></i></div>
+<div id=maximum class=case><i class="atom w60"></i><i class="atom w60"></i></div>
+<div id=content-box class=case><i class="atom w60"></i><i class="atom w60"></i></div>
+<div id=border-box class=case><i class="atom w60"></i><i class="atom w60"></i></div>
+<div class=host><div id=calculated class=target><i class="atom w60"></i><i class="atom w60"></i></div></div>
+<div id=cyclic-preferred-min class=case><div class=target style="width:fit-content(50%)"><i class="atom w100"></i><i class="atom w100"></i></div></div>
+<div id=cyclic-preferred-max class=case><div class=target style="width:fit-content(50%)"><i class="atom w50"></i><i class="atom w50"></i></div></div>
+<div id=cyclic-minimum class=case><div class=target style="width:50px;min-width:fit-content(50%)"><i class="atom w100"></i><i class="atom w100"></i></div></div>
+<div id=cyclic-maximum class=case><div class=target style="width:200px;max-width:fit-content(50%)"><i class="atom w50"></i><i class="atom w50"></i></div></div>
+</body></html>"#,
+            )
+            .await;
+
+            for (color, width, y) in [
+                (rgb(201, 1, 1), 100.0, 0.0),
+                (rgb(202, 2, 2), 100.0, 10.0),
+                (rgb(203, 3, 3), 100.0, 20.0),
+                (rgb(204, 4, 4), 100.0, 30.0),
+                (rgb(205, 5, 5), 100.0, 40.0),
+                (rgb(206, 6, 6), 100.0, 50.0),
+                (rgb(207, 7, 7), 120.0, 60.0),
+                (rgb(208, 8, 8), 100.0, 70.0),
+                (rgb(209, 9, 9), 110.0, 80.0),
+                (rgb(210, 10, 10), 100.0, 90.0),
+                (rgb(211, 11, 11), 100.0, 100.0),
+                (rgb(212, 12, 12), 100.0, 110.0),
+                (rgb(213, 13, 13), 100.0, 120.0),
+            ] {
+                assert_paint_rect(
+                    solid_paint_rect(&snapshot, color),
+                    moli_layout::PaintRect::new(0.0, y, width, 10.0),
+                );
+            }
+        }));
+    }
+
+    #[test]
     fn layout_renderer_resolves_cyclic_preferred_width_after_parent_contribution() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()

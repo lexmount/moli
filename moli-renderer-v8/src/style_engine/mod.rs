@@ -1115,12 +1115,10 @@ pub(crate) fn ensure_stylo_browser_compat_prefs() {
         stylo_static_prefs::set_pref!("layout.css.tree-counting-functions.enabled", true);
         stylo_static_prefs::set_pref!("layout.css.zoom.enabled", true);
         stylo_static_prefs::set_pref!("layout.grid.enabled", true);
-        // Stylo exposes the experimental CSS Sizing `fit-content(<length>)`
-        // form behind a Servo pref. Chromium 147 rejects that function for
-        // width/height while still accepting the bare `fit-content` keyword
-        // and grid track `fit-content()`. Keep declaration parsing, CSSOM and
-        // CSS.supports on the Chromium surface; the grid parser is separate.
-        stylo_static_prefs::set_pref!("layout.css.fit-content-function.enabled", false);
+        // Keep parsing capability synchronized with the typed Stylo-to-Taffy
+        // boundary. Parameterized fit-content is resolved by the common
+        // intrinsic sizing path for preferred, minimum, and maximum sizes.
+        stylo_static_prefs::set_pref!("layout.css.fit-content-function.enabled", true);
         // Blitz d788124a enables Stylo's omnibus Servo gate before creating
         // its Stylist. CSS masking is implemented in this pinned Stylo world
         // but remains grouped behind that gate, so paint cannot receive the
