@@ -926,6 +926,60 @@ html,body{margin:0;padding:0}
     }
 
     #[test]
+    fn layout_renderer_resolves_intrinsic_block_constraints_after_content_layout() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+.target{width:100px}.content{height:30px}
+#block-preferred{height:max-content;background:rgb(221,1,1)}
+#block-minimum{height:0;min-height:max-content;background:rgb(222,2,2)}
+#block-maximum{height:60px;max-height:min-content;background:rgb(223,3,3)}
+#flex-row{display:flex;height:fit-content;background:rgb(224,4,4)}
+#flex-column{display:flex;flex-direction:column;height:0;min-height:max-content;background:rgb(225,5,5)}
+#grid{display:grid;height:60px;max-height:min-content;background:rgb(226,6,6)}
+#content-box{box-sizing:content-box;height:0;min-height:max-content;padding:5px 0;background:rgb(227,7,7)}
+#absolute-host{position:relative;width:100px;height:100px}
+#absolute{position:absolute;top:50%;bottom:0;width:20px;height:fit-content;background:rgb(228,8,8)}
+</style></head><body>
+<div id=block-preferred class=target><div class=content></div></div>
+<div id=block-minimum class=target><div class=content></div></div>
+<div id=block-maximum class=target><div class=content></div></div>
+<div id=flex-row class=target><div class=content></div></div>
+<div id=flex-column class=target><div class=content></div></div>
+<div id=grid class=target><div class=content></div></div>
+<div id=content-box class=target><div class=content></div></div>
+<div id=absolute-host><div id=absolute><div class=content></div></div></div>
+</body></html>"#,
+            )
+            .await;
+
+            for (color, expected) in [
+                (rgb(221, 1, 1), (0.0, 0.0, 100.0, 30.0)),
+                (rgb(222, 2, 2), (0.0, 30.0, 100.0, 30.0)),
+                (rgb(223, 3, 3), (0.0, 60.0, 100.0, 30.0)),
+                (rgb(224, 4, 4), (0.0, 90.0, 100.0, 30.0)),
+                (rgb(225, 5, 5), (0.0, 120.0, 100.0, 30.0)),
+                (rgb(226, 6, 6), (0.0, 150.0, 100.0, 30.0)),
+                (rgb(227, 7, 7), (0.0, 180.0, 100.0, 40.0)),
+                (rgb(228, 8, 8), (0.0, 270.0, 20.0, 30.0)),
+            ] {
+                assert_paint_rect(
+                    solid_paint_rect(&snapshot, color),
+                    moli_layout::PaintRect::new(
+                        expected.0, expected.1, expected.2, expected.3,
+                    ),
+                );
+            }
+        }));
+    }
+
+    #[test]
     fn layout_renderer_resolves_cyclic_preferred_width_after_parent_contribution() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
