@@ -1362,6 +1362,13 @@ where
         &self.context.style
     }
 
+    fn get_size_containment(&self, _node_id: NodeId) -> taffy::SizeContainment {
+        // CSS table wrappers and internal table boxes are ineligible for size
+        // containment. Child cells leave this virtual tree through LayoutWorld,
+        // which applies their own used eligibility at that boundary.
+        taffy::SizeContainment::NONE
+    }
+
     fn resolve_calc_value(&self, value: *const (), basis: f32) -> f32 {
         resolve_stylo_calc_value(value, basis)
     }

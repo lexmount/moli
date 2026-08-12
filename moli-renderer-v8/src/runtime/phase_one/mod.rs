@@ -980,6 +980,61 @@ html,body{margin:0;padding:0}
     }
 
     #[test]
+    fn layout_renderer_applies_used_size_containment_across_formatting_contexts() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+.case{position:absolute;contain:size;contain-intrinsic-size:111px 22px}
+.large{width:300px;height:400px}
+#block{left:0;top:0;background:rgb(241,1,1)}
+#flex{display:flex;left:130px;top:0;background:rgb(242,2,2)}
+#grid{display:grid;left:260px;top:0;background:rgb(243,3,3)}
+#constrained{left:390px;top:0;width:300px;height:400px;max-width:max-content;max-height:max-content;background:rgb(244,4,4)}
+#boxed{left:0;top:60px;padding:5px 7px;border:3px solid transparent;background:rgb(245,5,5)}
+#single-axis{position:absolute;display:flow-root;left:150px;top:60px;writing-mode:vertical-rl;contain:inline-size;contain-intrinsic-width:77px;contain-intrinsic-height:88px;background:rgb(246,6,6)}
+#intrinsic-parent{position:absolute;display:flex;left:260px;top:60px;width:max-content;height:max-content;background:rgb(247,7,7)}
+#grid-tracks{position:absolute;display:grid;left:400px;top:60px;contain:size;grid-template-columns:50px auto;grid-template-rows:30px auto;gap:5px;background:rgb(248,8,8)}
+#replaced{position:absolute;left:500px;top:0;contain:size;contain-intrinsic-size:90px 45px;background:rgb(249,9,9)}
+</style></head><body>
+<div id=block class=case><div class=large></div></div>
+<div id=flex class=case><div class=large></div></div>
+<div id=grid class=case><div class=large></div></div>
+<div id=constrained class=case><div class=large></div></div>
+<div id=boxed class=case><div class=large></div></div>
+<div id=single-axis><div style="width:30px;height:40px"></div></div>
+<div id=intrinsic-parent><div class=case style="position:static"><div class=large></div></div></div>
+<div id=grid-tracks><div class=large></div><div class=large></div><div class=large></div></div>
+<img id=replaced>
+</body></html>"#,
+            )
+            .await;
+
+            for (color, expected) in [
+                (rgb(241, 1, 1), (0.0, 0.0, 111.0, 22.0)),
+                (rgb(242, 2, 2), (130.0, 0.0, 111.0, 22.0)),
+                (rgb(243, 3, 3), (260.0, 0.0, 111.0, 22.0)),
+                (rgb(244, 4, 4), (390.0, 0.0, 111.0, 22.0)),
+                (rgb(245, 5, 5), (0.0, 60.0, 131.0, 38.0)),
+                (rgb(246, 6, 6), (150.0, 60.0, 30.0, 88.0)),
+                (rgb(247, 7, 7), (260.0, 60.0, 111.0, 22.0)),
+                (rgb(248, 8, 8), (400.0, 60.0, 55.0, 35.0)),
+                (rgb(249, 9, 9), (500.0, 0.0, 90.0, 45.0)),
+            ] {
+                assert_paint_rect(
+                    solid_paint_rect(&snapshot, color),
+                    moli_layout::PaintRect::new(expected.0, expected.1, expected.2, expected.3),
+                );
+            }
+        }));
+    }
+
+    #[test]
     fn layout_renderer_orders_content_block_sizing_ratio_and_explicit_stretch() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()

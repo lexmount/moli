@@ -29,7 +29,7 @@ use style::{
         generics::{
             box_::{
                 BaselineShift as GenericBaselineShift, BaselineShiftKeyword,
-                Perspective as GenericPerspective,
+                GenericContainIntrinsicSize, Perspective as GenericPerspective,
             },
             flex::GenericFlexBasis,
             grid::GenericGridTemplateComponent,
@@ -38,7 +38,7 @@ use style::{
             position::PreferredRatio,
             transform::{Rotate, Scale, Translate},
         },
-        specified::box_::{DisplayInside, DisplayOutside},
+        specified::box_::{ContainerType, DisplayInside, DisplayOutside},
         specified::{
             TextAlignKeyword, WillChangeBits,
             align::{AlignFlags, ContentDistribution},
@@ -47,7 +47,8 @@ use style::{
     },
 };
 use taffy::{
-    BoxSizing, Display as TaffyDisplay, Position as TaffyPosition, ResolvedAspectRatio, Size, Style,
+    BoxSizing, Display as TaffyDisplay, LogicalSize, Position as TaffyPosition,
+    ResolvedAspectRatio, Size, SizeContainment, Style,
 };
 
 use crate::{
@@ -92,6 +93,22 @@ fn stylo_blend_mode(mode: StyloMixBlendMode) -> PaintBlendMode {
         StyloMixBlendMode::Color => PaintBlendMode::Color,
         StyloMixBlendMode::Luminosity => PaintBlendMode::Luminosity,
         StyloMixBlendMode::PlusLighter => PaintBlendMode::PlusLighter,
+    }
+}
+
+/// Select the fallback component of a computed `contain-intrinsic-*` value.
+///
+/// The optional remembered size behind `auto` is layout-object lifetime state,
+/// not computed style. Moli does not yet skip `content-visibility:auto`
+/// subtrees, so there is no active remembered-size source and both length
+/// forms select their authored fallback. `auto none` remains indefinite.
+fn contain_intrinsic_fallback(
+    value: &style::values::computed::ContainIntrinsicSize,
+) -> Option<f32> {
+    match value {
+        GenericContainIntrinsicSize::Length(length)
+        | GenericContainIntrinsicSize::AutoLength(length) => Some(length.px()),
+        GenericContainIntrinsicSize::None | GenericContainIntrinsicSize::AutoNone => None,
     }
 }
 
@@ -438,7 +455,7 @@ pub struct ResolvedLayoutStyle {
     has_clip_path: bool,
     has_mask: bool,
     isolation: bool,
-    any_size_containment: bool,
+    size_containment: SizeContainment,
     layout_containment: bool,
     paint_containment: bool,
     will_change_containment: bool,
@@ -496,7 +513,7 @@ impl std::fmt::Debug for ResolvedLayoutStyle {
             .field("has_clip_path", &self.has_clip_path)
             .field("has_mask", &self.has_mask)
             .field("isolation", &self.isolation)
-            .field("any_size_containment", &self.any_size_containment)
+            .field("size_containment", &self.size_containment)
             .field("layout_containment", &self.layout_containment)
             .field("paint_containment", &self.paint_containment)
             .field("will_change_containment", &self.will_change_containment)
@@ -664,9 +681,23 @@ impl ResolvedLayoutStyle {
         // `content-visibility:auto` only adds size containment while Blink is
         // actively skipping the subtree; Moli does not currently skip auto
         // subtrees, so it must not claim that dynamic state here.
-        let any_size_containment = contain.intersects(style::values::computed::Contain::SIZE)
-            || computed.clone_container_type().is_size_container_type()
-            || content_visibility == StyloContentVisibility::Hidden;
+        let container_type = computed.clone_container_type();
+        let logical_size_containment_axes = LogicalSize {
+            inline_size: contain.contains(style::values::computed::Contain::INLINE_SIZE)
+                || container_type.intersects(ContainerType::INLINE_SIZE)
+                || container_type.intersects(ContainerType::SIZE)
+                || content_visibility == StyloContentVisibility::Hidden,
+            block_size: contain.contains(style::values::computed::Contain::BLOCK_SIZE)
+                || container_type.intersects(ContainerType::SIZE)
+                || content_visibility == StyloContentVisibility::Hidden,
+        };
+        let size_containment = SizeContainment::new(
+            writing_mode.to_physical(logical_size_containment_axes),
+            Size {
+                width: contain_intrinsic_fallback(&computed.clone_contain_intrinsic_width()),
+                height: contain_intrinsic_fallback(&computed.clone_contain_intrinsic_height()),
+            },
+        );
         let mut layout_containment = contain.contains(style::values::computed::Contain::LAYOUT);
         let mut paint_containment = contain.contains(style::values::computed::Contain::PAINT);
         if content_visibility != StyloContentVisibility::Visible {
@@ -816,7 +847,7 @@ impl ResolvedLayoutStyle {
             has_clip_path,
             has_mask,
             isolation,
-            any_size_containment,
+            size_containment,
             layout_containment,
             paint_containment,
             will_change_containment,
@@ -885,7 +916,7 @@ impl ResolvedLayoutStyle {
             has_clip_path: false,
             has_mask: false,
             isolation: false,
-            any_size_containment: false,
+            size_containment: SizeContainment::NONE,
             layout_containment: false,
             paint_containment: false,
             will_change_containment: false,
@@ -1254,8 +1285,8 @@ impl ResolvedLayoutStyle {
         self.paint_containment
     }
 
-    pub(crate) const fn applies_any_size_containment(&self) -> bool {
-        self.any_size_containment
+    pub(crate) const fn size_containment(&self) -> SizeContainment {
+        self.size_containment
     }
 
     pub(crate) const fn is_visible(&self) -> bool {
@@ -1448,7 +1479,7 @@ impl ResolvedLayoutStyle {
         // descendant clip in the later projection passes.
         placeholder.layout_containment = false;
         placeholder.paint_containment = false;
-        placeholder.any_size_containment = false;
+        placeholder.size_containment = SizeContainment::NONE;
         placeholder.will_change_containment = false;
         placeholder.will_change_position = false;
         placeholder.will_change_stacking_context = false;
@@ -1621,7 +1652,7 @@ impl ResolvedLayoutStyle {
             has_clip_path: false,
             has_mask: false,
             isolation: false,
-            any_size_containment: false,
+            size_containment: SizeContainment::NONE,
             layout_containment: false,
             paint_containment: false,
             will_change_containment: false,
@@ -1682,7 +1713,7 @@ impl ResolvedLayoutStyle {
             has_clip_path: false,
             has_mask: false,
             isolation: false,
-            any_size_containment: false,
+            size_containment: SizeContainment::NONE,
             layout_containment: false,
             paint_containment: false,
             will_change_containment: false,

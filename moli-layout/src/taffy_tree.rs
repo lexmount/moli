@@ -7,12 +7,12 @@ use taffy::{
     AbsoluteAxis, AlignContent, AutoSizeBehavior, AvailableSpace, BlockContext,
     BlockFormattingContext, BoxSizing, CacheTree, Clear, Dimension, Display, FloatDirection,
     IntrinsicSizeResult, Layout, LayoutBlockContainer, LayoutFlexboxContainer, LayoutGridContainer,
-    LayoutInput, LayoutOutput, LayoutPartialTree, Line, LogicalOffset, MaybeMath, MaybeResolve,
-    NodeId, Point, ResolveOrZero, RoundTree, RunMode, Size, SizingMode, SizingPurpose, Style,
-    TraversePartialTree, TraverseTree, WritingDirection, compute_block_layout,
-    compute_cached_layout, compute_cached_size, compute_content_alignment_offset,
-    compute_flexbox_layout, compute_grid_layout, compute_hidden_layout,
-    compute_leaf_layout_with_aspect_ratio_and_writing_mode, compute_root_layout,
+    LayoutInput, LayoutOutput, LayoutPartialTree, LeafSizingContext, Line, LogicalOffset,
+    MaybeMath, MaybeResolve, NodeId, Point, ResolveOrZero, RoundTree, RunMode, Size, SizingMode,
+    SizingPurpose, Style, TraversePartialTree, TraverseTree, WritingDirection,
+    compute_block_layout, compute_cached_layout, compute_cached_size,
+    compute_content_alignment_offset, compute_flexbox_layout, compute_grid_layout,
+    compute_hidden_layout, compute_leaf_layout_with_sizing_context, compute_root_layout,
     resolve_content_alignment_fallback, resolve_intrinsic_width_inputs_with_provenance,
     round_layout_with_scale_factor,
 };
@@ -1232,6 +1232,14 @@ where
         self.boxes[LayoutBoxId::from_taffy(node_id).index()].resolved_aspect_ratio()
     }
 
+    fn get_size_containment(&self, node_id: NodeId) -> taffy::SizeContainment {
+        if self.is_viewport_taffy_node(node_id) {
+            taffy::SizeContainment::NONE
+        } else {
+            self.boxes[LayoutBoxId::from_taffy(node_id).index()].used_size_containment()
+        }
+    }
+
     fn resolve_calc_value(&self, value: *const (), basis: f32) -> f32 {
         resolve_stylo_calc_value(value, basis)
     }
@@ -1617,6 +1625,7 @@ where
         let writing_mode = layout_box.style.writing_mode();
         let replaced_context = layout_box.replaced_context;
         let resolved_aspect_ratio = layout_box.resolved_aspect_ratio();
+        let size_containment = layout_box.used_size_containment();
 
         if let Some(context) = replaced_context {
             // `measure_replaced` is the complete CSS replaced-element sizing
@@ -1630,16 +1639,16 @@ where
                 inputs.constraint_space(writing_mode),
                 &context,
                 resolved_aspect_ratio,
+                size_containment,
                 &style,
             );
             return LayoutOutput::from_sizes(size, size);
         }
 
-        compute_leaf_layout_with_aspect_ratio_and_writing_mode(
+        compute_leaf_layout_with_sizing_context(
             inputs,
             &style,
-            writing_mode,
-            resolved_aspect_ratio,
+            LeafSizingContext::new(writing_mode, resolved_aspect_ratio, size_containment),
             resolve_stylo_calc_value,
             |known_dimensions, available_space| {
                 if let Some(text) = text.as_deref() {
@@ -1669,6 +1678,7 @@ where
         let style = self.boxes[id.index()].style.taffy.clone();
         let writing_mode = self.boxes[id.index()].style.writing_mode();
         let resolved_aspect_ratio = self.boxes[id.index()].resolved_aspect_ratio();
+        let size_containment = self.boxes[id.index()].used_size_containment();
         let is_floated = box_is_effectively_floated(self, id);
         let percentage_basis = box_model_percentage_basis(inputs, writing_mode);
         // Both Taffy's block-float parent and Moli's IFC float parent
@@ -1695,11 +1705,10 @@ where
             .take()
             .unwrap_or_else(empty_inline_context);
         let mut measurement = None;
-        let mut output = compute_leaf_layout_with_aspect_ratio_and_writing_mode(
+        let mut output = compute_leaf_layout_with_sizing_context(
             leaf_inputs,
             &style,
-            writing_mode,
-            resolved_aspect_ratio,
+            LeafSizingContext::new(writing_mode, resolved_aspect_ratio, size_containment),
             resolve_stylo_calc_value,
             |known_dimensions, available_space| {
                 let result = self.measure_inline_context(
