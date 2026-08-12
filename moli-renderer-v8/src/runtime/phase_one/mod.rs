@@ -1175,6 +1175,33 @@ html,body{margin:0;padding:0}
     }
 
     #[test]
+    fn orthogonal_percentage_inline_size_uses_initial_containing_block() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+#subject{display:block;writing-mode:vertical-lr;inline-size:100%;block-size:20px;background:rgb(31,41,51)}
+</style></head><body><div id=subject></div></body></html>"#,
+            )
+            .await;
+
+            // html and body have auto block sizes, so neither supplies a
+            // definite physical height. The orthogonal child's percentage
+            // inline-size therefore resolves against the 800x600 initial
+            // containing block after crossing both parallel ancestors.
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(31, 41, 51)),
+                moli_layout::PaintRect::new(0.0, 0.0, 20.0, 600.0),
+            );
+        }));
+    }
+
+    #[test]
     fn flex_auto_position_uses_the_padding_box_across_writing_directions() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()

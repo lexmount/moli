@@ -51,6 +51,12 @@ pub(crate) fn compute_world_layout<N>(world: &mut LayoutWorld<N>, viewport: Pain
 where
     N: Copy + Debug + Eq + Hash,
 {
+    world.layout_environment = taffy::LayoutEnvironment {
+        initial_containing_block_size: Size {
+            width: Some(viewport.css_width as f32),
+            height: Some(viewport.css_height as f32),
+        },
+    };
     for layout_box in &mut world.boxes {
         layout_box.cache.clear();
         layout_box.unrounded_layout = Layout::with_order(0);
@@ -1240,6 +1246,10 @@ where
         }
     }
 
+    fn get_layout_environment(&self) -> taffy::LayoutEnvironment {
+        self.layout_environment
+    }
+
     fn resolve_calc_value(&self, value: *const (), basis: f32) -> f32 {
         resolve_stylo_calc_value(value, basis)
     }
@@ -1253,6 +1263,7 @@ where
     }
 
     fn compute_child_layout(&mut self, node_id: NodeId, inputs: LayoutInput) -> LayoutOutput {
+        let inputs = self.prepare_child_layout_input(node_id, inputs);
         let inputs = self.resolve_intrinsic_child_inputs(node_id, inputs).inputs;
         if self.is_viewport_taffy_node(node_id) {
             return compute_cached_layout(self, node_id, inputs, |world, node_id, inputs| {
@@ -1268,6 +1279,7 @@ where
     }
 
     fn compute_child_size(&mut self, node_id: NodeId, inputs: LayoutInput) -> IntrinsicSizeResult {
+        let inputs = self.prepare_child_layout_input(node_id, inputs);
         let resolved = self.resolve_intrinsic_child_inputs(node_id, inputs);
         let inputs = resolved.inputs;
         let intrinsic_dependency = resolved.depends_on_block_constraints;
@@ -1299,31 +1311,39 @@ where
 {
     fn cache_get(&self, node_id: NodeId, inputs: &LayoutInput) -> Option<LayoutOutput> {
         if self.is_viewport_taffy_node(node_id) {
-            self.viewport_layout.cache.get(inputs)
+            self.viewport_layout
+                .cache
+                .get_with_environment(inputs, self.layout_environment)
         } else {
             self.boxes[LayoutBoxId::from_taffy(node_id).index()]
                 .cache
-                .get(inputs)
+                .get_with_environment(inputs, self.layout_environment)
         }
     }
 
     fn cache_store(&mut self, node_id: NodeId, inputs: &LayoutInput, output: LayoutOutput) {
         if self.is_viewport_taffy_node(node_id) {
-            self.viewport_layout.cache.store(inputs, output);
+            self.viewport_layout.cache.store_with_environment(
+                inputs,
+                output,
+                self.layout_environment,
+            );
         } else {
             self.boxes[LayoutBoxId::from_taffy(node_id).index()]
                 .cache
-                .store(inputs, output);
+                .store_with_environment(inputs, output, self.layout_environment);
         }
     }
 
     fn cache_get_size(&self, node_id: NodeId, inputs: &LayoutInput) -> Option<IntrinsicSizeResult> {
         if self.is_viewport_taffy_node(node_id) {
-            self.viewport_layout.cache.get_size(inputs)
+            self.viewport_layout
+                .cache
+                .get_size_with_environment(inputs, self.layout_environment)
         } else {
             self.boxes[LayoutBoxId::from_taffy(node_id).index()]
                 .cache
-                .get_size(inputs)
+                .get_size_with_environment(inputs, self.layout_environment)
         }
     }
 
@@ -1334,11 +1354,15 @@ where
         result: IntrinsicSizeResult,
     ) {
         if self.is_viewport_taffy_node(node_id) {
-            self.viewport_layout.cache.store_size(inputs, result);
+            self.viewport_layout.cache.store_size_with_environment(
+                inputs,
+                result,
+                self.layout_environment,
+            );
         } else {
             self.boxes[LayoutBoxId::from_taffy(node_id).index()]
                 .cache
-                .store_size(inputs, result);
+                .store_size_with_environment(inputs, result, self.layout_environment);
         }
     }
 
@@ -1380,6 +1404,7 @@ where
         inputs: LayoutInput,
         block_context: Option<&mut BlockContext<'_>>,
     ) -> LayoutOutput {
+        let inputs = self.prepare_child_layout_input(node_id, inputs);
         if self.should_hide(node_id, inputs) {
             return compute_hidden_layout(self, node_id);
         }
