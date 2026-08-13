@@ -8,12 +8,23 @@
 
 <h1 align="center">Moli</h1>
 
-Moli is a **production-ready**, structured-first browser engine for AI agents.
+<p align="center">
+  <strong>English</strong> |
+  <a href="README.zh-CN.md">简体中文</a> |
+  <a href="README.ja.md">日本語</a> |
+  <a href="README.de.md">Deutsch</a> |
+  <a href="README.fr.md">Français</a> |
+  <a href="README.es.md">Español</a>
+</p>
 
-It runs real JavaScript, DOM, and browser APIs by default, and computes layout
-or pixels only when requested.
+Moli is a headless browser for AI agents, built around an "on-demand
+rendering" design and ready for production use.
 
-Use it through CLI, CDP, WebDriver Classic, or WebDriver BiDi.
+By default, it executes real JavaScript, maintains a real DOM, and exposes real
+browser APIs. It computes layout or renders pixels only when they are actually
+needed.
+
+Use it through the CLI, CDP, WebDriver Classic, or WebDriver BiDi.
 
 ## Showcase
 
@@ -55,7 +66,7 @@ cargo build --release -p moli
 
 ### Extract a page
 
-Render as Markdown, using Moli's default completion strategy:
+Render the page as Markdown with Moli's default completion strategy:
 
 ```bash
 ./target/release/moli fetch \
@@ -64,7 +75,7 @@ Render as Markdown, using Moli's default completion strategy:
   https://example.com
 ```
 
-Or return a compact, model-friendly semantic tree:
+Or directly return a compact, model-friendly semantic tree:
 
 ```bash
 ./target/release/moli fetch \
@@ -73,8 +84,9 @@ Or return a compact, model-friendly semantic tree:
   https://example.com
 ```
 
-Run `fetch --help` for the full list of output formats, lifecycle/response
-waits, profiles, proxy controls, resource policies, and tracing options.
+Run `fetch --help` for the complete option list, including output formats,
+page-load/response waits, profiles, proxy settings, resource policies, and
+tracing options.
 
 ### Start the automation server
 
@@ -89,8 +101,8 @@ waits, profiles, proxy controls, resource policies, and tracing options.
 ./target/release/moli serve --layout --resource
 ```
 
-One endpoint serves CDP, WebDriver Classic, and WebDriver BiDi. Playwright can
-connect directly over CDP:
+The same endpoint serves all three protocols: CDP, WebDriver Classic, and
+WebDriver BiDi. Playwright can connect directly over CDP:
 
 ```js
 import { chromium } from "playwright";
@@ -107,24 +119,27 @@ await browser.close();
 
 ## Why Moli
 
-Moli combines three qualities that matter for agent workloads:
+Three qualities matter most for agent workloads, and Moli brings them together:
 
 - **Full-featured** — real JavaScript, DOM, CSS, networking, storage, layout,
-  screenshots, and standard automation protocols in one browser engine.
-- **Fast** — structure-first operations skip layout and paint, avoiding visual
-  work that most automation requests do not need.
-- **Resource-efficient** — layout and pixels are created only on demand, so
-  Moli does not continuously retain and update a rendered visual world.
+  screenshots, and standard automation protocols, all integrated into one
+  headless browser.
+- **Fast** — most automation requests never need visual rendering, so
+  structure-first operations skip layout and paint entirely.
+- **Resource-efficient** — layout and pixels are generated only when needed,
+  so Moli does not have to continuously maintain and update a fully rendered
+  visual state.
 
-Most browser automation needs page structure, not a continuously rendered
-visual world. Moli keeps the native DOM and style state as its source of truth,
-then runs layout or software paint only for operations that need them.
+What most browser automation tasks actually need is page structure, not a
+continuously rendered visual world. Moli treats the native DOM and style state
+as the single source of truth, triggering layout or software paint only for
+operations that genuinely require them.
 
 | Agent request | What Moli does |
 | --- | --- |
-| Extract HTML/Markdown, query the DOM, run JS, inspect network/storage | Reads the browser runtime directly — no layout or paint |
-| Read an element's box, hit-test a point, send coordinate input | Runs one layout pass, keeps only the latest geometry snapshot |
-| Capture a screenshot or refresh a screencast | Rebuilds from current DOM/style, renders one fresh frame, discards it |
+| Extract HTML/Markdown, query the DOM, run JS, inspect network/storage | Reads browser runtime state directly — does not trigger layout or paint |
+| Read an element's box, hit-test coordinates, send coordinate input | Runs one layout calculation and keeps only the latest geometry snapshot |
+| Capture a screenshot or refresh a screencast | Rebuilds from the current DOM/style, renders a fresh frame, and discards it after use |
 
 <p align="center">
   <a href="assets/moli_ondemand_rendering_flow.svg">
@@ -136,58 +151,63 @@ then runs layout or software paint only for operations that need them.
   </a>
 </p>
 
-Moli still includes V8, CSS, layout, text shaping, hit-testing, and software
-paint. The difference is when visual work runs and how long its state is kept.
-This cost model targets crawling, browser-use agents, retrieval pipelines,
+Moli still includes the complete set of capabilities: V8, CSS, layout, text
+shaping, hit-testing, software paint, and more. The only difference is *when*
+visual work runs and *how long* its results are retained. This cost model is
+especially well suited to crawling, browser-use agents, retrieval pipelines,
 evaluation environments, and reinforcement-learning workloads.
 
-## What works today
+## Current capabilities
 
-- **Real web runtime** — streaming HTML parsing, native DOM, V8 JavaScript,
+- **Complete web runtime** — streaming HTML parsing, native DOM, V8 JavaScript,
   modules/timers/microtasks/events, iframes and workers, CSS cascade,
   Fetch/XHR/WebSocket, cookies, WebCrypto, and profile-scoped storage
   (localStorage, IndexedDB, OPFS).
-- **Extraction-first outputs** — HTML, Markdown, JSON, semantic text trees,
-  frame-aware serialization, selector/script/response waits, and network
-  tracing, all from the CLI.
-- **One automation binary** — CDP, WebDriver Classic, and WebDriver BiDi share
-  the same kernel and scheduler. No separate ChromeDriver, geckodriver, or
-  browser install required.
-- **Real visual surfaces on demand** — with `--layout`: box construction,
-  Taffy layout, Parley text layout, layout-backed hit-testing/input, viewport
+- **Extraction-optimized outputs** — the CLI directly produces HTML, Markdown,
+  JSON, semantic text trees, and frame-aware serialization, with
+  selector/script/response waits and network tracing.
+- **Unified automation binary** — CDP, WebDriver Classic, and WebDriver BiDi
+  share the same kernel and scheduler. No separate ChromeDriver, geckodriver,
+  or browser installation is required.
+- **Real visual capabilities on demand** — add `--layout` to enable complete box
+  construction, Taffy layout, Parley text layout, layout-backed
+  hit-testing/input, viewport
   screenshots, and low-frequency CPU-rendered DevTools screencast frames.
-- **Operational controls** — profiles, cookies, HTTP cache, proxies, resource
-  families, connection limits, timeouts, private-network policy, user-agent
-  overrides, structured logging, and network diagnostics.
+- **Controllable operational options** — profiles, cookies, HTTP cache, proxies,
+  resource families, connection limits, timeouts, private-network policy,
+  user-agent overrides, structured logging, and network diagnostics are all
+  available.
 
-## Moli and Lexmount
+## Moli's relationship with Lexmount
 
-Moli is Lexmount’s open-source browser engine. Lexmount Browser is the managed
+Moli is Lexmount's open-source headless browser; Lexmount Browser is the managed
 cloud runtime and control plane built around it.
 
-**The open-source engine is fully usable without Lexmount Browser.**
+**The open-source headless browser is fully usable without Lexmount Browser.**
 
 ## Cost controls
 
-Moli keeps expensive browser work explicit rather than silently enabling it:
+Expensive browser operations in Moli require an explicit opt-in and are never
+enabled by default:
 
 | Mode or option | Behavior |
 | --- | --- |
-| Default | `LayoutPolicy::Mock` — deterministic compatibility geometry, no real layout or paint |
+| Default | `LayoutPolicy::Mock` — deterministic geometry in a compatible format, with no real layout or paint |
 | `--layout` | `LayoutPolicy::OnDemand` — real layout, geometry, hit-testing, coordinate input, screenshots, screencast |
 | `--resource` | Fetch all optional visual/media resource families |
 | `--image`, `--font`, `--audio`, `--video`, `--media`, `--text-track` | Enable one specific optional resource family |
-| `--profile-dir`, `--http-cache-dir`, `--cookie-file` | Opt into whatever persistence the workload needs |
+| `--profile-dir`, `--http-cache-dir`, `--cookie-file` | Selectively enable the persistence required by the workload |
 
-Layout is sampled, not continuously retained: a cold geometry request builds
-one full pass from the current DOM/style and keeps only the latest
-`LayoutPassOutput`. Ordinary geometry reads may reuse that snapshot after
-later mutations; screenshots and screencast always rebuild fresh.
+Layout is an on-demand snapshot rather than continuously maintained state. The
+first geometry request (a cold start) builds one complete layout from the
+current DOM/style and retains only the latest `LayoutPassOutput`. After that,
+ordinary geometry reads may reuse the snapshot even if the page has changed;
+screenshots and screencasts always rebuild and never reuse stale results.
 
 ## Architecture
 
-Moli is a browser kernel, not a Chromium wrapper — one Rust runtime with one
-set of ownership and lifecycle rules, built on:
+Moli is a standalone browser kernel, not a Chromium wrapper. It is built in
+Rust, has its own ownership and lifecycle rules, and relies on:
 
 - `libcurl` — network transport and multi-request runtime
 - `html5ever` — HTML parsing
@@ -196,26 +216,27 @@ set of ownership and lifecycle rules, built on:
 - Taffy + Parley — box and text layout
 - AnyRender/Vello CPU, `usvg`, and the Rust image ecosystem — software rendering
 
-Native DOM and Stylo integration are the only document/style owners. Every
-real refresh rebuilds layout from that source of truth, projects the result
-into DOM-neutral immutable data, then discards the pass-local layout and paint
-state. There's no incremental layout tree, damage graph, retained display
-list, GPU compositor, or persistent window.
+Document and style have a single source of truth: the native DOM and its Stylo
+integration. Every real refresh rebuilds layout from that source, converts the
+result into immutable, DOM-independent data, and then discards the temporary
+state created during that layout and paint pass. The system has no incremental
+layout tree, damage graph, retained display list, GPU compositor, or persistent
+window.
 
-## Evidence
+## Test data
 
-Two recorded snapshots illustrate Moli's intended operating point, against
-real sites, real automation clients, focused Chromium/WPT behavior, and a
-large nextest regression suite.
+The following two measured data sets show Moli's current capability envelope.
+The tests cover real websites, real automation clients, focused Chromium/WPT
+behavior checks, and a large nextest regression suite.
 
-### Mixed public-web crawl
+### Mixed public-web crawl test
 
-192 public URLs across major Chinese and international sites. A page only
-counted as successful if it produced useful post-JavaScript content — an
-HTTP 200, challenge page, login wall, empty response, or app shell didn't
-count.
+The test covers 192 public URLs from major Chinese and international sites. A
+page only counts as successful if it produces meaningful content after
+JavaScript runs — an HTTP 200, challenge page, login wall, empty response, or
+shell-only application does not count.
 
-| Engine | Useful pages | Success rate | Median time | Median RSS |
+| Browser | Useful pages | Success rate | Median time | Median RSS |
 | --- | ---: | ---: | ---: | ---: |
 | **Moli** | **103** | **53.6%** | **1.43 s** | **73 MiB** |
 | Chrome Headless | 101 | 52.6% | 1.43 s | 773 MiB |
@@ -231,36 +252,36 @@ count.
 | Peak PSS | 102.46 MiB | 348.82 MiB |
 | Peak processes / threads | 1 / 24 | 11 / 123 |
 
-Against the current WPT selection guarding Moli's agent-browser scope, one
-full run recorded **1.612 million passing tests**.
+In the current WPT selection used to validate Moli's agent-browser scope, one
+complete run recorded **1.612 million passing tests**.
 
 ## Project scope
 
-Moli is production-ready for its documented agent-browser scope and remains
-under active development.
+Within the agent-browser scenarios defined in its documentation, Moli is ready
+for production use and remains under active development.
 
-Current intentional boundaries:
+Its current intentional boundaries include:
 
 - No GUI browser, persistent window, GPU compositor, or retained multi-frame
   paint architecture.
-- No promise of Chrome pixel parity or high-fidelity Canvas/WebGL/media
-  playback.
-- Selected CDP, WebDriver Classic, and WebDriver BiDi coverage, not full
-  protocol parity.
-- Software screenshots and raster-backed CDP PDF generation under `--layout`;
-  not every Chrome screenshot or print mode is implemented.
-- Resource loading, geometry freshness, and visual cost stay explicit policy
-  choices rather than always-on behavior.
+- It does not pursue pixel-for-pixel parity with Chrome or provide
+  high-fidelity Canvas/WebGL/media playback.
+- It covers selected CDP, WebDriver Classic, and WebDriver BiDi functionality
+  rather than implementing full protocol parity.
+- `--layout` supports software screenshots and raster-backed CDP PDF
+  generation, but not every Chrome screenshot or print mode is implemented.
+- Resource loading, geometry freshness, and visual rendering cost remain
+  explicit policy choices instead of being continuously enabled by default.
 
-Unsupported protocol paths fail explicitly — Moli never pretends a browser
-action, event, network observation, or visual result occurred when it didn't.
+Unsupported protocol paths return explicit errors — Moli never pretends that a
+browser action, event, network observation, or visual result occurred.
 
 Maintainers can publish a tagged binary release from GitHub Actions by following
 the [release guide](RELEASING.md).
 
 ## License
 
-Unless a file or directory carries a different notice, Moli is licensed under
-either the [Apache License 2.0](LICENSE-APACHE) or the
-[MIT License](LICENSE-MIT), at your option. Separately licensed third-party
-components and fixtures retain their own licenses and notices.
+Unless a file or directory states otherwise, you may use Moli under either the
+[Apache License 2.0](LICENSE-APACHE) or the [MIT License](LICENSE-MIT), at your
+option. Separately licensed third-party components and fixtures remain subject
+to their own licenses and notices.
