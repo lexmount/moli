@@ -6,14 +6,14 @@ use taffy::{
     AlignContent, AutoSizeBehavior, AvailableSpace, BlockContext, BlockFormattingContext,
     CacheTree, Clear, Dimension, Display, FloatDirection, IntrinsicSizeResult, Layout,
     LayoutBlockContainer, LayoutFlexboxContainer, LayoutGridContainer, LayoutInput, LayoutOutput,
-    LayoutPartialTree, LeafSizingContext, Line, LogicalOffset, LogicalStaticPosition, MaybeMath,
-    MaybeResolve, NodeId, OutOfFlowCandidate, OutOfFlowContainingBlock, Point, ResolveOrZero,
-    RoundTree, RunMode, Size, SizingMode, SizingPurpose, Style, TraversePartialTree, TraverseTree,
-    WritingDirection, compute_block_layout, compute_cached_layout, compute_cached_size,
+    LayoutPartialTree, Line, LogicalOffset, LogicalStaticPosition, MaybeMath, MaybeResolve, NodeId,
+    OutOfFlowCandidate, OutOfFlowContainingBlock, Point, ResolveOrZero, RoundTree, RunMode, Size,
+    SizingMode, SizingPurpose, Style, TraversePartialTree, TraverseTree, WritingDirection,
+    compute_block_layout, compute_cached_layout, compute_cached_size,
     compute_content_alignment_offset, compute_flexbox_layout, compute_grid_layout,
-    compute_hidden_layout, compute_leaf_layout_with_sizing_context, compute_out_of_flow_layout,
+    compute_hidden_layout, compute_leaf_layout_with_tree, compute_out_of_flow_layout,
     compute_replaced_layout, compute_root_layout, resolve_content_alignment_fallback,
-    resolve_leaf_node_sizing, round_layout,
+    round_layout,
 };
 
 use crate::{
@@ -1257,12 +1257,6 @@ where
     }
 
     fn compute_leaf(&mut self, id: LayoutBoxId, inputs: LayoutInput) -> LayoutOutput {
-        let has_replaced_context = self.boxes[id.index()].replaced_context.is_some();
-        let node_sizing = if has_replaced_context {
-            None
-        } else {
-            Some(resolve_leaf_node_sizing(self, id.to_taffy(), inputs))
-        };
         let layout_box = &self.boxes[id.index()];
         let style = layout_box.style.taffy.clone();
         let text = layout_box.text.clone();
@@ -1282,13 +1276,13 @@ where
             );
         }
 
-        compute_leaf_layout_with_sizing_context(
+        compute_leaf_layout_with_tree(
+            self,
+            id.to_taffy(),
             inputs,
             &style,
-            LeafSizingContext::new(writing_mode, resolved_aspect_ratio, size_containment)
-                .with_node_sizing(node_sizing.expect("non-replaced leaves resolve node sizing")),
             resolve_stylo_calc_value,
-            |known_dimensions, available_space| {
+            |_, known_dimensions, available_space| {
                 if let Some(text) = text.as_deref() {
                     measure_text(
                         text,
@@ -1313,51 +1307,38 @@ where
         inputs: LayoutInput,
         block_context: Option<&mut BlockContext<'_>>,
     ) -> InlineLayoutResult {
-        let node_sizing = resolve_leaf_node_sizing(self, id.to_taffy(), inputs);
         let style = self.boxes[id.index()].style.taffy.clone();
         let writing_mode = self.boxes[id.index()].style.writing_mode();
-        let resolved_aspect_ratio = self.boxes[id.index()].resolved_aspect_ratio();
-        let size_containment = self.boxes[id.index()].used_size_containment();
         let is_floated = box_is_effectively_floated(self, id);
         let percentage_basis = box_model_percentage_basis(inputs, writing_mode);
-        // Both Taffy's block-float parent and Moli's IFC float parent
-        // pass the border-box space left after horizontal margins. Taffy's
-        // generic leaf adapter normally subtracts a leaf's own margins, so
-        // restore them only around that adapter to keep the parent-owned
-        // float-margin contract from being applied twice.
-        let leaf_inputs = if is_floated {
-            let margin = style
-                .margin
-                .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
-            LayoutInput {
-                available_space: inputs
-                    .available_space
-                    .map_width(|width| width.maybe_add(margin.left + margin.right)),
-                ..inputs
-            }
-        } else {
-            inputs
-        };
         let alignment = self.boxes[id.index()].style.text_align();
-        let mut inline_context = self.boxes[id.index()]
-            .inline_layout
-            .take()
-            .unwrap_or_else(empty_inline_context);
+        // Resolving intrinsic sizing keywords may re-enter this same IFC in
+        // `ContentSize` mode. Keep its mutable content in the world until
+        // Taffy actually invokes the content measurer; taking it before the
+        // tree-owned sizing pass would make that nested probe observe an empty
+        // formatting context.
+        let mut inline_context = None;
         let mut measurement = None;
-        let mut output = compute_leaf_layout_with_sizing_context(
-            leaf_inputs,
+        let mut output = compute_leaf_layout_with_tree(
+            self,
+            id.to_taffy(),
+            inputs,
             &style,
-            LeafSizingContext::new(writing_mode, resolved_aspect_ratio, size_containment)
-                .with_node_sizing(node_sizing),
             resolve_stylo_calc_value,
-            |known_dimensions, available_space| {
-                let result = self.measure_inline_context(
+            |world, known_dimensions, available_space| {
+                let inline_context = inline_context.get_or_insert_with(|| {
+                    world.boxes[id.index()]
+                        .inline_layout
+                        .take()
+                        .unwrap_or_else(empty_inline_context)
+                });
+                let result = world.measure_inline_context(
                     id,
                     inputs,
                     known_dimensions,
                     available_space,
                     alignment,
-                    &inline_context,
+                    inline_context,
                     is_floated,
                     block_context,
                 );
@@ -1374,7 +1355,9 @@ where
             .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
 
         let mut depends_on_block_constraints = false;
-        if let Some(mut measurement) = measurement {
+        if let (Some(mut measurement), Some(inline_context)) =
+            (measurement, inline_context.as_mut())
+        {
             depends_on_block_constraints = measurement.depends_on_block_constraints;
             let content_box_height =
                 (output.size.height - padding.top - padding.bottom - border.top - border.bottom)
@@ -1410,7 +1393,7 @@ where
             }
             if inputs.run_mode == RunMode::PerformLayout {
                 self.position_inline_objects(
-                    &inline_context,
+                    inline_context,
                     &measurement,
                     Point {
                         x: padding.left + border.left,
@@ -1427,7 +1410,9 @@ where
             }
         }
 
-        self.boxes[id.index()].inline_layout = Some(inline_context);
+        if let Some(inline_context) = inline_context {
+            self.boxes[id.index()].inline_layout = Some(inline_context);
+        }
         if inputs.run_mode == RunMode::PerformLayout {
             self.layout_custom_context_out_of_flow_children(id, &mut output, padding, border);
         }
@@ -2047,20 +2032,13 @@ where
                         resolve_stylo_calc_value,
                     );
                     let logical_margin = writing_direction.to_logical_box_strut(margin);
-                    // A non-replaced float's formatting-context algorithm
-                    // owns its content size; pass it the slot remaining after
-                    // margins just like Taffy's block-float parent does. A
-                    // replaced leaf retains Taffy's intrinsic-size adapter,
-                    // which consumes the full slot and subtracts its margin.
-                    let layout_inputs = if self.boxes[child.index()].is_replaced() {
-                        child_inputs
-                    } else {
-                        LayoutInput {
-                            available_space: child_inputs
-                                .available_space
-                                .map_width(|width| width.maybe_sub(margin.left + margin.right)),
-                            ..child_inputs
-                        }
+                    // Child available space is the border-box slot remaining
+                    // after margins for both replaced and non-replaced floats.
+                    let layout_inputs = LayoutInput {
+                        available_space: child_inputs
+                            .available_space
+                            .map_width(|width| width.maybe_sub(margin.left + margin.right)),
+                        ..child_inputs
                     };
                     let output = self.compute_child_layout(child.to_taffy(), layout_inputs);
                     let state = breaker.state_mut();
