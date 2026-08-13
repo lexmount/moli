@@ -2762,6 +2762,11 @@ async fn direct_console_routes_to_loaded_background_owner_and_advances_parked_cu
     ctx.conn.inactive_browser_contexts.push(inactive);
     ctx.install_navigation_fixture_for_session_owner(page_url, Some("SID-background"))
         .await;
+    ctx.wait_for_scheduler_message("background console fixture load", |message| {
+        message["method"] == json!("Page.loadEventFired")
+            && message["sessionId"] == json!("SID-background")
+    })
+    .await;
     ctx.sent.clear();
 
     ctx.process_and_wait_for_response_async(json!({
