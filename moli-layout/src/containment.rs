@@ -69,7 +69,21 @@ impl<N> LayoutBox<N> {
     }
 
     pub(crate) fn applies_any_size_containment(&self) -> bool {
-        self.is_eligible_for_size_containment() && self.style.applies_any_size_containment()
+        let containment = self.used_size_containment();
+        containment.axes.width || containment.axes.height
+    }
+
+    /// Resolve computed containment to the used node-level layout protocol.
+    ///
+    /// Stylo owns the effective logical axes and physical fallback values;
+    /// this box boundary owns principal-box eligibility. Remembered sizes can
+    /// later be selected here without changing Taffy's numeric algorithms.
+    pub(crate) fn used_size_containment(&self) -> taffy::SizeContainment {
+        if self.is_eligible_for_size_containment() {
+            self.style.size_containment()
+        } else {
+            taffy::SizeContainment::NONE
+        }
     }
 
     pub(crate) fn establishes_positioned_containing_block(&self) -> bool {

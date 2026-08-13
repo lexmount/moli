@@ -1,7 +1,7 @@
 use std::{collections::HashMap, fmt::Debug, hash::Hash, sync::Arc};
 
 use style::Atom;
-use taffy::{Cache, Layout, Point, Style};
+use taffy::{Cache, Layout, LayoutEnvironment, Point, Style};
 
 use crate::{
     LayoutElementSemantics, LayoutError, LayoutPoint, LayoutPseudo, ResolvedLayoutStyle,
@@ -363,6 +363,8 @@ where
     pub(crate) display_contents_mapping: HashMap<N, Vec<LayoutBoxId>>,
     pub(crate) root: LayoutBoxId,
     pub(crate) viewport_layout: ViewportLayoutState,
+    /// Document/view state shared by the active layout pass.
+    pub(crate) layout_environment: LayoutEnvironment,
 }
 
 impl<N> LayoutWorld<N>
@@ -376,6 +378,7 @@ where
             display_contents_mapping: HashMap::new(),
             root: LayoutBoxId::from_index(0),
             viewport_layout: ViewportLayoutState::default(),
+            layout_environment: LayoutEnvironment::NONE,
         }
     }
 

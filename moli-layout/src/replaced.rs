@@ -8,7 +8,8 @@
 use style::Atom;
 use taffy::{
     AvailableSpace, BoxSizing, ConstraintSpace, CoreStyle as _, LayoutInput, MaybeMath,
-    MaybeResolve, RequestedAxis, ResolveOrZero as _, ResolvedAspectRatio, Size, SizingMode,
+    MaybeResolve, RequestedAxis, ResolveOrZero as _, ResolvedAspectRatio, Size, SizeContainment,
+    SizingMode,
 };
 
 use crate::{LayoutReplacedKind, ReplacedMetrics, style::resolve_stylo_calc_value};
@@ -220,6 +221,7 @@ pub(crate) fn measure_replaced(
     constraint_space: ConstraintSpace,
     context: &ReplacedContext,
     resolved_aspect_ratio: ResolvedAspectRatio,
+    size_containment: SizeContainment,
     style: &taffy::Style<Atom>,
 ) -> Size<f32> {
     let percentage_basis = constraint_space.margin_padding_percentage_basis();
@@ -246,6 +248,38 @@ pub(crate) fn measure_replaced(
         padding_border_sum
     } else {
         Size::ZERO
+    };
+    let contained_content_size = Size {
+        width: size_containment
+            .axes
+            .width
+            .then_some(size_containment.intrinsic_content_size.width.unwrap_or(0.0)),
+        height: size_containment.axes.height.then_some(
+            size_containment
+                .intrinsic_content_size
+                .height
+                .unwrap_or(0.0),
+        ),
+    };
+    let inherent_size = Size {
+        width: contained_content_size
+            .width
+            .unwrap_or(context.inherent_size.width),
+        height: contained_content_size
+            .height
+            .unwrap_or(context.inherent_size.height),
+    };
+    let attribute_size = Size {
+        width: if size_containment.axes.width {
+            None
+        } else {
+            context.attribute_size.width
+        },
+        height: if size_containment.axes.height {
+            None
+        } else {
+            context.attribute_size.height
+        },
     };
     // The browser-owned style seam has already resolved the three CSS states
     // (`auto`, `<ratio>`, and `auto <ratio>`) against the natural ratio. Do not
@@ -280,6 +314,18 @@ pub(crate) fn measure_replaced(
         .maybe_resolve(preferred_basis, resolve_stylo_calc_value)
         .maybe_sub(box_sizing_adjustment)
         .maybe_max(min_size);
+    for (raw, resolved, contained) in [
+        (style.size, &mut preferred_size, contained_content_size),
+        (style.min_size, &mut min_size, contained_content_size),
+        (style.max_size, &mut max_size, contained_content_size),
+    ] {
+        if raw.width.is_intrinsic() {
+            resolved.width = resolved.width.or(contained.width);
+        }
+        if raw.height.is_intrinsic() {
+            resolved.height = resolved.height.or(contained.height);
+        }
+    }
 
     // A replaced element's intrinsic min/max-content constraint transfers a
     // definite preferred size in the opposite axis through its preferred
@@ -337,7 +383,7 @@ pub(crate) fn measure_replaced(
             resolved_aspect_ratio,
             padding_border_sum,
         )
-        .unwrap_or(context.inherent_size);
+        .unwrap_or(inherent_size);
         let size = content_known.unwrap_or(transferred.maybe_clamp(min_size, style_max_size));
         return size.map(|value| value.max(0.0)) + padding_border_sum;
     }
@@ -348,16 +394,16 @@ pub(crate) fn measure_replaced(
             resolved_aspect_ratio,
             padding_border_sum,
         )
-        .unwrap_or(context.inherent_size)
-    } else if context.attribute_size.width.is_some() || context.attribute_size.height.is_some() {
+        .unwrap_or(inherent_size)
+    } else if attribute_size.width.is_some() || attribute_size.height.is_some() {
         apply_aspect_ratio_to_content_size(
-            context.attribute_size,
+            attribute_size,
             resolved_aspect_ratio,
             padding_border_sum,
         )
-        .unwrap_or(context.inherent_size)
+        .unwrap_or(inherent_size)
     } else {
-        context.inherent_size
+        inherent_size
     };
     let size = unclamped.map(|value| value.max(0.0));
     let width_violation = if size.width < min_size.width.unwrap_or(0.0) {
@@ -556,8 +602,101 @@ mod tests {
                     .or(Some(1.0)),
                 box_sizing: style.box_sizing,
             },
+            SizeContainment::NONE,
             style,
         )
+    }
+
+    fn measure_with_containment(
+        style: &taffy::Style<Atom>,
+        size_containment: SizeContainment,
+    ) -> Size<f32> {
+        measure_replaced(
+            measurement_space(
+                Size::NONE,
+                taffy::WritingMode::HorizontalTb,
+                taffy::WritingMode::HorizontalTb,
+            ),
+            &image_context(),
+            ResolvedAspectRatio {
+                ratio: style
+                    .aspect_ratio
+                    .filter(|ratio| ratio.is_finite() && *ratio > 0.0),
+                box_sizing: style.box_sizing,
+            },
+            size_containment,
+            style,
+        )
+    }
+
+    #[test]
+    fn contained_replaced_axes_override_natural_dimensions_without_creating_a_ratio() {
+        let style = taffy::Style::<Atom>::default();
+        assert_eq!(
+            measure_with_containment(
+                &style,
+                SizeContainment::new(
+                    Size {
+                        width: true,
+                        height: true
+                    },
+                    Size {
+                        width: Some(100.0),
+                        height: Some(200.0)
+                    },
+                ),
+            ),
+            Size {
+                width: 100.0,
+                height: 200.0
+            },
+        );
+        assert_eq!(
+            measure_with_containment(
+                &style,
+                SizeContainment::new(
+                    Size {
+                        width: true,
+                        height: false
+                    },
+                    Size {
+                        width: Some(100.0),
+                        height: Some(200.0)
+                    },
+                ),
+            ),
+            Size {
+                width: 100.0,
+                height: 60.0
+            },
+        );
+
+        let explicit_width = taffy::Style::<Atom> {
+            size: Size {
+                width: taffy::Dimension::length(100.0),
+                height: taffy::Dimension::auto(),
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            measure_with_containment(
+                &explicit_width,
+                SizeContainment::new(
+                    Size {
+                        width: true,
+                        height: true
+                    },
+                    Size {
+                        width: Some(50.0),
+                        height: Some(100.0)
+                    },
+                ),
+            ),
+            Size {
+                width: 100.0,
+                height: 100.0
+            },
+        );
     }
 
     #[test]
@@ -589,6 +728,7 @@ mod tests {
                     ratio: Some(2.0),
                     box_sizing,
                 },
+                SizeContainment::NONE,
                 &style,
             )
         };
@@ -640,6 +780,7 @@ mod tests {
                 ratio: None,
                 box_sizing: BoxSizing::ContentBox,
             },
+            SizeContainment::NONE,
             &style,
         );
 
