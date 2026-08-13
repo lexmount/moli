@@ -411,10 +411,27 @@ impl LayoutPseudo {
 /// has no intrinsic dimensions and represents no content, while replaced
 /// categories with a CSS default object size (for example canvas) keep their
 /// category-specific fallback.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ReplacedObjectSize {
+    pub width: f32,
+    pub height: f32,
+}
+
+impl ReplacedObjectSize {
+    pub const fn new(width: f32, height: f32) -> Self {
+        Self { width, height }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ReplacedMetrics {
+    /// Actual natural content-box dimensions. Missing axes stay absent even
+    /// when the decoded resource has a concrete default object size.
     pub intrinsic_width: Option<f32>,
     pub intrinsic_height: Option<f32>,
+    /// Resource-specific concrete fallback for missing natural axes. When
+    /// absent, the element category supplies its HTML/CSS default.
+    pub default_object_size: Option<ReplacedObjectSize>,
     pub attribute_width: Option<f32>,
     pub attribute_height: Option<f32>,
     pub intrinsic_ratio: Option<f32>,

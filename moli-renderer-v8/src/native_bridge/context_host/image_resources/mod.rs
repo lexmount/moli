@@ -14,7 +14,7 @@ use crate::{
 pub(crate) use css::{CssImageResourceAdmission, CssImageResourceRequestIdentity};
 pub(crate) use preload::{ScannedImagePreloadAdmission, SharedScannedImagePreloadLoad};
 pub(super) use state::ImageResourceStore;
-pub(crate) use state::ReadyImageForLayout;
+pub(crate) use state::{ImageNaturalSizing, ReadyImageForLayout};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(super) struct ImageResourceRequestIdentity {
@@ -284,6 +284,13 @@ impl super::JsContextHost {
 
     pub(crate) fn image_resource_intrinsic_size(&self, element: DomHandle) -> Option<(f32, f32)> {
         self.image_resources.intrinsic_dimensions(element)
+    }
+
+    pub(crate) fn image_resource_natural_sizing(
+        &self,
+        element: DomHandle,
+    ) -> Option<ImageNaturalSizing> {
+        self.image_resources.natural_sizing(element)
     }
 
     pub(crate) fn complete_pending_image_load_local_response_if_matches(

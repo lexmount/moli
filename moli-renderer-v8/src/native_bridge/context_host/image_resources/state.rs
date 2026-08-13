@@ -23,6 +23,19 @@ pub(crate) struct ReadyImageForLayout {
     pub(crate) svg: Option<Arc<moli_image::SvgImage>>,
 }
 
+/// Resource sizing data before CSS replaced-element normalization.
+///
+/// SVG natural axes remain independently optional. `concrete_*` is retained
+/// separately for the default-object-size fallback and paint surfaces.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ImageNaturalSizing {
+    pub(crate) width: Option<f32>,
+    pub(crate) height: Option<f32>,
+    pub(crate) ratio: Option<f32>,
+    pub(crate) concrete_width: f32,
+    pub(crate) concrete_height: f32,
+}
+
 pub(in crate::native_bridge::context_host) struct ImageResourceStore {
     slots: HashMap<DomHandle, ImageResourceSlot>,
     ready_by_request: ReadyImageResourceIndex,
@@ -288,6 +301,14 @@ impl ImageResourceStore {
         Some(intrinsic_dimensions(resource))
     }
 
+    pub(super) fn natural_sizing(&self, element: DomHandle) -> Option<ImageNaturalSizing> {
+        let slot = self.slots.get(&element)?;
+        let ImageResourceState::Ready(resource) = &slot.state else {
+            return None;
+        };
+        Some(natural_sizing(resource))
+    }
+
     pub(super) fn retire_element(&mut self, element: DomHandle) -> bool {
         let removed = self.slots.remove(&element).is_some();
         self.prune_dead_ready_requests();
@@ -308,11 +329,7 @@ impl ImageResourceStore {
 }
 
 pub(super) fn intrinsic_dimensions(resource: &ReadyImageResource) -> (f32, f32) {
-    let density = if resource.density.is_finite() && resource.density > 0.0 {
-        resource.density as f32
-    } else {
-        1.0
-    };
+    let density = resource_density(resource);
     // `ImageResponseDescriptor::{width,height}` deliberately stores integer
     // dimensions for the HTMLImageElement naturalWidth/naturalHeight surface.
     // SVG layout cannot reuse those rounded values: a viewBox-only 96:12 SVG
@@ -329,6 +346,42 @@ pub(super) fn intrinsic_dimensions(resource: &ReadyImageResource) -> (f32, f32) 
         }
     };
     (width / density, height / density)
+}
+
+pub(super) fn natural_sizing(resource: &ReadyImageResource) -> ImageNaturalSizing {
+    let density = resource_density(resource);
+    let (concrete_width, concrete_height) = intrinsic_dimensions(resource);
+    let (width, height, ratio) = match resource.descriptor.decode_metadata {
+        super::ImageDecodeMetadata::Raster(metadata) => {
+            let width = metadata.width as f32 / density;
+            let height = metadata.height as f32 / density;
+            (
+                Some(width),
+                Some(height),
+                (height > 0.0).then_some(width / height),
+            )
+        }
+        super::ImageDecodeMetadata::Svg(metadata) => (
+            metadata.intrinsic_width.map(|width| width / density),
+            metadata.intrinsic_height.map(|height| height / density),
+            metadata.intrinsic_ratio,
+        ),
+    };
+    ImageNaturalSizing {
+        width,
+        height,
+        ratio,
+        concrete_width,
+        concrete_height,
+    }
+}
+
+fn resource_density(resource: &ReadyImageResource) -> f32 {
+    if resource.density.is_finite() && resource.density > 0.0 {
+        resource.density as f32
+    } else {
+        1.0
+    }
 }
 
 #[cfg(test)]
@@ -356,5 +409,29 @@ mod tests {
             ..resource
         };
         assert_eq!(intrinsic_dimensions(&high_density_resource), (150.0, 18.75));
+    }
+
+    #[test]
+    fn svg_natural_sizing_keeps_missing_axes_distinct_from_concrete_fallbacks() {
+        let metadata =
+            moli_image::svg_image_metadata_from_root_attributes(Some("50px"), None, None);
+        let resource = ReadyImageResource {
+            descriptor: ImageResponseDescriptor::svg(metadata).expect("valid SVG descriptor"),
+            density: 1.0,
+            pixels: None,
+            svg: None,
+            _decoded_bytes_permit: None,
+        };
+
+        assert_eq!(
+            natural_sizing(&resource),
+            ImageNaturalSizing {
+                width: Some(50.0),
+                height: None,
+                ratio: None,
+                concrete_width: 50.0,
+                concrete_height: 150.0,
+            }
+        );
     }
 }
