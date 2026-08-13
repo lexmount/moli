@@ -924,6 +924,86 @@ html,body{margin:0;padding:0}
     }
 
     #[test]
+    fn replaced_percentage_padding_uses_vertical_containing_block_inline_size() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+#host{writing-mode:vertical-lr;width:100px;height:200px}
+#subject{display:block;box-sizing:content-box;width:10px;height:10px;padding-left:10%;padding-right:10%;background:rgb(17,18,19)}
+</style></head><body><div id=host><img id=subject></div></body></html>"#,
+            )
+            .await;
+
+            // Chromium resolves both physical padding sides against the
+            // vertical containing block's 200px logical inline-size. Use
+            // vertical-lr here so this regression isolates percentage
+            // resolution from vertical-rl's separate reversed block flow.
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(17, 18, 19)),
+                moli_layout::PaintRect::new(0.0, 0.0, 50.0, 10.0),
+            );
+        }));
+    }
+
+    #[test]
+    fn flex_auto_position_uses_the_padding_box_across_writing_directions() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+.flex{display:flex;position:relative;width:100px;height:60px;border:solid white;border-left-width:20px;left:-20px;border-top-width:5px;top:-5px;border-right-width:10px;border-bottom-width:15px;background:rgb(200,1,2)}
+.flex>div{position:absolute;width:100%;height:100%}
+#htb-ltr{writing-mode:horizontal-tb;direction:ltr}#htb-ltr>div{background:rgb(3,128,4)}
+#htb-rtl{writing-mode:horizontal-tb;direction:rtl}#htb-rtl>div{background:rgb(5,128,6)}
+#vlr-ltr{writing-mode:vertical-lr;direction:ltr}#vlr-ltr>div{background:rgb(7,128,8)}
+#vlr-rtl{writing-mode:vertical-lr;direction:rtl}#vlr-rtl>div{background:rgb(9,128,10)}
+#vrl-ltr{writing-mode:vertical-rl;direction:ltr}#vrl-ltr>div{background:rgb(11,128,12)}
+#vrl-rtl{writing-mode:vertical-rl;direction:rtl}#vrl-rtl>div{background:rgb(13,128,14)}
+</style></head><body>
+<div class=flex id=htb-ltr><div></div></div>
+<div class=flex id=htb-rtl><div></div></div>
+<div class=flex id=vlr-ltr><div></div></div>
+<div class=flex id=vlr-rtl><div></div></div>
+<div class=flex id=vrl-ltr><div></div></div>
+<div class=flex id=vrl-rtl><div></div></div>
+</body></html>"#,
+            )
+            .await;
+
+            // This is the six-case writing-mode/direction matrix from WPT's
+            // css-flexbox/abspos/abspos-autopos-*.html family. The relative
+            // offset puts each padding-box origin on its normal-flow row.
+            for (index, color) in [
+                rgb(3, 128, 4),
+                rgb(5, 128, 6),
+                rgb(7, 128, 8),
+                rgb(9, 128, 10),
+                rgb(11, 128, 12),
+                rgb(13, 128, 14),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                assert_paint_rect(
+                    solid_paint_rect(&snapshot, color),
+                    moli_layout::PaintRect::new(0.0, index as f32 * 80.0, 100.0, 60.0),
+                );
+            }
+        }));
+    }
+
+    #[test]
     fn fixed_table_layout_distributes_unresolved_columns_equally() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -1005,6 +1085,44 @@ table{table-layout:fixed;border-spacing:0}td{border:0;padding:0;height:10px}
                     moli_layout::PaintRect::new(expected.0, expected.1, expected.2, 10.0),
                 );
             }
+        }));
+    }
+
+    #[test]
+    fn table_grid_preserves_percentage_padding_until_constraint_resolution() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+#host{width:200px}
+table{border-spacing:0;table-layout:fixed;width:100px;padding-left:10%}
+td{border:0;padding:0;height:10px}
+#default-cell{background:rgb(27,28,29)}
+#content-box{box-sizing:content-box}#content-cell{background:rgb(37,38,39)}
+</style></head><body><div id=host>
+<table><tr><td id=default-cell></td></tr></table>
+<table id=content-box><tr><td id=content-cell></td></tr></table>
+</div></body></html>"#,
+            )
+            .await;
+
+            // Chromium resolves the table's 10% padding against the 200px
+            // containing block, leaving an 80px grid content box at x=20.
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(27, 28, 29)),
+                moli_layout::PaintRect::new(20.0, 0.0, 80.0, 10.0),
+            );
+            // An author override remains authoritative: content-box keeps a
+            // 100px grid and adds the same 20px padding outside it.
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(37, 38, 39)),
+                moli_layout::PaintRect::new(20.0, 10.0, 100.0, 10.0),
+            );
         }));
     }
 
