@@ -45,6 +45,33 @@ impl<N> LayoutBox<N> {
             )
     }
 
+    /// Mirrors Blink's `LayoutObject::IsEligibleForSizeContainment()`
+    /// boundary. Ordinary CSS boxes opt in, while table layout objects reject
+    /// size containment even where paint/layout containment may apply.
+    pub(crate) fn is_eligible_for_size_containment(&self) -> bool {
+        self.is_css_box()
+            && !matches!(
+                self.kind,
+                LayoutBoxKind::TableWrapper
+                    | LayoutBoxKind::InlineTableWrapper
+                    | LayoutBoxKind::TableRowGroup
+                    | LayoutBoxKind::TableHeaderGroup
+                    | LayoutBoxKind::TableFooterGroup
+                    | LayoutBoxKind::TableColumnGroup
+                    | LayoutBoxKind::TableColumn
+                    | LayoutBoxKind::TableRow
+                    | LayoutBoxKind::TableCell
+                    | LayoutBoxKind::AnonymousTableWrapper
+                    | LayoutBoxKind::AnonymousTableRowGroup
+                    | LayoutBoxKind::AnonymousTableRow
+                    | LayoutBoxKind::AnonymousTableCell
+            )
+    }
+
+    pub(crate) fn applies_any_size_containment(&self) -> bool {
+        self.is_eligible_for_size_containment() && self.style.applies_any_size_containment()
+    }
+
     pub(crate) fn establishes_positioned_containing_block(&self) -> bool {
         self.style.establishes_positioned_containing_block(
             self.is_css_box(),
