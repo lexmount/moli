@@ -8,7 +8,7 @@ use moli_layout::{
     LayoutReplacedKind, LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutTableData,
     LayoutTableRole, LayoutTextSelection, PaintBrush, PaintColor, PaintFragment, PaintRect,
     PaintShape, PaintSnapshot, PaintTransform2D, PaintViewport, ReplacedMetrics,
-    ResolvedLayoutStyle, ScreenshotLayoutRequest, build_screenshot_snapshot,
+    ReplacedObjectSize, ResolvedLayoutStyle, ScreenshotLayoutRequest, build_screenshot_snapshot,
 };
 use style::Atom;
 use taffy::{
@@ -834,6 +834,7 @@ fn degenerate_css_ratio_falls_back_to_the_replaced_intrinsic_ratio() {
         .with_metrics(ReplacedMetrics {
             intrinsic_width: Some(80.0),
             intrinsic_height: Some(40.0),
+            default_object_size: None,
             attribute_width: None,
             attribute_height: None,
             intrinsic_ratio: Some(2.0),
@@ -941,6 +942,112 @@ fn fractional_replaced_images_project_contiguous_pre_transform_destinations() {
         );
         assert_eq!(image.transform, PaintTransform2D::IDENTITY);
     }
+}
+
+/// Regression for
+/// <https://wpt.live/css/css-sizing/aspect-ratio/replaced-element-034.html>.
+#[test]
+fn intrinsic_replaced_axis_uses_natural_width_before_default_object_height() {
+    let source = Source(vec![
+        Node::element("root", "div", LayoutElementCategory::Generic, None, vec![1]),
+        Node::element(
+            "image",
+            "img",
+            LayoutElementCategory::Generic,
+            Some(LayoutReplacedKind::Image),
+            Vec::new(),
+        )
+        .with_metrics(ReplacedMetrics {
+            intrinsic_width: Some(50.0),
+            intrinsic_height: None,
+            default_object_size: Some(ReplacedObjectSize::new(300.0, 150.0)),
+            intrinsic_ratio: None,
+            ..ReplacedMetrics::default()
+        }),
+    ]);
+    let mut styles = Styles::default();
+    styles.primary.insert(
+        0,
+        sized(LayoutDisplay::Block, 300.0, 200.0, PaintColor::TRANSPARENT),
+    );
+    styles.primary.insert(
+        1,
+        ResolvedLayoutStyle::synthetic(
+            LayoutDisplay::Block,
+            Style {
+                box_sizing: BoxSizing::BorderBox,
+                size: Size {
+                    width: Dimension::auto(),
+                    height: Dimension::min_content(),
+                },
+                padding: Rect {
+                    left: taffy::LengthPercentage::length(50.0),
+                    ..Rect::zero()
+                },
+                aspect_ratio: Some(1.0),
+                ..Style::default()
+            },
+            GREEN,
+        ),
+    );
+
+    let snapshot = render(&source, &mut styles, 300, 200);
+    assert_eq!(
+        rect(&snapshot, GREEN),
+        PaintRect::new(0.0, 0.0, 100.0, 100.0)
+    );
+}
+
+/// Regression for
+/// <https://wpt.live/css/css-sizing/replaced-aspect-ratio-stretch-fit-003.html>.
+#[test]
+fn replaced_intrinsic_minimum_floors_a_smaller_authored_maximum() {
+    let source = Source(vec![
+        Node::element("root", "div", LayoutElementCategory::Generic, None, vec![1]),
+        Node::element(
+            "svg",
+            "svg",
+            LayoutElementCategory::Generic,
+            Some(LayoutReplacedKind::Svg),
+            Vec::new(),
+        )
+        .with_metrics(ReplacedMetrics {
+            intrinsic_ratio: Some(1.0),
+            default_object_size: Some(ReplacedObjectSize::new(300.0, 150.0)),
+            ..ReplacedMetrics::default()
+        }),
+    ]);
+    let mut styles = Styles::default();
+    styles.primary.insert(
+        0,
+        sized(LayoutDisplay::Block, 100.0, 100.0, PaintColor::TRANSPARENT),
+    );
+    styles.primary.insert(
+        1,
+        ResolvedLayoutStyle::synthetic(
+            LayoutDisplay::Inline,
+            Style {
+                size: Size {
+                    width: Dimension::auto(),
+                    height: Dimension::percent(1.0),
+                },
+                min_size: Size {
+                    width: Dimension::max_content(),
+                    height: Dimension::auto(),
+                },
+                max_size: Size {
+                    width: Dimension::length(50.0),
+                    height: Dimension::auto(),
+                },
+                ..Style::default()
+            },
+            GREEN,
+        ),
+    );
+
+    let snapshot = render(&source, &mut styles, 200, 200);
+    let replaced = rect(&snapshot, GREEN);
+    assert_eq!((replaced.width, replaced.height), (100.0, 100.0));
 }
 
 #[test]
