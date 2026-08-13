@@ -2243,7 +2243,8 @@ document.head.innerHTML = `<style>
 html,body{margin:0;padding:0;background:white}
 #icon{position:absolute;left:0;top:0;color:red}
 #icon.blue{color:blue}
-#ratio{position:absolute;left:0;top:30px;color:green}
+#ratio-host{position:absolute;left:0;top:30px;width:220px;height:160px}
+#ratio{position:absolute;left:0;top:0;color:green}
 #feishu-time{position:absolute;left:60px;top:0;color:#646a73;font-size:16px}
 #feishu-time.css-width{width:24px}
 </style>`;
@@ -2254,9 +2255,9 @@ document.body.innerHTML = `
 <svg id="feishu-time" width="1em" height="1em" viewBox="0 0 24 24" data-icon="TimeOutlined">
   <rect width="24" height="24" fill="currentColor"></rect>
 </svg>
-<svg id="ratio" viewBox="0 0 1 1">
+<div id="ratio-host"><svg id="ratio" viewBox="0 0 1 1">
   <rect width="1" height="1" fill="currentColor"></rect>
-</svg>`;
+</svg></div>`;
 'installed'
 "#,
         )?;
@@ -2267,6 +2268,13 @@ document.body.innerHTML = `
             )?,
             "16px|16px",
             "SVG presentation attributes must resolve 1em through the element's computed font size like Chromium",
+        );
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                "const r=document.getElementById('ratio').getBoundingClientRect();[r.width,r.height].join('|')",
+            )?,
+            "220|220",
+            "a ratio-only absolute SVG must stretch to the definite available inline size like Chromium",
         );
 
         let first = page_vm
@@ -2312,10 +2320,10 @@ document.body.innerHTML = `
         assert_eq!(first_pixel(65, 5), [100, 106, 115, 255]);
         assert_eq!(first_pixel(80, 5), [255, 255, 255, 255]);
         assert_eq!(first_pixel(140, 40), [0, 128, 0, 255]);
-        // A viewBox-only square uses its 1:1 ratio inside the CSS 300x150
-        // default object size, yielding a 150x150 replaced box rather than
-        // losing the ratio and stretching to 300x150.
-        assert_eq!(first_pixel(170, 40), [255, 255, 255, 255]);
+        // A viewBox-only square has a preferred ratio but no natural size.
+        // Blink stretch-fits its automatic inline size to the definite 220px
+        // available space, then transfers the 1:1 ratio to its block size.
+        assert_eq!(first_pixel(170, 40), [0, 128, 0, 255]);
 
         page_vm.vm_mut().eval(
             "document.getElementById('icon').classList.add('blue');document.getElementById('shape').setAttribute('x','2');document.getElementById('feishu-time').setAttribute('width','2em');'mutated'",
