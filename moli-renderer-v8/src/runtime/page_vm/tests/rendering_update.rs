@@ -1410,7 +1410,7 @@ document.body.innerHTML = `<div id=stage>
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn intrinsic_width_keywords_match_chromium_across_formatting_contexts() {
+async fn intrinsic_width_sizing_covers_browser_formatting_contexts() {
     run_page_vm_async_test(async move {
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
@@ -1484,8 +1484,8 @@ document.body.innerHTML = `
                 "min-content": true,
                 "max-content": true,
                 "fit-content": true,
-                "fit-content(120px)": false,
-                "fit-content(50%)": false,
+                "fit-content(120px)": true,
+                "fit-content(50%)": true,
                 "stretch": true,
                 "-webkit-fill-available": true,
                 "grid-fit-content(120px)": true,
