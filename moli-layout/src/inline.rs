@@ -1269,7 +1269,6 @@ pub(crate) fn prepare_inline_contexts<N>(
         layout_box.inline_layout = None;
         layout_box.inline_context_owner = None;
         layout_box.inline_flattened = false;
-        layout_box.inline_static_position = None;
     }
 
     let owners = (0..world.boxes.len())

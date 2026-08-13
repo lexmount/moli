@@ -23,7 +23,6 @@ mod normalize;
 mod normalize_source;
 mod paint;
 mod pass;
-mod positioned;
 mod projection;
 mod replaced;
 mod snapshot;
