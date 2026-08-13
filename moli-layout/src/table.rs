@@ -911,6 +911,7 @@ where
         sizing_purpose: SizingPurpose::IntrinsicContribution,
         run_mode: RunMode::ComputeSize,
         axis: RequestedAxis::from(table_writing_mode.inline_axis()),
+        inline_auto_behavior: AutoSizeBehavior::FitContent,
         block_auto_behavior: AutoSizeBehavior::FitContent,
         block_margins_are_collapsible: Line::FALSE,
     };
@@ -1018,6 +1019,7 @@ where
             sizing_purpose: SizingPurpose::Layout,
             run_mode: RunMode::PerformLayout,
             axis: taffy::RequestedAxis::Both,
+            inline_auto_behavior: AutoSizeBehavior::FitContent,
             block_auto_behavior: AutoSizeBehavior::FitContent,
             block_margins_are_collapsible: Line::FALSE,
         };
