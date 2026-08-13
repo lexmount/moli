@@ -1,0 +1,12 @@
+[package]
+license.workspace = true
+name = "moli-parkable-image"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+moli-disk-pool = { path = "../moli-disk-pool" }
+parking_lot = "0.12"
+
+[lints]
+workspace = true

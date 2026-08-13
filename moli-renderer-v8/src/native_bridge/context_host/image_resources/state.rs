@@ -3,6 +3,7 @@ use std::{
     sync::{Arc, Weak},
 };
 
+use moli_parkable_image::ParkableImage;
 use parking_lot::Mutex;
 
 use super::{
@@ -51,6 +52,7 @@ pub(super) struct ReadyImageResource {
     pub(super) density: f64,
     pub(super) pixels: Option<Arc<moli_image::RgbaImage>>,
     pub(super) svg: Option<Arc<moli_image::SvgImage>>,
+    pub(super) encoded: Option<ParkableImage>,
     pub(super) _decoded_bytes_permit: Option<ImageDecodedBytesPermit>,
 }
 
@@ -169,8 +171,9 @@ impl ImageResourceStore {
         &mut self,
         identity: &ImageResourceRequestIdentity,
         descriptor: ImageResponseDescriptor,
+        encoded: ParkableImage,
     ) -> bool {
-        self.complete_ready(identity, descriptor, None, None, None)
+        self.complete_ready(identity, descriptor, None, None, Some(encoded), None)
     }
 
     pub(super) fn complete_decode(
@@ -195,6 +198,7 @@ impl ImageResourceStore {
             descriptor,
             pixels,
             svg,
+            Some(ready.encoded),
             Some(ready.decoded_bytes_permit),
         )
     }
@@ -233,6 +237,7 @@ impl ImageResourceStore {
         descriptor: ImageResponseDescriptor,
         pixels: Option<Arc<moli_image::RgbaImage>>,
         svg: Option<Arc<moli_image::SvgImage>>,
+        encoded: Option<ParkableImage>,
         decoded_bytes_permit: Option<ImageDecodedBytesPermit>,
     ) -> bool {
         let Some(slot) = self.slots.get_mut(&identity.element) else {
@@ -246,6 +251,7 @@ impl ImageResourceStore {
             density: identity.request_key.density(),
             pixels,
             svg,
+            encoded,
             _decoded_bytes_permit: decoded_bytes_permit,
         });
         self.ready_by_request
@@ -287,6 +293,19 @@ impl ImageResourceStore {
         self.slots
             .get(&element)
             .is_some_and(|slot| matches!(slot.state, ImageResourceState::Ready(_)))
+    }
+
+    pub(super) fn encoded_for_element(&self, element: DomHandle) -> Option<ParkableImage> {
+        let slot = self.slots.get(&element)?;
+        match &slot.state {
+            ImageResourceState::Ready(resource) => resource.encoded.clone(),
+            ImageResourceState::Pending | ImageResourceState::DecodeQueued(_) => slot
+                .scanned_preload
+                .as_ref()
+                .and_then(SharedScannedImagePreloadLoad::try_outcome)
+                .and_then(|outcome| outcome.encoded()),
+            ImageResourceState::Failed => None,
+        }
     }
 
     pub(super) fn has_ready_request(&self, request_key: &ImageRequestKey) -> bool {
@@ -376,6 +395,7 @@ mod tests {
             density: 1.0,
             pixels: None,
             svg: None,
+            encoded: None,
             _decoded_bytes_permit: None,
         };
         assert_eq!(intrinsic_dimensions(&resource), (300.0, 37.5));

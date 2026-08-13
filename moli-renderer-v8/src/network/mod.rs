@@ -18,7 +18,8 @@ mod request_client;
 mod task_runner;
 
 pub use backend::{
-    BrowserResourceRuntime, BrowserResourceRuntimeDiagnostics, BrowserResourceRuntimeOwner,
+    BrowserParkableImageDiagnostics, BrowserResourceDiskPoolDiagnostics, BrowserResourceRuntime,
+    BrowserResourceRuntimeDiagnostics, BrowserResourceRuntimeOwner,
     BrowserResourceRuntimeOwnerRegistrar, BrowserResourceRuntimeOwnerRegistration,
     SharedMemoryResourceCacheDiagnostics,
 };

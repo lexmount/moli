@@ -1,0 +1,15 @@
+[package]
+license.workspace = true
+name = "moli-disk-pool"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+test-support = []
+
+[dependencies]
+parking_lot = "0.12"
+tempfile = "3.27.0"
+
+[lints]
+workspace = true
