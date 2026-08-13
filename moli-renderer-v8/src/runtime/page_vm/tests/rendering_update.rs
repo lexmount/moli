@@ -775,8 +775,14 @@ document.body.innerHTML = `<div id=centered></div><div id=definite-parent><div i
             let index = ((y * image.width + x) * 4) as usize;
             <[u8; 4]>::try_from(&image.rgba[index..index + 4]).expect("RGBA pixel")
         };
+        // Blink retains the fractional layout origin for DOM geometry, but
+        // box background painting snaps the fill rect to device pixels.
+        // The 975px box therefore paints [233, 1208), with no half-covered
+        // pixel at either edge at device scale 1.
+        assert_eq!(pixel(232, 10), [255, 255, 255, 255]);
         assert_eq!(pixel(233, 10), [255, 0, 0, 255]);
-        assert_eq!(pixel(232, 10), [255, 127, 127, 255]);
+        assert_eq!(pixel(1207, 10), [255, 0, 0, 255]);
+        assert_eq!(pixel(1208, 10), [255, 255, 255, 255]);
         assert_eq!(pixel(5, 230), [0, 0, 255, 255]);
         assert_eq!(pixel(5, 505), [0, 255, 0, 255]);
         Ok::<_, anyhow::Error>(())

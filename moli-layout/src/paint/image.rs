@@ -12,25 +12,25 @@ use style::{
 };
 
 use super::{
+    PaintSpace,
     geometry::{BoxAreas, BoxModelBox},
-    paint_space::PaintSpace,
 };
 use crate::{
-    LayoutBoxId, LayoutPoint, LayoutRect, LayoutReplacedKind, LayoutSize, LayoutTransform2D,
-    PaintBorderColors, PaintBorderStyle, PaintBorderStyles, PaintColor, PaintCornerRadii,
-    PaintDiagnostic, PaintDiagnosticSeverity, PaintEdgeSizes, PaintFragment, PaintImage,
-    PaintImageSampling, PaintSnapshot, PaintSvgImage, projection::OutputProjection,
+    LayoutBoxId, LayoutPoint, LayoutRect, LayoutReplacedKind, LayoutSize, PaintBorderColors,
+    PaintBorderStyle, PaintBorderStyles, PaintColor, PaintCornerRadii, PaintDiagnostic,
+    PaintDiagnosticSeverity, PaintEdgeSizes, PaintFragment, PaintImage, PaintImageSampling,
+    PaintSnapshot, PaintSvgImage, projection::OutputProjection,
 };
 
 pub(super) fn project_replaced_image<N>(
     projection: &OutputProjection<'_, N>,
     id: LayoutBoxId,
-    transform: LayoutTransform2D,
     paint_space: PaintSpace,
     snapshot: &mut PaintSnapshot,
 ) where
     N: Copy + Debug + Eq + Hash,
 {
+    let transform = paint_space.local_transform();
     let layout_box = &projection.world.boxes[id.index()];
     let Some(kind) = layout_box
         .element_semantics()
@@ -46,13 +46,13 @@ pub(super) fn project_replaced_image<N>(
     }
     let Some(resource) = layout_box.replaced_image.as_ref() else {
         if kind == LayoutReplacedKind::Image {
-            project_unavailable_image(projection, id, transform, snapshot);
+            project_unavailable_image(projection, id, paint_space, snapshot);
         }
         return;
     };
     if resource.pixels.is_none() && resource.svg.is_none() {
         if kind == LayoutReplacedKind::Image {
-            project_unavailable_image(projection, id, transform, snapshot);
+            project_unavailable_image(projection, id, paint_space, snapshot);
         }
         return;
     }
@@ -132,7 +132,7 @@ pub(super) fn project_replaced_image<N>(
             transform,
         });
     }
-    let destination = paint_space.offset_rect(destination);
+    let destination = paint_space.pre_transform_rect(destination);
     let image_transform = paint_space.property_transform();
     if let Some(pixels) = resource.pixels.clone() {
         let image = snapshot.add_image(pixels);
@@ -166,7 +166,7 @@ fn replaced_content_clip_needed(areas: BoxAreas, destination: LayoutRect) -> boo
 fn project_unavailable_image<N>(
     projection: &OutputProjection<'_, N>,
     id: LayoutBoxId,
-    transform: LayoutTransform2D,
+    paint_space: PaintSpace,
     snapshot: &mut PaintSnapshot,
 ) where
     N: Copy + Debug + Eq + Hash,
@@ -190,12 +190,12 @@ fn project_unavailable_image<N>(
     }
     let light_gray = PaintColor::new(211.0 / 255.0, 211.0 / 255.0, 211.0 / 255.0, 1.0);
     snapshot.push_fragment(PaintFragment::Border {
-        rect: content_rect,
+        rect: paint_space.pre_transform_rect(content_rect),
         widths: PaintEdgeSizes::new(1.0, 1.0, 1.0, 1.0),
         colors: PaintBorderColors::all(light_gray),
         styles: PaintBorderStyles::all(PaintBorderStyle::Solid),
         radii: PaintCornerRadii::ZERO,
-        transform,
+        transform: paint_space.property_transform(),
     });
 }
 

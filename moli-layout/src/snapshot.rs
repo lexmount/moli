@@ -58,6 +58,58 @@ impl Default for PaintColor {
 /// Paint-facing compatibility name for a canonical CSS-pixel rectangle.
 pub type PaintRect = crate::LayoutRect;
 
+/// Snap one paint-space extent to whole layout pixels while preserving a
+/// non-trivial nonzero size.
+///
+/// This is Blink's `SnapSizeToPixel` contract over Moli's shared 1/64 layout
+/// grid. The returned location and size must be used together: the size is
+/// sensitive to the fractional part of the location.
+pub fn pixel_snap_paint_axis(location: f32, size: f32) -> (f32, f32) {
+    pixel_snap_paint_axis_impl(location, size, false)
+}
+
+/// Snap one paint-space extent to whole layout pixels, allowing a thin extent
+/// to collapse to zero.
+///
+/// Border inner edges use this variant, matching Blink's
+/// `SnapSizeToPixelAllowingZero` behavior.
+pub fn pixel_snap_paint_axis_allowing_zero(location: f32, size: f32) -> (f32, f32) {
+    pixel_snap_paint_axis_impl(location, size, true)
+}
+
+fn pixel_snap_paint_axis_impl(location: f32, size: f32, allow_zero: bool) -> (f32, f32) {
+    let location = f64::from(location);
+    let size = f64::from(size);
+    let fraction = location % 1.0;
+    let snapped_location = round_layout_pixel(location);
+    let mut snapped_size = round_layout_pixel(fraction + size) - round_layout_pixel(fraction);
+    let layout_unit_epsilon = 1.0 / f64::from(crate::LAYOUT_SUBPIXELS_PER_CSS_PIXEL);
+    if !allow_zero && snapped_size == 0.0 && size.abs() > 4.0 * layout_unit_epsilon {
+        snapped_size = size.signum();
+    }
+    (snapped_location as f32, snapped_size as f32)
+}
+
+pub(crate) fn round_layout_pixel(value: f64) -> f64 {
+    (value + 0.5).floor()
+}
+
+/// Pixel-snap a positive finite rectangle in pre-transform paint space.
+pub fn pixel_snap_paint_rect(rect: PaintRect) -> Option<PaintRect> {
+    if !rect.x.is_finite()
+        || !rect.y.is_finite()
+        || !rect.width.is_finite()
+        || !rect.height.is_finite()
+        || rect.width <= 0.0
+        || rect.height <= 0.0
+    {
+        return None;
+    }
+    let (x, width) = pixel_snap_paint_axis(rect.x, rect.width);
+    let (y, height) = pixel_snap_paint_axis(rect.y, rect.height);
+    (width > 0.0 && height > 0.0).then(|| PaintRect::new(x, y, width, height))
+}
+
 /// Paint-facing compatibility name for a canonical CSS-pixel point.
 pub type PaintPoint = crate::LayoutPoint;
 
@@ -1085,6 +1137,18 @@ mod tests {
     use super::*;
 
     fn assert_source_free<T: Send + Sync + 'static>() {}
+
+    #[test]
+    fn paint_pixel_snapping_preserves_blink_layout_unit_semantics() {
+        assert_eq!(pixel_snap_paint_axis(0.0, 3.0 / 64.0), (0.0, 0.0));
+        assert_eq!(pixel_snap_paint_axis(0.0, 5.0 / 64.0), (0.0, 1.0));
+        assert_eq!(pixel_snap_paint_axis(0.5, 1.5), (1.0, 1.0));
+        assert_eq!(pixel_snap_paint_axis_allowing_zero(0.5, 0.5), (1.0, 0.0));
+        assert_eq!(
+            pixel_snap_paint_rect(PaintRect::new(151.09375, 24.0, 90.0, 90.0)),
+            Some(PaintRect::new(151.0, 24.0, 90.0, 90.0))
+        );
+    }
 
     #[test]
     fn snapshot_is_owned_and_source_free() {

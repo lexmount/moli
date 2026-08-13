@@ -5,6 +5,10 @@
 //! styles; all source/style borrows and per-pass caches are gone before the
 //! returned [`FrozenLayoutTree`] or [`PaintSnapshot`] crosses into a consumer.
 
+/// Number of fixed layout subpixels in one CSS pixel, matching Blink's
+/// `LayoutUnit` precision.
+pub const LAYOUT_SUBPIXELS_PER_CSS_PIXEL: f32 = 64.0;
+
 mod builder;
 mod capture;
 mod containment;
@@ -66,7 +70,8 @@ pub use snapshot::{
     PaintPathElement, PaintPoint, PaintRadialGradient, PaintRect, PaintShape, PaintSize,
     PaintSnapshot, PaintStroke, PaintSvgImage, PaintSvgImageId, PaintSvgImageResource,
     PaintTextDecoration, PaintTextDecorationStyle, PaintTextShadow, PaintTransform2D,
-    PaintViewport,
+    PaintViewport, pixel_snap_paint_axis, pixel_snap_paint_axis_allowing_zero,
+    pixel_snap_paint_rect,
 };
 pub use source::{
     LayoutElementCategory, LayoutElementMetadata, LayoutElementSemantics, LayoutFormControlData,

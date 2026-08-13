@@ -309,12 +309,14 @@ enum GeneratedContent {
 pub(crate) struct ResolvedLayoutTransform {
     pub(crate) transform: LayoutTransform2D,
     pub(crate) has_unsupported_3d: bool,
+    pub(crate) establishes_property_space: bool,
 }
 
 impl ResolvedLayoutTransform {
-    const IDENTITY: Self = Self {
+    pub(crate) const IDENTITY: Self = Self {
         transform: LayoutTransform2D::IDENTITY,
         has_unsupported_3d: false,
+        establishes_property_space: false,
     };
 }
 
@@ -1121,22 +1123,22 @@ impl ResolvedLayoutStyle {
         self.pointer_events
     }
 
-    pub(crate) const fn establishes_paint_property_space(&self) -> bool {
-        self.establishes_transform_containing_block
-    }
-
     pub(crate) fn resolved_2d_transform(&self, width: f32, height: f32) -> ResolvedLayoutTransform {
         if let Some(transform) = self.synthetic_transform {
             return ResolvedLayoutTransform {
                 transform,
                 has_unsupported_3d: false,
+                establishes_property_space: true,
             };
         }
-        self.computed
+        let mut resolved = self
+            .computed
             .as_ref()
             .map_or(ResolvedLayoutTransform::IDENTITY, |computed| {
                 resolve_stylo_2d_transform(computed.get_box(), width, height)
-            })
+            });
+        resolved.establishes_property_space = self.establishes_transform_containing_block;
+        resolved
     }
 
     pub(crate) fn is_absolute_positioned(&self) -> bool {
@@ -1844,6 +1846,7 @@ fn resolve_stylo_2d_transform(
     ResolvedLayoutTransform {
         transform: resolved,
         has_unsupported_3d,
+        establishes_property_space: false,
     }
 }
 

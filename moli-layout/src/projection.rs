@@ -4,6 +4,7 @@ use taffy::ResolveOrZero;
 
 use crate::layout_tree::LayoutCoordinateSpace;
 use crate::stacking::{PaintOrderEvent, build_paint_order};
+use crate::style::ResolvedLayoutTransform;
 use crate::{
     FrozenCoordinateSpace, FrozenLayoutBox, FrozenLayoutTree, LayoutAnonymousReason,
     LayoutBoxGeometry, LayoutBoxId, LayoutClipChainId, LayoutClipNode, LayoutCoordinateSpaceId,
@@ -71,7 +72,6 @@ where
             .filter(|diagnostic| diagnostic.severity == PaintDiagnosticSeverity::Warning)
             .count(),
     };
-
     let tree = projection.into_frozen_tree(content_size);
     Ok(LayoutPassResult::new(
         tree,
@@ -79,6 +79,73 @@ where
         metrics,
         paint_snapshot,
     ))
+}
+
+/// Blink-like linear paint space for one projected coordinate space.
+///
+/// Chromium describes this space as the combination of a transform and a
+/// paint offset. Keeping those two values together lets paint snap geometry
+/// before applying CSS and scroll property transforms.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PaintSpace {
+    pub(crate) paint_offset: LayoutPoint,
+    property_transform: LayoutTransform2D,
+}
+
+impl PaintSpace {
+    pub(crate) const ROOT: Self = Self {
+        paint_offset: LayoutPoint::ZERO,
+        property_transform: LayoutTransform2D::IDENTITY,
+    };
+
+    pub(crate) fn with_outer_transform(self, outer: LayoutTransform2D) -> Self {
+        Self {
+            paint_offset: self.paint_offset,
+            property_transform: outer.concatenate(self.property_transform),
+        }
+    }
+
+    pub(crate) fn local_transform(self) -> LayoutTransform2D {
+        self.property_transform
+            .concatenate(LayoutTransform2D::translation(
+                self.paint_offset.x,
+                self.paint_offset.y,
+            ))
+    }
+
+    pub(crate) fn pre_transform_rect(self, rect: LayoutRect) -> LayoutRect {
+        LayoutRect::new(
+            rect.x + self.paint_offset.x,
+            rect.y + self.paint_offset.y,
+            rect.width,
+            rect.height,
+        )
+    }
+
+    pub(crate) const fn property_transform(self) -> LayoutTransform2D {
+        self.property_transform
+    }
+}
+
+/// One coordinate space while output and paint projection are both live.
+///
+/// The public layout space retains exact CSS geometry for queries. `paint`
+/// may deliberately diverge at transform boundaries because Blink rounds the
+/// property translation and carries only the transform-safe subpixel residue.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ProjectedCoordinateSpace {
+    pub(crate) layout: LayoutCoordinateSpace,
+    pub(crate) paint: PaintSpace,
+}
+
+impl ProjectedCoordinateSpace {
+    fn into_layout_space(self) -> LayoutCoordinateSpace {
+        self.layout
+    }
+
+    pub(crate) fn paint_space(&self, outer: LayoutTransform2D) -> PaintSpace {
+        self.paint.with_outer_transform(outer)
+    }
 }
 
 pub(crate) struct OutputProjection<'a, N>
@@ -95,11 +162,11 @@ where
     fragments: Vec<LayoutFragment>,
     scroll_proxy_links: Vec<(N, LayoutOutputBoxId)>,
     pub(crate) scroll_extents: Vec<LayoutScrollExtent>,
-    pub(crate) coordinate_spaces: Vec<LayoutCoordinateSpace>,
+    pub(crate) coordinate_spaces: Vec<ProjectedCoordinateSpace>,
     pub(crate) clip_chain: Vec<LayoutClipNode>,
     paint_order_count: usize,
     pub(crate) diagnostics: Vec<PaintDiagnostic>,
-    pub(crate) resolved_transforms: Vec<LayoutTransform2D>,
+    resolved_transforms: Vec<ResolvedLayoutTransform>,
     overflow: Vec<LayoutRect>,
     viewport_anchored: Vec<bool>,
     direct_fragments: Vec<Option<LayoutFragmentId>>,
@@ -143,7 +210,7 @@ where
             clip_chain: Vec::new(),
             paint_order_count: 0,
             diagnostics: Vec::new(),
-            resolved_transforms: vec![LayoutTransform2D::IDENTITY; count],
+            resolved_transforms: vec![ResolvedLayoutTransform::IDENTITY; count],
             overflow: vec![LayoutRect::ZERO; count],
             viewport_anchored: vec![false; count],
             direct_fragments: vec![None; count],
@@ -199,7 +266,7 @@ where
             let resolved = layout_box
                 .style
                 .resolved_2d_transform(border_box.width, border_box.height);
-            self.resolved_transforms[index] = resolved.transform;
+            self.resolved_transforms[index] = resolved;
             if resolved.has_unsupported_3d {
                 self.diagnostics.push(PaintDiagnostic::new(
                     "transform-3d-geometry-fallback",
@@ -308,7 +375,8 @@ where
             };
             let location = self.world.boxes[index].final_layout.location;
             let layout_translation = LayoutTransform2D::translation(location.x, location.y);
-            let local_to_parent = layout_translation.concatenate(self.resolved_transforms[index]);
+            let local_to_parent =
+                layout_translation.concatenate(self.resolved_transforms[index].transform);
             let mapped = local_to_parent
                 .map_rect(visual_overflow)
                 .bounding_rect()
@@ -386,13 +454,16 @@ where
 
     fn build_coordinate_spaces(&mut self) -> Result<(), LayoutError> {
         let mut spaces = vec![None; self.world.boxes.len() + 1];
-        spaces[0] = Some(LayoutCoordinateSpace {
-            id: LayoutCoordinateSpaceId::from_index(0),
-            owner: None,
-            parent: None,
-            local_to_parent: LayoutTransform2D::IDENTITY,
-            local_to_document: LayoutTransform2D::IDENTITY,
-            local_to_viewport: LayoutTransform2D::IDENTITY,
+        spaces[0] = Some(ProjectedCoordinateSpace {
+            layout: LayoutCoordinateSpace {
+                id: LayoutCoordinateSpaceId::from_index(0),
+                owner: None,
+                parent: None,
+                local_to_parent: LayoutTransform2D::IDENTITY,
+                local_to_document: LayoutTransform2D::IDENTITY,
+                local_to_viewport: LayoutTransform2D::IDENTITY,
+            },
+            paint: PaintSpace::ROOT,
         });
         let mut state = vec![0_u8; self.world.boxes.len()];
         for index in 0..self.world.boxes.len() {
@@ -644,7 +715,7 @@ where
         let root_layout = self.world.boxes[root].final_layout.location;
         let layout_translation = LayoutTransform2D::translation(root_layout.x, root_layout.y);
         let overflow = layout_translation
-            .concatenate(self.resolved_transforms[root])
+            .concatenate(self.resolved_transforms[root].transform)
             .map_rect(self.overflow[root])
             .bounding_rect()
             .union(
@@ -660,7 +731,10 @@ where
 
     fn into_frozen_tree(self, content_size: LayoutSize) -> FrozenLayoutTree<N> {
         let root_box = LayoutOutputBoxId::from_index(self.world.root.index());
-        let mut coordinate_spaces = self.coordinate_spaces.into_iter();
+        let mut coordinate_spaces = self
+            .coordinate_spaces
+            .into_iter()
+            .map(ProjectedCoordinateSpace::into_layout_space);
         let viewport_coordinate_space = FrozenCoordinateSpace::from(
             coordinate_spaces
                 .next()
@@ -702,15 +776,108 @@ where
     }
 }
 
+#[derive(Clone, Copy)]
+struct SubpixelPropagation {
+    x: bool,
+    y: bool,
+}
+
+impl SubpixelPropagation {
+    const BOTH: Self = Self { x: true, y: true };
+    const NONE: Self = Self { x: false, y: false };
+
+    fn through_transform(transform: LayoutTransform2D) -> Self {
+        let [scale_x, skew_y, skew_x, scale_y, _, _] = transform.coefficients;
+        if skew_x != 0.0 || skew_y != 0.0 {
+            return Self::NONE;
+        }
+        Self {
+            x: scale_x == 1.0,
+            y: scale_y == 1.0,
+        }
+    }
+}
+
+fn establish_property_space(
+    state: PaintSpace,
+    property_transform: LayoutTransform2D,
+    propagation: SubpixelPropagation,
+) -> PaintSpace {
+    let rounded_offset = LayoutPoint::new(
+        crate::snapshot::round_layout_pixel(f64::from(state.paint_offset.x)) as f32,
+        crate::snapshot::round_layout_pixel(f64::from(state.paint_offset.y)) as f32,
+    );
+    let residual = LayoutPoint::new(
+        state.paint_offset.x - rounded_offset.x,
+        state.paint_offset.y - rounded_offset.y,
+    );
+    PaintSpace {
+        property_transform: state
+            .property_transform
+            .concatenate(LayoutTransform2D::translation(
+                rounded_offset.x,
+                rounded_offset.y,
+            ))
+            .concatenate(property_transform),
+        paint_offset: LayoutPoint::new(
+            if propagation.x { residual.x } else { 0.0 },
+            if propagation.y { residual.y } else { 0.0 },
+        ),
+    }
+}
+
+fn resolve_paint_space(
+    parent: Option<PaintSpace>,
+    viewport_scroll: LayoutPoint,
+    is_viewport_anchored: bool,
+    parent_scroll: Option<LayoutPoint>,
+    location: LayoutPoint,
+    resolved_transform: ResolvedLayoutTransform,
+) -> PaintSpace {
+    let mut state = parent.unwrap_or(PaintSpace {
+        property_transform: if is_viewport_anchored {
+            LayoutTransform2D::IDENTITY
+        } else {
+            LayoutTransform2D::translation(-viewport_scroll.x, -viewport_scroll.y)
+        },
+        paint_offset: LayoutPoint::ZERO,
+    });
+
+    // A scroll container establishes a property space even at scroll offset
+    // zero. Commit the rounded translation while retaining its fractional
+    // residue for descendant snapping, then apply scrolling outside it.
+    if let Some(parent_scroll) = parent_scroll {
+        state = establish_property_space(
+            state,
+            LayoutTransform2D::translation(-parent_scroll.x, -parent_scroll.y),
+            SubpixelPropagation::BOTH,
+        );
+    }
+    state.paint_offset = LayoutPoint::new(
+        state.paint_offset.x + location.x,
+        state.paint_offset.y + location.y,
+    );
+
+    if resolved_transform.establishes_property_space {
+        let propagation = if resolved_transform.has_unsupported_3d {
+            SubpixelPropagation::NONE
+        } else {
+            SubpixelPropagation::through_transform(resolved_transform.transform)
+        };
+        state = establish_property_space(state, resolved_transform.transform, propagation);
+    }
+    state
+}
+
 #[allow(clippy::too_many_arguments)]
 fn resolve_coordinate_space<N>(
     index: usize,
     world: &LayoutWorld<N>,
     viewport_scroll: LayoutPoint,
     scroll_extents: &[LayoutScrollExtent],
-    resolved_transforms: &[LayoutTransform2D],
+    resolved_transforms: &[ResolvedLayoutTransform],
     viewport_anchored: &mut [bool],
-    spaces: &mut [Option<LayoutCoordinateSpace>],
+    spaces: &mut [Option<ProjectedCoordinateSpace>],
     state: &mut [u8],
 ) -> Result<(), LayoutError>
 where
@@ -755,7 +922,7 @@ where
         Some(parent) => spaces
             .get(parent.index() + 1)
             .and_then(Option::as_ref)
-            .map(|space| space.local_to_document)
+            .map(|space| space.layout.local_to_document)
             .ok_or(LayoutError::InvalidBoxReference {
                 index: parent.index(),
             })?,
@@ -766,32 +933,56 @@ where
         |parent| viewport_anchored[parent.index()],
     );
     viewport_anchored[index] = is_viewport_anchored;
-    let parent_scroll = parent_box.map_or(LayoutPoint::ZERO, |parent| {
-        if parent == world.root {
-            LayoutPoint::ZERO
-        } else {
-            scroll_extents[parent.index()].applied_offset
-        }
+    let parent_scroll = parent_box.and_then(|parent| {
+        (parent != world.root && scroll_extents[parent.index()].is_scroll_container)
+            .then_some(scroll_extents[parent.index()].applied_offset)
     });
+    let applied_parent_scroll = parent_scroll.unwrap_or(LayoutPoint::ZERO);
     let location = layout_box.final_layout.location;
-    let local_to_parent =
-        LayoutTransform2D::translation(location.x - parent_scroll.x, location.y - parent_scroll.y)
-            .concatenate(resolved_transforms[index]);
+    let local_to_parent = LayoutTransform2D::translation(
+        location.x - applied_parent_scroll.x,
+        location.y - applied_parent_scroll.y,
+    )
+    .concatenate(resolved_transforms[index].transform);
     let local_to_document = if parent_box.is_none() && is_viewport_anchored {
         LayoutTransform2D::translation(viewport_scroll.x, viewport_scroll.y)
             .concatenate(local_to_parent)
     } else {
         parent_transform.concatenate(local_to_parent)
     };
-    let local_to_viewport = LayoutTransform2D::translation(-viewport_scroll.x, -viewport_scroll.y)
-        .concatenate(local_to_document);
-    spaces[index + 1] = Some(LayoutCoordinateSpace {
-        id: LayoutCoordinateSpaceId::from_index(index + 1),
-        owner: Some(LayoutOutputBoxId::from_index(index)),
-        parent: Some(parent_space),
-        local_to_parent,
-        local_to_document,
-        local_to_viewport,
+    let parent_paint_state = match parent_box {
+        Some(parent) => Some(
+            spaces
+                .get(parent.index() + 1)
+                .and_then(Option::as_ref)
+                .map(|space| space.paint)
+                .ok_or(LayoutError::InvalidBoxReference {
+                    index: parent.index(),
+                })?,
+        ),
+        None => None,
+    };
+    let paint = resolve_paint_space(
+        parent_paint_state,
+        viewport_scroll,
+        is_viewport_anchored,
+        parent_scroll,
+        LayoutPoint::new(location.x, location.y),
+        resolved_transforms[index],
+    );
+    let exact_local_to_viewport =
+        LayoutTransform2D::translation(-viewport_scroll.x, -viewport_scroll.y)
+            .concatenate(local_to_document);
+    spaces[index + 1] = Some(ProjectedCoordinateSpace {
+        layout: LayoutCoordinateSpace {
+            id: LayoutCoordinateSpaceId::from_index(index + 1),
+            owner: Some(LayoutOutputBoxId::from_index(index)),
+            parent: Some(parent_space),
+            local_to_parent,
+            local_to_document,
+            local_to_viewport: exact_local_to_viewport,
+        },
+        paint,
     });
     state[index] = 2;
     Ok(())
@@ -926,5 +1117,113 @@ where
         padding: padding_box,
         border: border_box,
         margin: margin_box,
+    }
+}
+
+#[cfg(test)]
+mod paint_space_tests {
+    use super::*;
+
+    fn property_transform(transform: LayoutTransform2D) -> ResolvedLayoutTransform {
+        ResolvedLayoutTransform {
+            transform,
+            has_unsupported_3d: false,
+            establishes_property_space: true,
+        }
+    }
+
+    #[test]
+    fn ordinary_offsets_accumulate_without_an_extra_property_transform() {
+        let root = resolve_paint_space(
+            None,
+            LayoutPoint::ZERO,
+            false,
+            None,
+            LayoutPoint::ZERO,
+            ResolvedLayoutTransform::IDENTITY,
+        );
+        let ordinary = resolve_paint_space(
+            Some(root),
+            LayoutPoint::ZERO,
+            false,
+            None,
+            LayoutPoint::new(0.0, 12.5),
+            ResolvedLayoutTransform::IDENTITY,
+        );
+        assert_eq!(ordinary.paint_offset, LayoutPoint::new(0.0, 12.5));
+        assert_eq!(ordinary.property_transform, LayoutTransform2D::IDENTITY);
+        assert_eq!(
+            ordinary.local_transform(),
+            LayoutTransform2D::translation(0.0, 12.5)
+        );
+    }
+
+    #[test]
+    fn translation_property_space_keeps_the_fractional_residual() {
+        let transformed = resolve_paint_space(
+            Some(PaintSpace {
+                paint_offset: LayoutPoint::new(0.75, 0.25),
+                property_transform: LayoutTransform2D::IDENTITY,
+            }),
+            LayoutPoint::ZERO,
+            false,
+            None,
+            LayoutPoint::ZERO,
+            property_transform(LayoutTransform2D::translation(5.0, 7.0)),
+        );
+        assert_eq!(transformed.paint_offset, LayoutPoint::new(-0.25, 0.25));
+        assert_eq!(
+            transformed.property_transform,
+            LayoutTransform2D::translation(6.0, 7.0)
+        );
+        assert_eq!(
+            transformed.local_transform(),
+            LayoutTransform2D::translation(5.75, 7.25)
+        );
+    }
+
+    #[test]
+    fn scale_discards_only_the_residual_on_scaled_axes() {
+        let transformed = resolve_paint_space(
+            Some(PaintSpace {
+                paint_offset: LayoutPoint::new(0.75, 0.75),
+                property_transform: LayoutTransform2D::IDENTITY,
+            }),
+            LayoutPoint::ZERO,
+            false,
+            None,
+            LayoutPoint::ZERO,
+            property_transform(LayoutTransform2D::scale(2.0, 1.0)),
+        );
+        assert_eq!(transformed.paint_offset, LayoutPoint::new(0.0, -0.25));
+        assert_eq!(
+            transformed.property_transform,
+            LayoutTransform2D::translation(1.0, 1.0)
+                .concatenate(LayoutTransform2D::scale(2.0, 1.0))
+        );
+    }
+
+    #[test]
+    fn scroll_property_space_exists_at_zero_offset_and_preserves_residual() {
+        let scrolled_child = resolve_paint_space(
+            Some(PaintSpace {
+                paint_offset: LayoutPoint::new(0.75, 0.0),
+                property_transform: LayoutTransform2D::IDENTITY,
+            }),
+            LayoutPoint::ZERO,
+            false,
+            Some(LayoutPoint::ZERO),
+            LayoutPoint::new(0.125, 0.0),
+            ResolvedLayoutTransform::IDENTITY,
+        );
+        assert_eq!(
+            scrolled_child.property_transform,
+            LayoutTransform2D::translation(1.0, 0.0)
+        );
+        assert_eq!(scrolled_child.paint_offset, LayoutPoint::new(-0.125, 0.0));
+        assert_eq!(
+            scrolled_child.local_transform(),
+            LayoutTransform2D::translation(0.875, 0.0)
+        );
     }
 }

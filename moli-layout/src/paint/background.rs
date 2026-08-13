@@ -21,6 +21,7 @@ use style::{
 };
 
 use super::{
+    PaintSpace,
     geometry::{BoxAreas, BoxModelBox},
     push_diagnostic_once,
 };
@@ -103,7 +104,7 @@ impl<'a> ImageLayerStyles<'a> {
 pub(super) fn project_background_color<N>(
     layout_box: &LayoutBox<N>,
     areas: BoxAreas,
-    transform: LayoutTransform2D,
+    paint_space: PaintSpace,
     color: PaintColor,
     snapshot: &mut PaintSnapshot,
     text_clip_mask: &impl Fn(&mut PaintSnapshot),
@@ -120,36 +121,46 @@ pub(super) fn project_background_color<N>(
         .map(BoxModelBox::from)
         .unwrap_or(BoxModelBox::Border);
     if clip == BoxModelBox::Text {
-        begin_background_text_clip_layer(areas, transform, snapshot);
+        let Some(shape) = begin_background_text_clip_layer(areas, paint_space, snapshot) else {
+            return;
+        };
         snapshot.push_fragment(PaintFragment::Fill {
-            shape: areas.shape(BoxModelBox::Border),
+            shape: shape.clone(),
             brush: PaintBrush::Solid(color),
-            transform,
+            transform: paint_space.property_transform(),
         });
-        finish_background_text_clip_layer(areas, transform, snapshot, text_clip_mask);
+        finish_background_text_clip_layer(
+            shape,
+            paint_space.property_transform(),
+            snapshot,
+            text_clip_mask,
+        );
         return;
     }
     diagnose_background_clip_fallback(layout_box, clip, snapshot);
-    let shape = areas.shape(clip);
+    let Some(shape) = paint_space.pixel_snapped_box_shape(areas.shape(clip)) else {
+        return;
+    };
     if shape.bounds().width <= 0.0 || shape.bounds().height <= 0.0 {
         return;
     }
     snapshot.push_fragment(PaintFragment::Fill {
         shape,
         brush: PaintBrush::Solid(color),
-        transform,
+        transform: paint_space.property_transform(),
     });
 }
 
 pub(super) fn project_background_layers<N>(
     layout_box: &LayoutBox<N>,
     areas: BoxAreas,
-    transform: LayoutTransform2D,
+    paint_space: PaintSpace,
     snapshot: &mut PaintSnapshot,
     text_clip_mask: &impl Fn(&mut PaintSnapshot),
 ) where
     N: Copy + Debug + Eq + Hash,
 {
+    let transform = paint_space.local_transform();
     let Some(computed) = layout_box.style.stylo_computed_values() else {
         return;
     };
@@ -198,14 +209,23 @@ pub(super) fn project_background_layers<N>(
                 if tiles.is_empty() {
                     continue;
                 }
-                if clips_to_text {
-                    begin_background_text_clip_layer(areas, transform, snapshot);
+                let text_clip_shape = if clips_to_text {
+                    let Some(shape) =
+                        begin_background_text_clip_layer(areas, paint_space, snapshot)
+                    else {
+                        continue;
+                    };
+                    Some(shape)
                 } else {
+                    let Some(clip_shape) = paint_space.pixel_snapped_box_shape(clip_shape) else {
+                        continue;
+                    };
                     snapshot.push_fragment(PaintFragment::PushClip {
                         shape: clip_shape,
-                        transform,
+                        transform: paint_space.property_transform(),
                     });
-                }
+                    None
+                };
                 for tile in tiles {
                     if let Some(brush) = project_gradient(gradient, tile, &current_color) {
                         snapshot.push_fragment(PaintFragment::Fill {
@@ -215,8 +235,13 @@ pub(super) fn project_background_layers<N>(
                         });
                     }
                 }
-                if clips_to_text {
-                    finish_background_text_clip_layer(areas, transform, snapshot, text_clip_mask);
+                if let Some(shape) = text_clip_shape {
+                    finish_background_text_clip_layer(
+                        shape,
+                        paint_space.property_transform(),
+                        snapshot,
+                        text_clip_mask,
+                    );
                 } else {
                     snapshot.push_fragment(PaintFragment::PopLayer);
                 }
@@ -231,7 +256,7 @@ pub(super) fn project_background_layers<N>(
                         .get(layer_index)
                         .and_then(Option::as_ref),
                     areas,
-                    transform,
+                    paint_space,
                     snapshot,
                     CssImageLayerKind::Background,
                     true,
@@ -263,24 +288,26 @@ pub(super) fn project_background_layers<N>(
 /// `DestIn` operation cannot consume the page backdrop.
 fn begin_background_text_clip_layer(
     areas: BoxAreas,
-    transform: LayoutTransform2D,
+    paint_space: PaintSpace,
     snapshot: &mut PaintSnapshot,
-) {
+) -> Option<PaintShape> {
+    let clip = paint_space.pixel_snapped_box_shape(areas.shape(BoxModelBox::Border))?;
     snapshot.push_fragment(PaintFragment::PushLayer {
         opacity: 1.0 - f32::EPSILON,
         blend_mode: PaintBlendMode::Normal,
         composite: PaintCompositeMode::SrcOver,
-        clip: areas.shape(BoxModelBox::Border),
-        transform,
+        clip: clip.clone(),
+        transform: paint_space.property_transform(),
         filter: None,
     });
+    Some(clip)
 }
 
 /// Applies opaque glyph ink to the isolated background with `DestIn` and
 /// closes both layers. The text projection deliberately ignores foreground
 /// fill color and shadows; only glyph/decorations alpha contributes.
 fn finish_background_text_clip_layer(
-    areas: BoxAreas,
+    clip: PaintShape,
     transform: LayoutTransform2D,
     snapshot: &mut PaintSnapshot,
     text_clip_mask: &impl Fn(&mut PaintSnapshot),
@@ -289,7 +316,7 @@ fn finish_background_text_clip_layer(
         opacity: 1.0,
         blend_mode: PaintBlendMode::Normal,
         composite: PaintCompositeMode::DestIn,
-        clip: areas.shape(BoxModelBox::Border),
+        clip,
         transform,
         filter: None,
     });
@@ -384,7 +411,7 @@ pub(super) fn project_url_image_layer<N>(
     layer: &ImageLayerStyles<'_>,
     resource: Option<&LayoutImageResource>,
     areas: BoxAreas,
-    transform: LayoutTransform2D,
+    paint_space: PaintSpace,
     snapshot: &mut PaintSnapshot,
     kind: CssImageLayerKind,
     push_clip: bool,
@@ -435,9 +462,12 @@ pub(super) fn project_url_image_layer<N>(
     }
 
     if push_clip {
+        let Some(clip_shape) = paint_space.pixel_snapped_box_shape(clip_shape) else {
+            return;
+        };
         snapshot.push_fragment(PaintFragment::PushClip {
             shape: clip_shape,
-            transform,
+            transform: paint_space.property_transform(),
         });
     }
     if let Some(pixels) = resource.pixels.clone() {
@@ -454,9 +484,9 @@ pub(super) fn project_url_image_layer<N>(
         for destination in tiles {
             snapshot.push_fragment(PaintFragment::Image(PaintImage {
                 image,
-                destination,
+                destination: paint_space.pre_transform_rect(destination),
                 sampling,
-                transform,
+                transform: paint_space.property_transform(),
             }));
         }
     } else if let Some(svg) = resource.svg.clone() {
@@ -464,8 +494,8 @@ pub(super) fn project_url_image_layer<N>(
         for destination in tiles {
             snapshot.push_fragment(PaintFragment::SvgImage(PaintSvgImage {
                 image,
-                destination,
-                transform,
+                destination: paint_space.pre_transform_rect(destination),
+                transform: paint_space.property_transform(),
             }));
         }
     }

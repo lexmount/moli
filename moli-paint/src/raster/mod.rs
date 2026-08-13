@@ -22,6 +22,7 @@ use moli_layout::{
     PaintGradientHueDirection, PaintImage, PaintImageSampling, PaintLineCap, PaintLineJoin,
     PaintPath, PaintPathElement, PaintRect, PaintShape, PaintSnapshot, PaintStroke, PaintSvgImage,
     PaintTextDecoration, PaintTextDecorationStyle, PaintTextShadow, PaintTransform2D,
+    pixel_snap_paint_axis, pixel_snap_paint_axis_allowing_zero, pixel_snap_paint_rect,
 };
 use peniko::{
     BlendMode, Blob, Color, Compose, Extend, Fill, Gradient, ImageAlphaType, ImageBrush, ImageData,
@@ -763,44 +764,13 @@ fn paint_svg_image(
 }
 
 fn pixel_snapped_image_destination(destination: PaintRect) -> Option<PaintRect> {
-    if !destination.x.is_finite()
-        || !destination.y.is_finite()
-        || !destination.width.is_finite()
-        || !destination.height.is_finite()
-        || destination.width <= 0.0
-        || destination.height <= 0.0
-    {
-        return None;
-    }
-
-    // Layout and CSSOM keep fractional geometry. Paint projection has moved
-    // ordinary layout offsets into this destination while leaving scroll/CSS
-    // transforms on the fragment, so snapping here happens in the same
-    // pre-transform space as Blink's ToPixelSnappedRect.
-    let (x, width) = pixel_snap_image_axis(destination.x, destination.width);
-    let (y, height) = pixel_snap_image_axis(destination.y, destination.height);
-    (width > 0.0 && height > 0.0).then(|| PaintRect::new(x, y, width, height))
-}
-
-fn pixel_snap_image_axis(location: f32, size: f32) -> (f32, f32) {
-    let location = f64::from(location);
-    let size = f64::from(size);
-    let fraction = location % 1.0;
-    let snapped_location = round_layout_pixel(location);
-    let mut snapped_size = round_layout_pixel(fraction + size) - round_layout_pixel(fraction);
-
-    // Blink's SnapSizeToPixel keeps a non-trivial LayoutUnit extent visible.
-    // LayoutUnit has six fractional bits; this threshold belongs to the paint
-    // compatibility rule and does not impose precision on Taffy.
-    const MIN_NON_EMPTY_SIZE: f64 = 4.0 / 64.0;
-    if snapped_size == 0.0 && size > MIN_NON_EMPTY_SIZE {
-        snapped_size = 1.0;
-    }
-    (snapped_location as f32, snapped_size as f32)
-}
-
-fn round_layout_pixel(value: f64) -> f64 {
-    (value + 0.5).floor()
+    // Image geometry remains fractional for layout and CSSOM. Snapshot
+    // projection has already applied ordinary paint offsets while preserving
+    // CSS/scroll property transforms; rasterization only snaps the image quad
+    // in that pre-transform paint space. Adjacent fractional images therefore
+    // share one pixel boundary, matching Blink's
+    // ToPixelSnappedRect/SnapSizeToPixel contract.
+    pixel_snap_paint_rect(destination)
 }
 
 fn paint_border(
@@ -817,6 +787,9 @@ fn paint_border(
         return;
     };
     let widths = sanitize_border_widths(widths, rect.width() as f32, rect.height() as f32);
+    let Some((rect, widths)) = pixel_snapped_border_geometry(rect, widths) else {
+        return;
+    };
     let radii = normalize_radii(radii, rect.width(), rect.height());
     if paint_uniform_solid_border(scene, rect, widths, colors, styles, radii, transform) {
         return;
@@ -837,6 +810,47 @@ fn paint_border(
             scene, rect, widths, radii, edge, width, color, style, transform,
         );
     }
+}
+
+/// Resolve the outer and inner border edges onto the layout-pixel grid.
+///
+/// Blink independently snaps `PixelSnappedContouredBorder` and
+/// `PixelSnappedContouredInnerBorder`. Reconstructing the four used widths
+/// from those two rectangles preserves that contract for asymmetric and
+/// fractional borders instead of merely rounding the outer origin.
+fn pixel_snapped_border_geometry(
+    rect: Rect,
+    widths: PaintEdgeSizes,
+) -> Option<(Rect, PaintEdgeSizes)> {
+    let (outer_x, outer_width) = pixel_snap_paint_axis(rect.x0 as f32, rect.width() as f32);
+    let (outer_y, outer_height) = pixel_snap_paint_axis(rect.y0 as f32, rect.height() as f32);
+    if outer_width <= 0.0 || outer_height <= 0.0 {
+        return None;
+    }
+
+    let inner_x = rect.x0 as f32 + widths.left;
+    let inner_y = rect.y0 as f32 + widths.top;
+    let inner_width = (rect.width() as f32 - widths.left - widths.right).max(0.0);
+    let inner_height = (rect.height() as f32 - widths.top - widths.bottom).max(0.0);
+    let (inner_x, inner_width) = pixel_snap_paint_axis_allowing_zero(inner_x, inner_width);
+    let (inner_y, inner_height) = pixel_snap_paint_axis_allowing_zero(inner_y, inner_height);
+
+    let outer = Rect::new(
+        f64::from(outer_x),
+        f64::from(outer_y),
+        f64::from(outer_x + outer_width),
+        f64::from(outer_y + outer_height),
+    );
+    let widths = PaintEdgeSizes::new(
+        (inner_y - outer_y).clamp(0.0, outer_height),
+        (outer.x1 as f32 - (inner_x + inner_width)).clamp(0.0, outer_width),
+        (outer.y1 as f32 - (inner_y + inner_height)).clamp(0.0, outer_height),
+        (inner_x - outer_x).clamp(0.0, outer_width),
+    );
+    Some((
+        outer,
+        sanitize_border_widths(widths, outer_width, outer_height),
+    ))
 }
 
 #[derive(Clone, Copy)]
@@ -2454,6 +2468,26 @@ mod tests {
         assert_eq!(pixel(&image, 3, 1), [255, 0, 0, 255]);
         assert_eq!(pixel(&image, 1, 3), [255, 0, 0, 255]);
         assert_eq!(pixel(&image, 3, 3), [255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn fractional_box_borders_snap_before_rasterization() {
+        let green = PaintColor::new(0.0, 1.0, 0.0, 1.0);
+        let gray = PaintColor::new(128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0, 1.0);
+        let rect = PaintRect::new(1.09375, 1.0, 6.0, 6.0);
+        let mut snapshot = snapshot(8, 8, 1.0);
+        snapshot.push_fragment(PaintFragment::solid_rect(rect, green));
+        snapshot.push_fragment(PaintFragment::border(
+            rect,
+            PaintEdgeSizes::new(1.0, 1.0, 1.0, 1.0),
+            PaintBorderColors::all(gray),
+        ));
+
+        let image = raster_snapshot(&snapshot).unwrap();
+        for coordinate in 1..7 {
+            assert_eq!(pixel(&image, 1, coordinate), [128, 128, 128, 255]);
+            assert_eq!(pixel(&image, 6, coordinate), [128, 128, 128, 255]);
+        }
     }
 
     #[test]

@@ -24,9 +24,8 @@ pub(super) fn project_collapsed_table_borders<N>(
         return;
     };
     let geometry = &projection.boxes[id.index()];
-    let transform = snapshot.viewport_to_surface.concatenate(
-        projection.coordinate_spaces[geometry.coordinate_space.index()].local_to_viewport,
-    );
+    let paint_space = projection.coordinate_spaces[geometry.coordinate_space.index()]
+        .paint_space(snapshot.viewport_to_surface);
 
     for segment in borders.segments() {
         let mut widths = PaintEdgeSizes::default();
@@ -42,12 +41,12 @@ pub(super) fn project_collapsed_table_borders<N>(
             styles.left = segment.style;
         }
         snapshot.push_fragment(PaintFragment::Border {
-            rect: segment.rect,
+            rect: paint_space.pre_transform_rect(segment.rect),
             widths,
             colors,
             styles,
             radii: PaintCornerRadii::ZERO,
-            transform,
+            transform: paint_space.property_transform(),
         });
     }
 }

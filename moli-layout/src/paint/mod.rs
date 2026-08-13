@@ -6,7 +6,6 @@ mod geometry;
 mod image;
 mod inline_boxes;
 mod mask;
-mod paint_space;
 mod table;
 mod text;
 
@@ -20,7 +19,6 @@ use geometry::{BoxAreas, BoxModelBox, canonical_shape, inset_radii};
 use image::project_replaced_image;
 use inline_boxes::project_inline_box_fragments;
 use mask::{CssMaskPlan, inspect_css_mask, project_css_mask};
-use paint_space::PaintSpaceMap;
 use style::values::generics::image::GenericImage;
 use table::project_collapsed_table_borders;
 use text::{TextClipMaskScope, project_text, project_text_clip_mask};
@@ -29,7 +27,9 @@ use crate::{
     LayoutBox, LayoutBoxId, LayoutClipChainId, LayoutElementCategory, LayoutFormControlKind,
     LayoutInputControlKind, LayoutReplacedKind, LayoutWorld, PaintColor, PaintDiagnostic,
     PaintDiagnosticSeverity, PaintEdgeSizes, PaintFragment, PaintShape, PaintSnapshot,
-    capture::ResolvedPaintCapture, projection::OutputProjection, stacking::PaintOrderEvent,
+    capture::ResolvedPaintCapture,
+    projection::{OutputProjection, PaintSpace},
+    stacking::PaintOrderEvent,
 };
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -37,6 +37,25 @@ struct ContextPaintState {
     effect_layers: usize,
     mask_layer: bool,
     clip_path_layer: bool,
+}
+
+impl PaintSpace {
+    /// Pixel-snap canonical CSS box geometry after ordinary layout offsets
+    /// and before property transforms.
+    fn pixel_snapped_box_shape(self, shape: PaintShape) -> Option<PaintShape> {
+        match shape {
+            PaintShape::Rect(rect) => {
+                crate::pixel_snap_paint_rect(self.pre_transform_rect(rect)).map(PaintShape::Rect)
+            }
+            PaintShape::RoundedRect { rect, radii } => {
+                crate::pixel_snap_paint_rect(self.pre_transform_rect(rect))
+                    .map(|rect| PaintShape::RoundedRect { rect, radii })
+            }
+            // BoxAreas only constructs rectilinear or rounded box geometry.
+            // Arbitrary paths retain their own authored coordinate contract.
+            PaintShape::Path(_) => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,10 +86,9 @@ where
     snapshot.viewport_to_surface = capture.viewport_to_surface;
     snapshot.content_size = projection.document_content_size();
     snapshot.diagnostics = projection.diagnostics.clone();
-    let paint_spaces = PaintSpaceMap::build(projection, capture.viewport_to_surface);
-
     if let Some(background) = propagated_background {
         let transform = capture.viewport_to_surface;
+        let paint_space = PaintSpace::ROOT.with_outer_transform(transform);
         let text_clip_mask = |snapshot: &mut PaintSnapshot| {
             project_background_text_clip_mask(
                 projection,
@@ -82,7 +100,7 @@ where
         project_background_layers(
             &projection.world.boxes[background.index()],
             BoxAreas::for_rect(capture.viewport_rect),
-            transform,
+            paint_space,
             &mut snapshot,
             &text_clip_mask,
         );
@@ -106,7 +124,8 @@ where
                 let geometry = &projection.boxes[id.index()];
                 let viewport_transform = projection.coordinate_spaces
                     [geometry.coordinate_space.index()]
-                .local_to_viewport;
+                .paint
+                .local_transform();
                 let transform = capture.viewport_to_surface.concatenate(viewport_transform);
                 let areas = BoxAreas::for_box(projection, id);
                 let clip_path_layer = match project_clip_path(style, areas) {
@@ -263,7 +282,6 @@ where
                 project_box_contents(
                     projection,
                     id,
-                    &paint_spaces,
                     embedded_frames,
                     capture.include_backgrounds,
                     &mut snapshot,
@@ -298,10 +316,10 @@ where
                 if state.mask_layer {
                     let layout_box = &projection.world.boxes[id.index()];
                     let geometry = &projection.boxes[id.index()];
-                    let transform = capture.viewport_to_surface.concatenate(
-                        projection.coordinate_spaces[geometry.coordinate_space.index()]
-                            .local_to_viewport,
-                    );
+                    let paint_space = projection.coordinate_spaces
+                        [geometry.coordinate_space.index()]
+                    .paint_space(capture.viewport_to_surface);
+                    let transform = paint_space.local_transform();
                     let areas = BoxAreas::for_box(projection, id);
                     snapshot.push_fragment(PaintFragment::PushLayer {
                         opacity: 1.0,
@@ -311,7 +329,7 @@ where
                         transform,
                         filter: None,
                     });
-                    project_css_mask(layout_box, areas, transform, &mut snapshot);
+                    project_css_mask(layout_box, areas, paint_space, &mut snapshot);
                     snapshot.push_fragment(PaintFragment::PopLayer); // DestIn mask
                     snapshot.push_fragment(PaintFragment::PopLayer); // isolation
                 }
@@ -356,7 +374,9 @@ where
     chain.retain(|node| node.owner.is_some());
     for node in &chain {
         let transform = snapshot.viewport_to_surface.concatenate(
-            projection.coordinate_spaces[node.coordinate_space.index()].local_to_viewport,
+            projection.coordinate_spaces[node.coordinate_space.index()]
+                .paint
+                .local_transform(),
         );
         let shape = node.owner.map_or(PaintShape::Rect(node.rect), |owner| {
             let layout_box = &projection.world.boxes[owner.index()];
@@ -452,14 +472,17 @@ fn project_box_background<N>(
         return;
     }
     let geometry = &projection.boxes[id.index()];
-    let transform = snapshot.viewport_to_surface.concatenate(
-        projection.coordinate_spaces[geometry.coordinate_space.index()].local_to_viewport,
-    );
+    let paint_space = projection.coordinate_spaces[geometry.coordinate_space.index()]
+        .paint_space(snapshot.viewport_to_surface);
     let areas = BoxAreas::for_box(projection, id);
     let rect = areas.border_rect;
     let radii = areas.border_radii;
 
-    let shadows = layout_box.style.box_shadows(rect, radii, transform);
+    let shadows = layout_box.style.box_shadows(
+        paint_space.pre_transform_rect(rect),
+        radii,
+        paint_space.property_transform(),
+    );
 
     if include_backgrounds && propagated_background != Some(id) {
         let mut color = layout_box.style.background_color();
@@ -500,12 +523,12 @@ fn project_box_background<N>(
         project_background_color(
             layout_box,
             areas,
-            transform,
+            paint_space,
             color,
             snapshot,
             &text_clip_mask,
         );
-        project_background_layers(layout_box, areas, transform, snapshot, &text_clip_mask);
+        project_background_layers(layout_box, areas, paint_space, snapshot, &text_clip_mask);
     }
 
     let layout = layout_box.final_layout;
@@ -524,12 +547,12 @@ fn project_box_background<N>(
         && colors.has_visible_edge()
     {
         snapshot.push_fragment(PaintFragment::Border {
-            rect,
+            rect: paint_space.pre_transform_rect(rect),
             widths,
             colors,
             styles: layout_box.style.border_styles(),
             radii,
-            transform,
+            transform: paint_space.property_transform(),
         });
     }
 }
@@ -587,7 +610,9 @@ fn project_box_text_clip_mask<N>(
     }
     let geometry = &projection.boxes[id.index()];
     let transform = snapshot.viewport_to_surface.concatenate(
-        projection.coordinate_spaces[geometry.coordinate_space.index()].local_to_viewport,
+        projection.coordinate_spaces[geometry.coordinate_space.index()]
+            .paint
+            .local_transform(),
     );
     let clip_count = push_clip_chain(projection, projection.content_clips[id.index()], snapshot);
     project_text_clip_mask(layout_box, transform, snapshot, scope);
@@ -606,13 +631,16 @@ fn project_outset_box_shadows<N>(
         return;
     }
     let geometry = &projection.boxes[id.index()];
-    let transform = snapshot.viewport_to_surface.concatenate(
-        projection.coordinate_spaces[geometry.coordinate_space.index()].local_to_viewport,
-    );
+    let paint_space = projection.coordinate_spaces[geometry.coordinate_space.index()]
+        .paint_space(snapshot.viewport_to_surface);
     let areas = BoxAreas::for_box(projection, id);
     for shadow in layout_box
         .style
-        .box_shadows(areas.border_rect, areas.border_radii, transform)
+        .box_shadows(
+            paint_space.pre_transform_rect(areas.border_rect),
+            areas.border_radii,
+            paint_space.property_transform(),
+        )
         .into_iter()
         .filter(|shadow| !shadow.inset)
         .rev()
@@ -644,16 +672,16 @@ fn project_box_outline<N>(
         return;
     }
     let geometry = &projection.boxes[id.index()];
-    let transform = snapshot.viewport_to_surface.concatenate(
-        projection.coordinate_spaces[geometry.coordinate_space.index()].local_to_viewport,
-    );
+    let paint_space = projection.coordinate_spaces[geometry.coordinate_space.index()]
+        .paint_space(snapshot.viewport_to_surface);
     let radii = layout_box
         .style
         .border_radii(geometry.border_box.width, geometry.border_box.height);
-    if let Some(outline) = layout_box
-        .style
-        .outline_fragment(geometry.border_box, radii, transform)
-    {
+    if let Some(outline) = layout_box.style.outline_fragment(
+        paint_space.pre_transform_rect(geometry.border_box),
+        radii,
+        paint_space.property_transform(),
+    ) {
         snapshot.push_fragment(outline);
     }
 }
@@ -661,7 +689,6 @@ fn project_box_outline<N>(
 fn project_box_contents<N>(
     projection: &OutputProjection<'_, N>,
     id: LayoutBoxId,
-    paint_spaces: &PaintSpaceMap,
     embedded_frames: &mut HashMap<LayoutBoxId, PaintSnapshot>,
     include_backgrounds: bool,
     snapshot: &mut PaintSnapshot,
@@ -673,9 +700,9 @@ fn project_box_contents<N>(
         return;
     }
     let geometry = &projection.boxes[id.index()];
-    let transform = snapshot.viewport_to_surface.concatenate(
-        projection.coordinate_spaces[geometry.coordinate_space.index()].local_to_viewport,
-    );
+    let paint_space = projection.coordinate_spaces[geometry.coordinate_space.index()]
+        .paint_space(snapshot.viewport_to_surface);
+    let transform = paint_space.local_transform();
     if let Some(child) = embedded_frames.remove(&id) {
         let content = BoxAreas::for_box(projection, id).content_rect;
         let local_to_surface =
@@ -686,7 +713,7 @@ fn project_box_contents<N>(
             local_to_surface,
         );
     }
-    project_replaced_image(projection, id, transform, paint_spaces.get(id), snapshot);
+    project_replaced_image(projection, id, paint_space, snapshot);
     project_form_control_appearance(layout_box, geometry.border_box, transform, snapshot);
     let text_clip_mask = |scope: TextClipMaskScope, snapshot: &mut PaintSnapshot| {
         project_background_text_clip_mask(projection, id, scope, snapshot);
@@ -694,7 +721,7 @@ fn project_box_contents<N>(
     project_inline_box_fragments(
         projection.world,
         layout_box,
-        transform,
+        paint_space,
         include_backgrounds,
         snapshot,
         &text_clip_mask,

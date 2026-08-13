@@ -11,19 +11,17 @@ use std::{fmt::Debug, hash::Hash};
 use taffy::ResolveOrZero;
 
 use super::{
+    PaintSpace,
     background::{project_background_color, project_background_layers},
     geometry::{BoxAreas, inset_radii},
     text::TextClipMaskScope,
 };
-use crate::{
-    LayoutBox, LayoutRect, LayoutTransform2D, LayoutWorld, PaintEdgeSizes, PaintFragment,
-    PaintSnapshot,
-};
+use crate::{LayoutBox, LayoutRect, LayoutWorld, PaintEdgeSizes, PaintFragment, PaintSnapshot};
 
 pub(super) fn project_inline_box_fragments<N>(
     world: &LayoutWorld<N>,
     owner: &LayoutBox<N>,
-    transform: LayoutTransform2D,
+    paint_space: PaintSpace,
     include_backgrounds: bool,
     snapshot: &mut PaintSnapshot,
     text_clip_mask: &impl Fn(TextClipMaskScope, &mut PaintSnapshot),
@@ -141,7 +139,7 @@ pub(super) fn project_inline_box_fragments<N>(
             project_background_color(
                 inline_box,
                 areas,
-                transform,
+                paint_space,
                 color,
                 snapshot,
                 &project_text_clip_mask,
@@ -149,7 +147,7 @@ pub(super) fn project_inline_box_fragments<N>(
             project_background_layers(
                 inline_box,
                 areas,
-                transform,
+                paint_space,
                 snapshot,
                 &project_text_clip_mask,
             );
@@ -158,12 +156,12 @@ pub(super) fn project_inline_box_fragments<N>(
         let colors = style.border_colors();
         if widths.has_positive_edge() && colors.has_visible_edge() {
             snapshot.push_fragment(PaintFragment::Border {
-                rect,
+                rect: paint_space.pre_transform_rect(rect),
                 widths,
                 colors,
                 styles: style.border_styles(),
                 radii,
-                transform,
+                transform: paint_space.property_transform(),
             });
         }
     }

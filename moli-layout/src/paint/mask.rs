@@ -16,6 +16,7 @@ use style::{
 };
 
 use super::{
+    PaintSpace,
     background::{
         CssImageLayerKind, ImageLayerStyles, background_tiles, get_cyclic, project_url_image_layer,
     },
@@ -23,8 +24,8 @@ use super::{
     push_diagnostic_once,
 };
 use crate::{
-    LayoutBox, LayoutTransform2D, PaintBlendMode, PaintCompositeMode, PaintFragment, PaintShape,
-    PaintSnapshot, ResolvedLayoutStyle, gradient::project_gradient,
+    LayoutBox, PaintBlendMode, PaintCompositeMode, PaintFragment, PaintShape, PaintSnapshot,
+    ResolvedLayoutStyle, gradient::project_gradient,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,11 +67,12 @@ pub(super) fn inspect_css_mask(style: &ResolvedLayoutStyle) -> CssMaskPlan {
 pub(super) fn project_css_mask<N>(
     layout_box: &LayoutBox<N>,
     areas: BoxAreas,
-    transform: LayoutTransform2D,
+    paint_space: PaintSpace,
     snapshot: &mut PaintSnapshot,
 ) where
     N: Copy + Debug + Eq + Hash,
 {
+    let transform = paint_space.local_transform();
     let Some(computed) = layout_box.style.stylo_computed_values() else {
         return;
     };
@@ -136,7 +138,7 @@ pub(super) fn project_css_mask<N>(
                     .get(index)
                     .and_then(Option::as_ref),
                 areas,
-                transform,
+                paint_space,
                 snapshot,
                 CssImageLayerKind::Mask,
                 false,

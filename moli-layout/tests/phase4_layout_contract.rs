@@ -1129,13 +1129,14 @@ fn unavailable_images_use_zero_default_size_and_a_content_box_outline() {
                     colors,
                     transform,
                     ..
-                } if *rect == PaintRect::new(0.0, 0.0, 80.0, 40.0)
+                } if rect.width == 80.0
+                    && rect.height == 40.0
                     && *widths == moli_layout::PaintEdgeSizes::new(1.0, 1.0, 1.0, 1.0)
                     && colors.top == light_gray
                     && colors.right == light_gray
                     && colors.bottom == light_gray
                     && colors.left == light_gray
-                    && transform.map_point(moli_layout::LayoutPoint::ZERO)
+                    && transform.map_point(moli_layout::LayoutPoint::new(rect.x, rect.y))
                         == moli_layout::LayoutPoint::new(0.0, 150.0)
             )
         }),
