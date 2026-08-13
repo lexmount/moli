@@ -1839,7 +1839,7 @@ fn relative_atomic_inline_resolves_insets_against_the_ifc_content_box() {
 }
 
 #[test]
-fn all_auto_absolute_inline_uses_the_zero_width_placeholder_after_atomic_content() {
+fn all_auto_absolute_inline_uses_the_parley_candidate_after_atomic_content() {
     let source = TestSource {
         root: 0,
         nodes: vec![

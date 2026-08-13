@@ -708,6 +708,338 @@ fn grid_item_placement_and_self_alignment_use_the_selected_grid_area() {
 }
 
 #[test]
+fn grid_static_position_does_not_change_the_absolute_containing_block() {
+    let source = FixtureSource {
+        nodes: vec![
+            FixtureNode::div("positioned-wrapper", vec![1]),
+            FixtureNode::div("grid", vec![2]),
+            FixtureNode::div("absolute", Vec::new()),
+        ],
+    };
+    let mut styles = FixtureStyles::default();
+    styles.0.insert(
+        0,
+        resolved(
+            LayoutDisplay::Block,
+            Style {
+                size: Size {
+                    width: length(100.0),
+                    height: length(100.0),
+                },
+                ..Style::default()
+            },
+            PaintColor::TRANSPARENT,
+        )
+        .with_position(LayoutPosition::Relative),
+    );
+    styles.0.insert(
+        1,
+        resolved(
+            LayoutDisplay::Grid,
+            Style {
+                display: Display::Grid,
+                size: Size {
+                    width: length(50.0),
+                    height: length(50.0),
+                },
+                grid_template_columns: vec![length(10.0), length(40.0)],
+                grid_template_rows: vec![length(10.0), length(40.0)],
+                ..Style::default()
+            },
+            PaintColor::TRANSPARENT,
+        ),
+    );
+    styles.0.insert(
+        2,
+        resolved(
+            LayoutDisplay::Block,
+            Style {
+                size: Size {
+                    width: percent(0.75),
+                    height: percent(0.75),
+                },
+                grid_column: Line {
+                    start: line(2),
+                    end: line(3),
+                },
+                grid_row: Line {
+                    start: line(2),
+                    end: line(3),
+                },
+                ..Style::default()
+            },
+            RED,
+        )
+        .with_position(LayoutPosition::Absolute),
+    );
+    let snapshot = render(&source, &mut styles, PaintViewport::new(200, 200, 1.0));
+    assert_rect(
+        solid_rect(&snapshot, RED),
+        PaintRect::new(0.0, 0.0, 75.0, 75.0),
+    );
+}
+
+#[test]
+fn grid_alignment_supplies_the_static_position_outside_its_containing_block() {
+    let source = FixtureSource {
+        nodes: vec![
+            FixtureNode::div("positioned-wrapper", vec![1]),
+            FixtureNode::div("grid", vec![2, 3]),
+            FixtureNode::div("centered-absolute", Vec::new()),
+            FixtureNode::div("end-aligned-absolute", Vec::new()),
+        ],
+    };
+    let mut styles = FixtureStyles::default();
+    styles.0.insert(
+        0,
+        resolved(
+            LayoutDisplay::Block,
+            Style {
+                size: Size {
+                    width: length(200.0),
+                    height: length(200.0),
+                },
+                ..Style::default()
+            },
+            PaintColor::TRANSPARENT,
+        )
+        .with_position(LayoutPosition::Relative),
+    );
+    styles.0.insert(
+        1,
+        resolved(
+            LayoutDisplay::Grid,
+            Style {
+                display: Display::Grid,
+                size: Size {
+                    width: length(100.0),
+                    height: length(100.0),
+                },
+                justify_items: Some(taffy::AlignItems::CENTER),
+                align_items: Some(taffy::AlignItems::CENTER),
+                ..Style::default()
+            },
+            PaintColor::TRANSPARENT,
+        ),
+    );
+    styles.0.insert(
+        2,
+        resolved(
+            LayoutDisplay::Block,
+            Style {
+                size: Size {
+                    width: percent(0.25),
+                    height: percent(0.25),
+                },
+                ..Style::default()
+            },
+            GREEN,
+        )
+        .with_position(LayoutPosition::Absolute),
+    );
+    styles.0.insert(
+        3,
+        resolved(
+            LayoutDisplay::Block,
+            Style {
+                size: Size {
+                    width: percent(0.2),
+                    height: percent(0.2),
+                },
+                justify_self: Some(taffy::AlignSelf::END),
+                align_self: Some(taffy::AlignSelf::END),
+                ..Style::default()
+            },
+            BLUE,
+        )
+        .with_position(LayoutPosition::Absolute),
+    );
+
+    let snapshot = render(&source, &mut styles, PaintViewport::new(300, 300, 1.0));
+    assert_rect(
+        solid_rect(&snapshot, GREEN),
+        PaintRect::new(25.0, 25.0, 50.0, 50.0),
+    );
+    assert_rect(
+        solid_rect(&snapshot, BLUE),
+        PaintRect::new(60.0, 60.0, 40.0, 40.0),
+    );
+}
+
+#[test]
+fn flex_alignment_supplies_the_static_position_outside_its_containing_block() {
+    let source = FixtureSource {
+        nodes: vec![
+            FixtureNode::div("positioned-wrapper", vec![1]),
+            FixtureNode::div("flex", vec![2, 3]),
+            FixtureNode::div("centered-absolute", Vec::new()),
+            FixtureNode::div("end-aligned-absolute", Vec::new()),
+        ],
+    };
+    let mut styles = FixtureStyles::default();
+    styles.0.insert(
+        0,
+        resolved(
+            LayoutDisplay::Block,
+            Style {
+                size: Size {
+                    width: length(200.0),
+                    height: length(200.0),
+                },
+                ..Style::default()
+            },
+            PaintColor::TRANSPARENT,
+        )
+        .with_position(LayoutPosition::Relative),
+    );
+    styles.0.insert(
+        1,
+        resolved(
+            LayoutDisplay::Flex,
+            Style {
+                display: Display::Flex,
+                size: Size {
+                    width: length(100.0),
+                    height: length(100.0),
+                },
+                justify_content: Some(AlignContent::CENTER),
+                align_items: Some(taffy::AlignItems::CENTER),
+                ..Style::default()
+            },
+            PaintColor::TRANSPARENT,
+        ),
+    );
+    styles.0.insert(
+        2,
+        resolved(
+            LayoutDisplay::Block,
+            Style {
+                size: Size {
+                    width: percent(0.25),
+                    height: percent(0.25),
+                },
+                ..Style::default()
+            },
+            GREEN,
+        )
+        .with_position(LayoutPosition::Absolute),
+    );
+    styles.0.insert(
+        3,
+        resolved(
+            LayoutDisplay::Block,
+            Style {
+                size: Size {
+                    width: percent(0.2),
+                    height: percent(0.2),
+                },
+                justify_self: Some(taffy::AlignSelf::END),
+                align_self: Some(taffy::AlignSelf::END),
+                ..Style::default()
+            },
+            BLUE,
+        )
+        .with_position(LayoutPosition::Absolute),
+    );
+
+    let snapshot = render(&source, &mut styles, PaintViewport::new(300, 300, 1.0));
+    assert_rect(
+        solid_rect(&snapshot, GREEN),
+        PaintRect::new(25.0, 25.0, 50.0, 50.0),
+    );
+    assert_rect(
+        solid_rect(&snapshot, BLUE),
+        // `justify-self` does not apply to flex-positioned children: the main
+        // axis still follows the container's centered `justify-content`,
+        // while `align-self: end` selects the cross-axis end candidate.
+        PaintRect::new(30.0, 60.0, 40.0, 40.0),
+    );
+}
+
+#[test]
+fn non_direct_absolute_descendant_ignores_grid_placement_lines() {
+    let source = FixtureSource {
+        nodes: vec![
+            FixtureNode::div("grid", vec![1]),
+            FixtureNode::div("nested-block", vec![2]),
+            FixtureNode::div("absolute", Vec::new()),
+        ],
+    };
+    let mut styles = FixtureStyles::default();
+    styles.0.insert(
+        0,
+        resolved(
+            LayoutDisplay::Grid,
+            Style {
+                display: Display::Grid,
+                size: Size {
+                    width: length(100.0),
+                    height: length(100.0),
+                },
+                grid_template_columns: vec![length(25.0), length(75.0)],
+                grid_template_rows: vec![length(25.0), length(75.0)],
+                ..Style::default()
+            },
+            PaintColor::TRANSPARENT,
+        )
+        .with_position(LayoutPosition::Relative),
+    );
+    styles.0.insert(
+        1,
+        resolved(
+            LayoutDisplay::Block,
+            Style {
+                grid_column: Line {
+                    start: line(1),
+                    end: line(3),
+                },
+                grid_row: Line {
+                    start: line(1),
+                    end: line(3),
+                },
+                ..Style::default()
+            },
+            PaintColor::TRANSPARENT,
+        ),
+    );
+    styles.0.insert(
+        2,
+        resolved(
+            LayoutDisplay::Block,
+            Style {
+                size: Size {
+                    width: percent(0.5),
+                    height: percent(0.5),
+                },
+                inset: Rect {
+                    left: length(0.0),
+                    right: taffy::LengthPercentageAuto::auto(),
+                    top: length(0.0),
+                    bottom: taffy::LengthPercentageAuto::auto(),
+                },
+                grid_column: Line {
+                    start: line(2),
+                    end: line(3),
+                },
+                grid_row: Line {
+                    start: line(2),
+                    end: line(3),
+                },
+                ..Style::default()
+            },
+            RED,
+        )
+        .with_position(LayoutPosition::Absolute),
+    );
+
+    let snapshot = render(&source, &mut styles, PaintViewport::new(200, 200, 1.0));
+    assert_rect(
+        solid_rect(&snapshot, RED),
+        PaintRect::new(0.0, 0.0, 50.0, 50.0),
+    );
+}
+
+#[test]
 fn grid_container_justify_items_center_shrink_wraps_an_auto_sized_item() {
     let source = FixtureSource {
         nodes: vec![

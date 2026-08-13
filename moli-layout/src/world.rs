@@ -1,7 +1,7 @@
 use std::{collections::HashMap, fmt::Debug, hash::Hash, sync::Arc};
 
 use style::Atom;
-use taffy::{Cache, Dimension, Layout, LayoutEnvironment, Point, Style};
+use taffy::{Cache, Dimension, Layout, LayoutEnvironment, LogicalStaticPosition, Style};
 
 use crate::{
     LayoutElementSemantics, LayoutError, LayoutPoint, LayoutPseudo, ResolvedLayoutStyle,
@@ -157,16 +157,20 @@ pub enum LayoutCapabilityDiagnostic {
     GeneratedContentUnsupported,
 }
 
-/// Hypothetical position contributed by an out-of-flow placeholder in one IFC.
-///
-/// Coordinates are relative to the formatting-context owner's border box.
-/// The record exists only for the current layout pass and is consumed before
-/// Taffy's rounding traversal.
+/// Static-position candidate retained between its original formatting context
+/// and the numeric ancestor that supplies the actual containing block.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct InlineStaticPosition {
+pub(crate) struct OutOfFlowStaticPosition {
     pub(crate) owner: LayoutBoxId,
-    pub(crate) point: Point<f32>,
-    pub(crate) inline_level: bool,
+    pub(crate) position: LogicalStaticPosition,
+}
+
+/// Real positioned child exposed to its original formatting context while its
+/// numeric layout parent remains the actual containing block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct OutOfFlowCandidateChild {
+    pub(crate) child: LayoutBoxId,
+    pub(crate) insertion_index: usize,
 }
 
 impl LayoutCapabilityDiagnostic {
@@ -208,8 +212,11 @@ pub struct LayoutBox<N> {
     /// is contained by a flattened inline box. `layout_parent` remains a real
     /// numeric-tree node; this field retains the semantic containing block.
     pub(crate) positioned_containing_block: Option<LayoutBoxId>,
-    /// Static position emitted by the shared IFC's out-of-flow placeholder.
-    pub(crate) inline_static_position: Option<InlineStaticPosition>,
+    /// Static position emitted by the original formatting context.
+    pub(crate) out_of_flow_static_position: Option<OutOfFlowStaticPosition>,
+    /// Positioned children whose static position this formatting context owns
+    /// even though their numeric parent is an ancestor containing block.
+    pub(crate) out_of_flow_candidates: Vec<OutOfFlowCandidateChild>,
     pub(crate) style: ResolvedLayoutStyle,
     pub(crate) text: Option<Arc<str>>,
     pub(crate) text_selection: Option<crate::LayoutTextSelection>,
@@ -703,7 +710,8 @@ where
             layout_parent: None,
             layout_children: Vec::new(),
             positioned_containing_block: None,
-            inline_static_position: None,
+            out_of_flow_static_position: None,
+            out_of_flow_candidates: Vec::new(),
             style,
             text,
             text_selection: None,

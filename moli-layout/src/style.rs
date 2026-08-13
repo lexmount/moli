@@ -1422,63 +1422,6 @@ impl ResolvedLayoutStyle {
             || (self.taffy.inset.top.is_auto() && self.taffy.inset.bottom.is_auto())
     }
 
-    /// Creates a zero-sized, non-painted absolute placeholder that asks the
-    /// original block formatting context to compute a positioned descendant's
-    /// hypothetical static position. The real box remains a child of its CSS
-    /// containing block in the numeric tree.
-    pub(crate) fn positioned_static_placeholder(&self) -> Self {
-        let mut placeholder = self.clone();
-        let zero_dimension = taffy::Dimension::length(0.0);
-        let zero_length = taffy::LengthPercentage::length(0.0);
-        placeholder.display = LayoutDisplay::Block;
-        placeholder.taffy.display = TaffyDisplay::Block;
-        placeholder.taffy.size = Size {
-            width: zero_dimension,
-            height: zero_dimension,
-        };
-        placeholder.taffy.min_size = Size {
-            width: zero_dimension,
-            height: zero_dimension,
-        };
-        placeholder.taffy.max_size = Size {
-            width: zero_dimension,
-            height: zero_dimension,
-        };
-        placeholder.taffy.padding = taffy::Rect {
-            left: zero_length,
-            right: zero_length,
-            top: zero_length,
-            bottom: zero_length,
-        };
-        placeholder.taffy.border = taffy::Rect {
-            left: zero_length,
-            right: zero_length,
-            top: zero_length,
-            bottom: zero_length,
-        };
-        placeholder.taffy.aspect_ratio = None;
-        placeholder.preferred_aspect_ratio = PreferredAspectRatio::Auto;
-        placeholder.background_color = PaintColor::TRANSPARENT;
-        placeholder.border_colors = PaintBorderColors::all(PaintColor::TRANSPARENT);
-        placeholder.generated_content = GeneratedContent::None;
-        placeholder.establishes_transform_containing_block = false;
-        placeholder.synthetic_transform = None;
-        // This is an internal static-position probe, not the authored CSS
-        // principal box. Do not let copied containment or `will-change`
-        // metadata turn it into a containing block, stacking context, or
-        // descendant clip in the later projection passes.
-        placeholder.layout_containment = false;
-        placeholder.paint_containment = false;
-        placeholder.size_containment = SizeContainment::NONE;
-        placeholder.will_change_containment = false;
-        placeholder.will_change_position = false;
-        placeholder.will_change_stacking_context = false;
-        placeholder.visible = false;
-        placeholder.pointer_events = false;
-        placeholder.explicit_z_index = None;
-        placeholder
-    }
-
     pub(crate) const fn sticky_inset(&self) -> taffy::Rect<taffy::LengthPercentageAuto> {
         self.sticky_inset
     }
@@ -1858,22 +1801,36 @@ fn project_taffy_max_size_dimension(
 fn taffy_item_alignment(input: AlignFlags) -> Option<taffy::AlignItems> {
     let mut alignment = match input.value() {
         AlignFlags::AUTO => None,
-        AlignFlags::NORMAL | AlignFlags::STRETCH => Some(taffy::AlignItems::STRETCH),
+        AlignFlags::NORMAL => Some(taffy::AlignItems::NORMAL),
+        AlignFlags::STRETCH => Some(taffy::AlignItems::STRETCH),
         AlignFlags::FLEX_START => Some(taffy::AlignItems::FLEX_START),
         AlignFlags::FLEX_END => Some(taffy::AlignItems::FLEX_END),
         AlignFlags::SELF_START => Some(taffy::AlignItems::SELF_START),
         AlignFlags::SELF_END => Some(taffy::AlignItems::SELF_END),
-        AlignFlags::START | AlignFlags::LEFT => Some(taffy::AlignItems::START),
-        AlignFlags::END | AlignFlags::RIGHT => Some(taffy::AlignItems::END),
+        AlignFlags::START => Some(taffy::AlignItems::START),
+        AlignFlags::END => Some(taffy::AlignItems::END),
+        AlignFlags::LEFT => Some(taffy::AlignItems::LEFT),
+        AlignFlags::RIGHT => Some(taffy::AlignItems::RIGHT),
         AlignFlags::CENTER => Some(taffy::AlignItems::CENTER),
         AlignFlags::BASELINE => Some(taffy::AlignItems::BASELINE),
         AlignFlags::LAST_BASELINE => Some(taffy::AlignItems::LAST_BASELINE),
         _ => None,
     }?;
-    if input.flags().contains(AlignFlags::SAFE) {
-        alignment.safety = taffy::AlignmentSafety::Safe;
-    }
+    alignment.safety = taffy_alignment_safety(input);
     Some(alignment)
+}
+
+/// Preserve whether the CSS overflow-position modifier was omitted, safe, or
+/// explicitly unsafe. The omitted/default case has layout-specific overflow
+/// behavior and therefore cannot be folded into authored `unsafe`.
+fn taffy_alignment_safety(input: AlignFlags) -> taffy::AlignmentSafety {
+    if input.flags().contains(AlignFlags::SAFE) {
+        taffy::AlignmentSafety::Safe
+    } else if input.flags().contains(AlignFlags::UNSAFE) {
+        taffy::AlignmentSafety::Unsafe
+    } else {
+        taffy::AlignmentSafety::Default
+    }
 }
 
 /// Losslessly project the CSS content-distribution grammar into Taffy's typed
@@ -1897,9 +1854,7 @@ fn taffy_content_alignment(input: ContentDistribution) -> Option<taffy::AlignCon
         AlignFlags::SPACE_EVENLY => Some(taffy::AlignContent::SPACE_EVENLY),
         _ => None,
     }?;
-    if primary.flags().contains(AlignFlags::SAFE) {
-        alignment.safety = taffy::AlignmentSafety::Safe;
-    }
+    alignment.safety = taffy_alignment_safety(primary);
     Some(alignment)
 }
 
@@ -1927,9 +1882,7 @@ fn taffy_justify_content(
     } else {
         taffy::AlignContent::START
     };
-    if primary.flags().contains(AlignFlags::SAFE) {
-        alignment.safety = taffy::AlignmentSafety::Safe;
-    }
+    alignment.safety = taffy_alignment_safety(primary);
     Some(alignment)
 }
 
@@ -2343,6 +2296,14 @@ mod alignment_tests {
     #[test]
     fn stylo_item_alignment_preserves_layout_protocol_values() {
         assert_eq!(
+            taffy_item_alignment(AlignFlags::NORMAL),
+            Some(taffy::AlignItems::NORMAL)
+        );
+        assert_ne!(
+            taffy_item_alignment(AlignFlags::NORMAL),
+            taffy_item_alignment(AlignFlags::STRETCH)
+        );
+        assert_eq!(
             taffy_item_alignment(AlignFlags::LAST_BASELINE),
             Some(taffy::AlignItems::LAST_BASELINE)
         );
@@ -2350,11 +2311,25 @@ mod alignment_tests {
             taffy_item_alignment(AlignFlags::SELF_START),
             Some(taffy::AlignItems::SELF_START)
         );
+        assert_eq!(
+            taffy_item_alignment(AlignFlags::LEFT),
+            Some(taffy::AlignItems::LEFT)
+        );
+        assert_eq!(
+            taffy_item_alignment(AlignFlags::RIGHT),
+            Some(taffy::AlignItems::RIGHT)
+        );
 
         let safe_center = taffy_item_alignment(AlignFlags::CENTER | AlignFlags::SAFE)
             .expect("safe center should project");
         assert_eq!(safe_center.keyword, taffy::AlignItemsKeyword::Center);
         assert_eq!(safe_center.safety, taffy::AlignmentSafety::Safe);
+
+        let default_end = taffy_item_alignment(AlignFlags::END).expect("end should project");
+        let unsafe_end = taffy_item_alignment(AlignFlags::END | AlignFlags::UNSAFE)
+            .expect("unsafe end should project");
+        assert_eq!(default_end.safety, taffy::AlignmentSafety::Default);
+        assert_eq!(unsafe_end.safety, taffy::AlignmentSafety::Unsafe);
     }
 
     #[test]
