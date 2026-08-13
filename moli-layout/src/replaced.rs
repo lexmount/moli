@@ -1,17 +1,21 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use taffy::{ReplacedSizingContext, ResolvedAspectRatio, Size, SizeContainment, WritingMode};
+use taffy::{
+    ReplacedNaturalSizing, ReplacedSizingContext, ResolvedAspectRatio, Size, SizeContainment,
+    WritingMode,
+};
 
 use crate::{LayoutReplacedKind, ReplacedMetrics};
 
 /// Browser-owned natural metrics for one replaced box.
 ///
-/// This adapter normalizes DOM/resource inputs and HTML default object sizes.
-/// CSS preferred/min/max sizing, percentage resolution, box-sizing and ratio
-/// transfer remain owned by Taffy's replaced sizing algorithm.
+/// This adapter preserves DOM/resource natural-axis provenance and supplies
+/// the HTML category's default object size. CSS natural-size normalization,
+/// preferred/min/max sizing, box-sizing and ratio transfer remain owned by
+/// Taffy's replaced sizing algorithm.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ReplacedContext {
-    natural_size: Size<f32>,
+    natural_sizing: ReplacedNaturalSizing,
     preferred_size_hint: Size<Option<f32>>,
     inherent_ratio: Option<f32>,
 }
@@ -26,7 +30,7 @@ impl ReplacedContext {
         metrics.intrinsic_ratio = metrics
             .intrinsic_ratio
             .filter(|ratio| ratio.is_finite() && *ratio > 0.0);
-        let default_size = match kind {
+        let category_default_size = match kind {
             LayoutReplacedKind::FormControl => Size {
                 width: 160.0,
                 height: 24.0,
@@ -44,13 +48,28 @@ impl ReplacedContext {
                 height: 150.0,
             },
         };
+        let default_object_size = metrics
+            .default_object_size
+            .filter(|size| {
+                size.width.is_finite()
+                    && size.width >= 0.0
+                    && size.height.is_finite()
+                    && size.height >= 0.0
+            })
+            .map(|size| Size {
+                width: size.width,
+                height: size.height,
+            })
+            .unwrap_or(category_default_size);
 
         // Canvas width/height attributes define the intrinsic bitmap
         // coordinate space independently: specifying only width does not
         // scale the default 150px height.
         if kind == LayoutReplacedKind::Canvas {
-            metrics.intrinsic_width = metrics.attribute_width.or(Some(default_size.width));
-            metrics.intrinsic_height = metrics.attribute_height.or(Some(default_size.height));
+            metrics.intrinsic_width = metrics.attribute_width.or(Some(default_object_size.width));
+            metrics.intrinsic_height = metrics
+                .attribute_height
+                .or(Some(default_object_size.height));
             metrics.attribute_width = None;
             metrics.attribute_height = None;
         }
@@ -76,11 +95,12 @@ impl ReplacedContext {
                     })
                     .flatten()
             });
-        let natural_size = concrete_object_size(
-            metrics.intrinsic_width,
-            metrics.intrinsic_height,
-            inherent_ratio,
-            default_size,
+        let natural_sizing = ReplacedNaturalSizing::new(
+            Size {
+                width: metrics.intrinsic_width,
+                height: metrics.intrinsic_height,
+            },
+            default_object_size,
         );
         let preferred_size_hint = Size {
             width: metrics.attribute_width,
@@ -89,10 +109,11 @@ impl ReplacedContext {
         // Canvas dimensions define its intrinsic coordinate space even while
         // its pixels remain an unavailable placeholder in Phase 4.
         let inherent_ratio = inherent_ratio.or_else(|| {
-            (kind == LayoutReplacedKind::Canvas).then_some(natural_size.width / natural_size.height)
+            (kind == LayoutReplacedKind::Canvas && default_object_size.height > 0.0)
+                .then(|| default_object_size.width / default_object_size.height)
         });
         Self {
-            natural_size,
+            natural_sizing,
             preferred_size_hint,
             inherent_ratio,
         }
@@ -100,7 +121,7 @@ impl ReplacedContext {
 
     pub(crate) fn form_control(size: Size<f32>) -> Self {
         Self {
-            natural_size: size,
+            natural_sizing: ReplacedNaturalSizing::fixed(size),
             preferred_size_hint: Size::NONE,
             inherent_ratio: None,
         }
@@ -120,51 +141,9 @@ impl ReplacedContext {
             writing_mode,
             aspect_ratio,
             size_containment,
-            self.natural_size,
+            self.natural_sizing,
             self.preferred_size_hint,
         )
-    }
-}
-
-fn concrete_object_size(
-    width: Option<f32>,
-    height: Option<f32>,
-    ratio: Option<f32>,
-    default_size: Size<f32>,
-) -> Size<f32> {
-    match (width, height, ratio) {
-        (Some(width), Some(height), _) => Size { width, height },
-        (Some(width), None, Some(ratio)) => Size {
-            width,
-            height: width / ratio,
-        },
-        (Some(width), None, None) => Size {
-            width,
-            height: default_size.height,
-        },
-        (None, Some(height), Some(ratio)) => Size {
-            width: height * ratio,
-            height,
-        },
-        (None, Some(height), None) => Size {
-            width: default_size.width,
-            height,
-        },
-        (None, None, Some(ratio)) if default_size.width > 0.0 && default_size.height > 0.0 => {
-            let width_at_default_height = default_size.height * ratio;
-            if width_at_default_height <= default_size.width {
-                Size {
-                    width: width_at_default_height,
-                    height: default_size.height,
-                }
-            } else {
-                Size {
-                    width: default_size.width,
-                    height: default_size.width / ratio,
-                }
-            }
-        }
-        (None, None, _) => default_size,
     }
 }
 

@@ -4,7 +4,7 @@ use moli_layout::{
     LayoutElementCategory, LayoutElementMetadata, LayoutElementSemantics, LayoutFormControlData,
     LayoutFormControlKind, LayoutImageResource, LayoutInputControlKind, LayoutListData,
     LayoutListRole, LayoutNamespace, LayoutReplacedKind, LayoutSource, LayoutSourceKind,
-    LayoutTableData, LayoutTableRole, LayoutTextSelection, ReplacedMetrics,
+    LayoutTableData, LayoutTableRole, LayoutTextSelection, ReplacedMetrics, ReplacedObjectSize,
 };
 
 use crate::{
@@ -133,14 +133,16 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
         }
         let attribute_width = numeric_dimension_attribute(self.host(), node, "width");
         let attribute_height = numeric_dimension_attribute(self.host(), node, "height");
-        let intrinsic = self.runtime.image_resource_intrinsic_size(node);
+        let natural = self.runtime.image_resource_natural_sizing(node);
         Some(ReplacedMetrics {
-            intrinsic_width: intrinsic.map(|(width, _)| width),
-            intrinsic_height: intrinsic.map(|(_, height)| height),
+            intrinsic_width: natural.and_then(|sizing| sizing.width),
+            intrinsic_height: natural.and_then(|sizing| sizing.height),
+            default_object_size: natural.map(|sizing| {
+                ReplacedObjectSize::new(sizing.concrete_width, sizing.concrete_height)
+            }),
             attribute_width,
             attribute_height,
-            intrinsic_ratio: intrinsic
-                .and_then(|(width, height)| (height > 0.0).then_some(width / height)),
+            intrinsic_ratio: natural.and_then(|sizing| sizing.ratio),
         })
     }
 

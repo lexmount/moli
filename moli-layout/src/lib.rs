@@ -77,7 +77,7 @@ pub use source::{
     LayoutFormControlKind, LayoutImageResource, LayoutInputControlKind, LayoutListData,
     LayoutListRole, LayoutNamespace, LayoutPseudo, LayoutReplacedKind, LayoutSource,
     LayoutSourceKind, LayoutStyleResolver, LayoutTableData, LayoutTableRole, LayoutTextSelection,
-    ReplacedMetrics,
+    ReplacedMetrics, ReplacedObjectSize,
 };
 pub use style::{
     LayoutDisplay, LayoutInlineAlignment, LayoutListMarkerPosition, LayoutListMarkerType,
