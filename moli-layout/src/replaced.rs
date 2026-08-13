@@ -8,13 +8,10 @@
 use style::Atom;
 use taffy::{
     AvailableSpace, BoxSizing, CoreStyle as _, MaybeMath, MaybeResolve, RequestedAxis,
-    ResolveOrZero as _, Size, SizingMode,
+    ResolveOrZero as _, ResolvedAspectRatio, Size, SizingMode,
 };
 
-use crate::{
-    LayoutReplacedKind, ReplacedMetrics,
-    style::{ResolvedAspectRatio, resolve_stylo_calc_value},
-};
+use crate::{LayoutReplacedKind, ReplacedMetrics, style::resolve_stylo_calc_value};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ReplacedContext {
@@ -179,12 +176,12 @@ fn content_width_from_height(
     aspect_ratio: ResolvedAspectRatio,
     padding_border: Size<f32>,
 ) -> Option<f32> {
-    let ratio = aspect_ratio.ratio?;
-    let width = match aspect_ratio.box_sizing {
-        BoxSizing::ContentBox => height * ratio,
-        BoxSizing::BorderBox => (height + padding_border.height) * ratio - padding_border.width,
-    };
-    width.is_finite().then_some(width.max(0.0))
+    Size {
+        width: None,
+        height: Some(height),
+    }
+    .maybe_apply_aspect_ratio_with_box_sizing(aspect_ratio, BoxSizing::ContentBox, padding_border)
+    .width
 }
 
 fn content_height_from_width(
@@ -192,12 +189,12 @@ fn content_height_from_width(
     aspect_ratio: ResolvedAspectRatio,
     padding_border: Size<f32>,
 ) -> Option<f32> {
-    let ratio = aspect_ratio.ratio?;
-    let height = match aspect_ratio.box_sizing {
-        BoxSizing::ContentBox => width / ratio,
-        BoxSizing::BorderBox => (width + padding_border.width) / ratio - padding_border.height,
-    };
-    height.is_finite().then_some(height.max(0.0))
+    Size {
+        width: Some(width),
+        height: None,
+    }
+    .maybe_apply_aspect_ratio_with_box_sizing(aspect_ratio, BoxSizing::ContentBox, padding_border)
+    .height
 }
 
 fn apply_aspect_ratio_to_content_size(
@@ -205,23 +202,11 @@ fn apply_aspect_ratio_to_content_size(
     aspect_ratio: ResolvedAspectRatio,
     padding_border: Size<f32>,
 ) -> Size<Option<f32>> {
-    match size {
-        Size {
-            width: Some(width),
-            height: None,
-        } => Size {
-            width: Some(width),
-            height: content_height_from_width(width, aspect_ratio, padding_border),
-        },
-        Size {
-            width: None,
-            height: Some(height),
-        } => Size {
-            width: content_width_from_height(height, aspect_ratio, padding_border),
-            height: Some(height),
-        },
-        _ => size,
-    }
+    size.maybe_apply_aspect_ratio_with_box_sizing(
+        aspect_ratio,
+        BoxSizing::ContentBox,
+        padding_border,
+    )
 }
 
 fn ratio_basis_scale(constrained: f32, original: f32, inset: f32, box_sizing: BoxSizing) -> f32 {
