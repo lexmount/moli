@@ -144,6 +144,25 @@ where
         .filter(|id| is_table_root(world.boxes[id.index()].kind))
         .collect::<Vec<_>>();
     for root in roots {
+        // CSS tables cannot shrink below GRID_MIN, even when an authored
+        // width/max-width is smaller. Project that table-specific lower bound
+        // through Taffy's generic parent sizing as `min-content`; retain the
+        // authored minimum separately for the table formatter's own sizing.
+        let table = &mut world.boxes[root.index()];
+        let writing_mode = table.style.writing_mode();
+        if table.table_authored_min_inline_size.is_none() {
+            table.table_authored_min_inline_size = Some(
+                writing_mode
+                    .to_logical(table.style.taffy.min_size)
+                    .inline_size,
+            );
+        }
+        set_physical_inline_dimension(
+            writing_mode,
+            &mut table.style.taffy.min_size,
+            Dimension::min_content(),
+        );
+
         let mut parts = Vec::new();
         collect_table_parts(world, root, &mut parts);
         if parts.is_empty() {
@@ -257,6 +276,14 @@ where
         root_style.table_border_spacing()
     };
     let mut style = root_style.taffy.clone();
+    if let Some(authored_min_inline_size) = world.boxes[root.index()].table_authored_min_inline_size
+    {
+        set_physical_inline_dimension(
+            root_style.writing_mode(),
+            &mut style.min_size,
+            authored_min_inline_size,
+        );
+    }
     style.display = Display::Grid;
     style.item_is_table = true;
     style.grid_auto_flow = GridAutoFlow::RowDense;
@@ -541,10 +568,17 @@ impl TableContext {
         };
 
         let authored_sizes_apply = inputs.sizing_mode == SizingMode::InherentSize;
+        // The outer tree replaces the table's min-inline-size with
+        // `min-content` so parent algorithms include GRID_MIN in their used
+        // size. Preserve an authored minimum in that intrinsic contribution,
+        // but deliberately do not let max-inline-size cap GRID_MIN.
+        let is_intrinsic_min_contribution = inputs.sizing_purpose
+            == SizingPurpose::IntrinsicContribution
+            && matches!(available, AvailableSpace::MinContent);
         let preferred = authored_sizes_apply
             .then(|| resolve_dimension(logical_size.inline_size))
             .flatten();
-        let min_size = authored_sizes_apply
+        let min_size = (authored_sizes_apply || is_intrinsic_min_contribution)
             .then(|| resolve_dimension(logical_min_size.inline_size))
             .flatten();
         let max_size = authored_sizes_apply
@@ -556,19 +590,13 @@ impl TableContext {
             .inline_size
             .or(preferred)
             .unwrap_or_else(fit_content);
-        if !self.layout_mode.is_fixed() {
-            // Automatic tables cannot make a column narrower than its outer
-            // min-content measure, even when a containing block supplies a
-            // smaller known or preferred size.
-            used = used.max(grid_min);
-        }
         if let Some(max_size) = max_size {
             used = used.min(max_size);
         }
         if let Some(min_size) = min_size {
             used = used.max(min_size);
         }
-        used.max(inline_insets)
+        used.max(grid_min).max(inline_insets)
     }
 }
 

@@ -12,9 +12,9 @@ use taffy::{
     SizingPurpose, Style, TraversePartialTree, TraverseTree, WritingDirection,
     compute_block_layout, compute_cached_layout, compute_cached_size,
     compute_content_alignment_offset, compute_flexbox_layout, compute_grid_layout,
-    compute_hidden_layout, compute_leaf_layout_with_sizing_context, compute_root_layout,
-    resolve_content_alignment_fallback, resolve_intrinsic_width_inputs_with_provenance,
-    round_layout,
+    compute_hidden_layout, compute_leaf_layout_with_sizing_context, compute_replaced_layout,
+    compute_root_layout, resolve_content_alignment_fallback,
+    resolve_intrinsic_width_inputs_with_provenance, round_layout,
 };
 
 use crate::{
@@ -25,7 +25,6 @@ use crate::{
         relative_atomic_inset_offset,
     },
     positioned::resolve_absolute_axis_margins,
-    replaced::measure_replaced,
     style::{InlineDirection, resolve_stylo_calc_value},
     table::{compute_table_layout, prepare_table_layout_trees},
     world::InlineStaticPosition,
@@ -1691,21 +1690,24 @@ where
         let size_containment = layout_box.used_size_containment();
 
         if let Some(context) = replaced_context {
-            // `measure_replaced` is the complete CSS replaced-element sizing
-            // algorithm ported from Blitz: it resolves preferred/min/max
-            // sizes and returns a border-box size. Taffy's generic leaf
-            // helper instead expects a content-box measurement callback and
-            // adds CSS padding and borders itself. Routing the complete
-            // replaced result through that helper would therefore apply the
-            // box model twice (most visibly on padded form controls).
-            let size = measure_replaced(
-                inputs.constraint_space(writing_mode),
-                &context,
-                resolved_aspect_ratio,
-                size_containment,
+            // A definite containing area is not an implicit max-size for an
+            // atomic replaced box. Preserve parent_size as the percentage
+            // basis, but make ordinary layout availability unbounded before
+            // entering the pinned Taffy replaced formatter. Intrinsic probes
+            // retain their min/max-content constraint.
+            let replaced_inputs = LayoutInput {
+                available_space: inputs.available_space.map(|available| match available {
+                    AvailableSpace::Definite(_) => AvailableSpace::MaxContent,
+                    intrinsic => intrinsic,
+                }),
+                ..inputs
+            };
+            return compute_replaced_layout(
+                replaced_inputs,
                 &style,
+                context.sizing_context(writing_mode, resolved_aspect_ratio, size_containment),
+                resolve_stylo_calc_value,
             );
-            return LayoutOutput::from_sizes(size, size);
         }
 
         compute_leaf_layout_with_sizing_context(

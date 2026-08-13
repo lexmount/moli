@@ -1,23 +1,18 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-//
-// The sizing algorithm is adapted from DioxusLabs/blitz commit
-// 5081c65811a4396f5a99b2e0aca542a4a4a6606f,
-// packages/blitz-dom/src/layout/replaced.rs. It operates only on pass-local,
-// DOM-neutral metrics and does not fetch or decode image content.
 
-use style::Atom;
-use taffy::{
-    AvailableSpace, BoxSizing, ConstraintSpace, CoreStyle as _, LayoutInput, MaybeMath,
-    MaybeResolve, RequestedAxis, ResolveOrZero as _, ResolvedAspectRatio, Size, SizeContainment,
-    SizingMode,
-};
+use taffy::{ReplacedSizingContext, ResolvedAspectRatio, Size, SizeContainment, WritingMode};
 
-use crate::{LayoutReplacedKind, ReplacedMetrics, style::resolve_stylo_calc_value};
+use crate::{LayoutReplacedKind, ReplacedMetrics};
 
+/// Browser-owned natural metrics for one replaced box.
+///
+/// This adapter normalizes DOM/resource inputs and HTML default object sizes.
+/// CSS preferred/min/max sizing, percentage resolution, box-sizing and ratio
+/// transfer remain owned by Taffy's replaced sizing algorithm.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ReplacedContext {
-    inherent_size: Size<f32>,
-    attribute_size: Size<Option<f32>>,
+    natural_size: Size<f32>,
+    preferred_size_hint: Size<Option<f32>>,
     inherent_ratio: Option<f32>,
 }
 
@@ -37,9 +32,8 @@ impl ReplacedContext {
                 height: 24.0,
             },
             // An HTML image without available natural dimensions represents
-            // no content. Blink and Blitz therefore use 0x0 here; the CSS
-            // 300x150 default object size still applies to the other replaced
-            // element categories below.
+            // no content. The 300x150 default object size applies to the
+            // remaining replaced categories.
             LayoutReplacedKind::Image => Size::ZERO,
             LayoutReplacedKind::Svg
             | LayoutReplacedKind::Canvas
@@ -53,9 +47,7 @@ impl ReplacedContext {
 
         // Canvas width/height attributes define the intrinsic bitmap
         // coordinate space independently: specifying only width does not
-        // scale the default 150px height. Inline SVG metrics are already
-        // normalized by the source adapter because a viewBox can provide an
-        // intrinsic ratio even when one or both dimensions are absent.
+        // scale the default 150px height.
         if kind == LayoutReplacedKind::Canvas {
             metrics.intrinsic_width = metrics.attribute_width.or(Some(default_size.width));
             metrics.intrinsic_height = metrics.attribute_height.or(Some(default_size.height));
@@ -84,39 +76,53 @@ impl ReplacedContext {
                     })
                     .flatten()
             });
-        let inherent_size = concrete_object_size(
+        let natural_size = concrete_object_size(
             metrics.intrinsic_width,
             metrics.intrinsic_height,
             inherent_ratio,
             default_size,
         );
-        let attribute_size = Size {
+        let preferred_size_hint = Size {
             width: metrics.attribute_width,
             height: metrics.attribute_height,
         };
         // Canvas dimensions define its intrinsic coordinate space even while
         // its pixels remain an unavailable placeholder in Phase 4.
         let inherent_ratio = inherent_ratio.or_else(|| {
-            (kind == LayoutReplacedKind::Canvas)
-                .then_some(inherent_size.width / inherent_size.height)
+            (kind == LayoutReplacedKind::Canvas).then_some(natural_size.width / natural_size.height)
         });
         Self {
-            inherent_size,
-            attribute_size,
+            natural_size,
+            preferred_size_hint,
             inherent_ratio,
         }
     }
 
     pub(crate) fn form_control(size: Size<f32>) -> Self {
         Self {
-            inherent_size: size,
-            attribute_size: Size::NONE,
+            natural_size: size,
+            preferred_size_hint: Size::NONE,
             inherent_ratio: None,
         }
     }
 
     pub(crate) const fn inherent_ratio(&self) -> Option<f32> {
         self.inherent_ratio
+    }
+
+    pub(crate) const fn sizing_context(
+        self,
+        writing_mode: WritingMode,
+        aspect_ratio: ResolvedAspectRatio,
+        size_containment: SizeContainment,
+    ) -> ReplacedSizingContext {
+        ReplacedSizingContext::new(
+            writing_mode,
+            aspect_ratio,
+            size_containment,
+            self.natural_size,
+            self.preferred_size_hint,
+        )
     }
 }
 
@@ -164,747 +170,4 @@ fn concrete_object_size(
 
 fn valid_dimension(value: Option<f32>) -> Option<f32> {
     value.filter(|value| value.is_finite() && *value >= 0.0)
-}
-
-enum Violation {
-    None,
-    Min,
-    Max,
-}
-
-fn content_width_from_height(
-    height: f32,
-    aspect_ratio: ResolvedAspectRatio,
-    padding_border: Size<f32>,
-) -> Option<f32> {
-    Size {
-        width: None,
-        height: Some(height),
-    }
-    .maybe_apply_aspect_ratio_with_box_sizing(aspect_ratio, BoxSizing::ContentBox, padding_border)
-    .width
-}
-
-fn content_height_from_width(
-    width: f32,
-    aspect_ratio: ResolvedAspectRatio,
-    padding_border: Size<f32>,
-) -> Option<f32> {
-    Size {
-        width: Some(width),
-        height: None,
-    }
-    .maybe_apply_aspect_ratio_with_box_sizing(aspect_ratio, BoxSizing::ContentBox, padding_border)
-    .height
-}
-
-fn apply_aspect_ratio_to_content_size(
-    size: Size<Option<f32>>,
-    aspect_ratio: ResolvedAspectRatio,
-    padding_border: Size<f32>,
-) -> Size<Option<f32>> {
-    size.maybe_apply_aspect_ratio_with_box_sizing(
-        aspect_ratio,
-        BoxSizing::ContentBox,
-        padding_border,
-    )
-}
-
-fn ratio_basis_scale(constrained: f32, original: f32, inset: f32, box_sizing: BoxSizing) -> f32 {
-    match box_sizing {
-        BoxSizing::ContentBox => constrained / original,
-        BoxSizing::BorderBox => (constrained + inset) / (original + inset),
-    }
-}
-
-pub(crate) fn measure_replaced(
-    constraint_space: ConstraintSpace,
-    context: &ReplacedContext,
-    resolved_aspect_ratio: ResolvedAspectRatio,
-    size_containment: SizeContainment,
-    style: &taffy::Style<Atom>,
-) -> Size<f32> {
-    let percentage_basis = constraint_space.margin_padding_percentage_basis();
-    let LayoutInput {
-        known_dimensions,
-        parent_size,
-        available_space,
-        sizing_mode,
-        axis: requested_axis,
-        ..
-    } = constraint_space.into_layout_input();
-    let padding = style
-        .padding()
-        .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
-    let border = style
-        .border()
-        .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
-    let padding_border = padding + border;
-    let padding_border_sum = Size {
-        width: padding_border.left + padding_border.right,
-        height: padding_border.top + padding_border.bottom,
-    };
-    let box_sizing_adjustment = if style.box_sizing() == BoxSizing::BorderBox {
-        padding_border_sum
-    } else {
-        Size::ZERO
-    };
-    let contained_content_size = Size {
-        width: size_containment
-            .axes
-            .width
-            .then_some(size_containment.intrinsic_content_size.width.unwrap_or(0.0)),
-        height: size_containment.axes.height.then_some(
-            size_containment
-                .intrinsic_content_size
-                .height
-                .unwrap_or(0.0),
-        ),
-    };
-    let inherent_size = Size {
-        width: contained_content_size
-            .width
-            .unwrap_or(context.inherent_size.width),
-        height: contained_content_size
-            .height
-            .unwrap_or(context.inherent_size.height),
-    };
-    let attribute_size = Size {
-        width: if size_containment.axes.width {
-            None
-        } else {
-            context.attribute_size.width
-        },
-        height: if size_containment.axes.height {
-            None
-        } else {
-            context.attribute_size.height
-        },
-    };
-    // The browser-owned style seam has already resolved the three CSS states
-    // (`auto`, `<ratio>`, and `auto <ratio>`) against the natural ratio. Do not
-    // reconstruct that precedence from Taffy's lossy numeric field here.
-    let aspect_ratio = resolved_aspect_ratio.ratio;
-    let preferred_basis = Size {
-        width: if available_space.width == AvailableSpace::MinContent {
-            Some(0.0)
-        } else {
-            parent_size.width
-        },
-        height: if available_space.height == AvailableSpace::MinContent {
-            Some(0.0)
-        } else {
-            parent_size.height
-        },
-    };
-    let mut preferred_size = style
-        .size
-        .maybe_resolve(preferred_basis, resolve_stylo_calc_value)
-        .maybe_sub(box_sizing_adjustment);
-    let mut min_size = style
-        .min_size
-        .maybe_resolve(parent_size, resolve_stylo_calc_value)
-        .maybe_sub(box_sizing_adjustment);
-    // Available space is not an implicit `max-width`/`max-height`. Blink
-    // resolves a replaced atomic inline's used size before line breaking and
-    // lets an oversized result overflow; only authored max-size constraints
-    // belong in this clamp.
-    let mut max_size = style
-        .max_size
-        .maybe_resolve(preferred_basis, resolve_stylo_calc_value)
-        .maybe_sub(box_sizing_adjustment)
-        .maybe_max(min_size);
-    for (raw, resolved, contained) in [
-        (style.size, &mut preferred_size, contained_content_size),
-        (style.min_size, &mut min_size, contained_content_size),
-        (style.max_size, &mut max_size, contained_content_size),
-    ] {
-        if raw.width.is_intrinsic() {
-            resolved.width = resolved.width.or(contained.width);
-        }
-        if raw.height.is_intrinsic() {
-            resolved.height = resolved.height.or(contained.height);
-        }
-    }
-
-    // A replaced element's intrinsic min/max-content constraint transfers a
-    // definite preferred size in the opposite axis through its preferred
-    // aspect ratio. It must not fall back to the resource's natural width or
-    // height. For example, a 60x60 image with `height:40px; width:30px;
-    // min-width:min-content` has a transferred min-width of 40px, not 60px.
-    // Taffy's generic horizontal intrinsic probe cannot preserve this once it
-    // reaches the complete replaced-element measure callback, and it has no
-    // vertical intrinsic-keyword resolver, so resolve both physical axes at
-    // this browser-owned sizing boundary.
-    if aspect_ratio.is_some() {
-        let transferred_width = preferred_size.height.and_then(|height| {
-            content_width_from_height(height, resolved_aspect_ratio, padding_border_sum)
-        });
-        let transferred_height = preferred_size.width.and_then(|width| {
-            content_height_from_width(width, resolved_aspect_ratio, padding_border_sum)
-        });
-        if is_min_or_max_content(style.min_size.width) {
-            min_size.width = transferred_width;
-        }
-        if is_min_or_max_content(style.min_size.height) {
-            min_size.height = transferred_height;
-        }
-        if is_min_or_max_content(style.max_size.width) {
-            max_size.width = transferred_width;
-        }
-        if is_min_or_max_content(style.max_size.height) {
-            max_size.height = transferred_height;
-        }
-    }
-
-    if sizing_mode == SizingMode::ContentSize {
-        match requested_axis {
-            RequestedAxis::Horizontal => {
-                preferred_size.width = None;
-                min_size.width = None;
-            }
-            RequestedAxis::Vertical => {
-                preferred_size.height = None;
-                min_size.height = None;
-            }
-            RequestedAxis::Both => {}
-        }
-    }
-
-    if known_dimensions.width.is_some() || known_dimensions.height.is_some() {
-        let style_max_size = style
-            .max_size
-            .maybe_resolve(preferred_basis, resolve_stylo_calc_value)
-            .maybe_sub(box_sizing_adjustment)
-            .maybe_max(min_size);
-        let content_known = known_dimensions.maybe_sub(padding_border_sum);
-        let transferred = apply_aspect_ratio_to_content_size(
-            content_known.maybe_clamp(min_size, style_max_size),
-            resolved_aspect_ratio,
-            padding_border_sum,
-        )
-        .unwrap_or(inherent_size);
-        let size = content_known.unwrap_or(transferred.maybe_clamp(min_size, style_max_size));
-        return size.map(|value| value.max(0.0)) + padding_border_sum;
-    }
-
-    let unclamped = if preferred_size.width.is_some() || preferred_size.height.is_some() {
-        apply_aspect_ratio_to_content_size(
-            preferred_size,
-            resolved_aspect_ratio,
-            padding_border_sum,
-        )
-        .unwrap_or(inherent_size)
-    } else if attribute_size.width.is_some() || attribute_size.height.is_some() {
-        apply_aspect_ratio_to_content_size(
-            attribute_size,
-            resolved_aspect_ratio,
-            padding_border_sum,
-        )
-        .unwrap_or(inherent_size)
-    } else {
-        inherent_size
-    };
-    let size = unclamped.map(|value| value.max(0.0));
-    let width_violation = if size.width < min_size.width.unwrap_or(0.0) {
-        Violation::Min
-    } else if size.width > max_size.width.unwrap_or(f32::INFINITY) {
-        Violation::Max
-    } else {
-        Violation::None
-    };
-    let height_violation = if size.height < min_size.height.unwrap_or(0.0) {
-        Violation::Min
-    } else if size.height > max_size.height.unwrap_or(f32::INFINITY) {
-        Violation::Max
-    } else {
-        Violation::None
-    };
-    let Some(_) = aspect_ratio else {
-        return size.maybe_clamp(min_size, max_size) + padding_border_sum;
-    };
-    let size = match (width_violation, height_violation) {
-        (Violation::None, Violation::None) => size,
-        (Violation::Max, Violation::None) => {
-            let width = max_size.width.expect("max-width violation has a bound");
-            Size {
-                width,
-                height: content_height_from_width(width, resolved_aspect_ratio, padding_border_sum)
-                    .expect("a resolved ratio transfers width to height")
-                    .maybe_max(min_size.height),
-            }
-        }
-        (Violation::Min, Violation::None) => {
-            let width = min_size.width.expect("min-width violation has a bound");
-            Size {
-                width,
-                height: content_height_from_width(width, resolved_aspect_ratio, padding_border_sum)
-                    .expect("a resolved ratio transfers width to height")
-                    .maybe_min(max_size.height),
-            }
-        }
-        (Violation::None, Violation::Max) => {
-            let height = max_size.height.expect("max-height violation has a bound");
-            Size {
-                width: content_width_from_height(height, resolved_aspect_ratio, padding_border_sum)
-                    .expect("a resolved ratio transfers height to width")
-                    .maybe_max(min_size.width),
-                height,
-            }
-        }
-        (Violation::None, Violation::Min) => {
-            let height = min_size.height.expect("min-height violation has a bound");
-            Size {
-                width: content_width_from_height(height, resolved_aspect_ratio, padding_border_sum)
-                    .expect("a resolved ratio transfers height to width")
-                    .maybe_min(max_size.width),
-                height,
-            }
-        }
-        (Violation::Max, Violation::Max) => {
-            let width = max_size.width.expect("max-width violation has a bound");
-            let height = max_size.height.expect("max-height violation has a bound");
-            if ratio_basis_scale(
-                width,
-                size.width,
-                padding_border_sum.width,
-                resolved_aspect_ratio.box_sizing,
-            ) <= ratio_basis_scale(
-                height,
-                size.height,
-                padding_border_sum.height,
-                resolved_aspect_ratio.box_sizing,
-            ) {
-                Size {
-                    width,
-                    height: content_height_from_width(
-                        width,
-                        resolved_aspect_ratio,
-                        padding_border_sum,
-                    )
-                    .expect("a resolved ratio transfers width to height")
-                    .maybe_max(min_size.height),
-                }
-            } else {
-                Size {
-                    width: content_width_from_height(
-                        height,
-                        resolved_aspect_ratio,
-                        padding_border_sum,
-                    )
-                    .expect("a resolved ratio transfers height to width")
-                    .maybe_max(min_size.width),
-                    height,
-                }
-            }
-        }
-        (Violation::Min, Violation::Min) => {
-            let width = min_size.width.expect("min-width violation has a bound");
-            let height = min_size.height.expect("min-height violation has a bound");
-            if ratio_basis_scale(
-                width,
-                size.width,
-                padding_border_sum.width,
-                resolved_aspect_ratio.box_sizing,
-            ) <= ratio_basis_scale(
-                height,
-                size.height,
-                padding_border_sum.height,
-                resolved_aspect_ratio.box_sizing,
-            ) {
-                Size {
-                    width: content_width_from_height(
-                        height,
-                        resolved_aspect_ratio,
-                        padding_border_sum,
-                    )
-                    .expect("a resolved ratio transfers height to width")
-                    .maybe_min(max_size.width),
-                    height,
-                }
-            } else {
-                Size {
-                    width,
-                    height: content_height_from_width(
-                        width,
-                        resolved_aspect_ratio,
-                        padding_border_sum,
-                    )
-                    .expect("a resolved ratio transfers width to height")
-                    .maybe_min(max_size.height),
-                }
-            }
-        }
-        (Violation::Min, Violation::Max) => Size {
-            width: min_size.width.expect("min-width violation has a bound"),
-            height: max_size.height.expect("max-height violation has a bound"),
-        },
-        (Violation::Max, Violation::Min) => Size {
-            width: max_size.width.expect("max-width violation has a bound"),
-            height: min_size.height.expect("min-height violation has a bound"),
-        },
-    };
-    size + padding_border_sum
-}
-
-fn is_min_or_max_content(dimension: taffy::Dimension) -> bool {
-    dimension.is_min_content() || dimension.is_max_content()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn measurement_space(
-        parent_size: Size<Option<f32>>,
-        parent_writing_mode: taffy::WritingMode,
-        writing_mode: taffy::WritingMode,
-    ) -> ConstraintSpace {
-        LayoutInput {
-            run_mode: taffy::RunMode::ComputeSize,
-            sizing_mode: SizingMode::InherentSize,
-            axis: RequestedAxis::Both,
-            parent_size,
-            parent_writing_mode,
-            available_space: Size {
-                width: AvailableSpace::MaxContent,
-                height: AvailableSpace::MaxContent,
-            },
-            ..LayoutInput::HIDDEN
-        }
-        .constraint_space(writing_mode)
-    }
-
-    fn image_context() -> ReplacedContext {
-        ReplacedContext::for_element(
-            LayoutReplacedKind::Image,
-            Some(ReplacedMetrics {
-                intrinsic_width: Some(60.0),
-                intrinsic_height: Some(60.0),
-                intrinsic_ratio: Some(1.0),
-                ..ReplacedMetrics::default()
-            }),
-        )
-    }
-
-    fn measure(style: &taffy::Style<Atom>) -> Size<f32> {
-        measure_replaced(
-            measurement_space(
-                Size::NONE,
-                taffy::WritingMode::HorizontalTb,
-                taffy::WritingMode::HorizontalTb,
-            ),
-            &image_context(),
-            ResolvedAspectRatio {
-                ratio: style
-                    .aspect_ratio
-                    .filter(|ratio| ratio.is_finite() && *ratio > 0.0)
-                    .or(Some(1.0)),
-                box_sizing: style.box_sizing,
-            },
-            SizeContainment::NONE,
-            style,
-        )
-    }
-
-    fn measure_with_containment(
-        style: &taffy::Style<Atom>,
-        size_containment: SizeContainment,
-    ) -> Size<f32> {
-        measure_replaced(
-            measurement_space(
-                Size::NONE,
-                taffy::WritingMode::HorizontalTb,
-                taffy::WritingMode::HorizontalTb,
-            ),
-            &image_context(),
-            ResolvedAspectRatio {
-                ratio: style
-                    .aspect_ratio
-                    .filter(|ratio| ratio.is_finite() && *ratio > 0.0),
-                box_sizing: style.box_sizing,
-            },
-            size_containment,
-            style,
-        )
-    }
-
-    #[test]
-    fn contained_replaced_axes_override_natural_dimensions_without_creating_a_ratio() {
-        let style = taffy::Style::<Atom>::default();
-        assert_eq!(
-            measure_with_containment(
-                &style,
-                SizeContainment::new(
-                    Size {
-                        width: true,
-                        height: true
-                    },
-                    Size {
-                        width: Some(100.0),
-                        height: Some(200.0)
-                    },
-                ),
-            ),
-            Size {
-                width: 100.0,
-                height: 200.0
-            },
-        );
-        assert_eq!(
-            measure_with_containment(
-                &style,
-                SizeContainment::new(
-                    Size {
-                        width: true,
-                        height: false
-                    },
-                    Size {
-                        width: Some(100.0),
-                        height: Some(200.0)
-                    },
-                ),
-            ),
-            Size {
-                width: 100.0,
-                height: 60.0
-            },
-        );
-
-        let explicit_width = taffy::Style::<Atom> {
-            size: Size {
-                width: taffy::Dimension::length(100.0),
-                height: taffy::Dimension::auto(),
-            },
-            ..Default::default()
-        };
-        assert_eq!(
-            measure_with_containment(
-                &explicit_width,
-                SizeContainment::new(
-                    Size {
-                        width: true,
-                        height: true
-                    },
-                    Size {
-                        width: Some(50.0),
-                        height: Some(100.0)
-                    },
-                ),
-            ),
-            Size {
-                width: 100.0,
-                height: 100.0
-            },
-        );
-    }
-
-    #[test]
-    fn preferred_ratio_uses_its_selected_box_sizing_basis() {
-        let style = taffy::Style::<Atom> {
-            box_sizing: BoxSizing::BorderBox,
-            size: Size {
-                width: taffy::Dimension::length(100.0),
-                height: taffy::Dimension::auto(),
-            },
-            padding: taffy::Rect {
-                left: taffy::LengthPercentage::length(10.0),
-                right: taffy::LengthPercentage::length(10.0),
-                top: taffy::LengthPercentage::length(10.0),
-                bottom: taffy::LengthPercentage::length(10.0),
-            },
-            aspect_ratio: Some(2.0),
-            ..taffy::Style::default()
-        };
-        let measure_with_basis = |box_sizing| {
-            measure_replaced(
-                measurement_space(
-                    Size::NONE,
-                    taffy::WritingMode::HorizontalTb,
-                    taffy::WritingMode::HorizontalTb,
-                ),
-                &image_context(),
-                ResolvedAspectRatio {
-                    ratio: Some(2.0),
-                    box_sizing,
-                },
-                SizeContainment::NONE,
-                &style,
-            )
-        };
-
-        assert_eq!(
-            measure_with_basis(BoxSizing::BorderBox),
-            Size {
-                width: 100.0,
-                height: 50.0,
-            }
-        );
-        assert_eq!(
-            measure_with_basis(BoxSizing::ContentBox),
-            Size {
-                width: 100.0,
-                height: 60.0,
-            }
-        );
-    }
-
-    #[test]
-    fn percentage_padding_uses_the_containing_blocks_logical_inline_size() {
-        let style = taffy::Style::<Atom> {
-            box_sizing: BoxSizing::ContentBox,
-            size: Size {
-                width: taffy::Dimension::length(10.0),
-                height: taffy::Dimension::length(10.0),
-            },
-            padding: taffy::Rect {
-                left: taffy::LengthPercentage::percent(0.1),
-                right: taffy::LengthPercentage::percent(0.1),
-                top: taffy::LengthPercentage::length(0.0),
-                bottom: taffy::LengthPercentage::length(0.0),
-            },
-            ..taffy::Style::default()
-        };
-
-        let size = measure_replaced(
-            measurement_space(
-                Size {
-                    width: Some(100.0),
-                    height: Some(200.0),
-                },
-                taffy::WritingMode::VerticalRl,
-                taffy::WritingMode::VerticalRl,
-            ),
-            &image_context(),
-            ResolvedAspectRatio {
-                ratio: None,
-                box_sizing: BoxSizing::ContentBox,
-            },
-            SizeContainment::NONE,
-            &style,
-        );
-
-        assert_eq!(
-            size,
-            Size {
-                width: 50.0,
-                height: 10.0,
-            }
-        );
-    }
-
-    #[test]
-    fn intrinsic_min_max_constraints_transfer_the_opposite_preferred_axis() {
-        let mut min_width = taffy::Style::<Atom> {
-            size: Size {
-                width: taffy::Dimension::length(30.0),
-                height: taffy::Dimension::length(40.0),
-            },
-            min_size: Size {
-                width: taffy::Dimension::min_content(),
-                height: taffy::Dimension::auto(),
-            },
-            ..taffy::Style::default()
-        };
-        assert_eq!(
-            measure(&min_width),
-            Size {
-                width: 40.0,
-                height: 40.0
-            }
-        );
-
-        min_width.min_size.width = taffy::Dimension::max_content();
-        assert_eq!(
-            measure(&min_width),
-            Size {
-                width: 40.0,
-                height: 40.0
-            }
-        );
-
-        let mut max_width = taffy::Style::<Atom> {
-            size: Size {
-                width: taffy::Dimension::length(80.0),
-                height: taffy::Dimension::length(70.0),
-            },
-            max_size: Size {
-                width: taffy::Dimension::min_content(),
-                height: taffy::Dimension::auto(),
-            },
-            ..taffy::Style::default()
-        };
-        assert_eq!(
-            measure(&max_width),
-            Size {
-                width: 70.0,
-                height: 70.0
-            }
-        );
-
-        max_width.max_size.width = taffy::Dimension::max_content();
-        assert_eq!(
-            measure(&max_width),
-            Size {
-                width: 70.0,
-                height: 70.0
-            }
-        );
-
-        let mut min_height = taffy::Style::<Atom> {
-            size: Size {
-                width: taffy::Dimension::length(40.0),
-                height: taffy::Dimension::length(30.0),
-            },
-            min_size: Size {
-                width: taffy::Dimension::auto(),
-                height: taffy::Dimension::min_content(),
-            },
-            ..taffy::Style::default()
-        };
-        assert_eq!(
-            measure(&min_height),
-            Size {
-                width: 40.0,
-                height: 40.0
-            }
-        );
-
-        min_height.min_size.height = taffy::Dimension::max_content();
-        assert_eq!(
-            measure(&min_height),
-            Size {
-                width: 40.0,
-                height: 40.0
-            }
-        );
-
-        let mut max_height = taffy::Style::<Atom> {
-            size: Size {
-                width: taffy::Dimension::length(70.0),
-                height: taffy::Dimension::length(80.0),
-            },
-            max_size: Size {
-                width: taffy::Dimension::auto(),
-                height: taffy::Dimension::min_content(),
-            },
-            ..taffy::Style::default()
-        };
-        assert_eq!(
-            measure(&max_height),
-            Size {
-                width: 70.0,
-                height: 70.0
-            }
-        );
-
-        max_height.max_size.height = taffy::Dimension::max_content();
-        assert_eq!(
-            measure(&max_height),
-            Size {
-                width: 70.0,
-                height: 70.0
-            }
-        );
-    }
 }
