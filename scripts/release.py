@@ -233,7 +233,7 @@ def package_release(
 ) -> tuple[Path, int, int]:
     package_name = f"moli-v{version}-{target}"
     extension = ".zip" if "-windows-" in target else ".tar.gz"
-    archive_path = output_dir / f"{package_name}{extension}"
+    archive_path = output_dir / f"moli-{target}{extension}"
 
     output_dir.mkdir(parents=True, exist_ok=True)
     if archive_path.exists():

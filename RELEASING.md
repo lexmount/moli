@@ -1,17 +1,24 @@
 # Releasing Moli
 
-The release workflow builds and publishes four native archives:
+The release workflow builds four native archives with stable asset names:
 
 | System | Rust target | Archive |
 | --- | --- | --- |
-| Linux x86_64 | `x86_64-unknown-linux-gnu` | `.tar.gz` |
-| macOS Intel | `x86_64-apple-darwin` | `.tar.gz` |
-| macOS Apple Silicon | `aarch64-apple-darwin` | `.tar.gz` |
-| Windows x86_64 | `x86_64-pc-windows-msvc` | `.zip` |
+| Linux x86_64 | `x86_64-unknown-linux-gnu` | `moli-x86_64-unknown-linux-gnu.tar.gz` |
+| macOS Intel | `x86_64-apple-darwin` | `moli-x86_64-apple-darwin.tar.gz` |
+| macOS Apple Silicon | `aarch64-apple-darwin` | `moli-aarch64-apple-darwin.tar.gz` |
+| Windows x86_64 | `x86_64-pc-windows-msvc` | `moli-x86_64-pc-windows-msvc.zip` |
 
 Every archive contains the `moli` executable, project licenses, README,
-version marker, and third-party license notices. GitHub displays the SHA-256
-digest for each uploaded release asset.
+version marker, and third-party license notices. The workflow also publishes
+`moli-installer.sh` and `moli-installer.ps1`. Skills are maintained separately
+in the repository and are not included in release assets.
+
+Stable names are intentional: the latest non-prerelease asset is always
+available at
+`https://github.com/lexmount/moli/releases/latest/download/<asset-name>`.
+The installers use those URLs, select the archive for the current platform,
+and install the executable.
 
 Each artifact is built on its native GitHub-hosted runner. The packager strips
 only a staging copy, leaving the binary under `target/release` unchanged for
@@ -31,7 +38,7 @@ untested.
    Linux or macOS:
 
    ```bash
-   scripts/release.sh --version 0.1.1
+   python3 scripts/release.py --version 0.1.1
    ```
 
    Windows PowerShell:
@@ -53,6 +60,8 @@ untested.
 
 The workflow validates the selected commit, builds all four native artifacts
 in parallel, verifies the expected archives, creates the corresponding
-`vX.Y.Z` tag, generates release notes, and uploads all four archives. It stops
-without creating a release if any platform fails, if the requested version does
-not match the manifest, or if the tag already exists.
+`vX.Y.Z` tag, generates release notes, and uploads six assets: four archives
+and two installers. It stops without creating a release if any platform fails,
+if the requested version does not match the manifest, or if the tag already
+exists. A published, non-prerelease release is explicitly marked as the latest
+release so the stable installer URLs switch to it immediately.

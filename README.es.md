@@ -55,18 +55,18 @@ Puede utilizarse mediante la CLI, CDP, WebDriver Classic o WebDriver BiDi.
 
 ## Inicio rápido
 
-Compile desde la raíz del espacio de trabajo:
+Dé esta instrucción a su agente de programación con IA:
 
-```bash
-cargo build --release -p moli
-```
+> Instala los skills de `https://github.com/lexmount/moli/tree/main/skills`, sigue sus instrucciones para descargar e instalar el binario precompilado más reciente de Moli y usa `moli-webfetch` para obtener `https://example.com` y mostrarme el resultado.
+
+## Uso de la CLI
 
 ### Extraer una página
 
 Renderice la página como Markdown con la estrategia de finalización predeterminada de Moli:
 
 ```bash
-./target/release/moli fetch \
+moli fetch \
   --dump markdown \
   --wait-until done \
   https://example.com
@@ -75,7 +75,7 @@ Renderice la página como Markdown con la estrategia de finalización predetermi
 También puede devolver directamente un árbol semántico compacto y fácil de procesar por un modelo:
 
 ```bash
-./target/release/moli fetch \
+moli fetch \
   --dump semantic_tree_text \
   --wait-selector body \
   https://example.com
@@ -87,13 +87,13 @@ Ejecute `fetch --help` para consultar la lista completa de parámetros, incluido
 
 ```bash
 # Servidor de automatización básico para cargas de trabajo que priorizan el DOM
-./target/release/moli serve
+moli serve
 
 # Activar geometría real, entradas por coordenadas y funciones de captura/screencast
-./target/release/moli serve --layout
+moli serve --layout
 
 # Obtener también recursos opcionales de imágenes, fuentes, audio, vídeo, multimedia y pistas de texto
-./target/release/moli serve --layout --resource
+moli serve --layout --resource
 ```
 
 El mismo punto de conexión ofrece los tres protocolos: CDP, WebDriver Classic y WebDriver BiDi. Playwright puede conectarse directamente mediante CDP:

@@ -55,18 +55,18 @@ Moli kann über die CLI, CDP, WebDriver Classic oder WebDriver BiDi genutzt werd
 
 ## Schnellstart
 
-Im Stammverzeichnis des Workspaces bauen:
+Gib deinem KI-Coding-Agenten diese Anweisung:
 
-```bash
-cargo build --release -p moli
-```
+> Installiere die skills unter `https://github.com/lexmount/moli/tree/main/skills`, folge ihren Anweisungen zum Herunterladen und Installieren des neuesten vorkompilierten Moli-Binarys, rufe anschließend mit `moli-webfetch` die Seite `https://example.com` ab und zeige mir das Ergebnis.
+
+## CLI-Verwendung
 
 ### Eine Seite extrahieren
 
 Die Seite mit Molis standardmäßiger Abschlussstrategie als Markdown rendern:
 
 ```bash
-./target/release/moli fetch \
+moli fetch \
   --dump markdown \
   --wait-until done \
   https://example.com
@@ -75,7 +75,7 @@ Die Seite mit Molis standardmäßiger Abschlussstrategie als Markdown rendern:
 Alternativ direkt einen kompakten, modellfreundlichen semantischen Baum zurückgeben:
 
 ```bash
-./target/release/moli fetch \
+moli fetch \
   --dump semantic_tree_text \
   --wait-selector body \
   https://example.com
@@ -87,13 +87,13 @@ Alternativ direkt einen kompakten, modellfreundlichen semantischen Baum zurückg
 
 ```bash
 # Einfacher Automatisierungsserver für DOM-orientierte Workloads
-./target/release/moli serve
+moli serve
 
 # Echte Geometrie, Koordinateneingaben sowie Screenshot-/Screencast-Funktionen aktivieren
-./target/release/moli serve --layout
+moli serve --layout
 
 # Zusätzlich optionale Bild-, Schrift-, Audio-, Video-, Medien- und Textspurressourcen abrufen
-./target/release/moli serve --layout --resource
+moli serve --layout --resource
 ```
 
 Derselbe Endpunkt stellt alle drei Protokolle bereit: CDP, WebDriver Classic und WebDriver BiDi. Playwright kann sich direkt über CDP verbinden:

@@ -55,18 +55,18 @@ Moli 是一款面向 AI 智能体的无头浏览器，采用"按需渲染"的设
 
 ## 快速开始
 
-在工作区根目录下构建：
+把这句话发给你的 AI 编程智能体：
 
-```bash
-cargo build --release -p moli
-```
+> 安装 `https://github.com/lexmount/moli/tree/main/skills` 下面的 skills，根据 skills 指引下载并安装最新版预编译 Moli 二进制，然后用 `moli-webfetch` 抓取 `https://example.com` 并把结果给我。
+
+## CLI 用法
 
 ### 提取页面
 
 使用 Moli 默认的完成策略，将页面渲染为 Markdown：
 
 ```bash
-./target/release/moli fetch \
+moli fetch \
   --dump markdown \
   --wait-until done \
   https://example.com
@@ -75,7 +75,7 @@ cargo build --release -p moli
 也可以直接返回结构紧凑、便于模型处理的语义树：
 
 ```bash
-./target/release/moli fetch \
+moli fetch \
   --dump semantic_tree_text \
   --wait-selector body \
   https://example.com
@@ -87,13 +87,13 @@ cargo build --release -p moli
 
 ```bash
 # 面向 DOM 优先工作负载的基础自动化服务器
-./target/release/moli serve
+moli serve
 
 # 启用真实几何信息、坐标输入以及截图/屏幕串流功能
-./target/release/moli serve --layout
+moli serve --layout
 
 # 同时获取可选的图片、字体、音频、视频、媒体和文本轨道资源
-./target/release/moli serve --layout --resource
+moli serve --layout --resource
 ```
 
 同一个端点会同时提供 CDP、WebDriver Classic 和 WebDriver BiDi 三种协议。Playwright 可以直接通过 CDP 连接：

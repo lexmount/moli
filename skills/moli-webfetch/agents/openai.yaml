@@ -1,0 +1,4 @@
+interface:
+  display_name: "Moli Web Fetch"
+  short_description: "Fetch, research, and capture websites with Moli"
+  default_prompt: "Use $moli-webfetch to fetch this live website and return the most useful text or visual output."

@@ -58,18 +58,18 @@ Use it through the CLI, CDP, WebDriver Classic, or WebDriver BiDi.
 
 ## Quick start
 
-Build from the workspace root:
+Give this prompt to your AI coding agent:
 
-```bash
-cargo build --release -p moli
-```
+> Install the skills under `https://github.com/lexmount/moli/tree/main/skills`, follow their instructions to download and install the latest prebuilt Moli binary, then use `moli-webfetch` to fetch `https://example.com` and show me the result.
+
+## CLI usage
 
 ### Extract a page
 
 Render the page as Markdown with Moli's default completion strategy:
 
 ```bash
-./target/release/moli fetch \
+moli fetch \
   --dump markdown \
   --wait-until done \
   https://example.com
@@ -78,7 +78,7 @@ Render the page as Markdown with Moli's default completion strategy:
 Or directly return a compact, model-friendly semantic tree:
 
 ```bash
-./target/release/moli fetch \
+moli fetch \
   --dump semantic_tree_text \
   --wait-selector body \
   https://example.com
@@ -92,13 +92,13 @@ tracing options.
 
 ```bash
 # Basic automation server for DOM-first workloads
-./target/release/moli serve
+moli serve
 
 # Enable real geometry, coordinate input, and screenshot/screencast surfaces
-./target/release/moli serve --layout
+moli serve --layout
 
 # Also fetch optional image, font, audio, video, media, and text-track resources
-./target/release/moli serve --layout --resource
+moli serve --layout --resource
 ```
 
 The same endpoint serves all three protocols: CDP, WebDriver Classic, and

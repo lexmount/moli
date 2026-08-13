@@ -55,18 +55,18 @@ Utilisez-le via la CLI, CDP, WebDriver Classic ou WebDriver BiDi.
 
 ## Démarrage rapide
 
-Compilez depuis la racine de l'espace de travail :
+Donnez cette instruction à votre agent de programmation IA :
 
-```bash
-cargo build --release -p moli
-```
+> Installe les skills sous `https://github.com/lexmount/moli/tree/main/skills`, suis leurs instructions pour télécharger et installer le dernier binaire Moli précompilé, puis utilise `moli-webfetch` pour récupérer `https://example.com` et montre-moi le résultat.
+
+## Utilisation de la CLI
 
 ### Extraire une page
 
 Effectuez le rendu de la page au format Markdown avec la stratégie d'achèvement par défaut de Moli :
 
 ```bash
-./target/release/moli fetch \
+moli fetch \
   --dump markdown \
   --wait-until done \
   https://example.com
@@ -75,7 +75,7 @@ Effectuez le rendu de la page au format Markdown avec la stratégie d'achèvemen
 Ou renvoyez directement un arbre sémantique compact et adapté aux modèles :
 
 ```bash
-./target/release/moli fetch \
+moli fetch \
   --dump semantic_tree_text \
   --wait-selector body \
   https://example.com
@@ -87,13 +87,13 @@ Exécutez `fetch --help` pour obtenir la liste complète des paramètres, notamm
 
 ```bash
 # Serveur d'automatisation de base pour les charges de travail privilégiant le DOM
-./target/release/moli serve
+moli serve
 
 # Activer la géométrie réelle, les entrées par coordonnées et les fonctions de capture/screencast
-./target/release/moli serve --layout
+moli serve --layout
 
 # Récupérer aussi les ressources facultatives d'image, de police, d'audio, de vidéo, de média et de piste de texte
-./target/release/moli serve --layout --resource
+moli serve --layout --resource
 ```
 
 Le même point de terminaison fournit les trois protocoles : CDP, WebDriver Classic et WebDriver BiDi. Playwright peut s'y connecter directement via CDP :

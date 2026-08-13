@@ -55,18 +55,18 @@ CLI、CDP、WebDriver Classic、または WebDriver BiDi から利用できま�
 
 ## クイックスタート
 
-ワークスペースのルートディレクトリでビルドします。
+次の文を AI コーディングエージェントに渡してください。
 
-```bash
-cargo build --release -p moli
-```
+> `https://github.com/lexmount/moli/tree/main/skills` 以下の skills をインストールし、その指示に従って最新のビルド済み Moli バイナリをダウンロードしてインストールしたうえで、`moli-webfetch` を使って `https://example.com` を取得し、結果を見せてください。
+
+## CLI の使い方
 
 ### ページを抽出する
 
 Moli の標準の完了判定を使い、ページを Markdown としてレンダリングします。
 
 ```bash
-./target/release/moli fetch \
+moli fetch \
   --dump markdown \
   --wait-until done \
   https://example.com
@@ -75,7 +75,7 @@ Moli の標準の完了判定を使い、ページを Markdown としてレン�
 または、構造がコンパクトでモデルが扱いやすいセマンティックツリーを直接返します。
 
 ```bash
-./target/release/moli fetch \
+moli fetch \
   --dump semantic_tree_text \
   --wait-selector body \
   https://example.com
@@ -87,13 +87,13 @@ Moli の標準の完了判定を使い、ページを Markdown としてレン�
 
 ```bash
 # DOM 優先のワークロード向け基本自動化サーバー
-./target/release/moli serve
+moli serve
 
 # 実際のジオメトリ、座標入力、スクリーンショット／スクリーンキャスト機能を有効化
-./target/release/moli serve --layout
+moli serve --layout
 
 # オプションの画像、フォント、音声、動画、メディア、テキストトラックの各リソースも取得
-./target/release/moli serve --layout --resource
+moli serve --layout --resource
 ```
 
 同じエンドポイントが CDP、WebDriver Classic、WebDriver BiDi の 3 つのプロトコルをすべて提供します。Playwright は CDP 経由で直接接続できます。

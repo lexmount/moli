@@ -1,0 +1,4 @@
+interface:
+  display_name: "Moli CDP Server"
+  short_description: "Start Moli and connect CDP automation clients"
+  default_prompt: "Use $moli-cdp-server to start a local Moli CDP server and connect this CDP client."
