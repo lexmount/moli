@@ -607,6 +607,7 @@ impl ResolvedLayoutStyle {
                             | GenericSize::MinContent
                             | GenericSize::MaxContent
                             | GenericSize::FitContent
+                            | GenericSize::FitContentFunction(_)
                             | GenericSize::Stretch
                             | GenericSize::WebkitFillAvailable
                     )
@@ -618,6 +619,7 @@ impl ResolvedLayoutStyle {
                     | GenericMaxSize::MinContent
                     | GenericMaxSize::MaxContent
                     | GenericMaxSize::FitContent
+                    | GenericMaxSize::FitContentFunction(_)
                     | GenericMaxSize::Stretch
                     | GenericMaxSize::WebkitFillAvailable
             );
@@ -1750,6 +1752,9 @@ fn taffy_size_dimension(
         GenericSize::MinContent => taffy::Dimension::min_content(),
         GenericSize::MaxContent => taffy::Dimension::max_content(),
         GenericSize::FitContent => taffy::Dimension::fit_content(),
+        GenericSize::FitContentFunction(limit) => taffy::Dimension::fit_content_function(
+            stylo_taffy::convert::length_percentage(&limit.0),
+        ),
         GenericSize::Stretch | GenericSize::WebkitFillAvailable => taffy::Dimension::stretch(),
         _ => fallback,
     }
@@ -1763,6 +1768,9 @@ fn taffy_max_size_dimension(
         GenericMaxSize::MinContent => taffy::Dimension::min_content(),
         GenericMaxSize::MaxContent => taffy::Dimension::max_content(),
         GenericMaxSize::FitContent => taffy::Dimension::fit_content(),
+        GenericMaxSize::FitContentFunction(limit) => taffy::Dimension::fit_content_function(
+            stylo_taffy::convert::length_percentage(&limit.0),
+        ),
         GenericMaxSize::Stretch | GenericMaxSize::WebkitFillAvailable => {
             taffy::Dimension::stretch()
         }
