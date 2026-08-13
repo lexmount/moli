@@ -954,6 +954,61 @@ td{padding:0;border:0;height:10px}
     }
 
     #[test]
+    fn fixed_table_layout_distributes_first_row_colspan_constraints() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+table{table-layout:fixed;border-spacing:0}td{border:0;padding:0;height:10px}
+#lengths{width:300px}#l0{background:rgb(10,20,30)}#l1{background:rgb(20,30,40)}#l2{background:rgb(30,40,50)}#l3{background:rgb(40,50,60)}
+#percents{width:500px}#p0{background:rgb(50,60,70)}#p1{background:rgb(60,70,80)}#p2{background:rgb(70,80,90)}#p3{background:rgb(80,90,100)}#p4{background:rgb(90,100,110)}
+#priority{width:300px}#c0{background:rgb(100,110,120)}#c1{background:rgb(110,120,130)}#c2{background:rgb(120,130,140)}
+#spacing{width:350px;border-spacing:10px}#s0{background:rgb(130,140,150)}#s1{background:rgb(140,150,160)}#s2{background:rgb(150,160,170)}#s3{background:rgb(160,170,180)}
+</style></head><body>
+<table id=lengths><tr><td colspan=2 style="width:100px"></td><td colspan=2 style="width:200px"></td></tr><tr><td id=l0></td><td id=l1></td><td id=l2></td><td id=l3></td></tr></table>
+<table id=percents><tr><td colspan=2 style="width:40%"></td><td colspan=2 style="width:20%"></td><td style="width:40%"></td></tr><tr><td id=p0></td><td id=p1></td><td id=p2></td><td id=p3></td><td id=p4></td></tr></table>
+<table id=priority><col style="width:80px"><col><col><tr><td colspan=2 style="width:200px"></td><td></td></tr><tr><td id=c0></td><td id=c1></td><td id=c2></td></tr></table>
+<table id=spacing><tr><td colspan=2 style="width:110px"></td><td colspan=2 style="width:210px"></td></tr><tr><td id=s0></td><td id=s1></td><td id=s2></td><td id=s3></td></tr></table>
+</body></html>"#,
+            )
+            .await;
+
+            // These values are Chromium's fixed-table constraint geometry.
+            // Wide first-row cells contribute one constraint that is divided
+            // over their tracks; explicit columns retain priority, and inner
+            // border-spacing is removed before division.
+            for (color, expected) in [
+                (rgb(10, 20, 30), (0.0, 10.0, 50.0)),
+                (rgb(20, 30, 40), (50.0, 10.0, 50.0)),
+                (rgb(30, 40, 50), (100.0, 10.0, 100.0)),
+                (rgb(40, 50, 60), (200.0, 10.0, 100.0)),
+                (rgb(50, 60, 70), (0.0, 30.0, 100.0)),
+                (rgb(60, 70, 80), (100.0, 30.0, 100.0)),
+                (rgb(70, 80, 90), (200.0, 30.0, 50.0)),
+                (rgb(80, 90, 100), (250.0, 30.0, 50.0)),
+                (rgb(90, 100, 110), (300.0, 30.0, 200.0)),
+                (rgb(100, 110, 120), (0.0, 50.0, 80.0)),
+                (rgb(110, 120, 130), (80.0, 50.0, 100.0)),
+                (rgb(120, 130, 140), (180.0, 50.0, 120.0)),
+                (rgb(130, 140, 150), (10.0, 90.0, 50.0)),
+                (rgb(140, 150, 160), (70.0, 90.0, 50.0)),
+                (rgb(150, 160, 170), (130.0, 90.0, 100.0)),
+                (rgb(160, 170, 180), (240.0, 90.0, 100.0)),
+            ] {
+                assert_paint_rect(
+                    solid_paint_rect(&snapshot, color),
+                    moli_layout::PaintRect::new(expected.0, expected.1, expected.2, 10.0),
+                );
+            }
+        }));
+    }
+
+    #[test]
     fn fixed_table_layout_grows_to_its_definite_column_minimum() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()

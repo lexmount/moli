@@ -26,7 +26,10 @@ mod columns;
 
 pub(crate) use collapsed_borders::CollapsedTableBorders;
 use collapsed_borders::{prepare_collapsed_table_borders, set_collapsed_border_geometry};
-use columns::{TableColumnConstraint, distribute_fixed_columns, fixed_grid_min_inline_size};
+use columns::{
+    TableCellInlineConstraint, TableCellSpanConstraint, TableColumnConstraint,
+    distribute_fixed_cell_spans, distribute_fixed_columns, fixed_grid_min_inline_size,
+};
 
 #[derive(Clone)]
 struct TableCell {
@@ -52,6 +55,66 @@ struct TableColumn {
     group: Option<LayoutBoxId>,
     start: usize,
     span: usize,
+}
+
+/// Direct table children grouped by their CSS table role.
+///
+/// A table's first header and footer groups have a visual position independent
+/// of tree order. Keeping this grouping as a first-class input ensures row
+/// placement, first-row column constraints, and structural box geometry all
+/// consume the same section order.
+#[derive(Default)]
+struct TableGroupedChildren {
+    captions: Vec<LayoutBoxId>,
+    columns: Vec<LayoutBoxId>,
+    header: Option<LayoutBoxId>,
+    bodies: Vec<LayoutBoxId>,
+    footer: Option<LayoutBoxId>,
+}
+
+impl TableGroupedChildren {
+    fn collect<N>(world: &LayoutWorld<N>, root: LayoutBoxId) -> Self
+    where
+        N: Copy + Debug + Eq + Hash,
+    {
+        let mut grouped = Self::default();
+        for child in world.boxes[root.index()].children.iter().copied() {
+            match world.boxes[child.index()].kind {
+                LayoutBoxKind::TableCaption => grouped.captions.push(child),
+                LayoutBoxKind::TableColumnGroup | LayoutBoxKind::TableColumn => {
+                    grouped.columns.push(child)
+                }
+                LayoutBoxKind::TableHeaderGroup => {
+                    if grouped.header.is_none() {
+                        grouped.header = Some(child);
+                    } else {
+                        grouped.bodies.push(child);
+                    }
+                }
+                LayoutBoxKind::TableRowGroup
+                | LayoutBoxKind::AnonymousTableRowGroup
+                | LayoutBoxKind::TableRow
+                | LayoutBoxKind::AnonymousTableRow => grouped.bodies.push(child),
+                LayoutBoxKind::TableFooterGroup => {
+                    if grouped.footer.is_none() {
+                        grouped.footer = Some(child);
+                    } else {
+                        grouped.bodies.push(child);
+                    }
+                }
+                _ => {}
+            }
+        }
+        grouped
+    }
+
+    fn sections(&self) -> impl Iterator<Item = LayoutBoxId> + '_ {
+        self.header
+            .iter()
+            .copied()
+            .chain(self.bodies.iter().copied())
+            .chain(self.footer.iter().copied())
+    }
 }
 
 struct TableContext {
@@ -234,14 +297,20 @@ where
     style.grid_auto_columns.clear();
     style.grid_auto_rows.clear();
 
+    let grouped_children = TableGroupedChildren::collect(world, root);
     let mut cells = Vec::new();
     let mut rows = Vec::new();
     let mut columns = Vec::new();
-    let mut captions = Vec::new();
     let mut max_columns = 0usize;
     let mut column_tracks = Vec::new();
-    collect_columns(world, root, None, &mut columns, &mut column_tracks);
-    collect_rows(world, root, None, &mut rows, &mut cells);
+    let mut cell_span_constraints = Vec::new();
+    let fixed_layout = root_style.table_layout_is_fixed();
+    for column in grouped_children.columns.iter().copied() {
+        collect_columns(world, column, None, &mut columns, &mut column_tracks);
+    }
+    for section in grouped_children.sections() {
+        collect_rows(world, section, None, &mut rows, &mut cells);
+    }
     place_table_cells(&mut cells, &rows, &mut max_columns);
     for cell in &mut cells {
         cell.style.grid_column = Line {
@@ -252,15 +321,19 @@ where
             start: style_helpers::line((cell.row + 1).min(i16::MAX as usize) as i16),
             end: style_helpers::span(cell.row_span as u16),
         };
-        if cell.row == 0 && cell.column_span == 1 {
-            if cell.column >= column_tracks.len() {
-                column_tracks.resize(cell.column + 1, TableColumnConstraint::auto());
-            }
-            // An explicit <col>/<colgroup> width wins over the first-row
-            // cell width in the fixed table algorithm.
-            if column_tracks[cell.column].is_auto() {
-                column_tracks[cell.column] =
-                    table_cell_width_track(&cell.style, root_style.table_layout_is_fixed());
+        if cell.row == 0 {
+            let inline_constraint = table_cell_inline_constraint(&cell.style, fixed_layout);
+            if cell.column_span == 1 {
+                if cell.column >= column_tracks.len() {
+                    column_tracks.resize(cell.column + 1, TableColumnConstraint::auto());
+                }
+                column_tracks[cell.column].encompass_first_row_cell(inline_constraint);
+            } else if fixed_layout {
+                cell_span_constraints.push(TableCellSpanConstraint {
+                    start_column: cell.column,
+                    span: cell.column_span,
+                    cell: inline_constraint,
+                });
             }
         }
         cell.style.size.width = Dimension::auto();
@@ -272,10 +345,15 @@ where
         }
         cell.style.size.height = Dimension::auto();
     }
-    collect_captions(world, root, &mut captions);
     max_columns = max_columns.max(column_tracks.len()).max(1);
     column_tracks.resize(max_columns, TableColumnConstraint::auto());
-    let fixed_layout = root_style.table_layout_is_fixed();
+    if fixed_layout {
+        distribute_fixed_cell_spans(
+            &mut column_tracks,
+            &mut cell_span_constraints,
+            spacing.width,
+        );
+    }
     style.grid_template_columns = column_tracks
         .iter()
         .copied()
@@ -306,7 +384,7 @@ where
         cells,
         rows,
         columns,
-        captions,
+        captions: grouped_children.captions,
         detailed: None,
         collapsed_borders: collapsed,
         column_count: max_columns,
@@ -417,17 +495,6 @@ impl TableContext {
     }
 }
 
-fn collect_captions<N>(world: &LayoutWorld<N>, root: LayoutBoxId, output: &mut Vec<LayoutBoxId>)
-where
-    N: Copy + Debug + Eq + Hash,
-{
-    for child in world.boxes[root.index()].children.iter().copied() {
-        if world.boxes[child.index()].kind == LayoutBoxKind::TableCaption {
-            output.push(child);
-        }
-    }
-}
-
 fn collect_columns<N>(
     world: &LayoutWorld<N>,
     current: LayoutBoxId,
@@ -437,37 +504,37 @@ fn collect_columns<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    for child in world.boxes[current.index()].children.iter().copied() {
-        match world.boxes[child.index()].kind {
-            LayoutBoxKind::TableColumnGroup => {
-                let before = tracks.len();
-                collect_columns(world, child, Some(child), columns, tracks);
-                if tracks.len() == before {
-                    let span = table_data(world, child).span.max(1) as usize;
-                    let track = dimension_track(world.boxes[child.index()].style.taffy.size.width);
-                    tracks.extend(std::iter::repeat_n(track, span));
-                    columns.push(TableColumn {
-                        id: child,
-                        group: None,
-                        start: before,
-                        span,
-                    });
-                }
+    match world.boxes[current.index()].kind {
+        LayoutBoxKind::TableColumnGroup => {
+            let before = tracks.len();
+            for child in world.boxes[current.index()].children.iter().copied() {
+                collect_columns(world, child, Some(current), columns, tracks);
             }
-            LayoutBoxKind::TableColumn => {
-                let span = table_data(world, child).span.max(1) as usize;
-                let start = tracks.len();
-                let track = dimension_track(world.boxes[child.index()].style.taffy.size.width);
+            if tracks.len() == before {
+                let span = table_data(world, current).span.max(1) as usize;
+                let track = dimension_track(world.boxes[current.index()].style.taffy.size.width);
                 tracks.extend(std::iter::repeat_n(track, span));
                 columns.push(TableColumn {
-                    id: child,
-                    group,
-                    start,
+                    id: current,
+                    group: None,
+                    start: before,
                     span,
                 });
             }
-            _ => {}
         }
+        LayoutBoxKind::TableColumn => {
+            let span = table_data(world, current).span.max(1) as usize;
+            let start = tracks.len();
+            let track = dimension_track(world.boxes[current.index()].style.taffy.size.width);
+            tracks.extend(std::iter::repeat_n(track, span));
+            columns.push(TableColumn {
+                id: current,
+                group,
+                start,
+                span,
+            });
+        }
+        _ => {}
     }
 }
 
@@ -480,48 +547,48 @@ fn collect_rows<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    for child in world.boxes[current.index()].children.iter().copied() {
-        match world.boxes[child.index()].kind {
-            LayoutBoxKind::TableRowGroup
-            | LayoutBoxKind::TableHeaderGroup
-            | LayoutBoxKind::TableFooterGroup
-            | LayoutBoxKind::AnonymousTableRowGroup => {
-                collect_rows(world, child, Some(child), rows, cells)
+    match world.boxes[current.index()].kind {
+        LayoutBoxKind::TableRowGroup
+        | LayoutBoxKind::TableHeaderGroup
+        | LayoutBoxKind::TableFooterGroup
+        | LayoutBoxKind::AnonymousTableRowGroup => {
+            for child in world.boxes[current.index()].children.iter().copied() {
+                collect_rows(world, child, Some(current), rows, cells);
             }
-            LayoutBoxKind::TableRow | LayoutBoxKind::AnonymousTableRow => {
-                let row_index = rows.len();
-                rows.push(TableRow {
-                    id: child,
-                    group,
-                    index: row_index,
-                    track: minimum_dimension_track(
-                        world.boxes[child.index()].style.taffy.size.height,
-                    ),
-                });
-                for cell in world.boxes[child.index()].children.iter().copied() {
-                    if !matches!(
-                        world.boxes[cell.index()].kind,
-                        LayoutBoxKind::TableCell | LayoutBoxKind::AnonymousTableCell
-                    ) {
-                        continue;
-                    }
-                    let data = table_data(world, cell);
-                    let column_span = usize::from(data.column_span.max(1));
-                    let row_span = usize::from(data.row_span.max(1));
-                    let mut cell_style = world.boxes[cell.index()].style.taffy.clone();
-                    cell_style.margin = Rect::ZERO.map(style_helpers::length);
-                    cells.push(TableCell {
-                        id: cell,
-                        style: cell_style,
-                        row: row_index,
-                        column: 0,
-                        row_span,
-                        column_span,
-                    });
-                }
-            }
-            _ => {}
         }
+        LayoutBoxKind::TableRow | LayoutBoxKind::AnonymousTableRow => {
+            let row_index = rows.len();
+            rows.push(TableRow {
+                id: current,
+                group,
+                index: row_index,
+                track: minimum_dimension_track(
+                    world.boxes[current.index()].style.taffy.size.height,
+                ),
+            });
+            for cell in world.boxes[current.index()].children.iter().copied() {
+                if !matches!(
+                    world.boxes[cell.index()].kind,
+                    LayoutBoxKind::TableCell | LayoutBoxKind::AnonymousTableCell
+                ) {
+                    continue;
+                }
+                let data = table_data(world, cell);
+                let column_span = usize::from(data.column_span.max(1));
+                let row_span = usize::from(data.row_span.max(1));
+                let mut cell_style = world.boxes[cell.index()].style.taffy.clone();
+                cell_style.margin = Rect::ZERO.map(style_helpers::length);
+                cells.push(TableCell {
+                    id: cell,
+                    style: cell_style,
+                    row: row_index,
+                    column: 0,
+                    row_span,
+                    column_span,
+                });
+            }
+        }
+        _ => {}
     }
 }
 
@@ -584,7 +651,7 @@ fn dimension_track(dimension: Dimension) -> TableColumnConstraint {
     match dimension.tag() {
         taffy::CompactLength::LENGTH_TAG => TableColumnConstraint::length(dimension.value()),
         taffy::CompactLength::PERCENT_TAG => TableColumnConstraint::percent(dimension.value(), 0.0),
-        _ => TableColumnConstraint::auto(),
+        _ => TableColumnConstraint::explicit_auto(),
     }
 }
 
@@ -602,7 +669,7 @@ fn minimum_dimension_track(dimension: Dimension) -> taffy::TrackSizingFunction {
     }
 }
 
-fn table_cell_width_track(style: &Style<Atom>, fixed: bool) -> TableColumnConstraint {
+fn table_cell_inline_constraint(style: &Style<Atom>, fixed: bool) -> TableCellInlineConstraint {
     match style.size.width.tag() {
         taffy::CompactLength::LENGTH_TAG => {
             let padding = style
@@ -615,7 +682,7 @@ fn table_cell_width_track(style: &Style<Atom>, fixed: bool) -> TableColumnConstr
             } else {
                 style.size.width.value().max(border_padding)
             };
-            TableColumnConstraint::length(outer_width)
+            TableCellInlineConstraint::length(outer_width)
         }
         taffy::CompactLength::PERCENT_TAG if fixed => {
             let border_padding = if style.box_sizing == taffy::BoxSizing::ContentBox {
@@ -627,9 +694,9 @@ fn table_cell_width_track(style: &Style<Atom>, fixed: bool) -> TableColumnConstr
             } else {
                 0.0
             };
-            TableColumnConstraint::percent(style.size.width.value(), border_padding)
+            TableCellInlineConstraint::percent(style.size.width.value(), border_padding)
         }
-        _ => TableColumnConstraint::auto(),
+        _ => TableCellInlineConstraint::auto(),
     }
 }
 

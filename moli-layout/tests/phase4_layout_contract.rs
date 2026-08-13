@@ -317,6 +317,110 @@ fn table_caption_tracks_rows_cells_and_common_spans_share_one_wrapper_geometry()
 }
 
 #[test]
+fn table_sections_use_visual_header_body_footer_order() {
+    use LayoutElementCategory::Table;
+    use LayoutTableRole::{BodyGroup, Cell, FooterGroup, HeaderGroup, Row, Table as Root};
+
+    let cell = |label| {
+        Node::element(label, "td", Table(Cell), None, Vec::new()).with_metadata(
+            LayoutElementMetadata {
+                table: Some(LayoutTableData::default()),
+                ..LayoutElementMetadata::default()
+            },
+        )
+    };
+    // Deliberately place tbody and tfoot before thead in tree order. CSS table
+    // layout promotes the first header group before all bodies and the first
+    // footer group after them.
+    let source = Source(vec![
+        Node::element("root", "div", LayoutElementCategory::Generic, None, vec![1]),
+        Node::element("table", "table", Table(Root), None, vec![2, 6, 10]),
+        Node::element("body", "tbody", Table(BodyGroup), None, vec![3]),
+        Node::element("body-row", "tr", Table(Row), None, vec![4, 5]),
+        cell("body-a"),
+        cell("body-b"),
+        Node::element("footer", "tfoot", Table(FooterGroup), None, vec![7]),
+        Node::element("footer-row", "tr", Table(Row), None, vec![8, 9]),
+        cell("footer-a"),
+        cell("footer-b"),
+        Node::element("header", "thead", Table(HeaderGroup), None, vec![11]),
+        Node::element("header-row", "tr", Table(Row), None, vec![12, 13]),
+        cell("header-a"),
+        cell("header-b"),
+    ]);
+    let body_a = PaintColor::new(0.11, 0.12, 0.13, 1.0);
+    let body_b = PaintColor::new(0.21, 0.22, 0.23, 1.0);
+    let footer_a = PaintColor::new(0.31, 0.32, 0.33, 1.0);
+    let footer_b = PaintColor::new(0.41, 0.42, 0.43, 1.0);
+    let header_a = PaintColor::new(0.51, 0.52, 0.53, 1.0);
+    let header_b = PaintColor::new(0.61, 0.62, 0.63, 1.0);
+    let mut styles = Styles::default();
+    styles.primary.insert(
+        0,
+        sized(LayoutDisplay::Block, 200.0, 100.0, PaintColor::TRANSPARENT),
+    );
+    styles.primary.insert(
+        1,
+        sized(LayoutDisplay::Table, 100.0, 30.0, PaintColor::TRANSPARENT),
+    );
+    styles.primary.insert(
+        2,
+        style(LayoutDisplay::TableRowGroup, PaintColor::TRANSPARENT),
+    );
+    styles
+        .primary
+        .insert(3, style(LayoutDisplay::TableRow, PaintColor::TRANSPARENT));
+    styles
+        .primary
+        .insert(4, sized(LayoutDisplay::TableCell, 20.0, 10.0, body_a));
+    styles
+        .primary
+        .insert(5, sized(LayoutDisplay::TableCell, 80.0, 10.0, body_b));
+    styles.primary.insert(
+        6,
+        style(LayoutDisplay::TableFooterGroup, PaintColor::TRANSPARENT),
+    );
+    styles
+        .primary
+        .insert(7, style(LayoutDisplay::TableRow, PaintColor::TRANSPARENT));
+    styles
+        .primary
+        .insert(8, sized(LayoutDisplay::TableCell, 50.0, 10.0, footer_a));
+    styles
+        .primary
+        .insert(9, sized(LayoutDisplay::TableCell, 50.0, 10.0, footer_b));
+    styles.primary.insert(
+        10,
+        style(LayoutDisplay::TableHeaderGroup, PaintColor::TRANSPARENT),
+    );
+    styles
+        .primary
+        .insert(11, style(LayoutDisplay::TableRow, PaintColor::TRANSPARENT));
+    styles
+        .primary
+        .insert(12, sized(LayoutDisplay::TableCell, 75.0, 10.0, header_a));
+    styles
+        .primary
+        .insert(13, sized(LayoutDisplay::TableCell, 25.0, 10.0, header_b));
+
+    let snapshot = render(&source, &mut styles, 200, 100);
+    for (color, expected) in [
+        (header_a, (0.0, 0.0, 75.0)),
+        (header_b, (75.0, 0.0, 25.0)),
+        (body_a, (0.0, 10.0, 75.0)),
+        (body_b, (75.0, 10.0, 25.0)),
+        (footer_a, (0.0, 20.0, 75.0)),
+        (footer_b, (75.0, 20.0, 25.0)),
+    ] {
+        let actual = rect(&snapshot, color);
+        assert_close(actual.x, expected.0);
+        assert_close(actual.y, expected.1);
+        assert_close(actual.width, expected.2);
+        assert_close(actual.height, 10.0);
+    }
+}
+
+#[test]
 fn left_float_restricts_inline_slots_and_clear_moves_the_next_block_below_it() {
     let source = Source(vec![
         Node::element(
