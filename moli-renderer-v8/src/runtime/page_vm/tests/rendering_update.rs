@@ -1585,6 +1585,80 @@ document.body.innerHTML = `
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn stretch_sizing_uses_each_formatting_contexts_available_area() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/stretch-sizing.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0}.case{position:absolute;width:100px}.target{display:block;width:20px}
+#block{left:0;top:0;height:100px;display:flow-root}#block-target{height:stretch;margin:10px}
+#ratio{left:200px;top:0;height:100px}#ratio-target{width:auto;height:stretch;aspect-ratio:2}
+#flex{left:0;top:150px;height:50px;display:flex;flex-flow:row wrap}
+#flex-target{box-sizing:content-box;height:55px;max-height:stretch;margin-block:2px 3px;padding:2px;border:3px solid}
+#flex-sibling{width:20px;height:60px}
+#grid-fixed{left:200px;top:150px;height:100px;display:grid;grid-template-rows:100px}
+#grid-auto{left:400px;top:150px;height:100px;display:grid}
+.grid-target{height:120px;max-height:stretch}
+#absolute{left:600px;top:150px;height:50px;padding-block:5px;box-sizing:content-box;position:absolute}
+#absolute-target{position:absolute;inset-block-start:10px;box-sizing:content-box;height:55px;max-height:stretch;margin-block:2px 3px;padding:2px;border:3px solid}
+</style>`;
+document.body.innerHTML = `
+<div id=block class=case><div id=block-target class=target></div></div>
+<div id=ratio class=case><div id=ratio-target></div></div>
+<div id=flex class=case><div id=flex-target class=target></div><div id=flex-sibling></div></div>
+<div id=grid-fixed class=case><div id=grid-fixed-target class="target grid-target"></div></div>
+<div id=grid-auto class=case><div id=grid-auto-target class="target grid-target"></div></div>
+<div id=absolute class=case><div id=absolute-target class=target></div></div>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+
+        let ids = [
+            "block-target",
+            "ratio-target",
+            "flex-target",
+            "grid-fixed-target",
+            "grid-auto-target",
+            "absolute-target",
+        ];
+        let geometry = page_vm.vm_mut().eval(&format!(
+            "JSON.stringify(Object.fromEntries({ids:?}.map(id=>{{const r=document.getElementById(id).getBoundingClientRect();return [id,[r.width,r.height]]}})))"
+        ))?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        for (id, expected) in [
+            ("block-target", [20.0, 80.0]),
+            ("ratio-target", [200.0, 100.0]),
+            ("flex-target", [30.0, 55.0]),
+            ("grid-fixed-target", [20.0, 100.0]),
+            ("grid-auto-target", [20.0, 120.0]),
+            ("absolute-target", [30.0, 45.0]),
+        ] {
+            let actual = geometry[id]
+                .as_array()
+                .unwrap_or_else(|| panic!("missing geometry for {id}: {geometry}"));
+            for (index, expected) in expected.into_iter().enumerate() {
+                let actual = actual[index].as_f64().expect("numeric geometry") as f32;
+                assert!(
+                    (actual - expected).abs() <= 0.05,
+                    "{id}[{index}]: expected {expected}, got {actual}; geometry={geometry}"
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("stretch sizing fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_resolves_collapsed_table_borders_with_chromium_geometry_and_pixels() {
     run_page_vm_async_test(async move {
         let loader =
