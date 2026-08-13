@@ -736,10 +736,10 @@ html, body { display: block; margin: 0; padding: 0 }
                 diagnostic.code != "positioned-static-position-deferred"
                     || !diagnostic.message.contains("div#auto-static")
             }));
-            assert!(snapshot.diagnostics.iter().any(|diagnostic| {
-                diagnostic.code == "intrinsic-sizing-keyword-deferred"
-                    && diagnostic.message.contains("div#intrinsic")
-            }));
+            assert!(snapshot
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.code != "anchor-sizing-deferred"));
             assert!(snapshot
                 .diagnostics
                 .iter()
@@ -1528,7 +1528,7 @@ td{border:0;padding:0;height:10px}
     }
 
     #[test]
-    fn fixed_table_layout_grows_to_its_definite_column_minimum() {
+    fn fixed_table_layout_honors_grid_min_for_overconstrained_length_columns() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -1543,9 +1543,15 @@ col{width:200px}td{padding:0;border:0;height:10px}
 #first{background:rgb(81,82,83)}#second{background:rgb(91,92,93)}
 #collapsed{border-collapse:collapse}
 #collapsed-first{background:rgb(171,172,173)}#collapsed-second{background:rgb(181,182,183)}
+#max-clamped{width:500px;max-width:300px}
+#max-first{background:rgb(201,202,203)}#max-second{background:rgb(211,212,213)}
+#authored-min{width:100px;min-width:500px}
+#min-first{background:rgb(221,222,223)}#min-second{background:rgb(231,232,233)}
 </style></head><body>
 <table><col><col><tr><td id=first></td><td id=second></td></tr></table>
 <table id=collapsed><col><col><tr><td id=collapsed-first></td><td id=collapsed-second></td></tr></table>
+<table id=max-clamped><col><col><tr><td id=max-first></td><td id=max-second></td></tr></table>
+<table id=authored-min><col><col><tr><td id=min-first></td><td id=min-second></td></tr></table>
 </body></html>"#,
             )
             .await;
@@ -1565,6 +1571,24 @@ col{width:200px}td{padding:0;border:0;height:10px}
             assert_paint_rect(
                 solid_paint_rect(&snapshot, rgb(181, 182, 183)),
                 moli_layout::PaintRect::new(200.0, 10.0, 200.0, 10.0),
+            );
+            // Chromium 147 applies GRID_MIN after max-width, while retaining
+            // an authored min-width as another lower bound.
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(201, 202, 203)),
+                moli_layout::PaintRect::new(0.0, 20.0, 200.0, 10.0),
+            );
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(211, 212, 213)),
+                moli_layout::PaintRect::new(200.0, 20.0, 200.0, 10.0),
+            );
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(221, 222, 223)),
+                moli_layout::PaintRect::new(0.0, 30.0, 250.0, 10.0),
+            );
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(231, 232, 233)),
+                moli_layout::PaintRect::new(250.0, 30.0, 250.0, 10.0),
             );
         }));
     }
