@@ -9,8 +9,7 @@ use taffy::{
     LayoutOutput, LayoutPartialTree, Line, MaybeMath, MaybeResolve, NodeId, Point, ResolveOrZero,
     RoundTree, RunMode, Size, SizingMode, SizingPurpose, Style, TraversePartialTree, TraverseTree,
     compute_block_layout, compute_cached_layout, compute_flexbox_layout, compute_grid_layout,
-    compute_hidden_layout, compute_leaf_layout, compute_root_layout,
-    round_layout_with_scale_factor,
+    compute_hidden_layout, compute_leaf_layout, compute_root_layout, round_layout,
 };
 
 use crate::{
@@ -82,7 +81,7 @@ where
     finish_form_control_contents(world);
     finish_outside_list_markers(world);
     finish_sticky_positioning(world, viewport);
-    round_layout_with_scale_factor(world, root, LAYOUT_SUBPIXELS_PER_CSS_PIXEL);
+    round_layout_to_css_subpixels(world, root);
     // Outside markers deliberately are not numeric children of the list item,
     // otherwise Taffy would allocate them a normal-flow row. Round each
     // detached numeric root explicitly so paint consumes the geometry written
@@ -92,7 +91,77 @@ where
         .filter(|id| world.boxes[id.index()].outside_list_marker)
         .collect::<Vec<_>>();
     for marker in outside_markers {
-        round_layout_with_scale_factor(world, marker.to_taffy(), LAYOUT_SUBPIXELS_PER_CSS_PIXEL);
+        round_layout_to_css_subpixels(world, marker.to_taffy());
+    }
+}
+
+/// Quantize final browser geometry without teaching Taffy about CSS layout
+/// units. Taffy's public rounding pass operates on an abstract integer grid;
+/// this adapter presents one CSS pixel as 64 such units and converts the
+/// result back at the ownership boundary.
+fn round_layout_to_css_subpixels(tree: &mut impl RoundTree, root: NodeId) {
+    let mut scaled = CssSubpixelRoundTree { tree };
+    round_layout(&mut scaled, root);
+}
+
+struct CssSubpixelRoundTree<'a, Tree>
+where
+    Tree: RoundTree + ?Sized,
+{
+    tree: &'a mut Tree,
+}
+
+impl<Tree> TraversePartialTree for CssSubpixelRoundTree<'_, Tree>
+where
+    Tree: RoundTree + ?Sized,
+{
+    type ChildIter<'a>
+        = Tree::ChildIter<'a>
+    where
+        Self: 'a;
+
+    fn child_ids(&self, parent_node_id: NodeId) -> Self::ChildIter<'_> {
+        self.tree.child_ids(parent_node_id)
+    }
+
+    fn child_count(&self, parent_node_id: NodeId) -> usize {
+        self.tree.child_count(parent_node_id)
+    }
+
+    fn get_child_id(&self, parent_node_id: NodeId, child_index: usize) -> NodeId {
+        self.tree.get_child_id(parent_node_id, child_index)
+    }
+}
+
+impl<Tree> TraverseTree for CssSubpixelRoundTree<'_, Tree> where Tree: RoundTree + ?Sized {}
+
+impl<Tree> RoundTree for CssSubpixelRoundTree<'_, Tree>
+where
+    Tree: RoundTree + ?Sized,
+{
+    fn get_unrounded_layout(&self, node_id: NodeId) -> Layout {
+        scale_layout(
+            self.tree.get_unrounded_layout(node_id),
+            LAYOUT_SUBPIXELS_PER_CSS_PIXEL,
+        )
+    }
+
+    fn set_final_layout(&mut self, node_id: NodeId, layout: &Layout) {
+        let css_layout = scale_layout(*layout, 1.0 / LAYOUT_SUBPIXELS_PER_CSS_PIXEL);
+        self.tree.set_final_layout(node_id, &css_layout);
+    }
+}
+
+fn scale_layout(layout: Layout, factor: f32) -> Layout {
+    Layout {
+        location: layout.location.map(|value| value * factor),
+        size: layout.size.map(|value| value * factor),
+        content_size: layout.content_size.map(|value| value * factor),
+        scrollbar_size: layout.scrollbar_size.map(|value| value * factor),
+        border: layout.border.map(|value| value * factor),
+        padding: layout.padding.map(|value| value * factor),
+        margin: layout.margin.map(|value| value * factor),
+        ..layout
     }
 }
 
@@ -2238,8 +2307,80 @@ fn inline_percentage_basis(
 
 #[cfg(test)]
 mod tests {
-    use super::inline_percentage_basis;
-    use taffy::{AvailableSpace, SizingPurpose};
+    use super::{inline_percentage_basis, round_layout_to_css_subpixels};
+    use taffy::{
+        AvailableSpace, Layout, NodeId, Point, RoundTree, Size, SizingPurpose, TraversePartialTree,
+        TraverseTree,
+    };
+
+    struct RoundNode {
+        children: Vec<NodeId>,
+        unrounded: Layout,
+        final_layout: Layout,
+    }
+
+    struct TestRoundTree(Vec<RoundNode>);
+
+    impl TraversePartialTree for TestRoundTree {
+        type ChildIter<'a> = std::iter::Copied<std::slice::Iter<'a, NodeId>>;
+
+        fn child_ids(&self, parent_node_id: NodeId) -> Self::ChildIter<'_> {
+            self.0[usize::from(parent_node_id)].children.iter().copied()
+        }
+
+        fn child_count(&self, parent_node_id: NodeId) -> usize {
+            self.0[usize::from(parent_node_id)].children.len()
+        }
+
+        fn get_child_id(&self, parent_node_id: NodeId, child_index: usize) -> NodeId {
+            self.0[usize::from(parent_node_id)].children[child_index]
+        }
+    }
+
+    impl TraverseTree for TestRoundTree {}
+
+    impl RoundTree for TestRoundTree {
+        fn get_unrounded_layout(&self, node_id: NodeId) -> Layout {
+            self.0[usize::from(node_id)].unrounded
+        }
+
+        fn set_final_layout(&mut self, node_id: NodeId, layout: &Layout) {
+            self.0[usize::from(node_id)].final_layout = *layout;
+        }
+    }
+
+    #[test]
+    fn css_subpixel_adapter_preserves_cumulative_edge_rounding() {
+        let root = NodeId::new(0);
+        let child = NodeId::new(1);
+        let layout = |x, width| Layout {
+            location: Point { x, y: 0.0 },
+            size: Size {
+                width,
+                height: 10.0,
+            },
+            ..Layout::with_order(0)
+        };
+        let mut tree = TestRoundTree(vec![
+            RoundNode {
+                children: vec![child],
+                unrounded: layout(0.2, 100.3),
+                final_layout: Layout::with_order(0),
+            },
+            RoundNode {
+                children: Vec::new(),
+                unrounded: layout(0.333, 10.333),
+                final_layout: Layout::with_order(0),
+            },
+        ]);
+
+        round_layout_to_css_subpixels(&mut tree, root);
+
+        assert_eq!(tree.0[0].final_layout.location.x, 0.203_125);
+        assert_eq!(tree.0[0].final_layout.size.width, 100.296_875);
+        assert_eq!(tree.0[1].final_layout.location.x, 0.328_125);
+        assert_eq!(tree.0[1].final_layout.size.width, 10.328_125);
+    }
 
     #[test]
     fn intrinsic_inline_percentages_use_a_zero_basis() {
