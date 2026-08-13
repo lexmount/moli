@@ -8,8 +8,8 @@
 use std::{fmt::Debug, hash::Hash};
 
 use taffy::{
-    AvailableSpace, LayoutInput, LayoutOutput, LayoutPartialTree, RequestedAxis, RunMode, Size,
-    SizingPurpose,
+    AvailableSpace, IntrinsicSizeResult, LayoutInput, LayoutOutput, LayoutPartialTree,
+    RequestedAxis, RunMode, Size, SizingPurpose,
 };
 
 use crate::{LayoutBoxId, LayoutDisplay, LayoutWorld};
@@ -42,14 +42,14 @@ where
             ..inputs
         };
         let min_content = self
-            .compute_child_layout(
+            .compute_child_size(
                 child.to_taffy(),
                 intrinsic_input(AvailableSpace::MinContent),
             )
             .size
             .width;
         let max_content = self
-            .compute_child_layout(
+            .compute_child_size(
                 child.to_taffy(),
                 intrinsic_input(AvailableSpace::MaxContent),
             )
@@ -74,6 +74,30 @@ where
         inputs: LayoutInput,
         horizontal_margin: f32,
     ) -> LayoutOutput {
+        let inputs = self.resolve_atomic_inline_inputs(child, inputs, horizontal_margin);
+        self.compute_child_layout(child.to_taffy(), inputs)
+    }
+
+    /// Measure one non-replaced atomic inline-level box while retaining
+    /// intrinsic sizing provenance from its formatting context.
+    pub(crate) fn compute_atomic_inline_size(
+        &mut self,
+        child: LayoutBoxId,
+        inputs: LayoutInput,
+        horizontal_margin: f32,
+    ) -> IntrinsicSizeResult {
+        let inputs = self.resolve_atomic_inline_inputs(child, inputs, horizontal_margin);
+        self.compute_child_size(child.to_taffy(), inputs)
+    }
+
+    /// Resolve the fit-content border-box width shared by the layout and
+    /// intrinsic-sizing protocols for an atomic inline box.
+    fn resolve_atomic_inline_inputs(
+        &mut self,
+        child: LayoutBoxId,
+        inputs: LayoutInput,
+        horizontal_margin: f32,
+    ) -> LayoutInput {
         let layout_box = &self.boxes[child.index()];
         let uses_fit_content = !layout_box.is_replaced()
             && layout_box.style.taffy.size.width.is_auto()
@@ -86,10 +110,10 @@ where
                     | LayoutDisplay::InlineTable
             );
         let AvailableSpace::Definite(available_width) = inputs.available_space.width else {
-            return self.compute_child_layout(child.to_taffy(), inputs);
+            return inputs;
         };
         if !uses_fit_content {
-            return self.compute_child_layout(child.to_taffy(), inputs);
+            return inputs;
         }
 
         let intrinsic_inputs = LayoutInput {
@@ -111,13 +135,10 @@ where
             height: inputs.definite_dimensions.height,
         };
 
-        self.compute_child_layout(
-            child.to_taffy(),
-            LayoutInput {
-                known_dimensions,
-                definite_dimensions,
-                ..inputs
-            },
-        )
+        LayoutInput {
+            known_dimensions,
+            definite_dimensions,
+            ..inputs
+        }
     }
 }

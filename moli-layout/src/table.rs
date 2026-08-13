@@ -13,8 +13,8 @@ use std::{fmt::Debug, hash::Hash};
 
 use style::Atom;
 use taffy::{
-    AvailableSpace, DetailedGridInfo, Dimension, Display, GridAutoFlow, Layout,
-    LayoutGridContainer, LayoutInput, LayoutOutput, LayoutPartialTree, Line, MaybeMath,
+    AvailableSpace, DetailedGridInfo, Dimension, Display, GridAutoFlow, IntrinsicSizeResult,
+    Layout, LayoutGridContainer, LayoutInput, LayoutOutput, LayoutPartialTree, Line, MaybeMath,
     MaybeResolve, NodeId, Point, Rect, ResolveOrZero, RunMode, Size, SizingMode, SizingPurpose,
     Style, TraversePartialTree, TraverseTree, compute_grid_layout, style_helpers,
 };
@@ -1095,6 +1095,18 @@ where
         let output = self.world.compute_child_layout(cell.to_taffy(), inputs);
         self.world.boxes[cell.index()].style.taffy = original;
         output
+    }
+
+    fn compute_child_size(&mut self, node_id: NodeId, inputs: LayoutInput) -> IntrinsicSizeResult {
+        let cell_index = usize::from(node_id);
+        let cell = self.context.cells[cell_index].id;
+        let original = std::mem::replace(
+            &mut self.world.boxes[cell.index()].style.taffy,
+            self.context.cells[cell_index].style.clone(),
+        );
+        let result = self.world.compute_child_size(cell.to_taffy(), inputs);
+        self.world.boxes[cell.index()].style.taffy = original;
+        result
     }
 }
 
