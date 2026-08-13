@@ -1575,13 +1575,78 @@ document.body.innerHTML = `
             .vm_mut()
             .screenshot_layout_snapshot(moli_layout::PaintViewport::new(1200, 1420, 1.0))?
             .expect("intrinsic width fixture must retain a root");
-        assert!(snapshot.diagnostics.iter().all(|diagnostic| {
-            diagnostic.code != "intrinsic-sizing-keyword-deferred"
-        }));
+        assert!(snapshot
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "anchor-sizing-deferred"));
         Ok::<_, anyhow::Error>(())
     })
     .await
     .expect("intrinsic width fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn replaced_sizing_transfers_constraints_through_flex_and_grid() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/replaced-sizing.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = '<style>\
+html,body{margin:0;padding:0}\
+.case{position:absolute}\
+#flex{left:0;top:0;display:flex}\
+#grid{left:200px;top:0;display:grid;grid-template-columns:auto 1fr}\
+.ratio{display:block;width:auto;height:10px}\
+#flex-ratio{min-height:30px}\
+#grid-ratio{min-height:50px}\
+#percent-min-case{left:0;top:100px;display:grid}\
+#percent-max-case{left:200px;top:100px;display:flex}\
+.natural{display:block;min-width:0}\
+#percent-min{min-height:100%}\
+#percent-max{max-height:100%}\
+</style>';
+document.body.innerHTML = '\
+<div id="flex" class="case"><div><svg id="flex-ratio" class="ratio" viewBox="0 0 2 1"></svg></div></div>\
+<div id="grid" class="case"><div><svg id="grid-ratio" class="ratio" viewBox="0 0 3 1"></svg></div><div></div></div>\
+<div id="percent-min-case" class="case"><div style="display:grid"><svg id="percent-min" class="natural" width="60" height="60"></svg></div></div>\
+<div id="percent-max-case" class="case"><div><svg id="percent-max" class="natural" width="60" height="60"></svg></div></div>';
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+
+        let ids = ["flex-ratio", "grid-ratio", "percent-min", "percent-max"];
+        let geometry = page_vm.vm_mut().eval(&format!(
+            "JSON.stringify(Object.fromEntries({ids:?}.map(id=>{{const r=document.getElementById(id).getBoundingClientRect();return [id,[r.width,r.height]]}})))"
+        ))?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        for (id, expected) in [
+            ("flex-ratio", [60.0, 30.0]),
+            ("grid-ratio", [150.0, 50.0]),
+            ("percent-min", [60.0, 60.0]),
+            ("percent-max", [60.0, 60.0]),
+        ] {
+            let actual = geometry[id]
+                .as_array()
+                .unwrap_or_else(|| panic!("missing geometry for {id}: {geometry}"));
+            for (index, expected) in expected.into_iter().enumerate() {
+                let actual = actual[index].as_f64().expect("numeric geometry") as f32;
+                assert!(
+                    (actual - expected).abs() <= 0.05,
+                    "{id}[{index}]: expected {expected}, got {actual}; geometry={geometry}"
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("replaced sizing fixture should run");
 }
 
 #[tokio::test(flavor = "current_thread")]

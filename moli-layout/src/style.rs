@@ -447,7 +447,7 @@ pub struct ResolvedLayoutStyle {
     visible: bool,
     pointer_events: bool,
     order: i32,
-    intrinsic_sizing_deferred: bool,
+    anchor_sizing_deferred: bool,
     grid_template_mode_deferred: bool,
     table_layout: TableLayoutPreference,
     explicit_z_index: Option<i32>,
@@ -502,7 +502,7 @@ impl std::fmt::Debug for ResolvedLayoutStyle {
             .field("visible", &self.visible)
             .field("pointer_events", &self.pointer_events)
             .field("order", &self.order)
-            .field("intrinsic_sizing_deferred", &self.intrinsic_sizing_deferred)
+            .field("anchor_sizing_deferred", &self.anchor_sizing_deferred)
             .field(
                 "grid_template_mode_deferred",
                 &self.grid_template_mode_deferred,
@@ -605,41 +605,6 @@ impl ResolvedLayoutStyle {
             StyloPosition::Sticky => LayoutPosition::Sticky,
         };
         let position_style = computed.get_position();
-        let intrinsic_sizing_deferred = [&position_style.height, &position_style.min_height]
-            .into_iter()
-            .any(|size| !matches!(size, GenericSize::Auto | GenericSize::LengthPercentage(_)))
-            || [&position_style.max_height].into_iter().any(|size| {
-                !matches!(
-                    size,
-                    GenericMaxSize::None | GenericMaxSize::LengthPercentage(_)
-                )
-            })
-            || [&position_style.width, &position_style.min_width]
-                .into_iter()
-                .any(|size| {
-                    !matches!(
-                        size,
-                        GenericSize::Auto
-                            | GenericSize::LengthPercentage(_)
-                            | GenericSize::MinContent
-                            | GenericSize::MaxContent
-                            | GenericSize::FitContent
-                            | GenericSize::FitContentFunction(_)
-                            | GenericSize::Stretch
-                            | GenericSize::WebkitFillAvailable
-                    )
-                })
-            || !matches!(
-                &position_style.max_width,
-                GenericMaxSize::None
-                    | GenericMaxSize::LengthPercentage(_)
-                    | GenericMaxSize::MinContent
-                    | GenericMaxSize::MaxContent
-                    | GenericMaxSize::FitContent
-                    | GenericMaxSize::FitContentFunction(_)
-                    | GenericMaxSize::Stretch
-                    | GenericMaxSize::WebkitFillAvailable
-            );
         let grid_template_mode_deferred = [
             &position_style.grid_template_rows,
             &position_style.grid_template_columns,
@@ -758,18 +723,37 @@ impl ResolvedLayoutStyle {
         taffy.align_self = taffy_item_alignment(position_style.align_self.0);
         taffy.justify_items = taffy_item_alignment((position_style.justify_items.computed.0).0);
         taffy.justify_self = taffy_item_alignment(position_style.justify_self.0);
-        taffy.size = Size {
-            width: taffy_size_dimension(&position_style.width, taffy.size.width),
-            height: taffy_size_dimension(&position_style.height, taffy.size.height),
+        let size = Size {
+            width: project_taffy_size_dimension(&position_style.width, taffy.size.width),
+            height: project_taffy_size_dimension(&position_style.height, taffy.size.height),
         };
-        taffy.min_size = Size {
-            width: taffy_size_dimension(&position_style.min_width, taffy.min_size.width),
-            height: taffy_size_dimension(&position_style.min_height, taffy.min_size.height),
+        let min_size = Size {
+            width: project_taffy_size_dimension(&position_style.min_width, taffy.min_size.width),
+            height: project_taffy_size_dimension(&position_style.min_height, taffy.min_size.height),
         };
-        taffy.max_size = Size {
-            width: taffy_max_size_dimension(&position_style.max_width, taffy.max_size.width),
-            height: taffy_max_size_dimension(&position_style.max_height, taffy.max_size.height),
+        let max_size = Size {
+            width: project_taffy_max_size_dimension(
+                &position_style.max_width,
+                taffy.max_size.width,
+            ),
+            height: project_taffy_max_size_dimension(
+                &position_style.max_height,
+                taffy.max_size.height,
+            ),
         };
+        let anchor_sizing_deferred = [
+            size.width,
+            size.height,
+            min_size.width,
+            min_size.height,
+            max_size.width,
+            max_size.height,
+        ]
+        .into_iter()
+        .any(|projection| projection.anchor_sizing_deferred);
+        taffy.size = size.map(|projection| projection.dimension);
+        taffy.min_size = min_size.map(|projection| projection.dimension);
+        taffy.max_size = max_size.map(|projection| projection.dimension);
         // Taffy's generic leaf algorithm transfers aspect ratios before a
         // replaced-element measure callback runs. CSS Sizing 4 defines zero,
         // infinite and NaN ratios as degenerate, so normalize them at the
@@ -839,7 +823,7 @@ impl ResolvedLayoutStyle {
             visible,
             pointer_events,
             order,
-            intrinsic_sizing_deferred,
+            anchor_sizing_deferred,
             grid_template_mode_deferred,
             table_layout,
             explicit_z_index,
@@ -908,7 +892,7 @@ impl ResolvedLayoutStyle {
             visible: true,
             pointer_events: true,
             order: 0,
-            intrinsic_sizing_deferred: false,
+            anchor_sizing_deferred: false,
             grid_template_mode_deferred: false,
             table_layout: TableLayoutPreference::Automatic,
             explicit_z_index: None,
@@ -1425,8 +1409,8 @@ impl ResolvedLayoutStyle {
         self.taffy.float != taffy::Float::None
     }
 
-    pub(crate) fn has_deferred_intrinsic_sizing(&self) -> bool {
-        self.intrinsic_sizing_deferred
+    pub(crate) fn has_deferred_anchor_sizing(&self) -> bool {
+        self.anchor_sizing_deferred
     }
 
     pub(crate) fn has_deferred_grid_template_mode(&self) -> bool {
@@ -1656,7 +1640,7 @@ impl ResolvedLayoutStyle {
             visible: parent.visible,
             pointer_events: parent.pointer_events,
             order: 0,
-            intrinsic_sizing_deferred: false,
+            anchor_sizing_deferred: false,
             grid_template_mode_deferred: false,
             table_layout: TableLayoutPreference::Automatic,
             explicit_z_index: None,
@@ -1717,7 +1701,7 @@ impl ResolvedLayoutStyle {
             visible: parent.visible,
             pointer_events: parent.pointer_events,
             order: 0,
-            intrinsic_sizing_deferred: false,
+            anchor_sizing_deferred: false,
             grid_template_mode_deferred: false,
             table_layout: TableLayoutPreference::Automatic,
             explicit_z_index: None,
@@ -1783,37 +1767,93 @@ fn usable_aspect_ratio(ratio: Option<f32>) -> Option<f32> {
     ratio.filter(|ratio| ratio.is_finite() && *ratio > 0.0)
 }
 
-fn taffy_size_dimension(
-    size: &GenericSize<style::values::computed::NonNegativeLengthPercentage>,
-    fallback: taffy::Dimension,
-) -> taffy::Dimension {
-    match size {
-        GenericSize::MinContent => taffy::Dimension::min_content(),
-        GenericSize::MaxContent => taffy::Dimension::max_content(),
-        GenericSize::FitContent => taffy::Dimension::fit_content(),
-        GenericSize::FitContentFunction(limit) => taffy::Dimension::fit_content_function(
-            stylo_taffy::convert::length_percentage(&limit.0),
-        ),
-        GenericSize::Stretch | GenericSize::WebkitFillAvailable => taffy::Dimension::stretch(),
-        _ => fallback,
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TaffyDimensionProjection {
+    dimension: taffy::Dimension,
+    anchor_sizing_deferred: bool,
+}
+
+impl TaffyDimensionProjection {
+    const fn supported(dimension: taffy::Dimension) -> Self {
+        Self {
+            dimension,
+            anchor_sizing_deferred: false,
+        }
+    }
+
+    const fn deferred(dimension: taffy::Dimension) -> Self {
+        Self {
+            dimension,
+            anchor_sizing_deferred: true,
+        }
     }
 }
 
-fn taffy_max_size_dimension(
+/// Project one computed main/minimum size through a single capability seam.
+///
+/// Intrinsic and stretch keywords are supported on both physical axes. Anchor
+/// sizing is different: resolving it requires the anchor-query context, so the
+/// generic Stylo/Taffy fallback remains in force and the same projection marks
+/// that missing context for diagnostics.
+fn project_taffy_size_dimension(
+    size: &GenericSize<style::values::computed::NonNegativeLengthPercentage>,
+    fallback: taffy::Dimension,
+) -> TaffyDimensionProjection {
+    match size {
+        GenericSize::MinContent => {
+            TaffyDimensionProjection::supported(taffy::Dimension::min_content())
+        }
+        GenericSize::MaxContent => {
+            TaffyDimensionProjection::supported(taffy::Dimension::max_content())
+        }
+        GenericSize::FitContent => {
+            TaffyDimensionProjection::supported(taffy::Dimension::fit_content())
+        }
+        GenericSize::FitContentFunction(limit) => {
+            TaffyDimensionProjection::supported(taffy::Dimension::fit_content_function(
+                stylo_taffy::convert::length_percentage(&limit.0),
+            ))
+        }
+        GenericSize::Stretch | GenericSize::WebkitFillAvailable => {
+            TaffyDimensionProjection::supported(taffy::Dimension::stretch())
+        }
+        GenericSize::Auto | GenericSize::LengthPercentage(_) => {
+            TaffyDimensionProjection::supported(fallback)
+        }
+        GenericSize::AnchorSizeFunction(_) | GenericSize::AnchorContainingCalcFunction(_) => {
+            TaffyDimensionProjection::deferred(fallback)
+        }
+    }
+}
+
+fn project_taffy_max_size_dimension(
     size: &GenericMaxSize<style::values::computed::NonNegativeLengthPercentage>,
     fallback: taffy::Dimension,
-) -> taffy::Dimension {
+) -> TaffyDimensionProjection {
     match size {
-        GenericMaxSize::MinContent => taffy::Dimension::min_content(),
-        GenericMaxSize::MaxContent => taffy::Dimension::max_content(),
-        GenericMaxSize::FitContent => taffy::Dimension::fit_content(),
-        GenericMaxSize::FitContentFunction(limit) => taffy::Dimension::fit_content_function(
-            stylo_taffy::convert::length_percentage(&limit.0),
-        ),
-        GenericMaxSize::Stretch | GenericMaxSize::WebkitFillAvailable => {
-            taffy::Dimension::stretch()
+        GenericMaxSize::MinContent => {
+            TaffyDimensionProjection::supported(taffy::Dimension::min_content())
         }
-        _ => fallback,
+        GenericMaxSize::MaxContent => {
+            TaffyDimensionProjection::supported(taffy::Dimension::max_content())
+        }
+        GenericMaxSize::FitContent => {
+            TaffyDimensionProjection::supported(taffy::Dimension::fit_content())
+        }
+        GenericMaxSize::FitContentFunction(limit) => {
+            TaffyDimensionProjection::supported(taffy::Dimension::fit_content_function(
+                stylo_taffy::convert::length_percentage(&limit.0),
+            ))
+        }
+        GenericMaxSize::Stretch | GenericMaxSize::WebkitFillAvailable => {
+            TaffyDimensionProjection::supported(taffy::Dimension::stretch())
+        }
+        GenericMaxSize::None | GenericMaxSize::LengthPercentage(_) => {
+            TaffyDimensionProjection::supported(fallback)
+        }
+        GenericMaxSize::AnchorSizeFunction(_) | GenericMaxSize::AnchorContainingCalcFunction(_) => {
+            TaffyDimensionProjection::deferred(fallback)
+        }
     }
 }
 

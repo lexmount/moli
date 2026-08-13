@@ -1,7 +1,7 @@
 use std::{collections::HashMap, fmt::Debug, hash::Hash, sync::Arc};
 
 use style::Atom;
-use taffy::{Cache, Layout, LayoutEnvironment, Point, Style};
+use taffy::{Cache, Dimension, Layout, LayoutEnvironment, Point, Style};
 
 use crate::{
     LayoutElementSemantics, LayoutError, LayoutPoint, LayoutPseudo, ResolvedLayoutStyle,
@@ -152,7 +152,7 @@ pub enum LayoutCapabilityDiagnostic {
     ListMarkerStyleFallback,
     TextProjectionDeferred,
     PositionedStaticPositionDeferred,
-    IntrinsicSizingKeywordDeferred,
+    AnchorSizingDeferred,
     GridTemplateModeDeferred,
     GeneratedContentUnsupported,
 }
@@ -175,7 +175,7 @@ impl LayoutCapabilityDiagnostic {
             Self::ListMarkerStyleFallback => "list-marker-style-fallback",
             Self::TextProjectionDeferred => "text-projection-deferred",
             Self::PositionedStaticPositionDeferred => "positioned-static-position-deferred",
-            Self::IntrinsicSizingKeywordDeferred => "intrinsic-sizing-keyword-deferred",
+            Self::AnchorSizingDeferred => "anchor-sizing-deferred",
             Self::GridTemplateModeDeferred => "grid-template-mode-deferred",
             Self::GeneratedContentUnsupported => "generated-content-unsupported",
         }
@@ -239,6 +239,14 @@ pub struct LayoutBox<N> {
     /// collapsed table. Their authored borders have already entered the table
     /// owner's conflict-resolution grid.
     pub(crate) collapsed_table_border_part: bool,
+    /// Authored logical `min-inline-size` saved while the parent-facing Taffy
+    /// style projects the table's GRID_MIN as `min-content`.
+    ///
+    /// Blink treats a table's intrinsic grid minimum as an additional lower
+    /// bound after authored min/max constraints. Taffy's generic block model
+    /// has only one `min-size` slot, so the outer tree exposes `min-content`
+    /// there and the table formatter retains the authored value here.
+    pub(crate) table_authored_min_inline_size: Option<Dimension>,
     pub(crate) inline_formatting_context: bool,
     pub(crate) cache: Cache,
     pub(crate) unrounded_layout: Layout,
@@ -709,6 +717,7 @@ where
             css_images: crate::source::LayoutCssImageResources::default(),
             collapsed_table_borders: None,
             collapsed_table_border_part: false,
+            table_authored_min_inline_size: None,
             inline_formatting_context: false,
             cache: Cache::new(),
             unrounded_layout: Layout::with_order(0),
@@ -829,10 +838,10 @@ fn default_capability_diagnostics(
             LayoutCapabilityDiagnostic::TextProjectionDeferred,
         );
     }
-    if style.has_deferred_intrinsic_sizing() {
+    if style.has_deferred_anchor_sizing() {
         push_diagnostic(
             &mut diagnostics,
-            LayoutCapabilityDiagnostic::IntrinsicSizingKeywordDeferred,
+            LayoutCapabilityDiagnostic::AnchorSizingDeferred,
         );
     }
     if style.has_deferred_grid_template_mode() {
