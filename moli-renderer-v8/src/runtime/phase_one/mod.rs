@@ -1089,6 +1089,56 @@ table{table-layout:fixed;border-spacing:0}td{border:0;padding:0;height:10px}
     }
 
     #[test]
+    fn table_layout_mode_uses_all_rows_only_for_automatic_layout() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+table{border-spacing:0}td{border:0;padding:0;height:10px}
+#fixed-auto{table-layout:fixed;width:auto}
+#auto-auto{table-layout:auto;width:auto}
+#fixed-definite{table-layout:fixed;width:300px}
+#fixed-min{table-layout:fixed;width:min-content}
+</style></head><body>
+<table id=fixed-auto><tr><td style="width:50px"></td><td style="width:100px"></td></tr><tr><td style="width:200px;background:rgb(11,21,31)"></td><td style="width:200px;background:rgb(12,22,32)"></td></tr></table>
+<table id=auto-auto><tr><td style="width:50px"></td><td style="width:100px"></td></tr><tr><td style="width:200px;background:rgb(13,23,33)"></td><td style="width:200px;background:rgb(14,24,34)"></td></tr></table>
+<table id=fixed-definite><tr><td style="width:50px"></td><td style="width:100px"></td></tr><tr><td style="width:200px;background:rgb(15,25,35)"></td><td style="width:200px;background:rgb(16,26,36)"></td></tr></table>
+<table id=fixed-min><tr><td style="width:50px"></td><td style="width:100px"></td></tr><tr><td style="width:200px;background:rgb(17,27,37)"></td><td style="width:200px;background:rgb(18,28,38)"></td></tr></table>
+<table id=auto-content><tr><td></td><td></td></tr><tr><td style="background:rgb(19,29,39)"><div style="width:180px;height:0"></div></td><td style="background:rgb(20,30,40)"><div style="width:120px;height:0"></div></td></tr></table>
+</body></html>"#,
+            )
+            .await;
+
+            // Chromium uses automatic table layout when `table-layout:fixed`
+            // has an auto logical width, so every row contributes. A definite
+            // width and min-content both retain fixed layout and only consume
+            // first-row column constraints.
+            for (color, expected) in [
+                (rgb(11, 21, 31), (0.0, 10.0, 200.0)),
+                (rgb(12, 22, 32), (200.0, 10.0, 200.0)),
+                (rgb(13, 23, 33), (0.0, 30.0, 200.0)),
+                (rgb(14, 24, 34), (200.0, 30.0, 200.0)),
+                (rgb(15, 25, 35), (0.0, 50.0, 100.0)),
+                (rgb(16, 26, 36), (100.0, 50.0, 200.0)),
+                (rgb(17, 27, 37), (0.0, 70.0, 50.0)),
+                (rgb(18, 28, 38), (50.0, 70.0, 100.0)),
+                (rgb(19, 29, 39), (0.0, 90.0, 180.0)),
+                (rgb(20, 30, 40), (180.0, 90.0, 120.0)),
+            ] {
+                assert_paint_rect(
+                    solid_paint_rect(&snapshot, color),
+                    moli_layout::PaintRect::new(expected.0, expected.1, expected.2, 10.0),
+                );
+            }
+        }));
+    }
+
+    #[test]
     fn table_grid_preserves_percentage_padding_until_constraint_resolution() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
