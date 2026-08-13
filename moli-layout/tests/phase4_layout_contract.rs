@@ -361,7 +361,7 @@ fn table_sections_use_visual_header_body_footer_order() {
     );
     styles.primary.insert(
         1,
-        sized(LayoutDisplay::Table, 100.0, 30.0, PaintColor::TRANSPARENT),
+        sized(LayoutDisplay::Table, 100.0, 30.0, PaintColor::TRANSPARENT).with_fixed_table_layout(),
     );
     styles.primary.insert(
         2,
