@@ -5,15 +5,19 @@ use std::{
     rc::{Rc, Weak as RcWeak},
     sync::{
         Arc, Weak as ArcWeak,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
+    time::Duration,
 };
 
 use moli_cookie_jar::SharedBrowserCookieStore;
+use moli_disk_pool::DiskPool;
 use moli_fetch::{FetchClient, FetchClientHandle, FetchConfig, FetchRuntimeJoinReport};
+use moli_parkable_image::{ParkableImageManager, ParkableImagePolicy};
 use parking_lot::{Mutex, RwLock};
 
 use super::{
+    BrowserParkableImageDiagnostics, BrowserResourceDiskPoolDiagnostics,
     BrowserResourceRuntimeDiagnostics, SharedMemoryResourceCacheDiagnostics,
     memory_cache::SharedMemoryResourceCache,
 };
@@ -24,6 +28,7 @@ use crate::network::loads::{
 
 static NEXT_BROWSER_RESOURCE_RUNTIME_ID: AtomicU64 = AtomicU64::new(0);
 static NEXT_BROWSER_RESOURCE_OWNER_ROOT_ID: AtomicU64 = AtomicU64::new(0);
+const PARKABLE_IMAGE_SWEEP_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Long-lived transport and renderer memory-cache state for one browser context.
 ///
@@ -127,6 +132,9 @@ struct BrowserResourceRuntimeInner {
     owner_root_id: AtomicU64,
     client: FetchClientHandle,
     memory_cache: Mutex<SharedMemoryResourceCache>,
+    disk_pool: Option<DiskPool>,
+    parkable_images: ParkableImageManager,
+    parkable_image_sweep_started: AtomicBool,
     detached_keepalive_loads: DetachedKeepaliveLoadRegistry,
 }
 
@@ -142,12 +150,19 @@ impl BrowserResourceRuntimeOwner {
         let runtime_id = NEXT_BROWSER_RESOURCE_RUNTIME_ID
             .fetch_add(1, Ordering::Relaxed)
             .saturating_add(1);
+        let disk_pool = DiskPool::new(None).ok();
         let runtime = BrowserResourceRuntime {
             inner: Arc::new(BrowserResourceRuntimeInner {
                 id: runtime_id,
                 owner_root_id: AtomicU64::new(0),
                 client: fetch_owner.handle(),
                 memory_cache: Mutex::new(SharedMemoryResourceCache::default()),
+                parkable_images: ParkableImageManager::new(
+                    disk_pool.clone(),
+                    ParkableImagePolicy::default(),
+                ),
+                disk_pool,
+                parkable_image_sweep_started: AtomicBool::new(false),
                 detached_keepalive_loads: DetachedKeepaliveLoadRegistry::default(),
             }),
         };
@@ -203,10 +218,63 @@ impl BrowserResourceRuntime {
         self.inner.memory_cache.lock().diagnostics()
     }
 
+    pub fn disk_pool(&self) -> Option<DiskPool> {
+        self.inner.disk_pool.clone()
+    }
+
+    pub fn disk_pool_diagnostics(&self) -> Option<BrowserResourceDiskPoolDiagnostics> {
+        self.inner
+            .disk_pool
+            .as_ref()
+            .map(|pool| pool.diagnostics().into())
+    }
+
+    pub fn parkable_image_manager(&self) -> ParkableImageManager {
+        self.inner.parkable_images.clone()
+    }
+
+    pub fn parkable_image_diagnostics(&self) -> BrowserParkableImageDiagnostics {
+        self.inner.parkable_images.diagnostics().into()
+    }
+
+    pub(crate) fn ensure_parkable_image_sweep(
+        &self,
+        runner: &crate::network::RendererResourceTaskRunner,
+    ) {
+        if self
+            .inner
+            .parkable_image_sweep_started
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+
+        let runtime = Arc::downgrade(&self.inner);
+        runner.spawn(async move {
+            loop {
+                tokio::time::sleep(PARKABLE_IMAGE_SWEEP_INTERVAL).await;
+                let Some(runtime) = runtime.upgrade() else {
+                    return;
+                };
+                let manager = runtime.parkable_images.clone();
+                drop(runtime);
+                if tokio::task::spawn_blocking(move || manager.maybe_park_images())
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        });
+    }
+
     pub fn diagnostics(&self) -> BrowserResourceRuntimeDiagnostics {
         BrowserResourceRuntimeDiagnostics {
             runtime_id: self.runtime_id_for_diagnostics(),
             memory_cache: self.memory_cache_diagnostics(),
+            disk_pool: self.disk_pool_diagnostics(),
+            parkable_images: self.parkable_image_diagnostics(),
             detached_keepalive_loads: self.detached_keepalive_diagnostics(),
         }
     }

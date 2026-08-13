@@ -171,6 +171,7 @@ impl CssImageResourceStore {
             density: identity.request_key.density(),
             pixels,
             svg,
+            encoded: Some(ready.encoded),
             _decoded_bytes_permit: Some(ready.decoded_bytes_permit),
         });
         self.ready_by_request
@@ -293,11 +294,14 @@ mod tests {
 
     fn ready_red_pixel() -> ReadyDecodedImage {
         let budget = super::super::budget::SharedImageResourceBudget::default();
+        let encoded =
+            moli_parkable_image::ParkableImageManager::default().from_frozen_bytes(vec![0]);
         ReadyDecodedImage {
             content: DecodedImageContent::Raster(Arc::new(
                 moli_image::RgbaImage::try_new(1, 1, vec![255, 0, 0, 255]).unwrap(),
             )),
             decoded_bytes_permit: budget.reserve_decoded(4).unwrap(),
+            encoded,
         }
     }
 
@@ -374,6 +378,7 @@ mod tests {
             density: 1.0,
             pixels: None,
             svg: None,
+            encoded: None,
             _decoded_bytes_permit: None,
         });
         ready_index.insert(metadata_only_key, &metadata_only);

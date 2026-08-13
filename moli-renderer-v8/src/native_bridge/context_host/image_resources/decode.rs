@@ -1,5 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
+use moli_parkable_image::ParkableImage;
 use parking_lot::Mutex;
 
 use super::{
@@ -45,11 +46,13 @@ impl Default for ImageDecodeCoordinator {
 pub(super) enum ImageDecodeQueueError {
     JobLimit,
     EncodedByteLimit,
+    EncodedSource,
 }
 
 pub(super) struct ReadyDecodedImage {
     pub(super) content: DecodedImageContent,
     pub(super) decoded_bytes_permit: ImageDecodedBytesPermit,
+    pub(super) encoded: ParkableImage,
 }
 
 pub(super) enum DecodedImageContent {
@@ -86,7 +89,7 @@ impl ImageDecodeCoordinator {
         identity: ImageResourceRequestIdentity,
         target: WindowDocumentTaskTarget,
         metadata: ImageDecodeMetadata,
-        encoded: &[u8],
+        encoded: ParkableImage,
     ) -> Result<(), ImageDecodeQueueError> {
         let coordinator = self.clone();
         let task_id = RendererPageImageLoadEventTaskId::new(identity.element, identity.sequence);
@@ -119,7 +122,7 @@ impl ImageDecodeCoordinator {
         store: CssImageResourceStore,
         identity: CssImageResourceRequestIdentity,
         metadata: ImageDecodeMetadata,
-        encoded: &[u8],
+        encoded: ParkableImage,
     ) -> Result<(), ImageDecodeQueueError> {
         self.submit_job(
             runner,
@@ -152,7 +155,7 @@ impl ImageDecodeCoordinator {
         &self,
         runner: RendererResourceTaskRunner,
         metadata: ImageDecodeMetadata,
-        encoded: &[u8],
+        encoded: ParkableImage,
         complete: impl FnOnce(ImageDecodeResult) + Send + 'static,
     ) -> Result<(), ImageDecodeQueueError> {
         self.submit_job(runner, metadata, encoded, move |result, _job_permit| {
@@ -164,21 +167,24 @@ impl ImageDecodeCoordinator {
         &self,
         runner: RendererResourceTaskRunner,
         metadata: ImageDecodeMetadata,
-        encoded: &[u8],
+        encoded: ParkableImage,
         complete: impl FnOnce(ImageDecodeResult, ImageDecodeJobPermit) + Send + 'static,
     ) -> Result<(), ImageDecodeQueueError> {
-        let job_permit =
-            self.inner
-                .budget
-                .admit_job(encoded.len())
-                .map_err(|error| match error {
-                    ImageResourceBudgetError::JobLimit => ImageDecodeQueueError::JobLimit,
-                    ImageResourceBudgetError::EncodedByteLimit
-                    | ImageResourceBudgetError::DecodedByteLimit => {
-                        ImageDecodeQueueError::EncodedByteLimit
-                    }
-                })?;
-        let encoded = encoded.to_vec();
+        let encoded_len = encoded.len();
+        let job_permit = self
+            .inner
+            .budget
+            .admit_job(encoded_len)
+            .map_err(|error| match error {
+                ImageResourceBudgetError::JobLimit => ImageDecodeQueueError::JobLimit,
+                ImageResourceBudgetError::EncodedByteLimit
+                | ImageResourceBudgetError::DecodedByteLimit => {
+                    ImageDecodeQueueError::EncodedByteLimit
+                }
+            })?;
+        let snapshot = encoded
+            .snapshot()
+            .map_err(|_| ImageDecodeQueueError::EncodedSource)?;
         let coordinator = self.clone();
         runner.spawn(async move {
             let Ok(_concurrency) = coordinator.inner.concurrency.clone().acquire_owned().await
@@ -187,30 +193,38 @@ impl ImageDecodeCoordinator {
             };
             let budget = coordinator.inner.budget.clone();
             let decoded = tokio::task::spawn_blocking(move || {
-                let retained_bytes = metadata
-                    .retained_byte_len(encoded.len())
-                    .ok_or_else(|| "decoded image byte estimate overflowed".to_owned())?;
-                let decoded_bytes_permit =
-                    budget.reserve_decoded(retained_bytes).map_err(|error| {
-                        format!("decoded image budget rejected the resource: {error:?}")
-                    })?;
-                let content = match metadata {
-                    ImageDecodeMetadata::Raster(metadata) => {
-                        let decoded =
-                            moli_image::decode_raster_image_with_metadata(&encoded, metadata)
-                                .map_err(|error| error.to_string())?;
-                        DecodedImageContent::Raster(Arc::new(decoded.image))
-                    }
-                    ImageDecodeMetadata::Svg(metadata) => {
-                        let decoded =
-                            moli_image::decode_svg_image_with_metadata(&encoded, metadata)
-                                .map_err(|error| error.to_string())?;
-                        DecodedImageContent::Svg(Arc::new(decoded))
-                    }
-                };
-                Ok::<_, String>(ReadyDecodedImage {
+                let result = (|| {
+                    let retained_bytes = metadata
+                        .retained_byte_len(encoded_len)
+                        .ok_or_else(|| "decoded image byte estimate overflowed".to_owned())?;
+                    let decoded_bytes_permit =
+                        budget.reserve_decoded(retained_bytes).map_err(|error| {
+                            format!("decoded image budget rejected the resource: {error:?}")
+                        })?;
+                    let content = match metadata {
+                        ImageDecodeMetadata::Raster(metadata) => {
+                            let decoded =
+                                moli_image::decode_raster_image_with_metadata(&snapshot, metadata)
+                                    .map_err(|error| error.to_string())?;
+                            DecodedImageContent::Raster(Arc::new(decoded.image))
+                        }
+                        ImageDecodeMetadata::Svg(metadata) => {
+                            let decoded =
+                                moli_image::decode_svg_image_with_metadata(&snapshot, metadata)
+                                    .map_err(|error| error.to_string())?;
+                            DecodedImageContent::Svg(Arc::new(decoded))
+                        }
+                    };
+                    Ok::<_, String>((content, decoded_bytes_permit))
+                })();
+                drop(snapshot);
+                if let Err(error) = encoded.maybe_park() {
+                    tracing::debug!(%error, "failed to park encoded image after decode");
+                }
+                result.map(|(content, decoded_bytes_permit)| ReadyDecodedImage {
                     content,
                     decoded_bytes_permit,
+                    encoded,
                 })
             })
             .await;
@@ -262,5 +276,59 @@ impl ImageDecodeCoordinator {
 
     pub(super) fn discard_completion(&self, task_id: RendererPageImageLoadEventTaskId) -> bool {
         self.inner.completions.lock().remove(&task_id).is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use moli_disk_pool::DiskPool;
+    use moli_parkable_image::{
+        ParkableImageManager, ParkableImagePolicy, ParkableImageStorageState,
+    };
+
+    use super::*;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn decode_uses_snapshot_then_parks_the_shared_encoded_image() {
+        let pixels = moli_image::RgbaImage::try_new(1, 1, vec![255, 0, 0, 255]).unwrap();
+        let bytes = moli_image::encode_png(&pixels).unwrap().bytes;
+        let metadata = moli_image::probe_raster_image(&bytes).unwrap();
+        let pool = DiskPool::new(None).unwrap();
+        let manager = ParkableImageManager::new(
+            Some(pool.clone()),
+            ParkableImagePolicy {
+                min_size_to_park: 1,
+                parking_delay: Duration::ZERO,
+            },
+        );
+        let encoded = manager.from_frozen_bytes(bytes.clone());
+        let coordinator = ImageDecodeCoordinator::default();
+        let runner = RendererResourceTaskRunner::from_current_tokio().unwrap();
+        let (complete_tx, complete_rx) = tokio::sync::oneshot::channel();
+
+        coordinator
+            .submit_preload(
+                runner,
+                ImageDecodeMetadata::Raster(metadata),
+                encoded.clone(),
+                move |result| {
+                    let _ = complete_tx.send(result);
+                },
+            )
+            .unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(5), complete_rx)
+            .await
+            .expect("image decode should complete")
+            .expect("decode callback should send its result");
+        assert!(matches!(result, ImageDecodeResult::Ready(_)));
+        assert_eq!(
+            encoded.diagnostics().storage,
+            ParkableImageStorageState::Parked
+        );
+        assert_eq!(manager.diagnostics().retained_memory_bytes, 0);
+        assert_eq!(pool.diagnostics().disk_footprint_bytes, bytes.len() as u64);
+        assert_eq!(encoded.data().unwrap(), bytes);
     }
 }

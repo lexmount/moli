@@ -263,7 +263,10 @@ fn apply_media_subresource_terminal(
 }
 
 enum ImageSubresourceTerminal<'a> {
-    Response(&'a crate::protocol_types::NavigationResponse),
+    Response {
+        response: &'a crate::protocol_types::NavigationResponse,
+        encoded: &'a moli_parkable_image::ParkableImage,
+    },
     Failure,
 }
 
@@ -273,7 +276,7 @@ impl ImageSubresourceTerminal<'_> {
         request_url: &url::Url,
     ) -> crate::context_bootstrap::ResourcePerformanceEntry {
         match self {
-            Self::Response(response) => {
+            Self::Response { response, .. } => {
                 crate::context_bootstrap::ResourcePerformanceEntry::from_network_response(
                     request_url.as_str(),
                     "img",
@@ -302,7 +305,7 @@ fn apply_image_subresource_terminal(
     terminal: ImageSubresourceTerminal<'_>,
 ) {
     let (accepted, followup) = match &terminal {
-        ImageSubresourceTerminal::Response(response) => {
+        ImageSubresourceTerminal::Response { response, encoded } => {
             let descriptor = crate::network_host::image_response_descriptor(response);
             let completion = context_host
                 .borrow_mut()
@@ -311,7 +314,7 @@ fn apply_image_subresource_terminal(
                     sequence,
                     internal_id,
                     descriptor,
-                    response.body_bytes(),
+                    (*encoded).clone(),
                 );
             (completion.accepted(), completion.followup())
         }
@@ -3622,6 +3625,26 @@ impl ScriptVm {
             match result {
                 Ok(response) => {
                     let response_status = response.status;
+                    let parkable_image = (!opaque_response_blocked
+                        && pending.info.resource_type == SubresourceResourceType::Image)
+                        .then(|| {
+                            let existing = match &pending.continuation {
+                                PendingSubresourceContinuation::Image { image_handle, .. } => {
+                                    context_host
+                                        .borrow()
+                                        .parkable_image_for_element(*image_handle)
+                                }
+                                _ => None,
+                            };
+                            existing.unwrap_or_else(|| {
+                                let runner = pending.load.task_runner();
+                                pending
+                                    .load
+                                    .request_client()
+                                    .parkable_image_manager(&runner)
+                                    .from_frozen_bytes(response.clone_body_bytes())
+                            })
+                        });
                     let request_cookie_report = response
                         .request_cookie_report
                         .clone()
@@ -3655,7 +3678,12 @@ impl ScriptVm {
                             response.final_url.clone(),
                             response.status,
                             response.headers.clone(),
-                            SubresourceResponseBody::from_navigation_response(&response),
+                            parkable_image.as_ref().map_or_else(
+                                || SubresourceResponseBody::from_navigation_response(&response),
+                                |image| {
+                                    SubresourceResponseBody::from_parkable_image(image.clone())
+                                },
+                            ),
                             response.cookie_set_reports.clone(),
                         )
                         .with_from_cache(response.from_cache)
@@ -3747,15 +3775,23 @@ impl ScriptVm {
                             image_handle,
                             sequence,
                             ..
-                        } => apply_image_subresource_terminal(
-                            scope,
-                            &context_host,
-                            image_handle,
-                            sequence,
-                            pending.info.internal_id,
-                            &pending.info.url,
-                            ImageSubresourceTerminal::Response(&observable_response),
-                        ),
+                        } => {
+                            let encoded = parkable_image
+                                .as_ref()
+                                .expect("an accepted image response must be parkable");
+                            apply_image_subresource_terminal(
+                                scope,
+                                &context_host,
+                                image_handle,
+                                sequence,
+                                pending.info.internal_id,
+                                &pending.info.url,
+                                ImageSubresourceTerminal::Response {
+                                    response: &observable_response,
+                                    encoded,
+                                },
+                            )
+                        }
                         PendingSubresourceContinuation::Media {
                             media_handle,
                             sequence,
@@ -3798,7 +3834,10 @@ impl ScriptVm {
                                     .complete_stylesheet_css_image_response(
                                         identity,
                                         descriptor,
-                                        observable_response.body_bytes(),
+                                        parkable_image
+                                            .as_ref()
+                                            .expect("a CSS image response must be parkable")
+                                            .clone(),
                                     );
                             }
                             if binding.child_handle().is_none() {
@@ -4426,6 +4465,7 @@ impl ScriptVm {
         let accepted_document = pending
             .execution_context
             .window_document_network_only_identity();
+        let disk_pool = pending.load.request_client().disk_pool();
         self._context_host
             .borrow_mut()
             .record_streaming_subresource_fetch(StreamingSubresourceFetchState {
@@ -4437,7 +4477,7 @@ impl ScriptVm {
                 body_source_id: started.body_source_id,
                 head: started.head,
                 network_request_headers: started.network_request_headers,
-                body_writer: SubresourceResponseBodyWriter::default(),
+                body_writer: SubresourceResponseBodyWriter::with_disk_pool(disk_pool),
                 event_source_parser: None,
                 xhr_response: None,
             });
@@ -4808,6 +4848,7 @@ impl ScriptVm {
             if let PendingSubresourceContinuation::Xhr(xhr) = &pending.continuation {
                 let xhr = v8::Local::new(scope, xhr);
                 let pending_owner = pending.execution_context.dispatch_scope();
+                let disk_pool = pending.load.request_client().disk_pool();
                 let xhr_response = crate::types::XhrStreamingResponseState::new(
                     &observable_head.headers,
                 );
@@ -4822,7 +4863,7 @@ impl ScriptVm {
                         body_source_id: started.body_source_id,
                         head: started.head.clone(),
                         network_request_headers: started.network_request_headers.clone(),
-                        body_writer: SubresourceResponseBodyWriter::default(),
+                        body_writer: SubresourceResponseBodyWriter::with_disk_pool(disk_pool),
                         event_source_parser: None,
                         xhr_response: Some(xhr_response),
                     });
@@ -4962,6 +5003,7 @@ impl ScriptVm {
             }
 
             let pending_owner = pending.execution_context.dispatch_scope();
+            let disk_pool = pending.load.request_client().disk_pool();
             self._context_host.borrow_mut().record_streaming_subresource_fetch(
                 StreamingSubresourceFetchState {
                     pending,
@@ -4972,7 +5014,7 @@ impl ScriptVm {
                     body_source_id: started.body_source_id,
                     head: started.head.clone(),
                     network_request_headers: started.network_request_headers.clone(),
-                    body_writer: SubresourceResponseBodyWriter::default(),
+                    body_writer: SubresourceResponseBodyWriter::with_disk_pool(disk_pool),
                     event_source_parser,
                     xhr_response: None,
                 },

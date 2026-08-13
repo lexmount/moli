@@ -4,6 +4,8 @@ mod decode;
 mod preload;
 mod state;
 
+use moli_parkable_image::ParkableImage;
+
 use crate::{
     document_runtime::DomHandle,
     frame_owner_model::FrameDocumentTaskOwner,
@@ -213,7 +215,7 @@ impl super::JsContextHost {
         &mut self,
         identity: &CssImageResourceRequestIdentity,
         descriptor: Option<ImageResponseDescriptor>,
-        encoded: &[u8],
+        encoded: ParkableImage,
     ) -> bool {
         let Some(descriptor) = descriptor else {
             return self.image_resources.css.fail(identity);
@@ -225,6 +227,7 @@ impl super::JsContextHost {
         {
             return false;
         }
+        let encoded_len = encoded.len();
         let submission = self
             .document_resource_loader_for_owner(identity.document_owner)
             .map(|loader| loader.task_runner())
@@ -242,7 +245,7 @@ impl super::JsContextHost {
             tracing::debug!(
                 document = identity.document_handle.index(),
                 request_id = identity.request_id,
-                encoded_bytes = encoded.len(),
+                encoded_bytes = encoded_len,
                 "queued bounded CSS image resource decode"
             );
             return true;
@@ -265,6 +268,10 @@ impl super::JsContextHost {
 
     pub(crate) fn image_resource_is_ready(&self, element: DomHandle) -> bool {
         self.image_resources.is_ready(element)
+    }
+
+    pub(crate) fn parkable_image_for_element(&self, element: DomHandle) -> Option<ParkableImage> {
+        self.image_resources.encoded_for_element(element)
     }
 
     pub(crate) fn has_ready_image_request(&self, request_key: &ImageRequestKey) -> bool {
@@ -291,7 +298,7 @@ impl super::JsContextHost {
         element: DomHandle,
         sequence: super::ImageLoadEventId,
         descriptor: Option<ImageResponseDescriptor>,
-        encoded: &[u8],
+        encoded: ParkableImage,
     ) -> ImageResponseCompletion {
         self.complete_pending_image_response_if_matches(
             element,
@@ -309,7 +316,7 @@ impl super::JsContextHost {
         sequence: super::ImageLoadEventId,
         internal_id: u64,
         descriptor: Option<ImageResponseDescriptor>,
-        encoded: &[u8],
+        encoded: ParkableImage,
     ) -> ImageResponseCompletion {
         self.complete_pending_image_response_if_matches(
             element,
@@ -328,7 +335,7 @@ impl super::JsContextHost {
         internal_id: Option<u64>,
         source: super::PendingImageLoadTerminalSource,
         descriptor: Option<ImageResponseDescriptor>,
-        encoded: &[u8],
+        encoded: ParkableImage,
     ) -> ImageResponseCompletion {
         let Some(pending) = self.pending_image_load_event(element) else {
             return ImageResponseCompletion::Ignored;
@@ -398,6 +405,7 @@ impl super::JsContextHost {
             {
                 return ImageResponseCompletion::Ignored;
             }
+            let encoded_len = encoded.len();
             let submission = loader
                 .map(|loader| loader.task_runner())
                 .ok_or(decode::ImageDecodeQueueError::JobLimit)
@@ -419,7 +427,7 @@ impl super::JsContextHost {
                 tracing::debug!(
                     image = element.index(),
                     sequence = sequence.get(),
-                    encoded_bytes = encoded.len(),
+                    encoded_bytes = encoded_len,
                     "queued bounded image resource decode"
                 );
                 return ImageResponseCompletion::Accepted { followup: None };
@@ -442,7 +450,7 @@ impl super::JsContextHost {
 
         if !self
             .image_resources
-            .complete_metadata(&identity, descriptor)
+            .complete_metadata(&identity, descriptor, encoded)
         {
             return ImageResponseCompletion::Ignored;
         }

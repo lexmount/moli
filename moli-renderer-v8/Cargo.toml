@@ -35,8 +35,10 @@ moli-browser-profile = { path = "../moli-browser-profile" }
 moli-crypto = { path = "../moli-crypto" }
 moli-css-parse = { path = "../moli-css-parse" }
 moli-dom = { path = "../moli-dom" }
+moli-disk-pool = { path = "../moli-disk-pool" }
 moli-parser = { path = "../moli-parser" }
 moli-page-types = { path = "../moli-page-types" }
+moli-parkable-image = { path = "../moli-parkable-image" }
 moli-protocol-cdp = { path = "../moli-protocol-cdp" }
 moli-selector = { path = "../moli-selector" }
 moli-shared-worker = { path = "../moli-shared-worker" }

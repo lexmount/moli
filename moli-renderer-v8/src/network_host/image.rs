@@ -19,6 +19,7 @@ use moli_fetch::{
 pub(crate) enum ImageElementResourceFetchStart {
     Local {
         response: Box<crate::protocol_types::NavigationResponse>,
+        encoded: moli_parkable_image::ParkableImage,
     },
     Failed,
     PolicySkipped,
@@ -51,6 +52,10 @@ pub(crate) fn start_scanned_image_preload(
         return ScannedImagePreloadStart::Disabled;
     }
     let document_url = host.document_url().clone();
+    let task_runner = resource_loader.task_runner();
+    let parkable_images = resource_loader
+        .request_client()
+        .parkable_image_manager(&task_runner);
     let client_id = host.service_worker_client_id_for_subresource_owner(OwnerDispatchScope::Top);
     if host
         .service_worker_controller_for_fetch(client_id, &document_url, &request_url)
@@ -91,7 +96,8 @@ pub(crate) fn start_scanned_image_preload(
             .with_fetch_priority_hint(fetch_priority),
         Err(error) => {
             load.finish_network_result(
-                resource_loader.task_runner(),
+                task_runner,
+                parkable_images,
                 std::sync::Arc::new(Err(error.to_string())),
                 false,
             );
@@ -99,7 +105,6 @@ pub(crate) fn start_scanned_image_preload(
         }
     };
     let loader = resource_loader.request_client().clone();
-    let task_runner = resource_loader.task_runner();
     let decode_runner = task_runner.clone();
     let cancel_handle = load.cancel_handle();
     task_runner.spawn(async move {
@@ -145,6 +150,7 @@ pub(crate) fn start_scanned_image_preload(
         });
         load.finish_network_result(
             decode_runner,
+            parkable_images,
             std::sync::Arc::new(result),
             response_is_decode_eligible,
         );
@@ -207,17 +213,27 @@ pub(crate) fn start_image_element_resource_fetch(
 
     if let Some(response) = local_url_response(&request_url) {
         let response: crate::protocol_types::NavigationResponse = response.into();
+        let manager = resource_loader.as_ref().map_or_else(
+            moli_parkable_image::ParkableImageManager::default,
+            |loader| {
+                let runner = loader.task_runner();
+                loader.request_client().parkable_image_manager(&runner)
+            },
+        );
+        let encoded = manager.from_frozen_bytes(response.clone_body_bytes());
         let result = Ok(response);
-        host.record_get_subresource_network_result_with_initiator(
+        host.record_get_subresource_network_result_with_body_and_initiator(
             frame_id,
             document_url,
             request_url,
             SubresourceResourceType::Image,
             request_initiator_type,
             &result,
+            crate::types::SubresourceResponseBody::from_parkable_image(encoded.clone()),
         );
         return result.map(|response| ImageElementResourceFetchStart::Local {
             response: Box::new(response),
+            encoded,
         });
     }
 

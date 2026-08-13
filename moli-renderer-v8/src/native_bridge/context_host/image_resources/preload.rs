@@ -77,6 +77,12 @@ impl ScannedImagePreloadOutcome {
     pub(crate) fn network_result(&self) -> &SharedNavigationResponseResult {
         &self.network_result
     }
+
+    pub(super) fn encoded(&self) -> Option<moli_parkable_image::ParkableImage> {
+        self._resource
+            .as_ref()
+            .and_then(|resource| resource.encoded.clone())
+    }
 }
 
 struct ScannedImagePreloadBodyPermit {
@@ -257,6 +263,7 @@ impl SharedScannedImagePreloadLoad {
     pub(crate) fn finish_network_result(
         &self,
         runner: RendererResourceTaskRunner,
+        manager: moli_parkable_image::ParkableImageManager,
         network_result: SharedNavigationResponseResult,
         response_is_decode_eligible: bool,
     ) {
@@ -300,12 +307,13 @@ impl SharedScannedImagePreloadLoad {
             });
             return;
         };
-        let encoded_source = network_result.clone();
-        let encoded = encoded_source
-            .as_ref()
-            .as_ref()
-            .expect("a decoded preload descriptor requires a response")
-            .body_bytes();
+        let encoded = manager.from_frozen_bytes(
+            network_result
+                .as_ref()
+                .as_ref()
+                .expect("a decoded preload descriptor requires a response")
+                .clone_body_bytes(),
+        );
         let load = self.clone();
         let completion_state = Arc::new(Mutex::new(Some((network_result, retained_body_permit))));
         let completion_state_for_decode = completion_state.clone();
@@ -332,6 +340,7 @@ impl SharedScannedImagePreloadLoad {
                             density: load.inner.identity.request_key.density(),
                             pixels,
                             svg,
+                            encoded: Some(ready.encoded),
                             _decoded_bytes_permit: Some(ready.decoded_bytes_permit),
                         });
                         load.inner
@@ -505,6 +514,7 @@ mod tests {
 
         claimed.finish_network_result(
             RendererResourceTaskRunner::for_test(),
+            moli_parkable_image::ParkableImageManager::default(),
             Arc::new(Err("network failed".to_owned())),
             false,
         );
@@ -567,6 +577,7 @@ mod tests {
 
         load.finish_network_result(
             RendererResourceTaskRunner::for_test(),
+            moli_parkable_image::ParkableImageManager::default(),
             Arc::new(Ok(response)),
             true,
         );
@@ -640,6 +651,7 @@ mod tests {
 
         load.finish_network_result(
             RendererResourceTaskRunner::for_test(),
+            moli_parkable_image::ParkableImageManager::default(),
             Arc::new(Ok(response)),
             false,
         );

@@ -229,13 +229,13 @@ fn queue_image_load_event(
                 followup,
             );
         }
-        Ok(crate::network_host::ImageElementResourceFetchStart::Local { response }) => {
+        Ok(crate::network_host::ImageElementResourceFetchStart::Local { response, encoded }) => {
             let descriptor = crate::network_host::image_response_descriptor(&response);
             let completion = runtime.complete_pending_image_load_local_response_if_matches(
                 handle,
                 pending.id(),
                 descriptor,
-                response.body_bytes(),
+                encoded,
             );
             queue_image_load_terminal_followup_if_ready(
                 runtime_ptr,

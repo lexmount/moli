@@ -9,10 +9,12 @@ use anyhow::{Context, Result, anyhow};
 use moli_cookie_jar::{
     BrowserCookieFacadeContext, SharedBrowserCookieStore, new_shared_browser_cookie_store,
 };
+use moli_disk_pool::DiskPool;
 use moli_fetch::{
     FetchCancelHandle, FetchConfig, NetworkFetchResult, RawResponse, Request, Response,
     ResponseHead, StreamingRawResponse,
 };
+use moli_parkable_image::ParkableImageManager;
 
 use crate::{protocol_types::OptionalResourceFetchMask, types::SubresourceResourceType};
 
@@ -62,6 +64,18 @@ impl ResourceRequestClient {
 
     pub fn browser_resource_runtime(&self) -> BrowserResourceRuntime {
         self.resource_runtime.clone()
+    }
+
+    pub fn disk_pool(&self) -> Option<DiskPool> {
+        self.resource_runtime.disk_pool()
+    }
+
+    pub(crate) fn parkable_image_manager(
+        &self,
+        runner: &crate::network::RendererResourceTaskRunner,
+    ) -> ParkableImageManager {
+        self.resource_runtime.ensure_parkable_image_sweep(runner);
+        self.resource_runtime.parkable_image_manager()
     }
 
     pub fn shares_resource_runtime_with(&self, other: &Self) -> bool {

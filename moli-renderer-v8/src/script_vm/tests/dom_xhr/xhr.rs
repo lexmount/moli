@@ -3075,16 +3075,18 @@ async fn streaming_xhr_materialization_failure_errors_body_source_before_close()
     let request_url = Url::parse("https://xhr-streaming-materialize-error.test/data")
         .expect("request URL should parse");
 
-    let mut body_writer = crate::types::SubresourceResponseBodyWriter::new(1);
+    let disk_pool = load_client
+        .disk_pool()
+        .expect("streaming XHR materialization test should have a disk pool");
+    let mut body_writer =
+        crate::types::SubresourceResponseBodyWriter::with_memory_limit_and_disk_pool(
+            1,
+            Some(disk_pool.clone()),
+        );
     body_writer.append(b"hello");
-    let missing_path = std::env::temp_dir().join(format!(
-        "moli-missing-streaming-xhr-body-{}-{body_source_id}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_file(&missing_path);
-    let original_spool_path = body_writer
-        .replace_spool_path_for_test(missing_path)
-        .expect("body writer should have spooled to a temp file");
+    disk_pool
+        .truncate_file_for_test(0)
+        .expect("test should truncate the pooled body file");
 
     let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
     let context_host = vm._context_host.clone();
@@ -3166,7 +3168,6 @@ async fn streaming_xhr_materialization_failure_errors_body_source_before_close()
 
     vm.finish_streaming_async_subresource_fetch(internal_id, body_source_id, Ok(()))
         .expect("streaming XHR finish should surface a network failure, not panic");
-    let _ = std::fs::remove_file(original_spool_path);
 
     let records: Vec<_> = vm
         ._context_host
