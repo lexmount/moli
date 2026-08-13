@@ -13,11 +13,11 @@ use std::{fmt::Debug, hash::Hash};
 
 use style::Atom;
 use taffy::{
-    AvailableSpace, CacheTree, DetailedGridInfo, Dimension, Display, GridAutoFlow,
-    IntrinsicSizeResult, Layout, LayoutGridContainer, LayoutInput, LayoutOutput, LayoutPartialTree,
-    Line, LogicalSize, MaybeResolve, NodeId, Point, Rect, RequestedAxis, ResolveOrZero, RunMode,
-    Size, SizingMode, SizingPurpose, Style, TraversePartialTree, TraverseTree, compute_grid_layout,
-    style_helpers,
+    AutoSizeBehavior, AvailableSpace, CacheTree, DetailedGridInfo, Dimension, Display,
+    GridAutoFlow, IntrinsicSizeResult, Layout, LayoutGridContainer, LayoutInput, LayoutOutput,
+    LayoutPartialTree, Line, LogicalSize, MaybeResolve, NodeId, Point, Rect, RequestedAxis,
+    ResolveOrZero, RunMode, Size, SizingMode, SizingPurpose, Style, TraversePartialTree,
+    TraverseTree, compute_grid_layout, style_helpers,
 };
 
 use crate::{LayoutBoxId, LayoutBoxKind, LayoutWorld, style::resolve_stylo_calc_value};
@@ -883,6 +883,7 @@ where
         sizing_purpose: SizingPurpose::IntrinsicContribution,
         run_mode: RunMode::ComputeSize,
         axis: RequestedAxis::from(table_writing_mode.inline_axis()),
+        block_auto_behavior: AutoSizeBehavior::FitContent,
         block_margins_are_collapsible: Line::FALSE,
     };
     table_writing_mode
@@ -989,6 +990,7 @@ where
             sizing_purpose: SizingPurpose::Layout,
             run_mode: RunMode::PerformLayout,
             axis: taffy::RequestedAxis::Both,
+            block_auto_behavior: AutoSizeBehavior::FitContent,
             block_margins_are_collapsible: Line::FALSE,
         };
         let output = world.compute_child_layout(caption.to_taffy(), inputs);
@@ -1358,6 +1360,13 @@ where
 
     fn get_core_container_style(&self, _node_id: NodeId) -> Self::CoreContainerStyle<'_> {
         &self.context.style
+    }
+
+    fn get_size_containment(&self, _node_id: NodeId) -> taffy::SizeContainment {
+        // CSS table wrappers and internal table boxes are ineligible for size
+        // containment. Child cells leave this virtual tree through LayoutWorld,
+        // which applies their own used eligibility at that boundary.
+        taffy::SizeContainment::NONE
     }
 
     fn resolve_calc_value(&self, value: *const (), basis: f32) -> f32 {

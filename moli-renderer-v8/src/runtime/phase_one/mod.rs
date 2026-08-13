@@ -921,6 +921,155 @@ html,body{margin:0;padding:0}
     }
 
     #[test]
+    fn layout_renderer_resolves_intrinsic_block_constraints_after_content_layout() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+.target{width:100px}.content{height:30px}
+#block-preferred{height:max-content;background:rgb(221,1,1)}
+#block-minimum{height:0;min-height:max-content;background:rgb(222,2,2)}
+#block-maximum{height:60px;max-height:min-content;background:rgb(223,3,3)}
+#flex-row{display:flex;height:fit-content;background:rgb(224,4,4)}
+#flex-column{display:flex;flex-direction:column;height:0;min-height:max-content;background:rgb(225,5,5)}
+#grid{display:grid;height:60px;max-height:min-content;background:rgb(226,6,6)}
+#content-box{box-sizing:content-box;height:0;min-height:max-content;padding:5px 0;background:rgb(227,7,7)}
+#absolute-host{position:relative;width:100px;height:100px}
+#absolute{position:absolute;top:50%;bottom:0;width:20px;height:fit-content;background:rgb(228,8,8)}
+</style></head><body>
+<div id=block-preferred class=target><div class=content></div></div>
+<div id=block-minimum class=target><div class=content></div></div>
+<div id=block-maximum class=target><div class=content></div></div>
+<div id=flex-row class=target><div class=content></div></div>
+<div id=flex-column class=target><div class=content></div></div>
+<div id=grid class=target><div class=content></div></div>
+<div id=content-box class=target><div class=content></div></div>
+<div id=absolute-host><div id=absolute><div class=content></div></div></div>
+</body></html>"#,
+            )
+            .await;
+
+            for (color, expected) in [
+                (rgb(221, 1, 1), (0.0, 0.0, 100.0, 30.0)),
+                (rgb(222, 2, 2), (0.0, 30.0, 100.0, 30.0)),
+                (rgb(223, 3, 3), (0.0, 60.0, 100.0, 30.0)),
+                (rgb(224, 4, 4), (0.0, 90.0, 100.0, 30.0)),
+                (rgb(225, 5, 5), (0.0, 120.0, 100.0, 30.0)),
+                (rgb(226, 6, 6), (0.0, 150.0, 100.0, 30.0)),
+                (rgb(227, 7, 7), (0.0, 180.0, 100.0, 40.0)),
+                (rgb(228, 8, 8), (0.0, 270.0, 20.0, 30.0)),
+            ] {
+                assert_paint_rect(
+                    solid_paint_rect(&snapshot, color),
+                    moli_layout::PaintRect::new(
+                        expected.0, expected.1, expected.2, expected.3,
+                    ),
+                );
+            }
+        }));
+    }
+
+    #[test]
+    fn layout_renderer_applies_used_size_containment_across_formatting_contexts() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+.case{position:absolute;contain:size;contain-intrinsic-size:111px 22px}
+.large{width:300px;height:400px}
+#block{left:0;top:0;background:rgb(241,1,1)}
+#flex{display:flex;left:130px;top:0;background:rgb(242,2,2)}
+#grid{display:grid;left:260px;top:0;background:rgb(243,3,3)}
+#constrained{left:390px;top:0;width:300px;height:400px;max-width:max-content;max-height:max-content;background:rgb(244,4,4)}
+#boxed{left:0;top:60px;padding:5px 7px;border:3px solid transparent;background:rgb(245,5,5)}
+#single-axis{position:absolute;display:flow-root;left:150px;top:60px;writing-mode:vertical-rl;contain:inline-size;contain-intrinsic-width:77px;contain-intrinsic-height:88px;background:rgb(246,6,6)}
+#intrinsic-parent{position:absolute;display:flex;left:260px;top:60px;width:max-content;height:max-content;background:rgb(247,7,7)}
+#grid-tracks{position:absolute;display:grid;left:400px;top:60px;contain:size;grid-template-columns:50px auto;grid-template-rows:30px auto;gap:5px;background:rgb(248,8,8)}
+#replaced{position:absolute;left:500px;top:0;contain:size;contain-intrinsic-size:90px 45px;background:rgb(249,9,9)}
+</style></head><body>
+<div id=block class=case><div class=large></div></div>
+<div id=flex class=case><div class=large></div></div>
+<div id=grid class=case><div class=large></div></div>
+<div id=constrained class=case><div class=large></div></div>
+<div id=boxed class=case><div class=large></div></div>
+<div id=single-axis><div style="width:30px;height:40px"></div></div>
+<div id=intrinsic-parent><div class=case style="position:static"><div class=large></div></div></div>
+<div id=grid-tracks><div class=large></div><div class=large></div><div class=large></div></div>
+<img id=replaced>
+</body></html>"#,
+            )
+            .await;
+
+            for (color, expected) in [
+                (rgb(241, 1, 1), (0.0, 0.0, 111.0, 22.0)),
+                (rgb(242, 2, 2), (130.0, 0.0, 111.0, 22.0)),
+                (rgb(243, 3, 3), (260.0, 0.0, 111.0, 22.0)),
+                (rgb(244, 4, 4), (390.0, 0.0, 111.0, 22.0)),
+                (rgb(245, 5, 5), (0.0, 60.0, 131.0, 38.0)),
+                (rgb(246, 6, 6), (150.0, 60.0, 30.0, 88.0)),
+                (rgb(247, 7, 7), (260.0, 60.0, 111.0, 22.0)),
+                (rgb(248, 8, 8), (400.0, 60.0, 55.0, 35.0)),
+                (rgb(249, 9, 9), (500.0, 0.0, 90.0, 45.0)),
+            ] {
+                assert_paint_rect(
+                    solid_paint_rect(&snapshot, color),
+                    moli_layout::PaintRect::new(expected.0, expected.1, expected.2, expected.3),
+                );
+            }
+        }));
+    }
+
+    #[test]
+    fn layout_renderer_orders_content_block_sizing_ratio_and_explicit_stretch() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+.target{width:100px;aspect-ratio:10}.content{height:25px}
+#ratio-auto{height:auto;background:rgb(231,1,1)}
+#ratio-max{height:auto;max-height:15px;background:rgb(232,2,2)}
+#ratio-scroll{height:auto;overflow:scroll;background:rgb(233,3,3)}
+#grid-host{display:grid;width:100px;height:100px;grid-template-columns:100px;grid-template-rows:100px}
+#grid-item{width:100px;height:auto;aspect-ratio:10;align-self:stretch;background:rgb(234,4,4)}
+</style></head><body>
+<div id=ratio-auto class=target><div class=content></div></div>
+<div id=ratio-max class=target><div class=content></div></div>
+<div id=ratio-scroll class=target><div class=content></div></div>
+<div id=grid-host><div id=grid-item><div class=content></div></div></div>
+</body></html>"#,
+            )
+            .await;
+
+            for (color, expected) in [
+                (rgb(231, 1, 1), (0.0, 0.0, 100.0, 25.0)),
+                (rgb(232, 2, 2), (0.0, 25.0, 100.0, 15.0)),
+                (rgb(233, 3, 3), (0.0, 40.0, 100.0, 10.0)),
+                (rgb(234, 4, 4), (0.0, 50.0, 100.0, 100.0)),
+            ] {
+                assert_paint_rect(
+                    solid_paint_rect(&snapshot, color),
+                    moli_layout::PaintRect::new(expected.0, expected.1, expected.2, expected.3),
+                );
+            }
+        }));
+    }
+
+    #[test]
     fn layout_renderer_resolves_cyclic_preferred_width_after_parent_contribution() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -1016,6 +1165,33 @@ html,body{margin:0;padding:0}
             assert_paint_rect(
                 solid_paint_rect(&snapshot, rgb(17, 18, 19)),
                 moli_layout::PaintRect::new(0.0, 0.0, 50.0, 10.0),
+            );
+        }));
+    }
+
+    #[test]
+    fn orthogonal_percentage_inline_size_uses_initial_containing_block() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+#subject{display:block;writing-mode:vertical-lr;inline-size:100%;block-size:20px;background:rgb(31,41,51)}
+</style></head><body><div id=subject></div></body></html>"#,
+            )
+            .await;
+
+            // html and body have auto block sizes, so neither supplies a
+            // definite physical height. The orthogonal child's percentage
+            // inline-size therefore resolves against the 800x600 initial
+            // containing block after crossing both parallel ancestors.
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(31, 41, 51)),
+                moli_layout::PaintRect::new(0.0, 0.0, 20.0, 600.0),
             );
         }));
     }
