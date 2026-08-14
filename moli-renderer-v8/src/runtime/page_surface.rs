@@ -3627,6 +3627,7 @@ pub enum RendererPageCommand {
     },
     DispatchQueuedRuntimeInspectorCommand {
         command_id: u64,
+        inspector_session_id: Option<String>,
     },
     DispatchRuntimeProtocolMessageWithContextResolution {
         inspector_session_id: Option<String>,
@@ -4168,6 +4169,39 @@ pub enum RendererRuntimeRemoteObjectResolution {
 }
 
 impl RendererPageCommand {
+    /// Returns the V8 Inspector session whose message order owns this command's
+    /// first-dispatch boundary. Direct Inspector commands and the owner fallback
+    /// for pause-routable commands share the same session lane, preventing
+    /// same-session overtaking without coupling independent sessions.
+    pub(super) fn first_dispatch_inspector_session(&self) -> Option<DevToolsSessionKey> {
+        let inspector_session_id = match self {
+            Self::DispatchRuntimeProtocolMessage {
+                inspector_session_id,
+                ..
+            }
+            | Self::DispatchRuntimeProtocolMessageWithDeferredResponse {
+                inspector_session_id,
+                ..
+            }
+            | Self::DispatchQueuedRuntimeInspectorCommand {
+                inspector_session_id,
+                ..
+            }
+            | Self::DispatchRuntimeProtocolMessageWithContextResolution {
+                inspector_session_id,
+                ..
+            }
+            | Self::DispatchRuntimeProtocolMessageWithContextResolutionAndDeferredResponse {
+                inspector_session_id,
+                ..
+            } => inspector_session_id.as_deref(),
+            _ => return None,
+        };
+        Some(DevToolsSessionKey::from_wire_session_id(
+            inspector_session_id,
+        ))
+    }
+
     pub(crate) fn interruptible_by_javascript_dialog(&self) -> bool {
         #[cfg(test)]
         if matches!(self, Self::TakeDocumentLifecycleEvents) {

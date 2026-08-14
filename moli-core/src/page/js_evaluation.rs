@@ -513,6 +513,7 @@ impl Page {
         raw_json: String,
         deferred_response: RendererRuntimeInspectorResponseSender,
     ) -> Result<PendingRuntimeInspectorCommandDispatch> {
+        let owner_fallback_inspector_session_id = inspector_session_id.clone();
         let route = self.handle.enqueue_routable_runtime_inspector_command(
             inspector_session_id,
             owner_context_resolution_action,
@@ -522,7 +523,10 @@ impl Page {
         let owner_pending = if route.requires_owner_fallback() {
             let command_id = route.command_id();
             match self.start_page_command(
-                RendererPageCommand::DispatchQueuedRuntimeInspectorCommand { command_id },
+                RendererPageCommand::DispatchQueuedRuntimeInspectorCommand {
+                    command_id,
+                    inspector_session_id: owner_fallback_inspector_session_id,
+                },
             ) {
                 Ok(pending) => Some(pending),
                 Err(error) => {

@@ -54,6 +54,7 @@ mod owner_local;
 mod owner_local_store;
 mod owner_maintenance;
 mod page;
+mod page_command_residence;
 mod page_commands;
 mod page_context_cancel;
 mod page_css;

@@ -203,7 +203,7 @@ impl PageVm {
                 )
                 .map(RendererRuntimeCommandOutput::from_messages)
                 .map(RendererPageReply::RuntimeInspectorProtocolMessages),
-            RendererPageCommand::DispatchQueuedRuntimeInspectorCommand { command_id } => self
+            RendererPageCommand::DispatchQueuedRuntimeInspectorCommand { command_id, .. } => self
                 .dispatch_queued_runtime_inspector_command(command_id)
                 .map(RendererRuntimeCommandOutput::from_messages)
                 .map(RendererPageReply::RuntimeInspectorProtocolMessages),
