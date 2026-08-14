@@ -85,6 +85,7 @@ fn node_scroll_position_setter_for_object<'s>(
     };
     let value = value.clamp(minimum, maximum);
     let is_scrolling_element = runtime.dom_host().document_element_handle() == Some(handle);
+    let document = runtime.dom_host().owner_document_handle(handle);
     let Some(element) = runtime
         .dom_host_mut()
         .node_mut(handle)
@@ -107,7 +108,7 @@ fn node_scroll_position_setter_for_object<'s>(
                 if horizontal { current.1 } else { value },
             );
         } else {
-            crate::observer_runtime::queue_intersection_checks(scope, runtime_ptr);
+            queue_scroll_observable_effects(scope, runtime_ptr, document, false);
         }
     }
     Ok(())
@@ -158,22 +159,44 @@ fn set_node_scroll_position(
     top: f64,
     queue_observable_effects: bool,
 ) {
-    let runtime = unsafe { &mut *runtime_ptr };
-    let Some(element) = runtime
-        .dom_host_mut()
-        .node_mut(handle)
-        .and_then(|node| node.data_mut().as_element_mut())
-    else {
-        return;
-    };
-    let changed = element.set_scroll_left(left) | element.set_scroll_top(top);
-    if changed && queue_observable_effects {
-        crate::observer_runtime::queue_intersection_checks(scope, runtime_ptr);
+    let (changed, document) = {
+        let runtime = unsafe { &mut *runtime_ptr };
         let document = runtime.dom_host().owner_document_handle(handle);
-        if let Some(document) = document {
-            queue_revealed_lazy_image_loads(scope, runtime_ptr, document);
-        }
-        queue_revealed_lazy_media_loads(scope, runtime_ptr);
+        let Some(element) = runtime
+            .dom_host_mut()
+            .node_mut(handle)
+            .and_then(|node| node.data_mut().as_element_mut())
+        else {
+            return;
+        };
+        (
+            element.set_scroll_left(left) | element.set_scroll_top(top),
+            document,
+        )
+    };
+    if changed && queue_observable_effects {
+        queue_scroll_observable_effects(scope, runtime_ptr, document, false);
+    }
+}
+
+pub(crate) fn queue_scroll_observable_effects(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    document: Option<DomHandle>,
+    queue_document_events: bool,
+) {
+    // Native lazy loading deliberately combines the retained pre-scroll
+    // projection with live element offsets, so admit those requests before
+    // retiring the sampled projection. Observable geometry and author
+    // IntersectionObservers, on the other hand, must see a fresh projection.
+    if let Some(document) = document {
+        queue_revealed_lazy_image_loads(scope, runtime_ptr, document);
+    }
+    queue_revealed_lazy_media_loads(scope, runtime_ptr);
+    unsafe { &*runtime_ptr }.invalidate_layout_after_interaction_state_change();
+    crate::observer_runtime::queue_intersection_checks(scope, runtime_ptr);
+    if queue_document_events {
+        let _ = unsafe { &mut *runtime_ptr }.queue_document_scroll_events(scope);
     }
 }
 
@@ -257,6 +280,146 @@ fn apply_observable_window_scroll(
         unsafe { &mut *runtime_ptr }.scroll_window_endpoint_to(scope, endpoint, target_x, target_y);
     }
     true
+}
+
+fn consume_wheel_axis(
+    current: f64,
+    minimum: f64,
+    maximum: f64,
+    remaining: f64,
+    allows_user_scroll: bool,
+) -> (f64, f64) {
+    if !allows_user_scroll || remaining == 0.0 {
+        return (current, remaining);
+    }
+    let target = (current + remaining).clamp(minimum, maximum);
+    (target, remaining - (target - current))
+}
+
+/// Run the uncancelled default action for one pixel-mode WheelEvent.
+///
+/// Each axis starts at the innermost scroll container under the pointer. Any
+/// delta left at that container's boundary continues along the layout ancestor
+/// chain, matching the scroll chaining users expect from a trackpad or wheel.
+pub(crate) fn perform_wheel_scroll_default_action(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+    delta_x: f64,
+    delta_y: f64,
+) -> Result<bool, moli_layout::LayoutError> {
+    let mut remaining_x = if delta_x.is_finite() { delta_x } else { 0.0 };
+    let mut remaining_y = if delta_y.is_finite() { delta_y } else { 0.0 };
+    if remaining_x == 0.0 && remaining_y == 0.0 {
+        return Ok(false);
+    }
+
+    let runtime = unsafe { &*runtime_ptr };
+    let target = if runtime
+        .dom_host()
+        .node(handle)
+        .is_some_and(Node::is_document)
+    {
+        let Some(root) = runtime.dom_host().document_element_handle() else {
+            return Ok(false);
+        };
+        root
+    } else if runtime.dom_host().is_connected(handle) {
+        handle
+    } else {
+        return Ok(false);
+    };
+    let Some(mut geometry) = observable_scroll_into_view_geometry(
+        runtime,
+        target,
+        moli_layout::LayoutFlushReason::SynchronousGeometry,
+    )?
+    else {
+        return Ok(false);
+    };
+
+    // ScrollIntoView geometry begins at the target's parent. Include the
+    // target itself so an empty overflow scroller still responds when its own
+    // background is the hit-test result.
+    if let Some(metrics) = observable_element_metrics(
+        runtime,
+        target,
+        moli_layout::LayoutFlushReason::SynchronousGeometry,
+    )? && metrics.is_scroll_container
+        && geometry
+            .scroll_containers
+            .iter()
+            .all(|container| container.source != target)
+    {
+        geometry.scroll_containers.insert(
+            0,
+            moli_layout::LayoutScrollContainerMetrics {
+                source: target,
+                metrics,
+            },
+        );
+    }
+
+    let mut changed = false;
+    for container in geometry.scroll_containers {
+        if remaining_x == 0.0 && remaining_y == 0.0 {
+            break;
+        }
+        let (current_x, current_y) =
+            node_scroll_position(unsafe { &*runtime_ptr }, container.source);
+        let (target_x, next_remaining_x) = consume_wheel_axis(
+            current_x,
+            f64::from(container.metrics.minimum_scroll_offset.x),
+            f64::from(container.metrics.maximum_scroll_offset.x),
+            remaining_x,
+            container.metrics.allows_user_scroll_x,
+        );
+        let (target_y, next_remaining_y) = consume_wheel_axis(
+            current_y,
+            f64::from(container.metrics.minimum_scroll_offset.y),
+            f64::from(container.metrics.maximum_scroll_offset.y),
+            remaining_y,
+            container.metrics.allows_user_scroll_y,
+        );
+        remaining_x = next_remaining_x;
+        remaining_y = next_remaining_y;
+        if target_x == current_x && target_y == current_y {
+            continue;
+        }
+
+        let container_document = unsafe { &*runtime_ptr }
+            .dom_host()
+            .owner_document_handle(container.source);
+        let is_document_scroller = container_document.is_some_and(|document| {
+            unsafe { &*runtime_ptr }
+                .dom_host()
+                .dom()
+                .document_element_handle_for_document(document)
+                == Some(container.source)
+        });
+        if is_document_scroller {
+            changed |= apply_observable_window_scroll(
+                scope,
+                runtime_ptr,
+                container.source,
+                target_x,
+                target_y,
+                current_x,
+                current_y,
+            );
+        } else {
+            set_node_scroll_position(
+                scope,
+                runtime_ptr,
+                container.source,
+                target_x,
+                target_y,
+                true,
+            );
+            changed = true;
+        }
+    }
+    Ok(changed)
 }
 
 pub(crate) fn scroll_node_into_view_if_needed(

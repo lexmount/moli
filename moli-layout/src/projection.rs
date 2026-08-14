@@ -446,6 +446,10 @@ where
                 minimum_offset,
                 maximum_offset,
                 is_scroll_container,
+                allows_user_scroll_x: is_root
+                    || self.world.boxes[index].style.allows_user_scroll_x(),
+                allows_user_scroll_y: is_root
+                    || self.world.boxes[index].style.allows_user_scroll_y(),
                 clips_overflow: self.world.boxes[index].style.clips_overflow(),
             });
         }

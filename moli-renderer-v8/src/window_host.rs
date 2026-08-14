@@ -32,8 +32,7 @@ use super::{
             iframe_handle_viewport, observable_event_offset,
             perform_click_default_action_for_dispatched_event,
             prepare_legacy_activation_for_dispatched_click,
-            queue_animation_start_for_listener_target, queue_revealed_lazy_image_loads,
-            queue_revealed_lazy_media_loads,
+            queue_animation_start_for_listener_target, queue_scroll_observable_effects,
         },
         enter_active_child_window_scope, enter_top_level_lightweight_popup_scope,
         node_runtime_and_handle_from_object, throw_dom_exception,
@@ -1077,13 +1076,7 @@ pub(crate) fn scroll_window_to(
     if !set_scroll_position(scope, global, x, y) && !scrolling_element_changed {
         return;
     }
-    crate::observer_runtime::queue_intersection_checks(scope, host_ptr);
-    if let Some(document) = document {
-        queue_revealed_lazy_image_loads(scope, host_ptr, document);
-    }
-    queue_revealed_lazy_media_loads(scope, host_ptr);
-    let runtime = unsafe { &mut *host_ptr };
-    let _ = runtime.queue_document_scroll_events(scope);
+    queue_scroll_observable_effects(scope, host_ptr, document, true);
 }
 
 pub(crate) fn current_window_scroll_position(scope: &mut v8::PinScope<'_, '_>) -> (f64, f64) {

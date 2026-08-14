@@ -1496,6 +1496,14 @@ impl ResolvedLayoutStyle {
             .any(|overflow| matches!(overflow, taffy::Overflow::Hidden | taffy::Overflow::Scroll))
     }
 
+    pub(crate) fn allows_user_scroll_x(&self) -> bool {
+        self.taffy.overflow.x == taffy::Overflow::Scroll
+    }
+
+    pub(crate) fn allows_user_scroll_y(&self) -> bool {
+        self.taffy.overflow.y == taffy::Overflow::Scroll
+    }
+
     pub(crate) fn text_leaf_from(parent: &Self) -> Self {
         Self {
             computed: parent.computed.clone(),

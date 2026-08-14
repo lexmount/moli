@@ -243,6 +243,180 @@ fn element_scroll_into_view_if_needed_updates_observable_window_scroll() {
 }
 
 #[test]
+fn wheel_default_action_scrolls_and_refreshes_geometry_unless_canceled() {
+    let mut vm = new_storage_test_vm("https://wheel-default-scroll.test/");
+    vm.eval(
+        r#"
+        (() => {
+          if (!document.documentElement) {
+            document.appendChild(document.createElement("html"));
+          }
+          if (!document.body) {
+            document.documentElement.appendChild(document.createElement("body"));
+          }
+          document.documentElement.style.margin = "0";
+          document.body.style.margin = "0";
+          document.body.innerHTML =
+            '<div style="height: 500px"></div>' +
+            '<div id="marker" style="height: 20px"></div>' +
+            '<div style="height: 2500px"></div>';
+          window.__wheelDeltas = [];
+          window.addEventListener("wheel", event => {
+            window.__wheelDeltas.push(event.deltaY);
+          }, { capture: true });
+        })()
+        "#,
+    )
+    .expect("wheel fixture should initialize");
+    refresh_layout_for_test(&mut vm);
+
+    let before = vm
+        .eval("document.getElementById('marker').getBoundingClientRect().top")
+        .expect("initial marker geometry should evaluate")
+        .parse::<f64>()
+        .expect("initial marker top should be numeric");
+    let outcome = vm
+        .dispatch_mouse_event_at_point(10.0, 10.0, "wheel", -1, Some(0), 0.0, 120.0)
+        .expect("wheel input should dispatch");
+    assert!(outcome.handled);
+
+    let result = vm
+        .eval(
+            r#"
+            JSON.stringify({
+              scrollY,
+              scrollingElementScrollTop: document.scrollingElement.scrollTop,
+              markerTop: document.getElementById("marker").getBoundingClientRect().top,
+              wheelDeltas: window.__wheelDeltas
+            })
+            "#,
+        )
+        .expect("post-wheel geometry should evaluate");
+    let result: serde_json::Value =
+        serde_json::from_str(&result).expect("post-wheel result should be JSON");
+    assert_eq!(result["scrollY"], 120.0);
+    assert_eq!(result["scrollingElementScrollTop"], 120.0);
+    assert_eq!(result["markerTop"], before - 120.0);
+    assert_eq!(result["wheelDeltas"], serde_json::json!([120]));
+
+    vm.eval(
+        r#"
+        window.addEventListener("wheel", event => event.preventDefault(), {
+          capture: true,
+          passive: false
+        })
+        "#,
+    )
+    .expect("wheel cancellation listener should install");
+    vm.dispatch_mouse_event_at_point(10.0, 10.0, "wheel", -1, Some(0), 0.0, 80.0)
+        .expect("canceled wheel input should dispatch");
+    assert_eq!(
+        vm.eval("String(scrollY)")
+            .expect("canceled wheel scroll position should evaluate"),
+        "120"
+    );
+}
+
+#[test]
+fn window_scroll_refreshes_intersection_observer_geometry() {
+    let mut vm = new_storage_test_vm("https://scroll-intersection-observer.test/");
+    vm.eval(
+        r#"
+        (() => {
+          if (!document.documentElement) {
+            document.appendChild(document.createElement("html"));
+          }
+          if (!document.body) {
+            document.documentElement.appendChild(document.createElement("body"));
+          }
+          document.documentElement.style.margin = "0";
+          document.body.style.margin = "0";
+          document.body.innerHTML =
+            '<div style="height: 800px"></div>' +
+            '<div id="lazy-target" style="height: 20px"></div>' +
+            '<div style="height: 1000px"></div>';
+        })()
+        "#,
+    )
+    .expect("intersection scroll fixture should initialize");
+    refresh_layout_for_test(&mut vm);
+
+    vm.eval(
+        r#"
+        (() => {
+          window.__intersectionStates = [];
+          window.__intersectionObserver = new IntersectionObserver(entries => {
+            window.__intersectionStates.push(entries[0].isIntersecting);
+          });
+          window.__intersectionObserver.observe(
+            document.getElementById("lazy-target")
+          );
+        })()
+        "#,
+    )
+    .expect("intersection observer should register");
+    assert_eq!(
+        vm.eval("JSON.stringify(window.__intersectionStates)")
+            .expect("initial intersection state should flush"),
+        "[false]"
+    );
+
+    vm.eval("window.scrollTo(0, 400)")
+        .expect("window scroll should evaluate");
+    assert_eq!(
+        vm.eval("JSON.stringify(window.__intersectionStates)")
+            .expect("scrolled intersection state should flush"),
+        "[false,true]"
+    );
+}
+
+#[test]
+fn wheel_default_action_scrolls_the_innermost_container_then_chains_to_the_root() {
+    let mut vm = new_storage_test_vm("https://wheel-scroll-chain.test/");
+    vm.eval(
+        r#"
+        (() => {
+          if (!document.documentElement) {
+            document.appendChild(document.createElement("html"));
+          }
+          if (!document.body) {
+            document.documentElement.appendChild(document.createElement("body"));
+          }
+          document.documentElement.style.margin = "0";
+          document.body.style.margin = "0";
+          document.body.innerHTML =
+            '<div id="scroller" style="width: 200px; height: 100px; overflow: auto">' +
+              '<div style="height: 500px"></div>' +
+            '</div>' +
+            '<div style="height: 2000px"></div>';
+        })()
+        "#,
+    )
+    .expect("nested wheel fixture should initialize");
+    refresh_layout_for_test(&mut vm);
+
+    vm.dispatch_mouse_event_at_point(10.0, 10.0, "wheel", -1, Some(0), 0.0, 60.0)
+        .expect("nested wheel input should dispatch");
+    assert_eq!(
+        vm.eval("JSON.stringify([document.getElementById('scroller').scrollTop, window.scrollY])")
+            .expect("nested wheel positions should evaluate"),
+        "[60,0]"
+    );
+
+    vm.eval(
+        "document.getElementById('scroller').scrollTop = document.getElementById('scroller').scrollHeight"
+    )
+    .expect("nested scroller should move to its boundary");
+    vm.dispatch_mouse_event_at_point(10.0, 10.0, "wheel", -1, Some(0), 0.0, 40.0)
+        .expect("chained wheel input should dispatch");
+    assert_eq!(
+        vm.eval("String(window.scrollY)")
+            .expect("root chained scroll position should evaluate"),
+        "40"
+    );
+}
+
+#[test]
 fn dom_core_prototype_accessors_brand_check_live_and_detached_receivers() {
     let mut vm = new_storage_test_vm("https://example.com/");
 

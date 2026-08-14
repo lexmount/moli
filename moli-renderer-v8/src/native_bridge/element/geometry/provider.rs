@@ -628,6 +628,8 @@ fn mock_element_metrics(
         scrollport: quad,
         scrollable_overflow: quad,
         is_scroll_container: false,
+        allows_user_scroll_x: false,
+        allows_user_scroll_y: false,
         clips_overflow: false,
         visible: rect.width > 0.0 && rect.height > 0.0,
         pointer_events: true,

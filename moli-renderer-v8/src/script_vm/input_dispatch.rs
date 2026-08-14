@@ -23,8 +23,9 @@ use crate::native_bridge::element::{
     construct_touch_event, construct_touch_event_with_points, construct_wheel_event,
     contenteditable_editing_host, dispatch_public_event, observable_input_hit_test,
     perform_drop_default_action, perform_mouse_focus_default_action,
-    replace_contenteditable_selection, replace_text_control_selection,
-    select_contenteditable_contents, text_control_set_selection_range_internal,
+    perform_wheel_scroll_default_action, replace_contenteditable_selection,
+    replace_text_control_selection, select_contenteditable_contents,
+    text_control_set_selection_range_internal,
     text_control_set_selection_range_with_direction_internal, text_control_value, update_focus,
 };
 use crate::runtime::{
@@ -458,7 +459,15 @@ impl ScriptVm {
             let mut context_host = self._context_host.borrow_mut();
             context_host.set_hovered_element_for_input(hit_handle);
         }
-        let Some(handle) = capture_handle.or(hit_handle) else {
+        let wheel_fallback_handle = (event_name == "wheel")
+            .then(|| {
+                self._context_host
+                    .borrow()
+                    .dom_host()
+                    .document_element_handle()
+            })
+            .flatten();
+        let Some(handle) = capture_handle.or(hit_handle).or(wheel_fallback_handle) else {
             return Ok(input_dispatch_outcome(false));
         };
         let hover_transition = if tracks_mouse_hover_for_event(event_name) {
@@ -708,6 +717,15 @@ impl ScriptVm {
                 if let Some(event) = event {
                     let dispatched =
                         dispatch_public_event(scope, runtime_ptr, pointer_dispatch_handle, event);
+                    if event_name == "wheel" && dispatched.allows_default() {
+                        let _ = perform_wheel_scroll_default_action(
+                            scope,
+                            runtime_ptr,
+                            pointer_dispatch_handle,
+                            delta_x,
+                            delta_y,
+                        )?;
+                    }
                     if event_name == "mousedown" && dispatched.allows_default() {
                         // Chromium transfers mouse focus only after the
                         // pointer/mouse down events have run and only when

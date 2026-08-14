@@ -19,7 +19,10 @@ pub(in crate::native_bridge) use metrics::{
     node_scroll_top_getter_function, node_scroll_top_setter_function,
     node_scroll_width_getter_function,
 };
-pub(crate) use metrics::{scroll_node_into_view_at_start, scroll_node_into_view_if_needed};
+pub(crate) use metrics::{
+    perform_wheel_scroll_default_action, queue_scroll_observable_effects,
+    scroll_node_into_view_at_start, scroll_node_into_view_if_needed,
+};
 pub(crate) use provider::{
     observable_bounding_client_rect, observable_bounding_client_rects, observable_caret_position,
     observable_client_rects, observable_deep_hit_test, observable_element_metrics,

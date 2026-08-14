@@ -301,6 +301,8 @@ pub struct LayoutScrollExtent {
     pub minimum_offset: LayoutPoint,
     pub maximum_offset: LayoutPoint,
     pub is_scroll_container: bool,
+    pub allows_user_scroll_x: bool,
+    pub allows_user_scroll_y: bool,
     pub clips_overflow: bool,
 }
 

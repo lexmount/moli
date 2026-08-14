@@ -99,6 +99,133 @@ async fn fetch_server_response(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn websocket_cdp_mouse_wheel_scrolls_page_and_honors_prevent_default() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .expect("connect browser websocket");
+    let target_id = create_dynamic_target(&mut browser, 1).await;
+    let mut page = connect_dynamic_page(addr, &target_id).await;
+
+    let installed = send_cdp_command(
+        &mut page,
+        1,
+        "Runtime.evaluate",
+        None,
+        json!({
+            "expression": r#"
+                (() => {
+                  document.documentElement.style.margin = "0";
+                  document.body.style.margin = "0";
+                  document.body.innerHTML =
+                    '<div style="height: 500px"></div>' +
+                    '<div id="marker" style="height: 20px"></div>' +
+                    '<div style="height: 2500px"></div>';
+                  window.__wheelDeltas = [];
+                  window.addEventListener("wheel", event => {
+                    window.__wheelDeltas.push(event.deltaY);
+                  }, { capture: true });
+                  return document.getElementById("marker").getBoundingClientRect().top;
+                })()
+            "#,
+            "returnByValue": true
+        }),
+    )
+    .await;
+    let marker_before = response_by_id(&installed, 1)["result"]["result"]["value"]
+        .as_f64()
+        .expect("initial marker top");
+
+    let wheel = send_cdp_command(
+        &mut page,
+        2,
+        "Input.dispatchMouseEvent",
+        None,
+        json!({
+            "type": "mouseWheel",
+            "x": 10,
+            "y": 10,
+            "deltaX": 0,
+            "deltaY": 120
+        }),
+    )
+    .await;
+    assert!(response_by_id(&wheel, 2).get("result").is_some());
+
+    let scrolled = send_cdp_command(
+        &mut page,
+        3,
+        "Runtime.evaluate",
+        None,
+        json!({
+            "expression": r#"
+                ({
+                  scrollY,
+                  markerTop: document.getElementById("marker").getBoundingClientRect().top,
+                  wheelDeltas: window.__wheelDeltas
+                })
+            "#,
+            "returnByValue": true
+        }),
+    )
+    .await;
+    let value = &response_by_id(&scrolled, 3)["result"]["result"]["value"];
+    assert_eq!(value["scrollY"], json!(120));
+    assert_eq!(
+        value["markerTop"].as_f64().expect("scrolled marker top"),
+        marker_before - 120.0
+    );
+    assert_eq!(value["wheelDeltas"], json!([120]));
+
+    let cancel = send_cdp_command(
+        &mut page,
+        4,
+        "Runtime.evaluate",
+        None,
+        json!({
+            "expression": r#"
+                window.addEventListener("wheel", event => event.preventDefault(), {
+                  capture: true,
+                  passive: false
+                })
+            "#
+        }),
+    )
+    .await;
+    assert!(response_by_id(&cancel, 4).get("result").is_some());
+    let canceled_wheel = send_cdp_command(
+        &mut page,
+        5,
+        "Input.dispatchMouseEvent",
+        None,
+        json!({
+            "type": "mouseWheel",
+            "x": 10,
+            "y": 10,
+            "deltaX": 0,
+            "deltaY": 80
+        }),
+    )
+    .await;
+    assert!(response_by_id(&canceled_wheel, 5).get("result").is_some());
+    let final_scroll = send_cdp_command(
+        &mut page,
+        6,
+        "Runtime.evaluate",
+        None,
+        json!({ "expression": "scrollY", "returnByValue": true }),
+    )
+    .await;
+    assert_eq!(
+        response_by_id(&final_scroll, 6)["result"]["result"]["value"],
+        json!(120)
+    );
+
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_cdp_dynamic_page_routes_to_existing_target_owner() {
     let (addr, server) = spawn_test_protocol_server().await;
     let (mut browser, _) =

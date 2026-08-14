@@ -52,6 +52,8 @@ pub struct LayoutElementMetrics<N> {
     pub scrollport: LayoutQuad,
     pub scrollable_overflow: LayoutQuad,
     pub is_scroll_container: bool,
+    pub allows_user_scroll_x: bool,
+    pub allows_user_scroll_y: bool,
     pub clips_overflow: bool,
     pub visible: bool,
     pub pointer_events: bool,

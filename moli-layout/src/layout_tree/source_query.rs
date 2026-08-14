@@ -160,6 +160,8 @@ where
                 .local_to_viewport
                 .map_rect(extent.scrollable_overflow),
             is_scroll_container: extent.is_scroll_container,
+            allows_user_scroll_x: extent.allows_user_scroll_x,
+            allows_user_scroll_y: extent.allows_user_scroll_y,
             clips_overflow: extent.clips_overflow,
             visible: geometry.visible,
             pointer_events: geometry.pointer_events,
