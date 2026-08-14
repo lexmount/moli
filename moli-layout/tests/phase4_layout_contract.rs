@@ -1050,6 +1050,91 @@ fn replaced_intrinsic_minimum_floors_a_smaller_authored_maximum() {
     assert_eq!((replaced.width, replaced.height), (100.0, 100.0));
 }
 
+/// Regression for
+/// <https://wpt.live/css/css-sizing/intrinsic-ratio-replaced-box-sizing.html>.
+#[test]
+fn ratio_only_atomic_images_receive_margin_excluded_available_space() {
+    let svg = Arc::new(
+        moli_image::decode_svg_image(
+            br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><rect width="1" height="1" fill="lime"/></svg>"##,
+        )
+        .expect("fixture SVG should parse"),
+    );
+    let image = LayoutImageResource {
+        intrinsic_width: 100.0,
+        intrinsic_height: 100.0,
+        pixels: None,
+        svg: Some(svg),
+    };
+    let replaced = |label, local_name, kind| {
+        Node::element(
+            label,
+            local_name,
+            LayoutElementCategory::Generic,
+            Some(kind),
+            Vec::new(),
+        )
+        .with_metrics(ReplacedMetrics {
+            intrinsic_ratio: Some(1.0),
+            default_object_size: Some(ReplacedObjectSize::new(300.0, 150.0)),
+            ..ReplacedMetrics::default()
+        })
+        .with_image(image.clone())
+    };
+    let source = Source(vec![
+        Node::element(
+            "root",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            vec![1, 2, 3, 4],
+        ),
+        replaced("image-content-box", "img", LayoutReplacedKind::Image),
+        replaced("image-border-box", "img", LayoutReplacedKind::Image),
+        replaced("svg-content-box", "svg", LayoutReplacedKind::Svg),
+        replaced("svg-border-box", "svg", LayoutReplacedKind::Svg),
+    ]);
+    let mut styles = Styles::default();
+    styles.primary.insert(
+        0,
+        sized(LayoutDisplay::Block, 100.0, 400.0, PaintColor::TRANSPARENT),
+    );
+    for (node, box_sizing) in [
+        (1, BoxSizing::ContentBox),
+        (2, BoxSizing::BorderBox),
+        (3, BoxSizing::ContentBox),
+        (4, BoxSizing::BorderBox),
+    ] {
+        styles.primary.insert(
+            node,
+            ResolvedLayoutStyle::synthetic(
+                LayoutDisplay::Inline,
+                Style {
+                    box_sizing,
+                    margin: Rect::length(5.0),
+                    border: Rect::length(10.0),
+                    ..Style::default()
+                },
+                PaintColor::TRANSPARENT,
+            ),
+        );
+    }
+
+    let snapshot = render(&source, &mut styles, 100, 400);
+    let destinations = snapshot
+        .fragments
+        .iter()
+        .filter_map(|fragment| match fragment {
+            PaintFragment::SvgImage(image) => Some(image.destination),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(destinations.len(), 4);
+    for destination in destinations {
+        assert_eq!((destination.width, destination.height), (70.0, 70.0));
+    }
+}
+
 #[test]
 fn replaced_attributes_canvas_defaults_and_image_button_share_resource_free_sizing() {
     let source = Source(vec![
