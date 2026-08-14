@@ -111,7 +111,7 @@ where
     paint_order: Vec<LayoutFragmentId>,
     hit_entries: Vec<LayoutHitTestEntry<N>>,
     pub(crate) diagnostics: Vec<PaintDiagnostic>,
-    resolved_transforms: Vec<LayoutTransform2D>,
+    pub(crate) resolved_transforms: Vec<LayoutTransform2D>,
     overflow: Vec<LayoutRect>,
     viewport_anchored: Vec<bool>,
     direct_fragments: Vec<Option<LayoutFragmentId>>,

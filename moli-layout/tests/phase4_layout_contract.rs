@@ -1,14 +1,14 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use moli_layout::{
     DocumentLayoutServices, LayoutDisplay, LayoutElementCategory, LayoutElementMetadata,
     LayoutElementSemantics, LayoutError, LayoutFormControlData, LayoutFormControlKind,
-    LayoutInputControlKind, LayoutListData, LayoutListMarkerPosition, LayoutListMarkerType,
-    LayoutListRole, LayoutNamespace, LayoutPosition, LayoutPseudo, LayoutReplacedKind,
-    LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutTableData, LayoutTableRole,
-    LayoutTextSelection, PaintBrush, PaintColor, PaintFragment, PaintRect, PaintShape,
-    PaintSnapshot, PaintViewport, ReplacedMetrics, ResolvedLayoutStyle, ScreenshotLayoutRequest,
-    build_screenshot_snapshot,
+    LayoutImageResource, LayoutInputControlKind, LayoutListData, LayoutListMarkerPosition,
+    LayoutListMarkerType, LayoutListRole, LayoutNamespace, LayoutPosition, LayoutPseudo,
+    LayoutReplacedKind, LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutTableData,
+    LayoutTableRole, LayoutTextSelection, PaintBrush, PaintColor, PaintFragment, PaintRect,
+    PaintShape, PaintSnapshot, PaintTransform2D, PaintViewport, ReplacedMetrics,
+    ResolvedLayoutStyle, ScreenshotLayoutRequest, build_screenshot_snapshot,
 };
 use style::Atom;
 use taffy::{
@@ -28,6 +28,7 @@ struct Node {
     text: Option<&'static str>,
     children: Vec<usize>,
     metrics: Option<ReplacedMetrics>,
+    image: Option<LayoutImageResource>,
     selection: Option<LayoutTextSelection>,
 }
 
@@ -51,6 +52,7 @@ impl Node {
             text: None,
             children,
             metrics: None,
+            image: None,
             selection: None,
         }
     }
@@ -63,6 +65,7 @@ impl Node {
             text: Some(text),
             children: Vec::new(),
             metrics: None,
+            image: None,
             selection: None,
         }
     }
@@ -79,6 +82,11 @@ impl Node {
 
     fn with_metrics(mut self, metrics: ReplacedMetrics) -> Self {
         self.metrics = Some(metrics);
+        self
+    }
+
+    fn with_image(mut self, image: LayoutImageResource) -> Self {
+        self.image = Some(image);
         self
     }
 }
@@ -128,6 +136,14 @@ impl LayoutSource for Source {
 
     fn replaced_metrics(&self, node: Self::NodeId) -> Option<ReplacedMetrics> {
         self.0[node].metrics
+    }
+
+    fn replaced_image(
+        &self,
+        node: Self::NodeId,
+        _style: &ResolvedLayoutStyle,
+    ) -> Option<LayoutImageResource> {
+        self.0[node].image.clone()
     }
 }
 
@@ -747,6 +763,80 @@ fn degenerate_css_ratio_falls_back_to_the_replaced_intrinsic_ratio() {
             .iter()
             .any(|diagnostic| diagnostic.code == "replaced-content-placeholder")
     );
+}
+
+/// Regression for
+/// <https://wpt.live/css/css-sizing/image-fractional-height-with-wide-aspect-ratio.html>.
+#[test]
+fn fractional_replaced_images_project_contiguous_pre_transform_destinations() {
+    let svg = Arc::new(
+        moli_image::decode_svg_image(
+            br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 12"><rect width="96" height="12" fill="green"/></svg>"##,
+        )
+        .expect("fixture SVG should parse"),
+    );
+    let image = LayoutImageResource {
+        intrinsic_width: 96.0,
+        intrinsic_height: 12.0,
+        pixels: None,
+        svg: Some(svg),
+    };
+    let labels = [
+        "row-1", "row-2", "row-3", "row-4", "row-5", "row-6", "row-7", "row-8",
+    ];
+    let mut nodes = vec![Node::element(
+        "root",
+        "div",
+        LayoutElementCategory::Generic,
+        None,
+        (1..=8).collect(),
+    )];
+    nodes.extend(labels.into_iter().map(|label| {
+        Node::element(
+            label,
+            "img",
+            LayoutElementCategory::Generic,
+            Some(LayoutReplacedKind::Image),
+            Vec::new(),
+        )
+        .with_metrics(ReplacedMetrics {
+            intrinsic_width: Some(96.0),
+            intrinsic_height: Some(12.0),
+            intrinsic_ratio: Some(8.0),
+            ..ReplacedMetrics::default()
+        })
+        .with_image(image.clone())
+    }));
+    let source = Source(nodes);
+    let mut styles = Styles::default();
+    styles.primary.insert(
+        0,
+        sized(LayoutDisplay::Block, 100.0, 100.0, PaintColor::TRANSPARENT),
+    );
+    for node in 1..=8 {
+        styles.primary.insert(
+            node,
+            sized(LayoutDisplay::Block, 100.0, 12.5, PaintColor::TRANSPARENT),
+        );
+    }
+
+    let snapshot = render(&source, &mut styles, 100, 101);
+    let images = snapshot
+        .fragments
+        .iter()
+        .filter_map(|fragment| match fragment {
+            PaintFragment::SvgImage(image) => Some(image),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(images.len(), 8);
+    for (row, image) in images.into_iter().enumerate() {
+        assert_eq!(
+            image.destination,
+            PaintRect::new(0.0, row as f32 * 12.5, 100.0, 12.5)
+        );
+        assert_eq!(image.transform, PaintTransform2D::IDENTITY);
+    }
 }
 
 #[test]

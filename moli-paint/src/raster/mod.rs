@@ -689,16 +689,10 @@ fn paint_image(
     let Some(resource) = snapshot.image(image.image) else {
         return;
     };
-    let destination = image.destination;
-    if !destination.x.is_finite()
-        || !destination.y.is_finite()
-        || !destination.width.is_finite()
-        || !destination.height.is_finite()
-        || destination.width <= 0.0
-        || destination.height <= 0.0
-        || resource.image.width == 0
-        || resource.image.height == 0
-    {
+    let Some(destination) = pixel_snapped_image_destination(image.destination) else {
+        return;
+    };
+    if resource.image.width == 0 || resource.image.height == 0 {
         return;
     }
     let quality = match image.sampling {
@@ -741,17 +735,11 @@ fn paint_svg_image(
     let Some(resource) = snapshot.svg_image(image.image) else {
         return;
     };
-    let destination = image.destination;
+    let Some(destination) = pixel_snapped_image_destination(image.destination) else {
+        return;
+    };
     let tree_size = resource.image.tree().size();
-    if !destination.x.is_finite()
-        || !destination.y.is_finite()
-        || !destination.width.is_finite()
-        || !destination.height.is_finite()
-        || destination.width <= 0.0
-        || destination.height <= 0.0
-        || tree_size.width() <= 0.0
-        || tree_size.height() <= 0.0
-    {
+    if tree_size.width() <= 0.0 || tree_size.height() <= 0.0 {
         return;
     }
     let image_to_destination =
@@ -772,6 +760,47 @@ fn paint_svg_image(
         transform,
         &mut |_scene, _node| {},
     );
+}
+
+fn pixel_snapped_image_destination(destination: PaintRect) -> Option<PaintRect> {
+    if !destination.x.is_finite()
+        || !destination.y.is_finite()
+        || !destination.width.is_finite()
+        || !destination.height.is_finite()
+        || destination.width <= 0.0
+        || destination.height <= 0.0
+    {
+        return None;
+    }
+
+    // Layout and CSSOM keep fractional geometry. Paint projection has moved
+    // ordinary layout offsets into this destination while leaving scroll/CSS
+    // transforms on the fragment, so snapping here happens in the same
+    // pre-transform space as Blink's ToPixelSnappedRect.
+    let (x, width) = pixel_snap_image_axis(destination.x, destination.width);
+    let (y, height) = pixel_snap_image_axis(destination.y, destination.height);
+    (width > 0.0 && height > 0.0).then(|| PaintRect::new(x, y, width, height))
+}
+
+fn pixel_snap_image_axis(location: f32, size: f32) -> (f32, f32) {
+    let location = f64::from(location);
+    let size = f64::from(size);
+    let fraction = location % 1.0;
+    let snapped_location = round_layout_pixel(location);
+    let mut snapped_size = round_layout_pixel(fraction + size) - round_layout_pixel(fraction);
+
+    // Blink's SnapSizeToPixel keeps a non-trivial LayoutUnit extent visible.
+    // LayoutUnit has six fractional bits; this threshold belongs to the paint
+    // compatibility rule and does not impose precision on Taffy.
+    const MIN_NON_EMPTY_SIZE: f64 = 4.0 / 64.0;
+    if snapped_size == 0.0 && size > MIN_NON_EMPTY_SIZE {
+        snapped_size = 1.0;
+    }
+    (snapped_location as f32, snapped_size as f32)
+}
+
+fn round_layout_pixel(value: f64) -> f64 {
+    (value + 0.5).floor()
 }
 
 fn paint_border(
@@ -2338,6 +2367,46 @@ mod tests {
         assert_eq!(pixel(&rendered, 17, 5), [0, 255, 0, 255]);
         drop(snapshot);
         assert_eq!(Arc::strong_count(&svg), 1);
+    }
+
+    #[test]
+    fn fractional_svg_image_rows_share_pixel_snapped_boundaries() {
+        let svg = Arc::new(
+            moli_image::decode_svg_image(
+                br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 12"><rect width="96" height="12" fill="#008000"/></svg>"##,
+            )
+            .expect("fixture SVG should parse"),
+        );
+        let mut snapshot = PaintSnapshot::new(
+            PaintViewport::new(100, 101, 1.0),
+            PaintColor::new(1.0, 0.0, 0.0, 1.0),
+        );
+        let image = snapshot.add_svg_image(svg);
+        for row in 0..8 {
+            snapshot.push_fragment(PaintFragment::SvgImage(PaintSvgImage {
+                image,
+                destination: PaintRect::new(0.0, row as f32 * 12.5, 100.0, 12.5),
+                transform: PaintTransform2D::IDENTITY,
+            }));
+        }
+
+        let rendered = raster_snapshot(&snapshot).expect("SVG rows should rasterize");
+        for y in 0..100 {
+            for x in 0..100 {
+                assert_eq!(
+                    pixel(&rendered, x, y),
+                    [0, 128, 0, 255],
+                    "unexpected image coverage at ({x}, {y})"
+                );
+            }
+        }
+        for x in 0..100 {
+            assert_eq!(
+                pixel(&rendered, x, 100),
+                [255, 0, 0, 255],
+                "SVG content escaped its snapped destination at ({x}, 100)"
+            );
+        }
     }
 
     #[test]

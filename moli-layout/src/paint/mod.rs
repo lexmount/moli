@@ -6,6 +6,7 @@ mod geometry;
 mod image;
 mod inline_boxes;
 mod mask;
+mod paint_space;
 mod table;
 mod text;
 
@@ -19,6 +20,7 @@ use geometry::{BoxAreas, BoxModelBox, canonical_shape, inset_radii};
 use image::project_replaced_image;
 use inline_boxes::project_inline_box_fragments;
 use mask::{CssMaskPlan, inspect_css_mask, project_css_mask};
+use paint_space::PaintSpaceMap;
 use style::values::generics::image::GenericImage;
 use table::project_collapsed_table_borders;
 use text::{TextClipMaskScope, project_text, project_text_clip_mask};
@@ -65,6 +67,7 @@ where
     snapshot.viewport_to_surface = capture.viewport_to_surface;
     snapshot.content_size = projection.document_content_size();
     snapshot.diagnostics = projection.diagnostics.clone();
+    let paint_spaces = PaintSpaceMap::build(projection, capture.viewport_to_surface);
 
     if let Some(background) = propagated_background {
         let transform = capture.viewport_to_surface;
@@ -260,6 +263,7 @@ where
                 project_box_contents(
                     projection,
                     id,
+                    &paint_spaces,
                     embedded_frames,
                     capture.include_backgrounds,
                     &mut snapshot,
@@ -657,6 +661,7 @@ fn project_box_outline<N>(
 fn project_box_contents<N>(
     projection: &OutputProjection<'_, N>,
     id: LayoutBoxId,
+    paint_spaces: &PaintSpaceMap,
     embedded_frames: &mut HashMap<LayoutBoxId, PaintSnapshot>,
     include_backgrounds: bool,
     snapshot: &mut PaintSnapshot,
@@ -681,7 +686,7 @@ fn project_box_contents<N>(
             local_to_surface,
         );
     }
-    project_replaced_image(projection, id, transform, snapshot);
+    project_replaced_image(projection, id, transform, paint_spaces.get(id), snapshot);
     project_form_control_appearance(layout_box, geometry.border_box, transform, snapshot);
     let text_clip_mask = |scope: TextClipMaskScope, snapshot: &mut PaintSnapshot| {
         project_background_text_clip_mask(projection, id, scope, snapshot);

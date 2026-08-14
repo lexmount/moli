@@ -11,7 +11,10 @@ use style::{
     values::{computed::CSSPixelLength, specified::image::ImageRendering},
 };
 
-use super::geometry::{BoxAreas, BoxModelBox};
+use super::{
+    geometry::{BoxAreas, BoxModelBox},
+    paint_space::PaintSpace,
+};
 use crate::{
     LayoutBoxId, LayoutPoint, LayoutRect, LayoutReplacedKind, LayoutSize, LayoutTransform2D,
     PaintBorderColors, PaintBorderStyle, PaintBorderStyles, PaintColor, PaintCornerRadii,
@@ -23,6 +26,7 @@ pub(super) fn project_replaced_image<N>(
     projection: &OutputProjection<'_, N>,
     id: LayoutBoxId,
     transform: LayoutTransform2D,
+    paint_space: PaintSpace,
     snapshot: &mut PaintSnapshot,
 ) where
     N: Copy + Debug + Eq + Hash,
@@ -128,20 +132,22 @@ pub(super) fn project_replaced_image<N>(
             transform,
         });
     }
+    let destination = paint_space.offset_rect(destination);
+    let image_transform = paint_space.property_transform();
     if let Some(pixels) = resource.pixels.clone() {
         let image = snapshot.add_image(pixels);
         snapshot.push_fragment(PaintFragment::Image(PaintImage {
             image,
             destination,
             sampling,
-            transform,
+            transform: image_transform,
         }));
     } else if let Some(svg) = resource.svg.clone() {
         let image = snapshot.add_svg_image(svg);
         snapshot.push_fragment(PaintFragment::SvgImage(PaintSvgImage {
             image,
             destination,
-            transform,
+            transform: image_transform,
         }));
     }
     if content_clip_needed {

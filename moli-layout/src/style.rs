@@ -1121,6 +1121,10 @@ impl ResolvedLayoutStyle {
         self.pointer_events
     }
 
+    pub(crate) const fn establishes_paint_property_space(&self) -> bool {
+        self.establishes_transform_containing_block
+    }
+
     pub(crate) fn resolved_2d_transform(&self, width: f32, height: f32) -> ResolvedLayoutTransform {
         if let Some(transform) = self.synthetic_transform {
             return ResolvedLayoutTransform {
