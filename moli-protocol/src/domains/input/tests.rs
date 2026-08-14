@@ -1,5 +1,5 @@
 use super::*;
-use crate::conn::{BrowserContext, CdpCommandTaskStep};
+use crate::conn::{BrowserContext, CdpCommandTaskStep, CommandDispatchContext};
 use crate::testing::{TestContext, wait_until_frame_stopped_loading};
 use moli_core::LayoutPolicy;
 
@@ -261,6 +261,64 @@ async fn coordinate_mouse_release_acknowledges_real_link_navigation() {
             );
         })
         .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn completed_mouse_event_does_not_restore_replaced_page_state() {
+    let mut ctx = TestContext::new();
+    with_loaded_document(&mut ctx, "<body>origin</body>").await;
+
+    let original_owner = ctx
+        .conn
+        .target_page_residence_identity_for_session(None)
+        .expect("the original Page should have a residence identity");
+    let pending = loaded_page_mut(&mut ctx.conn, None)
+        .expect("the original Page should be loaded")
+        .start_dispatch_mouse_event_at_point_with_outcome(
+            INPUT_HIT_X.into(),
+            INPUT_HIT_Y.into(),
+            "mousemove",
+            -1,
+            None,
+            0.0,
+            0.0,
+        )
+        .expect("the original Page should admit the mouse event");
+    let completed = PendingInputCommandDispatch {
+        command_id: Some(104),
+        session_id: None,
+        owner: original_owner.clone(),
+        kind: PendingInputCommandKind::DispatchMouseEvent,
+        pending: PendingInputOperation::Page(pending),
+    }
+    .wait()
+    .await;
+
+    let replacement_url = "data:text/html,<body>replacement</body>";
+    ctx.install_navigation_fixture_for_session_owner(replacement_url, None)
+        .await;
+    let replacement_owner = ctx
+        .conn
+        .target_page_residence_identity_for_session(None)
+        .expect("the replacement Page should have a residence identity");
+    assert_ne!(original_owner, replacement_owner);
+
+    let completed = complete_pending_input_command(
+        &mut ctx.conn,
+        completed,
+        &mut CommandDispatchContext::default(),
+    )
+    .await;
+    assert!(matches!(completed.result, Ok(DevToolsCommandResult::Empty)));
+    assert!(completed.protocol_events.is_empty());
+    assert!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .and_then(|context| context.active_target.runtime_slot.loaded_page())
+            .is_some_and(|page| page.final_url().as_str() == replacement_url),
+        "settling the original input command must not install its Page state into the replacement"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

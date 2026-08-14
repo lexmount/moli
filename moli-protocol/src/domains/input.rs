@@ -12,10 +12,11 @@ use crate::devtools_runtime::{
 };
 use crate::domains::command_output::CommandOutputPlan;
 use moli_core::page::{
-    CompletedPageCommand, Page, PageInputExt, PendingPageCommand, RendererDragData,
-    RendererDragDataItem, RendererDraggedFile, RendererInputDispatchOutcome,
+    CompletedPageCommand, Page, PageInputExt, PendingPageCommand, RendererCommandTurnCompletion,
+    RendererDragData, RendererDragDataItem, RendererDraggedFile, RendererInputDispatchOutcome,
     RendererPendingDownloadActivation, RendererPendingFileChooserActivation,
-    RendererPointerEventProperties, RendererTouchPoint,
+    RendererPointerEventProperties, RendererTouchPoint, decode_input_dispatch_outcome_completion,
+    decode_insert_text_completion,
 };
 use serde::Deserialize;
 #[cfg(test)]
@@ -163,16 +164,6 @@ impl CompletedInputCommandDispatch {
 
     pub(crate) fn session_id(&self) -> Option<&str> {
         self.session_id.as_deref()
-    }
-
-    fn renderer_output_predecessor(&self) -> Option<moli_core::RendererOutputFence> {
-        match &self.completed {
-            CompletedInputOperation::Page(completed) => completed
-                .as_ref()
-                .as_ref()
-                .ok()
-                .and_then(CompletedPageCommand::renderer_output_predecessor),
-        }
     }
 }
 
@@ -1238,9 +1229,6 @@ async fn complete_pending_input_command(
     completed: CompletedInputCommandDispatch,
     command_context: &mut CommandDispatchContext,
 ) -> CompletedInputCommandResult {
-    if let Some(predecessor) = completed.renderer_output_predecessor() {
-        command_context.set_renderer_output_predecessor(predecessor);
-    }
     let session_id = completed.session_id.as_deref();
     let owner = completed.owner;
     let completed_operation = completed.completed;
@@ -1261,27 +1249,23 @@ async fn complete_pending_input_command(
                     };
                 }
             };
-            let outcome = finish_completed_input_command_for_owner(
+            let completion = settle_completed_input_page_command(
                 conn,
                 session_id,
                 &owner,
                 result,
-                |page, result| match kind {
-                    PendingInputCommandKind::DispatchMouseEvent => {
-                        page.finish_dispatch_mouse_event_at_point_with_outcome(result)
-                    }
-                    PendingInputCommandKind::DispatchTouchEvent
-                    | PendingInputCommandKind::SynthesizeTapGesture => {
-                        page.finish_dispatch_touch_event_at_point_with_outcome(result)
-                    }
-                    PendingInputCommandKind::DispatchDragEvent => {
-                        page.finish_dispatch_drag_event_at_point_with_outcome(result)
-                    }
-                    PendingInputCommandKind::DispatchKeyEvent
-                    | PendingInputCommandKind::InsertText => unreachable!(),
-                },
-                CompletedPageCommand::into_detached_input_dispatch_outcome,
+                command_context,
             );
+            let operation = match kind {
+                PendingInputCommandKind::DispatchMouseEvent => "mouse event page command",
+                PendingInputCommandKind::DispatchTouchEvent
+                | PendingInputCommandKind::SynthesizeTapGesture => "touch event page command",
+                PendingInputCommandKind::DispatchDragEvent => "drag event page command",
+                PendingInputCommandKind::DispatchKeyEvent | PendingInputCommandKind::InsertText => {
+                    unreachable!()
+                }
+            };
+            let outcome = decode_input_dispatch_outcome_completion(completion, operation);
             match outcome {
                 Ok(outcome) => {
                     if let Err(error) = handle_input_dispatch_outcome_async(
@@ -1319,14 +1303,15 @@ async fn complete_pending_input_command(
                     };
                 }
             };
-            let outcome = finish_completed_input_command_for_owner(
+            let completion = settle_completed_input_page_command(
                 conn,
                 session_id,
                 &owner,
                 result,
-                Page::finish_dispatch_key_event_with_outcome,
-                CompletedPageCommand::into_detached_input_dispatch_outcome,
+                command_context,
             );
+            let outcome =
+                decode_input_dispatch_outcome_completion(completion, "key event page command");
             match outcome {
                 Ok(outcome) => {
                     if let Err(error) = handle_input_dispatch_outcome_async(
@@ -1364,14 +1349,14 @@ async fn complete_pending_input_command(
                     };
                 }
             };
-            let result = finish_completed_input_command_for_owner(
+            let completion = settle_completed_input_page_command(
                 conn,
                 session_id,
                 &owner,
                 result,
-                Page::finish_insert_text_into_active_control,
-                CompletedPageCommand::into_detached_insert_text_result,
+                command_context,
             );
+            let result = decode_insert_text_completion(completion);
             match result {
                 Ok(_) => Ok(DevToolsCommandResult::Empty),
                 Err(error) => Err(DevToolsError::new(
@@ -1389,28 +1374,15 @@ async fn complete_pending_input_command(
     }
 }
 
-/// Finishes an input command against the exact Page residence that admitted
-/// it. Navigation is allowed to suspend that Page while its renderer reply is
-/// crossing protocol ingress, so completion bypasses the ordinary navigation
-/// access barrier. If navigation has already installed a replacement Page,
-/// consume the frozen reply without applying the old Page state to the new
-/// residence.
-fn finish_completed_input_command_for_owner<T>(
+fn settle_completed_input_page_command(
     conn: &mut CdpConnection,
     session_id: Option<&str>,
     owner: &TargetPageResidenceIdentity,
     completion: CompletedPageCommand,
-    finish_current: impl FnOnce(&mut Page, CompletedPageCommand) -> anyhow::Result<T>,
-    finish_detached: impl FnOnce(CompletedPageCommand) -> anyhow::Result<T>,
-) -> anyhow::Result<T> {
-    if !conn.target_page_residence_identity_is_current_for_session(session_id, owner) {
-        return finish_detached(completion);
-    }
-
-    let page = conn
-        .loaded_page_mut_for_interruptible_protocol_access(session_id)
-        .map_err(anyhow::Error::msg)?;
-    finish_current(page, completion)
+    command_context: &mut CommandDispatchContext,
+) -> RendererCommandTurnCompletion {
+    let output = conn.settle_page_command_turn_for_owner(session_id, owner, completion);
+    command_context.consume_renderer_command_turn_output(output)
 }
 
 pub(crate) async fn complete_pending_input_command_output_plan(

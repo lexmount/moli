@@ -1,32 +1,12 @@
 use anyhow::Result;
 
 use super::{
-    CompletedPageCommand, Page, PendingPageCommand, RendererDragData, RendererInputDispatchOutcome,
-    RendererPageCommand, RendererPageReply, RendererPointerEventProperties, RendererTouchPoint,
+    CompletedPageCommand, Page, PendingPageCommand, RendererCommandTurnCompletion,
+    RendererDragData, RendererInputDispatchOutcome, RendererPageCommand, RendererPageReply,
+    RendererPointerEventProperties, RendererTouchPoint,
 };
 
-impl CompletedPageCommand {
-    /// Decodes an input reply after the Page that produced it was replaced.
-    ///
-    /// Renderer completion is the acknowledgement boundary for an admitted
-    /// input command. Callers should normally finish through [`PageInputExt`]
-    /// so the originating Page receives its refreshed state. Once that Page
-    /// is no longer current, however, its frozen reply remains valid and must
-    /// not be applied to the replacement Page.
-    pub fn into_detached_input_dispatch_outcome(self) -> Result<RendererInputDispatchOutcome> {
-        let (reply, _page_state) = self.into_output().into_reply_and_state();
-        decode_input_dispatch_outcome(reply, "detached input event page command")
-    }
-
-    /// Decodes an admitted insert-text reply whose originating Page was
-    /// replaced before protocol delivery completed.
-    pub fn into_detached_insert_text_result(self) -> Result<bool> {
-        let (reply, _page_state) = self.into_output().into_reply_and_state();
-        decode_insert_text_result(reply)
-    }
-}
-
-fn decode_input_dispatch_outcome(
+fn decode_input_dispatch_outcome_reply(
     reply: RendererPageReply,
     operation: &str,
 ) -> Result<RendererInputDispatchOutcome> {
@@ -38,13 +18,37 @@ fn decode_input_dispatch_outcome(
     )
 }
 
-fn decode_insert_text_result(reply: RendererPageReply) -> Result<bool> {
+fn decode_insert_text_reply(reply: RendererPageReply) -> Result<bool> {
     expect_page_reply!(
         reply,
         "insert text page command",
         "a bool reply",
         RendererPageReply::Bool(value) => Ok(value),
     )
+}
+
+fn settled_input_reply(completion: RendererCommandTurnCompletion) -> Result<RendererPageReply> {
+    let (reply, _page_state, post_response_continuation) = completion.into_parts();
+    anyhow::ensure!(
+        post_response_continuation.is_none(),
+        "input completion must consume its renderer turn before reply decoding"
+    );
+    Ok(reply)
+}
+
+/// Decodes a completed renderer turn shared by mouse, touch, drag, and key dispatches.
+#[doc(hidden)]
+pub fn decode_input_dispatch_outcome_completion(
+    completion: RendererCommandTurnCompletion,
+    operation: &str,
+) -> Result<RendererInputDispatchOutcome> {
+    decode_input_dispatch_outcome_reply(settled_input_reply(completion)?, operation)
+}
+
+/// Decodes the completed renderer turn returned by an insert-text command.
+#[doc(hidden)]
+pub fn decode_insert_text_completion(completion: RendererCommandTurnCompletion) -> Result<bool> {
+    decode_insert_text_reply(settled_input_reply(completion)?)
 }
 
 #[allow(async_fn_in_trait)]
@@ -292,7 +296,7 @@ impl PageInputExt for Page {
         completion: CompletedPageCommand,
     ) -> Result<RendererInputDispatchOutcome> {
         let reply = self.finish_page_command(completion);
-        decode_input_dispatch_outcome(reply, "mouse event page command")
+        decode_input_dispatch_outcome_reply(reply, "mouse event page command")
     }
 
     async fn dispatch_touch_event_at_point_with_outcome_async(
@@ -348,7 +352,7 @@ impl PageInputExt for Page {
         completion: CompletedPageCommand,
     ) -> Result<RendererInputDispatchOutcome> {
         let reply = self.finish_page_command(completion);
-        decode_input_dispatch_outcome(reply, "touch event page command")
+        decode_input_dispatch_outcome_reply(reply, "touch event page command")
     }
 
     async fn dispatch_drag_event_at_point_with_outcome_async(
@@ -398,7 +402,7 @@ impl PageInputExt for Page {
         completion: CompletedPageCommand,
     ) -> Result<RendererInputDispatchOutcome> {
         let reply = self.finish_page_command(completion);
-        decode_input_dispatch_outcome(reply, "drag event page command")
+        decode_input_dispatch_outcome_reply(reply, "drag event page command")
     }
 
     async fn clear_active_drag_data_transfer_async(&mut self) -> Result<()> {
@@ -437,7 +441,7 @@ impl PageInputExt for Page {
         completion: CompletedPageCommand,
     ) -> Result<bool> {
         let reply = self.finish_page_command(completion);
-        decode_insert_text_result(reply)
+        decode_insert_text_reply(reply)
     }
 
     async fn dispatch_key_event_with_outcome_async(
@@ -489,7 +493,7 @@ impl PageInputExt for Page {
         completion: CompletedPageCommand,
     ) -> Result<RendererInputDispatchOutcome> {
         let reply = self.finish_page_command(completion);
-        decode_input_dispatch_outcome(reply, "key event page command")
+        decode_input_dispatch_outcome_reply(reply, "key event page command")
     }
 
     async fn dispatch_key_event_async(

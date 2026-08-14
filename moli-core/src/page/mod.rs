@@ -62,7 +62,9 @@ pub use dom_protocol_support::{
     MAX_DOM_OUTPUT_TREE_DEPTH, MAX_INSPECTOR_PROTOCOL_VALUE_DEPTH, MAX_JSON_OUTPUT_TREE_DEPTH,
     RENDERER_BACKEND_NODE_ID_START, is_renderer_backend_node_id,
 };
-pub use input_support::PageInputExt;
+pub use input_support::{
+    PageInputExt, decode_input_dispatch_outcome_completion, decode_insert_text_completion,
+};
 pub use moli_page_types::DomScrollIntoViewRect;
 pub use moli_page_types::{
     RendererDomDebuggerDomBreakpointType, RendererDomDebuggerEventListenerBreakpoint,
