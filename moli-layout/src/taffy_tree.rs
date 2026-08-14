@@ -12,8 +12,7 @@ use taffy::{
     compute_block_layout, compute_cached_layout, compute_cached_size,
     compute_content_alignment_offset, compute_flexbox_layout, compute_grid_layout,
     compute_hidden_layout, compute_leaf_layout_with_tree, compute_out_of_flow_layout,
-    compute_replaced_layout, compute_root_layout, resolve_content_alignment_fallback,
-    round_layout,
+    compute_replaced_layout, compute_root_layout, resolve_content_alignment_fallback, round_layout,
 };
 
 use crate::{
@@ -1611,20 +1610,33 @@ where
                         .taffy
                         .margin
                         .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
+                    let margin_size = Size {
+                        width: margins.left + margins.right,
+                        height: margins.top + margins.bottom,
+                    };
+                    // Child layout algorithms consume the border-box space
+                    // left after the parent resolves margins. Blocks, flex
+                    // and grid establish the same contract before recursing;
+                    // this is that boundary for the Parley-owned IFC.
+                    let atomic_inputs = LayoutInput {
+                        available_space: Size {
+                            width: child_inputs
+                                .available_space
+                                .width
+                                .maybe_sub(margin_size.width),
+                            height: child_inputs
+                                .available_space
+                                .height
+                                .maybe_sub(margin_size.height),
+                        },
+                        ..child_inputs
+                    };
                     let child_output = if inputs.run_mode == RunMode::ComputeSize {
-                        let result = self.compute_atomic_inline_size(
-                            object.box_id,
-                            child_inputs,
-                            margins.left + margins.right,
-                        );
+                        let result = self.compute_atomic_inline_size(object.box_id, atomic_inputs);
                         depends_on_block_constraints |= result.depends_on_block_constraints;
                         LayoutOutput::from_outer_size(result.size)
                     } else {
-                        self.compute_atomic_inline_layout(
-                            object.box_id,
-                            child_inputs,
-                            margins.left + margins.right,
-                        )
+                        self.compute_atomic_inline_layout(object.box_id, atomic_inputs)
                     };
                     inline_box.width =
                         (margins.left + margins.right + child_output.size.width).max(0.0);
