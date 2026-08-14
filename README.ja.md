@@ -17,11 +17,19 @@
   <a href="README.es.md">Español</a>
 </p>
 
-Moli は AI エージェント向けのヘッドレスブラウザです。「オンデマンドレンダリング」という設計思想を採用し、すでに本番環境で利用できる水準に達しています。
+Moli は AI エージェント向けの本番運用可能なヘッドレスブラウザです。オンデマンドのレイアウトとレンダリングにより、完全なブラウザランタイムと軽量なリソース使用量を両立します。
 
 標準で実際の JavaScript を実行し、実際の DOM を維持し、実際のブラウザ API を提供しますが、レイアウトの計算やピクセルのレンダリングは本当に必要なときにだけ行います。
 
 CLI、CDP、WebDriver Classic、または WebDriver BiDi から利用できます。
+
+## クイックスタート
+
+次の文を AI コーディングエージェントに渡してください。
+
+```text
+https://github.com/lexmount/moli/tree/main/skills 以下の skills をインストールし、その指示に従って最新のビルド済み Moli バイナリをダウンロードしてインストールしたうえで、moli-webfetch を使って https://example.com を取得し、結果を見せてください。
+```
 
 ## デモ
 
@@ -53,12 +61,6 @@ CLI、CDP、WebDriver Classic、または WebDriver BiDi から利用できま�
   <sub>Moli でレンダリングした rust-lang.org。ライブの DOM、CSS、ジオメトリを Chrome DevTools から確認できます。</sub>
 </p>
 
-## クイックスタート
-
-次の文を AI コーディングエージェントに渡してください。
-
-> `https://github.com/lexmount/moli/tree/main/skills` 以下の skills をインストールし、その指示に従って最新のビルド済み Moli バイナリをダウンロードしてインストールしたうえで、`moli-webfetch` を使って `https://example.com` を取得し、結果を見せてください。
-
 ## CLI の使い方
 
 ### ページを抽出する
@@ -79,6 +81,13 @@ moli fetch \
   --dump semantic_tree_text \
   --wait-selector body \
   https://example.com
+```
+
+視覚出力が必要な場合は、オンデマンドレイアウトを有効にして、ビューポートの PNG スクリーンショットまたはページ分割された PDF を直接生成できます。
+
+```bash
+moli fetch --layout --dump screenshot https://example.com > page.png
+moli fetch --layout --dump pdf https://example.com > page.pdf
 ```
 
 `fetch --help` を実行すると、出力形式、ページ読み込み／レスポンスの待機条件、プロファイル、プロキシ設定、リソースポリシー、トレースオプションを含む完全なパラメーター一覧を確認できます。

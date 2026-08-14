@@ -17,11 +17,19 @@
   <a href="README.es.md">Español</a>
 </p>
 
-Moli est un navigateur headless destiné aux agents d'IA, conçu autour du principe de « rendu à la demande » et déjà prêt pour la production.
+Moli est un navigateur headless prêt pour la production et destiné aux agents d'IA. Sa conception fondée sur une mise en page et un rendu à la demande associe un environnement d'exécution de navigateur complet à une faible empreinte sur les ressources.
 
 Par défaut, il exécute du code JavaScript réel, maintient un véritable DOM et fournit de véritables API de navigateur. Il ne calcule la mise en page et ne rend les pixels que lorsqu'ils sont réellement nécessaires.
 
 Utilisez-le via la CLI, CDP, WebDriver Classic ou WebDriver BiDi.
+
+## Démarrage rapide
+
+Donnez cette instruction à votre agent de programmation IA :
+
+```text
+Installe les skills sous https://github.com/lexmount/moli/tree/main/skills, suis leurs instructions pour télécharger et installer le dernier binaire Moli précompilé, puis utilise moli-webfetch pour récupérer https://example.com et montre-moi le résultat.
+```
 
 ## Démonstration
 
@@ -53,12 +61,6 @@ Utilisez-le via la CLI, CDP, WebDriver Classic ou WebDriver BiDi.
   <sub>Le site rust-lang.org rendu par Moli, avec son DOM, son CSS et sa géométrie en direct dans Chrome DevTools.</sub>
 </p>
 
-## Démarrage rapide
-
-Donnez cette instruction à votre agent de programmation IA :
-
-> Installe les skills sous `https://github.com/lexmount/moli/tree/main/skills`, suis leurs instructions pour télécharger et installer le dernier binaire Moli précompilé, puis utilise `moli-webfetch` pour récupérer `https://example.com` et montre-moi le résultat.
-
 ## Utilisation de la CLI
 
 ### Extraire une page
@@ -79,6 +81,13 @@ moli fetch \
   --dump semantic_tree_text \
   --wait-selector body \
   https://example.com
+```
+
+Pour une sortie visuelle, activez la mise en page à la demande et générez directement une capture PNG de la fenêtre d'affichage ou un PDF paginé :
+
+```bash
+moli fetch --layout --dump screenshot https://example.com > page.png
+moli fetch --layout --dump pdf https://example.com > page.pdf
 ```
 
 Exécutez `fetch --help` pour obtenir la liste complète des paramètres, notamment les formats de sortie, les attentes de chargement de page ou de réponse, les profils, les réglages du proxy, les politiques de ressources et les options de traçage.

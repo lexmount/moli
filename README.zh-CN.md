@@ -17,11 +17,19 @@
   <a href="README.es.md">Español</a>
 </p>
 
-Moli 是一款面向 AI 智能体的无头浏览器，采用"按需渲染"的设计理念，目前已经达到生产可用的水平。
+Moli 是一款面向 AI 智能体、可用于生产环境的无头浏览器。它采用按需布局与渲染的设计，兼顾完整的浏览器运行时与轻量的资源占用。
 
 它默认会执行真实的 JavaScript、维护真实的 DOM、提供真实的浏览器 API，但只有在确实需要时才会计算布局或渲染像素。
 
 你可以通过 CLI、CDP、WebDriver Classic 或 WebDriver BiDi 来使用它。
+
+## 快速开始
+
+把这句话发给你的 AI 编程智能体：
+
+```text
+安装 https://github.com/lexmount/moli/tree/main/skills 下面的 skills，根据 skills 指引下载并安装最新版预编译 Moli 二进制，然后用 moli-webfetch 抓取 https://example.com 并把结果给我。
+```
 
 ## 效果展示
 
@@ -53,12 +61,6 @@ Moli 是一款面向 AI 智能体的无头浏览器，采用"按需渲染"的设
   <sub>由 Moli 渲染的 rust-lang.org，其实时 DOM、CSS 和几何信息可在 Chrome DevTools 中查看。</sub>
 </p>
 
-## 快速开始
-
-把这句话发给你的 AI 编程智能体：
-
-> 安装 `https://github.com/lexmount/moli/tree/main/skills` 下面的 skills，根据 skills 指引下载并安装最新版预编译 Moli 二进制，然后用 `moli-webfetch` 抓取 `https://example.com` 并把结果给我。
-
 ## CLI 用法
 
 ### 提取页面
@@ -79,6 +81,13 @@ moli fetch \
   --dump semantic_tree_text \
   --wait-selector body \
   https://example.com
+```
+
+如果需要视觉输出，可以启用按需布局，直接生成视口 PNG 截图或分页 PDF：
+
+```bash
+moli fetch --layout --dump screenshot https://example.com > page.png
+moli fetch --layout --dump pdf https://example.com > page.pdf
 ```
 
 运行 `fetch --help` 可以查看完整的参数列表，包括输出格式、页面加载/响应等待条件、配置文件、代理设置、资源策略和跟踪选项。

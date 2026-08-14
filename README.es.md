@@ -17,11 +17,19 @@
   <strong>Español</strong>
 </p>
 
-Moli es un navegador sin interfaz gráfica para agentes de IA, diseñado en torno al concepto de «renderizado bajo demanda» y listo para su uso en producción.
+Moli es un navegador sin interfaz gráfica para agentes de IA y listo para su uso en producción. Su diseño de disposición y renderizado bajo demanda combina un entorno de ejecución de navegador completo con un bajo consumo de recursos.
 
 De forma predeterminada, ejecuta JavaScript real, mantiene un DOM real y ofrece API de navegador reales. Solo calcula la disposición o renderiza píxeles cuando son realmente necesarios.
 
 Puede utilizarse mediante la CLI, CDP, WebDriver Classic o WebDriver BiDi.
+
+## Inicio rápido
+
+Dé esta instrucción a su agente de programación con IA:
+
+```text
+Instala los skills de https://github.com/lexmount/moli/tree/main/skills, sigue sus instrucciones para descargar e instalar el binario precompilado más reciente de Moli y usa moli-webfetch para obtener https://example.com y mostrarme el resultado.
+```
 
 ## Demostración
 
@@ -53,12 +61,6 @@ Puede utilizarse mediante la CLI, CDP, WebDriver Classic o WebDriver BiDi.
   <sub>El sitio rust-lang.org renderizado por Moli, con su DOM, CSS y geometría en directo disponibles en Chrome DevTools.</sub>
 </p>
 
-## Inicio rápido
-
-Dé esta instrucción a su agente de programación con IA:
-
-> Instala los skills de `https://github.com/lexmount/moli/tree/main/skills`, sigue sus instrucciones para descargar e instalar el binario precompilado más reciente de Moli y usa `moli-webfetch` para obtener `https://example.com` y mostrarme el resultado.
-
 ## Uso de la CLI
 
 ### Extraer una página
@@ -79,6 +81,13 @@ moli fetch \
   --dump semantic_tree_text \
   --wait-selector body \
   https://example.com
+```
+
+Para obtener una salida visual, active el diseño bajo demanda y genere directamente una captura PNG del área visible o un PDF paginado:
+
+```bash
+moli fetch --layout --dump screenshot https://example.com > page.png
+moli fetch --layout --dump pdf https://example.com > page.pdf
 ```
 
 Ejecute `fetch --help` para consultar la lista completa de parámetros, incluidos los formatos de salida, las esperas de carga de página o de respuesta, los perfiles, la configuración del proxy, las políticas de recursos y las opciones de trazado.

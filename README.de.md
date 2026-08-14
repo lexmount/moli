@@ -17,11 +17,19 @@
   <a href="README.es.md">Español</a>
 </p>
 
-Moli ist ein Headless-Browser für KI-Agenten, der nach dem Prinzip „Rendering bei Bedarf“ entwickelt wurde und bereits produktionsreif ist.
+Moli ist ein produktionsreifer Headless-Browser für KI-Agenten. Sein Design mit Layout und Rendering nach Bedarf verbindet eine vollständige Browser-Laufzeit mit einem geringen Ressourcenbedarf.
 
 Sie führt standardmäßig echtes JavaScript aus, verwaltet ein echtes DOM und stellt echte Browser-APIs bereit. Layoutberechnungen oder das Rendern von Pixeln erfolgen jedoch nur, wenn sie tatsächlich benötigt werden.
 
 Moli kann über die CLI, CDP, WebDriver Classic oder WebDriver BiDi genutzt werden.
+
+## Schnellstart
+
+Gib deinem KI-Coding-Agenten diese Anweisung:
+
+```text
+Installiere die skills unter https://github.com/lexmount/moli/tree/main/skills, folge ihren Anweisungen zum Herunterladen und Installieren des neuesten vorkompilierten Moli-Binarys, rufe anschließend mit moli-webfetch die Seite https://example.com ab und zeige mir das Ergebnis.
+```
 
 ## Demo
 
@@ -53,12 +61,6 @@ Moli kann über die CLI, CDP, WebDriver Classic oder WebDriver BiDi genutzt werd
   <sub>Die von Moli gerenderte Website rust-lang.org, deren Live-DOM, CSS und Geometrie in Chrome DevTools verfügbar sind.</sub>
 </p>
 
-## Schnellstart
-
-Gib deinem KI-Coding-Agenten diese Anweisung:
-
-> Installiere die skills unter `https://github.com/lexmount/moli/tree/main/skills`, folge ihren Anweisungen zum Herunterladen und Installieren des neuesten vorkompilierten Moli-Binarys, rufe anschließend mit `moli-webfetch` die Seite `https://example.com` ab und zeige mir das Ergebnis.
-
 ## CLI-Verwendung
 
 ### Eine Seite extrahieren
@@ -79,6 +81,13 @@ moli fetch \
   --dump semantic_tree_text \
   --wait-selector body \
   https://example.com
+```
+
+Für eine visuelle Ausgabe kann das On-Demand-Layout aktiviert und entweder ein PNG-Screenshot des Viewports oder ein mehrseitiges PDF direkt erzeugt werden:
+
+```bash
+moli fetch --layout --dump screenshot https://example.com > page.png
+moli fetch --layout --dump pdf https://example.com > page.pdf
 ```
 
 `fetch --help` zeigt die vollständige Parameterliste, darunter Ausgabeformate, Wartebedingungen für das Laden von Seiten und für Antworten, Profile, Proxy-Einstellungen, Ressourcenrichtlinien und Tracing-Optionen.

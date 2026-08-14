@@ -17,14 +17,23 @@
   <a href="README.es.md">Español</a>
 </p>
 
-Moli is a headless browser for AI agents, built around an "on-demand
-rendering" design and ready for production use.
+Moli is a production-ready headless browser for AI agents. Its on-demand layout
+and rendering design combines a complete browser runtime with a lightweight
+resource footprint.
 
 By default, it executes real JavaScript, maintains a real DOM, and exposes real
 browser APIs. It computes layout or renders pixels only when they are actually
 needed.
 
 Use it through the CLI, CDP, WebDriver Classic, or WebDriver BiDi.
+
+## Quick start
+
+Give this prompt to your AI coding agent:
+
+```text
+Install the skills under https://github.com/lexmount/moli/tree/main/skills, follow their instructions to download and install the latest prebuilt Moli binary, then use moli-webfetch to fetch https://example.com and show me the result.
+```
 
 ## Showcase
 
@@ -56,12 +65,6 @@ Use it through the CLI, CDP, WebDriver Classic, or WebDriver BiDi.
   <sub>rust-lang.org rendered by Moli, with its live DOM, CSS, and geometry available in Chrome DevTools.</sub>
 </p>
 
-## Quick start
-
-Give this prompt to your AI coding agent:
-
-> Install the skills under `https://github.com/lexmount/moli/tree/main/skills`, follow their instructions to download and install the latest prebuilt Moli binary, then use `moli-webfetch` to fetch `https://example.com` and show me the result.
-
 ## CLI usage
 
 ### Extract a page
@@ -82,6 +85,13 @@ moli fetch \
   --dump semantic_tree_text \
   --wait-selector body \
   https://example.com
+```
+
+For visual output, enable on-demand layout and write either a viewport PNG screenshot or a paginated PDF:
+
+```bash
+moli fetch --layout --dump screenshot https://example.com > page.png
+moli fetch --layout --dump pdf https://example.com > page.pdf
 ```
 
 Run `fetch --help` for the complete option list, including output formats,
