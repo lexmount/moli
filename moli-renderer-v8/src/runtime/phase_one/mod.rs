@@ -1291,6 +1291,59 @@ html,body{margin:0;padding:0}
     }
 
     #[test]
+    fn table_ua_defaults_match_chromium_spacing_indent_and_border_color() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+body{text-indent:30px}
+td{width:10px;height:10px;padding:0;border:0;font-size:0}
+#first{background:rgb(21,31,41)}#second{background:rgb(22,32,42)}
+#indent-probe{display:inline-block;width:4px;height:4px;background:rgb(23,33,43)}
+#bordered{border-style:solid;border-width:1px}
+</style></head><body>
+<table><tr><td id=first><span id=indent-probe></span></td><td id=second></td></tr></table>
+<table id=bordered><tr><td></td></tr></table>
+</body></html>"#,
+            )
+            .await;
+
+            let first = solid_paint_rect(&snapshot, rgb(21, 31, 41));
+            let second = solid_paint_rect(&snapshot, rgb(22, 32, 42));
+            let indent_probe = solid_paint_rect(&snapshot, rgb(23, 33, 43));
+            assert_paint_rect(first, moli_layout::PaintRect::new(2.0, 2.0, 10.0, 10.0));
+            assert_paint_rect(second, moli_layout::PaintRect::new(14.0, 2.0, 10.0, 10.0));
+            assert!(
+                (indent_probe.x - first.x).abs() <= 0.01,
+                "table should reset inherited text-indent: first={first:?}, probe={indent_probe:?}"
+            );
+
+            let gray = rgb(128, 128, 128);
+            assert!(
+                snapshot.fragments.iter().any(|fragment| matches!(
+                    fragment,
+                    moli_layout::PaintFragment::Border { widths, colors, .. }
+                        if widths.top == 1.0
+                            && widths.right == 1.0
+                            && widths.bottom == 1.0
+                            && widths.left == 1.0
+                            && colors.top == gray
+                            && colors.right == gray
+                            && colors.bottom == gray
+                            && colors.left == gray
+                )),
+                "table should inherit Chromium's gray UA border color: {:?}",
+                snapshot.fragments
+            );
+        }));
+    }
+
+    #[test]
     fn layout_renderer_computes_phase_four_special_formatting_geometry_from_native_dom_and_stylo() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
