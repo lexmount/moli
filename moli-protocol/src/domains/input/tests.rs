@@ -1,6 +1,6 @@
 use super::*;
 use crate::conn::{BrowserContext, CdpCommandTaskStep};
-use crate::testing::TestContext;
+use crate::testing::{TestContext, wait_until_frame_stopped_loading};
 use moli_core::LayoutPolicy;
 
 const INPUT_HIT_X: u32 = 20;
@@ -202,6 +202,89 @@ async fn coordinate_mouse_commands_hit_test_real_layout_and_dispatch_dom_events(
         evaluate_string(&mut ctx, "JSON.stringify(window.__events)").await,
         r#"["mousedown","mouseup","click","wheel","mousemove"]"#
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn coordinate_mouse_release_acknowledges_real_link_navigation() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let mut ctx = TestContext::new();
+            ctx.enable_background_navigation_scheduler_for_test();
+            with_loaded_document(
+                &mut ctx,
+                r#"<html><body style='margin:0'>
+                <a id='next' href='data:text/html,destination'
+                   style='display:block;width:80px;height:80px'>next</a>
+               </body></html>"#,
+            )
+            .await;
+            ctx.enable_page_events_for_test(None);
+
+            ctx.process_and_wait_for_response_async(json!({
+                "id": 101,
+                "method": "Input.dispatchMouseEvent",
+                "params": {
+                    "type": "mousePressed",
+                    "x": INPUT_HIT_X,
+                    "y": INPUT_HIT_Y,
+                    "button": "left",
+                    "buttons": 1,
+                    "clickCount": 1
+                }
+            }))
+            .await;
+            ctx.expect_result(101, json!({}), None);
+
+            ctx.process_and_wait_for_response_async(json!({
+                "id": 102,
+                "method": "Input.dispatchMouseEvent",
+                "params": {
+                    "type": "mouseReleased",
+                    "x": INPUT_HIT_X,
+                    "y": INPUT_HIT_Y,
+                    "button": "left",
+                    "buttons": 0,
+                    "clickCount": 1
+                }
+            }))
+            .await;
+
+            // Chromium acknowledges an input event once its renderer has consumed
+            // it. The resulting Document replacement is an independent lifecycle and
+            // must not retroactively turn this response into NoDocumentLoaded.
+            ctx.expect_result(102, json!({}), None);
+            wait_until_frame_stopped_loading(&mut ctx, "TID-1").await;
+            ctx.expect_event("Page.frameNavigated", None);
+            assert_eq!(
+                evaluate_string(&mut ctx, "document.body.textContent").await,
+                "destination"
+            );
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn coordinate_mouse_event_without_document_still_reports_no_document_loaded() {
+    let mut ctx = TestContext::new();
+    let mut bc = BrowserContext::new("BID-I".into());
+    bc.set_active_target_id("TID-1");
+    ctx.conn.browser_context = Some(bc);
+
+    ctx.process_async(json!({
+        "id": 103,
+        "method": "Input.dispatchMouseEvent",
+        "params": {
+            "type": "mouseReleased",
+            "x": INPUT_HIT_X,
+            "y": INPUT_HIT_Y,
+            "button": "left",
+            "buttons": 0,
+            "clickCount": 1
+        }
+    }))
+    .await;
+
+    ctx.expect_error(103, -32000, "NoDocumentLoaded");
 }
 
 #[tokio::test(flavor = "multi_thread")]

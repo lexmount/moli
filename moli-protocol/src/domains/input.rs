@@ -1261,18 +1261,12 @@ async fn complete_pending_input_command(
                     };
                 }
             };
-            let outcome = {
-                let Some(page) = loaded_page_mut(conn, session_id) else {
-                    let protocol_events = side_effects.into_events();
-                    return CompletedInputCommandResult {
-                        result: Err(DevToolsError::new(
-                            DevToolsErrorKind::Internal,
-                            "NoDocumentLoaded",
-                        )),
-                        protocol_events,
-                    };
-                };
-                match kind {
+            let outcome = finish_completed_input_command_for_owner(
+                conn,
+                session_id,
+                &owner,
+                result,
+                |page, result| match kind {
                     PendingInputCommandKind::DispatchMouseEvent => {
                         page.finish_dispatch_mouse_event_at_point_with_outcome(result)
                     }
@@ -1285,8 +1279,9 @@ async fn complete_pending_input_command(
                     }
                     PendingInputCommandKind::DispatchKeyEvent
                     | PendingInputCommandKind::InsertText => unreachable!(),
-                }
-            };
+                },
+                CompletedPageCommand::into_detached_input_dispatch_outcome,
+            );
             match outcome {
                 Ok(outcome) => {
                     if let Err(error) = handle_input_dispatch_outcome_async(
@@ -1324,19 +1319,14 @@ async fn complete_pending_input_command(
                     };
                 }
             };
-            let outcome = {
-                let Some(page) = loaded_page_mut(conn, session_id) else {
-                    let protocol_events = side_effects.into_events();
-                    return CompletedInputCommandResult {
-                        result: Err(DevToolsError::new(
-                            DevToolsErrorKind::Internal,
-                            "NoDocumentLoaded",
-                        )),
-                        protocol_events,
-                    };
-                };
-                page.finish_dispatch_key_event_with_outcome(result)
-            };
+            let outcome = finish_completed_input_command_for_owner(
+                conn,
+                session_id,
+                &owner,
+                result,
+                Page::finish_dispatch_key_event_with_outcome,
+                CompletedPageCommand::into_detached_input_dispatch_outcome,
+            );
             match outcome {
                 Ok(outcome) => {
                     if let Err(error) = handle_input_dispatch_outcome_async(
@@ -1374,19 +1364,14 @@ async fn complete_pending_input_command(
                     };
                 }
             };
-            let result = {
-                let Some(page) = loaded_page_mut(conn, session_id) else {
-                    let protocol_events = side_effects.into_events();
-                    return CompletedInputCommandResult {
-                        result: Err(DevToolsError::new(
-                            DevToolsErrorKind::Internal,
-                            "NoDocumentLoaded",
-                        )),
-                        protocol_events,
-                    };
-                };
-                page.finish_insert_text_into_active_control(result)
-            };
+            let result = finish_completed_input_command_for_owner(
+                conn,
+                session_id,
+                &owner,
+                result,
+                Page::finish_insert_text_into_active_control,
+                CompletedPageCommand::into_detached_insert_text_result,
+            );
             match result {
                 Ok(_) => Ok(DevToolsCommandResult::Empty),
                 Err(error) => Err(DevToolsError::new(
@@ -1402,6 +1387,30 @@ async fn complete_pending_input_command(
         result,
         protocol_events,
     }
+}
+
+/// Finishes an input command against the exact Page residence that admitted
+/// it. Navigation is allowed to suspend that Page while its renderer reply is
+/// crossing protocol ingress, so completion bypasses the ordinary navigation
+/// access barrier. If navigation has already installed a replacement Page,
+/// consume the frozen reply without applying the old Page state to the new
+/// residence.
+fn finish_completed_input_command_for_owner<T>(
+    conn: &mut CdpConnection,
+    session_id: Option<&str>,
+    owner: &TargetPageResidenceIdentity,
+    completion: CompletedPageCommand,
+    finish_current: impl FnOnce(&mut Page, CompletedPageCommand) -> anyhow::Result<T>,
+    finish_detached: impl FnOnce(CompletedPageCommand) -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    if !conn.target_page_residence_identity_is_current_for_session(session_id, owner) {
+        return finish_detached(completion);
+    }
+
+    let page = conn
+        .loaded_page_mut_for_interruptible_protocol_access(session_id)
+        .map_err(anyhow::Error::msg)?;
+    finish_current(page, completion)
 }
 
 pub(crate) async fn complete_pending_input_command_output_plan(
