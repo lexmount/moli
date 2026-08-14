@@ -59,7 +59,7 @@ where
         available_width.max(0.0).max(min_content).min(max_content)
     }
 
-    /// Lay out one non-replaced atomic inline-level box.
+    /// Lay out one atomic inline-level box.
     ///
     /// CSS 2.2 §10.3.9 defines an auto-width inline-block as fit-content:
     /// `min(max(min-content, available), max-content)`. A single Taffy call
@@ -72,31 +72,28 @@ where
         &mut self,
         child: LayoutBoxId,
         inputs: LayoutInput,
-        horizontal_margin: f32,
     ) -> LayoutOutput {
-        let inputs = self.resolve_atomic_inline_inputs(child, inputs, horizontal_margin);
+        let inputs = self.resolve_atomic_inline_fit_content(child, inputs);
         self.compute_child_layout(child.to_taffy(), inputs)
     }
 
-    /// Measure one non-replaced atomic inline-level box while retaining
-    /// intrinsic sizing provenance from its formatting context.
+    /// Measure one atomic inline-level box while retaining intrinsic sizing
+    /// provenance from its formatting context.
     pub(crate) fn compute_atomic_inline_size(
         &mut self,
         child: LayoutBoxId,
         inputs: LayoutInput,
-        horizontal_margin: f32,
     ) -> IntrinsicSizeResult {
-        let inputs = self.resolve_atomic_inline_inputs(child, inputs, horizontal_margin);
+        let inputs = self.resolve_atomic_inline_fit_content(child, inputs);
         self.compute_child_size(child.to_taffy(), inputs)
     }
 
     /// Resolve the fit-content border-box width shared by the layout and
-    /// intrinsic-sizing protocols for an atomic inline box.
-    fn resolve_atomic_inline_inputs(
+    /// intrinsic-sizing protocols for non-replaced atomic inline boxes.
+    fn resolve_atomic_inline_fit_content(
         &mut self,
         child: LayoutBoxId,
         inputs: LayoutInput,
-        horizontal_margin: f32,
     ) -> LayoutInput {
         let layout_box = &self.boxes[child.index()];
         let uses_fit_content = !layout_box.is_replaced()
@@ -121,11 +118,7 @@ where
             definite_dimensions: Size::NONE,
             ..inputs
         };
-        let fit_content = self.measure_fit_content_width(
-            child,
-            intrinsic_inputs,
-            available_width - horizontal_margin,
-        );
+        let fit_content = self.measure_fit_content_width(child, intrinsic_inputs, available_width);
         let known_dimensions = Size {
             width: Some(fit_content),
             height: inputs.known_dimensions.height,
