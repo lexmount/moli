@@ -748,7 +748,7 @@ html, body { display: block; margin: 0; padding: 0 }
     }
 
     #[test]
-    fn layout_renderer_preserves_calc_min_width_in_float_intrinsic_contribution() {
+    fn layout_renderer_resolves_cyclic_calc_minimums_against_zero() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -763,8 +763,11 @@ html,body{margin:0;padding:0}
 #inner{width:40px;min-width:calc(160px + 0%);height:20px;background:rgb(111,112,113)}
 #definite{clear:both;width:200px;height:20px}
 #definite-child{width:40px;min-width:calc(20px + 50%);height:20px;background:rgb(121,122,123)}
+#axis-outer{display:inline-block;border:5px solid transparent;padding:3px;background:rgb(131,132,133)}
+#axis-inner{min-width:calc(100px + 50%);min-height:calc(100px + 50%);border:2px solid transparent}
 </style></head><body><div id=host><div id=outer><div id=inner></div></div></div>
-<div id=definite><div id=definite-child></div></div></body></html>"#,
+<div id=definite><div id=definite-child></div></div>
+<div id=axis-outer><div id=axis-inner></div></div></body></html>"#,
             )
             .await;
             page_vm.vm_mut().sync_live_document_style_sources();
@@ -794,6 +797,13 @@ html,body{margin:0;padding:0}
                     moli_layout::PaintColor::new(121.0 / 255.0, 122.0 / 255.0, 123.0 / 255.0, 1.0),
                 ),
                 moli_layout::PaintRect::new(0.0, 30.0, 120.0, 20.0),
+            );
+            assert_paint_rect(
+                solid_paint_rect(
+                    &snapshot,
+                    moli_layout::PaintColor::new(131.0 / 255.0, 132.0 / 255.0, 133.0 / 255.0, 1.0),
+                ),
+                moli_layout::PaintRect::new(0.0, 50.0, 120.0, 120.0),
             );
         }));
     }
