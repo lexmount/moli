@@ -1297,6 +1297,39 @@ html,body{margin:0;padding:0}
     }
 
     #[test]
+    fn layout_renderer_derives_out_of_flow_inline_size_from_inset_fixed_block_size() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+#horizontal{position:relative;width:300px;height:50px}
+#horizontal>div{position:absolute;left:0;top:0;bottom:0;aspect-ratio:2/1;background:rgb(59,19,119)}
+#vertical{position:relative;width:100px;height:300px}
+#vertical>div{position:absolute;left:0;right:0;top:0;writing-mode:vertical-lr;aspect-ratio:2/1;background:rgb(60,20,120)}
+</style></head><body>
+<div id=horizontal><div></div></div>
+<div id=vertical><div></div></div>
+</body></html>"#,
+            )
+            .await;
+
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(59, 19, 119)),
+                moli_layout::PaintRect::new(0.0, 0.0, 100.0, 50.0),
+            );
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(60, 20, 120)),
+                moli_layout::PaintRect::new(0.0, 50.0, 100.0, 50.0),
+            );
+        }));
+    }
+
+    #[test]
     fn layout_renderer_resolves_cyclic_preferred_width_after_parent_contribution() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
