@@ -186,6 +186,14 @@ impl PendingCdpCommandDispatch {
         self.inner.name()
     }
 
+    #[cfg(test)]
+    pub(crate) fn hold_input_renderer_ack_for_test(&mut self) -> bool {
+        match &mut self.inner {
+            PendingCdpCommandDispatchKind::Input(pending) => pending.hold_renderer_ack_for_test(),
+            _ => false,
+        }
+    }
+
     pub fn command_id(&self) -> Option<u64> {
         match &self.inner {
             PendingCdpCommandDispatchKind::Runtime(pending) => pending.command_id(),

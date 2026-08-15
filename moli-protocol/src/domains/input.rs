@@ -132,6 +132,8 @@ enum PendingInputCommandKind {
 
 enum PendingInputOperation {
     Page(PendingPageCommand),
+    #[cfg(test)]
+    RendererAckHeldForTest,
 }
 
 enum CompletedInputOperation {
@@ -187,6 +189,23 @@ impl PendingInputCommandDispatch {
                     ) => CompletedInputOperation::PageResidenceUnavailable,
                 }
             }
+            #[cfg(test)]
+            PendingInputOperation::RendererAckHeldForTest => {
+                match wait_for_renderer_input_or_page_replacement(
+                    std::future::pending::<std::convert::Infallible>(),
+                    self.owner_observer,
+                )
+                .await
+                {
+                    RendererInputWaitOutcome::Completed(never) => match never {},
+                    RendererInputWaitOutcome::PageResidence(
+                        TargetPageResidenceObservation::Superseded,
+                    ) => CompletedInputOperation::PageResidenceSuperseded,
+                    RendererInputWaitOutcome::PageResidence(
+                        TargetPageResidenceObservation::Unavailable,
+                    ) => CompletedInputOperation::PageResidenceUnavailable,
+                }
+            }
         };
         CompletedInputCommandDispatch {
             command_id: self.command_id,
@@ -195,6 +214,20 @@ impl PendingInputCommandDispatch {
             kind: self.kind,
             completed,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn hold_renderer_ack_for_test(&mut self) -> bool {
+        // The command has already crossed the real JSON/domain admission path
+        // and been enqueued in the renderer. Replacing only its reply receiver
+        // gives lifecycle smoke tests a deterministic outstanding callback;
+        // public CDP intentionally cannot pause that callback while also
+        // scheduling a replacement of the same Page owner.
+        if !self.kind.uses_renderer_host_ack_cleanup() || self.owner_observer.is_none() {
+            return false;
+        }
+        self.pending = PendingInputOperation::RendererAckHeldForTest;
+        true
     }
 }
 

@@ -366,6 +366,54 @@ async fn pending_mouse_event_acknowledges_when_page_is_replaced_before_renderer_
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn completed_renderer_ack_wins_when_page_replacement_is_already_observable() {
+    let mut ctx = TestContext::new();
+    with_loaded_document(&mut ctx, "<body>origin</body>").await;
+
+    let original_owner = ctx
+        .conn
+        .target_page_residence_identity_for_session(None)
+        .expect("the original Page should have a residence identity");
+    let observer = ctx
+        .conn
+        .register_target_page_residence_observer_for_session(None, &original_owner);
+    ctx.install_navigation_fixture_for_session_owner(
+        "data:text/html,<body>replacement-after-ack</body>",
+        None,
+    )
+    .await;
+
+    let outcome = wait_for_renderer_input_or_page_replacement(
+        std::future::ready("renderer-ack"),
+        Some(observer),
+    )
+    .await;
+    assert!(matches!(
+        outcome,
+        RendererInputWaitOutcome::Completed("renderer-ack")
+    ));
+}
+
+#[test]
+fn renderer_host_ack_cleanup_is_limited_to_mouse_and_key_callbacks() {
+    for kind in [
+        PendingInputCommandKind::DispatchMouseEvent,
+        PendingInputCommandKind::DispatchKeyEvent,
+    ] {
+        assert!(kind.uses_renderer_host_ack_cleanup());
+    }
+
+    for kind in [
+        PendingInputCommandKind::DispatchTouchEvent,
+        PendingInputCommandKind::DispatchDragEvent,
+        PendingInputCommandKind::SynthesizeTapGesture,
+        PendingInputCommandKind::InsertText,
+    ] {
+        assert!(!kind.uses_renderer_host_ack_cleanup());
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn coordinate_mouse_event_without_document_still_reports_no_document_loaded() {
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-I".into());
