@@ -1084,6 +1084,48 @@ html,body{margin:0;padding:0}
     }
 
     #[test]
+    fn layout_renderer_resolves_ratio_block_size_before_propagating_collapsed_end_margin() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+#first{width:100px;height:25px;margin-bottom:-200px;background:rgb(64,24,124)}
+#ratio{width:100px;margin:0;aspect-ratio:2/1;background:rgb(65,25,125)}
+#ratio>div{width:100px;margin-top:50px;margin-bottom:200px}
+#last{width:100px;height:25px;background:rgb(66,26,126)}
+</style></head><body>
+<div id=first></div>
+<div id=ratio><div></div></div>
+<div id=last></div>
+</body></html>"#,
+            )
+            .await;
+
+            for (color, expected) in [
+                (
+                    rgb(64, 24, 124),
+                    moli_layout::PaintRect::new(0.0, 0.0, 100.0, 25.0),
+                ),
+                (
+                    rgb(65, 25, 125),
+                    moli_layout::PaintRect::new(0.0, 25.0, 100.0, 50.0),
+                ),
+                (
+                    rgb(66, 26, 126),
+                    moli_layout::PaintRect::new(0.0, 75.0, 100.0, 25.0),
+                ),
+            ] {
+                assert_paint_rect(solid_paint_rect(&snapshot, color), expected);
+            }
+        }));
+    }
+
+    #[test]
     fn layout_renderer_reruns_grid_tracks_after_ratio_resolves_the_block_size() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
