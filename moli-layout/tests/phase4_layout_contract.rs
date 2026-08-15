@@ -317,6 +317,109 @@ fn table_caption_tracks_rows_cells_and_common_spans_share_one_wrapper_geometry()
 }
 
 #[test]
+fn table_caption_minimum_inline_contribution_constrains_an_empty_table() {
+    use LayoutElementCategory::Table;
+    use LayoutTableRole::{Caption, Table as Root};
+
+    let source = Source(vec![
+        Node::element("root", "div", LayoutElementCategory::Generic, None, vec![1]),
+        Node::element("table", "table", Table(Root), None, vec![2]),
+        Node::element("caption", "caption", Table(Caption), None, vec![3, 4]),
+        Node::element(
+            "first-block",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            Vec::new(),
+        ),
+        Node::element(
+            "second-block",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            Vec::new(),
+        ),
+    ]);
+    let mut styles = Styles::default();
+    styles.primary.insert(
+        0,
+        style(LayoutDisplay::Block, PaintColor::TRANSPARENT)
+            .tap_taffy(|taffy| taffy.size.width = Dimension::length(400.0)),
+    );
+    styles
+        .primary
+        .insert(1, style(LayoutDisplay::Table, PaintColor::TRANSPARENT));
+    styles.primary.insert(
+        2,
+        style(LayoutDisplay::TableCaption, GREEN)
+            .tap_taffy(|taffy| taffy.size.width = Dimension::length(100.0)),
+    );
+    for child in [3, 4] {
+        styles.primary.insert(
+            child,
+            style(LayoutDisplay::Block, PaintColor::TRANSPARENT).tap_taffy(|taffy| {
+                taffy.size.height = Dimension::length(35.0);
+                taffy.margin.top = taffy::LengthPercentageAuto::length(10.0);
+                taffy.margin.bottom = taffy::LengthPercentageAuto::length(10.0);
+            }),
+        );
+    }
+
+    let snapshot = render(&source, &mut styles, 400, 200);
+    let caption = rect(&snapshot, GREEN);
+    assert_close(caption.width, 100.0);
+    assert_close(caption.height, 100.0);
+}
+
+#[test]
+fn table_caption_resolves_inline_auto_margins_without_a_block_percentage_basis() {
+    use LayoutElementCategory::Table;
+    use LayoutTableRole::{Caption, Table as Root};
+
+    let source = Source(vec![
+        Node::element("root", "div", LayoutElementCategory::Generic, None, vec![1]),
+        Node::element("table", "table", Table(Root), None, vec![2]),
+        Node::element("caption", "caption", Table(Caption), None, vec![3]),
+        Node::element(
+            "caption-child",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            Vec::new(),
+        ),
+    ]);
+    let mut styles = Styles::default();
+    styles.primary.insert(
+        0,
+        style(LayoutDisplay::Block, PaintColor::TRANSPARENT)
+            .tap_taffy(|taffy| taffy.size.width = Dimension::length(400.0)),
+    );
+    styles.primary.insert(
+        1,
+        sized(LayoutDisplay::Table, 200.0, 100.0, PaintColor::TRANSPARENT),
+    );
+    styles.primary.insert(
+        2,
+        style(LayoutDisplay::TableCaption, GREEN).tap_taffy(|taffy| {
+            taffy.size.width = Dimension::percent(0.5);
+            taffy.size.height = Dimension::percent(0.8);
+            taffy.margin.left = taffy::LengthPercentageAuto::auto();
+            taffy.margin.right = taffy::LengthPercentageAuto::auto();
+        }),
+    );
+    styles.primary.insert(
+        3,
+        sized(LayoutDisplay::Block, 10.0, 30.0, PaintColor::TRANSPARENT),
+    );
+
+    let snapshot = render(&source, &mut styles, 400, 200);
+    let caption = rect(&snapshot, GREEN);
+    assert_close(caption.x, 50.0);
+    assert_close(caption.width, 100.0);
+    assert_close(caption.height, 30.0);
+}
+
+#[test]
 fn table_sections_use_visual_header_body_footer_order() {
     use LayoutElementCategory::Table;
     use LayoutTableRole::{BodyGroup, Cell, FooterGroup, HeaderGroup, Row, Table as Root};
