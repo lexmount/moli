@@ -1126,6 +1126,48 @@ html,body{margin:0;padding:0}
     }
 
     #[test]
+    fn layout_renderer_treats_intrinsic_block_sizes_as_auto_for_margin_collapse() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+.case{width:100px}.case>div{height:100px;margin-bottom:100px}
+#min{height:min-content;background:rgb(67,27,127)}
+#max{height:max-content;background:rgb(68,28,128)}
+#fit{height:fit-content;background:rgb(69,29,129)}
+</style></head><body>
+<div id=min class=case><div></div></div>
+<div id=max class=case><div></div></div>
+<div id=fit class=case><div></div></div>
+</body></html>"#,
+            )
+            .await;
+
+            for (color, expected) in [
+                (
+                    rgb(67, 27, 127),
+                    moli_layout::PaintRect::new(0.0, 0.0, 100.0, 100.0),
+                ),
+                (
+                    rgb(68, 28, 128),
+                    moli_layout::PaintRect::new(0.0, 200.0, 100.0, 100.0),
+                ),
+                (
+                    rgb(69, 29, 129),
+                    moli_layout::PaintRect::new(0.0, 400.0, 100.0, 100.0),
+                ),
+            ] {
+                assert_paint_rect(solid_paint_rect(&snapshot, color), expected);
+            }
+        }));
+    }
+
+    #[test]
     fn layout_renderer_reruns_grid_tracks_after_ratio_resolves_the_block_size() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
