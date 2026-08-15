@@ -14,8 +14,15 @@ use std::{
     cell::{Cell, RefCell, UnsafeCell},
     collections::HashMap,
     rc::{Rc, Weak},
-    sync::atomic::{AtomicI64, Ordering},
+    sync::atomic::{AtomicI64, AtomicUsize, Ordering},
 };
+
+thread_local! {
+    static INTERRUPT_LOOPS: RefCell<HashMap<usize, Weak<RendererInspectorPauseLoopLocal>>> =
+        RefCell::new(HashMap::new());
+}
+
+static NEXT_INTERRUPT_ROUTE_ID: AtomicUsize = AtomicUsize::new(1);
 
 struct RendererInspectorClient {
     isolate: UnsafeCell<v8::UnsafeRawIsolatePtr>,
@@ -35,13 +42,29 @@ struct RendererInspectorPauseSession {
 pub(super) struct RendererInspectorPauseSessionRegistration {
     pause_loop: Weak<RendererInspectorPauseLoopLocal>,
     context_group_id: i32,
+    agent_token: RendererDevToolsAgentToken,
     session_key: DevToolsSessionKey,
     session: Weak<v8::inspector::V8InspectorSession>,
 }
 
 struct RendererInspectorPauseLoopLocal {
     bridge: RendererInspectorPauseBridge,
+    interrupt_route_id: Option<usize>,
     sessions: RefCell<HashMap<(i32, DevToolsSessionKey), RendererInspectorPauseSession>>,
+    interrupt_sessions: RefCell<
+        HashMap<(RendererDevToolsAgentToken, DevToolsSessionKey), RendererInspectorPauseSession>,
+    >,
+}
+
+impl Drop for RendererInspectorPauseLoopLocal {
+    fn drop(&mut self) {
+        let Some(interrupt_route_id) = self.interrupt_route_id else {
+            return;
+        };
+        let _ = INTERRUPT_LOOPS.try_with(|loops| {
+            loops.borrow_mut().remove(&interrupt_route_id);
+        });
+    }
 }
 
 impl Drop for RendererInspectorPauseSessionRegistration {
@@ -57,15 +80,38 @@ impl Drop for RendererInspectorPauseSessionRegistration {
         {
             sessions.remove(&key);
         }
+        let interrupt_key = (self.agent_token, self.session_key.clone());
+        let mut interrupt_sessions = pause_loop.interrupt_sessions.borrow_mut();
+        if interrupt_sessions
+            .get(&interrupt_key)
+            .is_some_and(|entry| Weak::ptr_eq(&entry.session, &self.session))
+        {
+            interrupt_sessions.remove(&interrupt_key);
+        }
     }
 }
 
 impl RendererInspectorPauseLoopLocal {
-    fn new(bridge: RendererInspectorPauseBridge) -> Self {
-        Self {
+    fn new(bridge: RendererInspectorPauseBridge) -> Rc<Self> {
+        let interrupt_route_id = bridge.interrupt_route_id();
+        let pause_loop = Rc::new(Self {
             bridge,
+            interrupt_route_id,
             sessions: RefCell::new(HashMap::new()),
+            interrupt_sessions: RefCell::new(HashMap::new()),
+        });
+        if let Some(interrupt_route_id) = interrupt_route_id {
+            let previous = INTERRUPT_LOOPS.with(|loops| {
+                loops
+                    .borrow_mut()
+                    .insert(interrupt_route_id, Rc::downgrade(&pause_loop))
+            });
+            assert!(
+                previous.is_none(),
+                "renderer Inspector interrupt route IDs must be unique"
+            );
         }
+        pause_loop
     }
 
     fn register_session(
@@ -77,18 +123,26 @@ impl RendererInspectorPauseLoopLocal {
         outbound: InspectorOutbound,
     ) -> RendererInspectorPauseSessionRegistration {
         let weak_session = Rc::downgrade(session);
-        self.sessions.borrow_mut().insert(
-            (context_group_id.get(), session_key.clone()),
-            RendererInspectorPauseSession {
-                session: weak_session.clone(),
-                outbound,
-                agent_token,
-                session_key: session_key.clone(),
-            },
-        );
+        let route = RendererInspectorPauseSession {
+            session: weak_session.clone(),
+            outbound,
+            agent_token,
+            session_key: session_key.clone(),
+        };
+        self.sessions
+            .borrow_mut()
+            .insert((context_group_id.get(), session_key.clone()), route.clone());
+        // Context groups may overlap briefly during document replacement.
+        // Active-JS interrupts carry the stable renderer-agent identity rather
+        // than a V8 context-group id, so keep an explicit latest-registration
+        // index instead of depending on HashMap iteration order.
+        self.interrupt_sessions
+            .borrow_mut()
+            .insert((agent_token, session_key.clone()), route);
         RendererInspectorPauseSessionRegistration {
             pause_loop: Rc::downgrade(self),
             context_group_id: context_group_id.get(),
+            agent_token,
             session_key,
             session: weak_session,
         }
@@ -105,17 +159,35 @@ impl RendererInspectorPauseLoopLocal {
     }
 
     fn dispatch_command(&self, context_group_id: i32, command: RendererInspectorPauseCommand) {
-        let session_key = DevToolsSessionKey::from_wire_session_id(
-            command
-                .inspector_session_id
-                .as_deref()
-                .filter(|session_id| !session_id.is_empty()),
-        );
+        let session_key = command.metadata.session().clone();
         let session = self
             .sessions
             .borrow()
             .get(&(context_group_id, session_key))
+            .filter(|session| session.agent_token == command.agent_token)
             .cloned();
+        self.dispatch_command_to_session(command, session);
+    }
+
+    fn dispatch_next_io_command_from_interrupt(&self) {
+        let Some(command) = self.bridge.claim_io_command_for_interrupt() else {
+            return;
+        };
+        let session_key = command.metadata.session();
+        let session = self
+            .interrupt_sessions
+            .borrow()
+            .get(&(command.agent_token, session_key.clone()))
+            .cloned();
+        self.dispatch_command_to_session(command, session);
+    }
+
+    fn dispatch_command_to_session(
+        &self,
+        command: RendererInspectorPauseCommand,
+        session: Option<RendererInspectorPauseSession>,
+    ) {
+        let mut first_dispatch = self.bridge.first_dispatch_guard(&command);
         let Some(session) = session else {
             send_pause_dispatch_error(command.response, "Inspector session is not available");
             return;
@@ -128,6 +200,7 @@ impl RendererInspectorPauseLoopLocal {
         session
             .outbound
             .register_response_callback(command.response);
+        first_dispatch.release();
         v8_session.dispatch_protocol_message(v8::inspector::StringView::from(
             command.raw_json.as_bytes(),
         ));
@@ -141,6 +214,38 @@ impl RendererInspectorPauseLoopLocal {
     fn quit_message_loop_on_pause(&self) {
         self.bridge.request_quit();
     }
+}
+
+fn allocate_interrupt_route_id() -> usize {
+    NEXT_INTERRUPT_ROUTE_ID
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            current.checked_add(1)
+        })
+        .expect("renderer Inspector interrupt route ID exhausted")
+}
+
+unsafe extern "C" fn dispatch_inspector_interrupt(
+    isolate: v8::UnsafeRawIsolatePtr,
+    data: *mut std::ffi::c_void,
+) {
+    let interrupt_route_id = data as usize;
+    let pause_loop = INTERRUPT_LOOPS
+        .try_with(|loops| {
+            loops
+                .borrow()
+                .get(&interrupt_route_id)
+                .and_then(Weak::upgrade)
+        })
+        .ok()
+        .flatten();
+    let Some(pause_loop) = pause_loop else {
+        return;
+    };
+    let mut isolate_ptr = isolate;
+    let isolate = unsafe { v8::Isolate::ref_from_raw_isolate_ptr_mut(&mut isolate_ptr) };
+    with_scoped_inspector_microtasks(isolate, || {
+        pause_loop.dispatch_next_io_command_from_interrupt();
+    });
 }
 
 fn send_pause_dispatch_error(response: RendererRuntimeInspectorResponseSender, message: &str) {
@@ -301,8 +406,12 @@ impl RendererInspectorIsolateBackend {
         let isolate_ptr = unsafe { isolate.as_raw_isolate_ptr() };
         let context_registry = DocumentInspectorContextRegistry::default();
         let unique_id_state = Rc::new(RendererInspectorClientUniqueIdState::new());
-        let pause_bridge = RendererInspectorPauseBridge::default();
-        let pause_loop = Rc::new(RendererInspectorPauseLoopLocal::new(pause_bridge.clone()));
+        let pause_bridge = RendererInspectorPauseBridge::new_interruptible(
+            isolate.thread_safe_handle(),
+            dispatch_inspector_interrupt,
+            allocate_interrupt_route_id(),
+        );
+        let pause_loop = RendererInspectorPauseLoopLocal::new(pause_bridge.clone());
         let inspector_client =
             v8::inspector::V8InspectorClient::new(Box::new(RendererInspectorClient::new(
                 isolate_ptr,

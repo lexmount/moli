@@ -166,12 +166,15 @@ impl RendererPageHandle {
     pub fn enqueue_routable_runtime_inspector_command(
         &self,
         inspector_session_id: Option<String>,
+        route: RendererInspectorCommandRoute,
         owner_context_resolution_action: Option<String>,
         raw_json: String,
         response: RendererRuntimeInspectorResponseSender,
     ) -> crate::script_vm::inspector_pause::RendererRuntimeInspectorCommandRoute {
         self.inspector_pause_bridge.enqueue_command(
+            self.devtools_agent_token,
             inspector_session_id,
+            route,
             owner_context_resolution_action,
             raw_json,
             response,

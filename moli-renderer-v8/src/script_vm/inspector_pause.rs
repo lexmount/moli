@@ -1,5 +1,6 @@
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
+    ffi::c_void,
     sync::Arc,
 };
 
@@ -8,30 +9,50 @@ use parking_lot::{Condvar, Mutex};
 use serde_json::{Value, json};
 
 use crate::runtime::{
-    PageId, PendingRendererOutputRecord, RendererOutputResidenceIdentity,
-    RendererProtocolObservation, RendererRuntimeCommandCausalIdentity,
-    RendererRuntimeInspectorMessage, RendererRuntimeInspectorMessageBatch,
-    RendererRuntimeInspectorResponseSender, RendererTurnOutputJournal,
+    PageId, PendingRendererOutputRecord, RendererInspectorCommandMetadata,
+    RendererInspectorCommandRoute, RendererOutputResidenceIdentity, RendererProtocolObservation,
+    RendererRuntimeCommandCausalIdentity, RendererRuntimeInspectorMessage,
+    RendererRuntimeInspectorMessageBatch, RendererRuntimeInspectorResponseSender,
+    RendererTurnOutputJournal,
 };
 
 pub(crate) struct RendererInspectorPauseCommand {
     command_id: u64,
-    pub(crate) inspector_session_id: Option<String>,
+    pub(crate) agent_token: RendererDevToolsAgentToken,
+    pub(crate) metadata: RendererInspectorCommandMetadata,
     pub(crate) owner_context_resolution_action: Option<String>,
     pub(crate) raw_json: String,
     pub(crate) response: RendererRuntimeInspectorResponseSender,
     claim_tx: Option<tokio::sync::oneshot::Sender<RendererRuntimeInspectorCommandClaim>>,
 }
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct RendererInspectorFirstDispatchLane {
+    agent_token: RendererDevToolsAgentToken,
+    session: DevToolsSessionKey,
+    route: RendererInspectorCommandRoute,
+}
+
+impl RendererInspectorPauseCommand {
+    fn first_dispatch_lane(&self) -> RendererInspectorFirstDispatchLane {
+        RendererInspectorFirstDispatchLane {
+            agent_token: self.agent_token,
+            session: self.metadata.session().clone(),
+            route: self.metadata.route(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RendererRuntimeInspectorCommandClaim {
     Owner,
-    Pause,
+    Inspector,
     Canceled,
 }
 
 pub struct RendererRuntimeInspectorCommandRoute {
     command_id: u64,
+    metadata: RendererInspectorCommandMetadata,
     requires_owner_fallback: bool,
     claim_rx: Option<tokio::sync::oneshot::Receiver<RendererRuntimeInspectorCommandClaim>>,
     bridge: RendererInspectorPauseBridge,
@@ -40,6 +61,10 @@ pub struct RendererRuntimeInspectorCommandRoute {
 impl RendererRuntimeInspectorCommandRoute {
     pub fn command_id(&self) -> u64 {
         self.command_id
+    }
+
+    pub fn metadata(&self) -> &RendererInspectorCommandMetadata {
+        &self.metadata
     }
 
     pub fn requires_owner_fallback(&self) -> bool {
@@ -74,6 +99,16 @@ pub(crate) struct RendererInspectorPauseBridge {
 struct RendererInspectorPauseBridgeShared {
     state: Mutex<RendererInspectorPauseBridgeState>,
     command_ready: Condvar,
+    interrupt_route: Option<RendererInspectorInterruptRoute>,
+}
+
+type RendererInspectorInterruptCallback =
+    unsafe extern "C" fn(v8::UnsafeRawIsolatePtr, *mut c_void);
+
+struct RendererInspectorInterruptRoute {
+    isolate: v8::IsolateHandle,
+    callback: RendererInspectorInterruptCallback,
+    callback_data: usize,
 }
 
 #[derive(Clone)]
@@ -95,6 +130,7 @@ struct RendererInspectorPauseBridgeState {
     quit_requested: bool,
     session_detach_arms: usize,
     target_closed: bool,
+    active_first_dispatch_lanes: HashMap<RendererInspectorFirstDispatchLane, u64>,
     commands: VecDeque<RendererInspectorPauseCommand>,
     pending_prefaces: VecDeque<RendererInspectorPausePreface>,
     paused_sessions_awaiting_resumed: HashSet<(RendererDevToolsAgentToken, DevToolsSessionKey)>,
@@ -203,6 +239,28 @@ pub(super) struct RendererInspectorPausePrefaceGuard {
     id: u64,
 }
 
+pub(crate) struct RendererInspectorFirstDispatchGuard {
+    bridge: RendererInspectorPauseBridge,
+    active: Option<(RendererInspectorFirstDispatchLane, u64)>,
+}
+
+impl Drop for RendererInspectorFirstDispatchGuard {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
+impl RendererInspectorFirstDispatchGuard {
+    /// Releases the lane at the call boundary into V8 Inspector. The command
+    /// response and any JavaScript it starts may remain pending after this
+    /// point; neither is part of the first-dispatch lifetime.
+    pub(crate) fn release(&mut self) {
+        if let Some((lane, command_id)) = self.active.take() {
+            self.bridge.finish_first_dispatch(lane, command_id);
+        }
+    }
+}
+
 impl Drop for RendererInspectorPausePrefaceGuard {
     fn drop(&mut self) {
         self.bridge.cancel_pause_preface(self.id);
@@ -217,6 +275,28 @@ pub(super) struct RendererInspectorPauseOutboundRoute {
 
 impl Default for RendererInspectorPauseBridge {
     fn default() -> Self {
+        Self::new(None)
+    }
+}
+
+impl RendererInspectorPauseBridge {
+    pub(super) fn new_interruptible(
+        isolate: v8::IsolateHandle,
+        callback: RendererInspectorInterruptCallback,
+        callback_data: usize,
+    ) -> Self {
+        assert_ne!(
+            callback_data, 0,
+            "Inspector interrupt route ID must be non-zero"
+        );
+        Self::new(Some(RendererInspectorInterruptRoute {
+            isolate,
+            callback,
+            callback_data,
+        }))
+    }
+
+    fn new(interrupt_route: Option<RendererInspectorInterruptRoute>) -> Self {
         Self {
             shared: Arc::new(RendererInspectorPauseBridgeShared {
                 state: Mutex::new(RendererInspectorPauseBridgeState {
@@ -226,6 +306,7 @@ impl Default for RendererInspectorPauseBridge {
                     quit_requested: false,
                     session_detach_arms: 0,
                     target_closed: false,
+                    active_first_dispatch_lanes: HashMap::new(),
                     commands: VecDeque::new(),
                     pending_prefaces: VecDeque::new(),
                     paused_sessions_awaiting_resumed: HashSet::new(),
@@ -234,6 +315,7 @@ impl Default for RendererInspectorPauseBridge {
                     route: None,
                 }),
                 command_ready: Condvar::new(),
+                interrupt_route,
             }),
         }
     }
@@ -248,6 +330,10 @@ impl std::fmt::Debug for RendererInspectorPauseBridge {
             .field("quit_requested", &state.quit_requested)
             .field("session_detach_arms", &state.session_detach_arms)
             .field("target_closed", &state.target_closed)
+            .field(
+                "active_first_dispatch_lanes",
+                &state.active_first_dispatch_lanes,
+            )
             .field("pending_commands", &state.commands.len())
             .field("pending_prefaces", &state.pending_prefaces.len())
             .field(
@@ -267,6 +353,13 @@ impl std::fmt::Debug for RendererInspectorPauseBridge {
 }
 
 impl RendererInspectorPauseBridge {
+    pub(super) fn interrupt_route_id(&self) -> Option<usize> {
+        self.shared
+            .interrupt_route
+            .as_ref()
+            .map(|route| route.callback_data)
+    }
+
     pub(super) fn outbound_route(
         &self,
         agent_token: RendererDevToolsAgentToken,
@@ -304,7 +397,11 @@ impl RendererInspectorPauseBridge {
         }
         let call_id = command.response.call_id();
         let causal_identity = RendererRuntimeCommandCausalIdentity::new(
-            command.inspector_session_id.clone(),
+            command
+                .metadata
+                .session()
+                .wire_session_id()
+                .map(str::to_owned),
             call_id,
         );
         let mut state = self.shared.state.lock();
@@ -439,7 +536,9 @@ impl RendererInspectorPauseBridge {
 
     pub(crate) fn enqueue_command(
         &self,
+        agent_token: RendererDevToolsAgentToken,
         inspector_session_id: Option<String>,
+        route: RendererInspectorCommandRoute,
         owner_context_resolution_action: Option<String>,
         raw_json: String,
         response: RendererRuntimeInspectorResponseSender,
@@ -451,9 +550,11 @@ impl RendererInspectorPauseBridge {
             .next_command_id
             .checked_add(1)
             .expect("runtime inspector pause command ID overflow");
+        let metadata = RendererInspectorCommandMetadata::new(inspector_session_id, route);
         let command = RendererInspectorPauseCommand {
             command_id,
-            inspector_session_id,
+            agent_token,
+            metadata: metadata.clone(),
             owner_context_resolution_action,
             raw_json,
             response,
@@ -464,6 +565,7 @@ impl RendererInspectorPauseBridge {
             fail_pause_command(command, "Inspector target closed while paused");
             return RendererRuntimeInspectorCommandRoute {
                 command_id,
+                metadata,
                 requires_owner_fallback: false,
                 claim_rx: Some(claim_rx),
                 bridge: self.clone(),
@@ -474,16 +576,30 @@ impl RendererInspectorPauseBridge {
         if pause_active {
             self.shared.command_ready.notify_one();
         }
+        drop(state);
+        if route == RendererInspectorCommandRoute::Io {
+            self.request_io_interrupt();
+        }
         RendererRuntimeInspectorCommandRoute {
             command_id,
-            // Queue the owner task even while V8 is paused. The nested pause loop
-            // normally claims the command first, making that task a no-op. If a
-            // preceding Debugger.resume exits the loop first, the owner task is
-            // already waiting and can dispatch the still-unclaimed command.
+            metadata,
+            // Every route keeps an owner fallback. IO can win through a V8
+            // interrupt, while both Chromium transport routes can run in the
+            // nested debugger loop. If V8 unwinds first, the already-queued
+            // owner turn can dispatch the still-unclaimed command.
             requires_owner_fallback: true,
             claim_rx: Some(claim_rx),
             bridge: self.clone(),
         }
+    }
+
+    fn request_io_interrupt(&self) {
+        let Some(route) = self.shared.interrupt_route.as_ref() else {
+            return;
+        };
+        let _ = route
+            .isolate
+            .request_interrupt(route.callback, route.callback_data as *mut c_void);
     }
 
     pub(crate) fn claim_command_for_owner(
@@ -498,10 +614,27 @@ impl RendererInspectorPauseBridge {
             .commands
             .iter()
             .position(|command| command.command_id == command_id)?;
+        let lane = state.commands[position].first_dispatch_lane();
+        if state.active_first_dispatch_lanes.contains_key(&lane)
+            || state
+                .commands
+                .iter()
+                .take(position)
+                .any(|command| command.first_dispatch_lane() == lane)
+        {
+            return None;
+        }
         let command = state
             .commands
             .remove(position)
             .expect("queued runtime inspector command position should remain valid");
+        assert!(
+            state
+                .active_first_dispatch_lanes
+                .insert(lane, command.command_id)
+                .is_none(),
+            "a first-dispatch lane must have at most one active command"
+        );
         Some(claim_pause_command(
             command,
             RendererRuntimeInspectorCommandClaim::Owner,
@@ -540,13 +673,95 @@ impl RendererInspectorPauseBridge {
             if state.target_closed || state.quit_requested || state.session_detach_arms != 0 {
                 return None;
             }
-            if let Some(command) = state.commands.pop_front() {
+            if let Some(position) = state.commands.iter().position(|command| {
+                !state
+                    .active_first_dispatch_lanes
+                    .contains_key(&command.first_dispatch_lane())
+            }) {
+                let command = state
+                    .commands
+                    .remove(position)
+                    .expect("queued Inspector command position must remain valid");
+                let lane = command.first_dispatch_lane();
+                assert!(
+                    state
+                        .active_first_dispatch_lanes
+                        .insert(lane, command.command_id)
+                        .is_none(),
+                    "a first-dispatch lane must have at most one active command"
+                );
                 return Some(claim_pause_command(
                     command,
-                    RendererRuntimeInspectorCommandClaim::Pause,
+                    RendererRuntimeInspectorCommandClaim::Inspector,
                 ));
             }
             self.shared.command_ready.wait(&mut state);
+        }
+    }
+
+    pub(super) fn claim_io_command_for_interrupt(&self) -> Option<RendererInspectorPauseCommand> {
+        let mut state = self.shared.state.lock();
+        if state.target_closed {
+            return None;
+        }
+        let position = state.commands.iter().position(|command| {
+            command.metadata.route() == RendererInspectorCommandRoute::Io
+                && !state
+                    .active_first_dispatch_lanes
+                    .contains_key(&command.first_dispatch_lane())
+        })?;
+        let command = state
+            .commands
+            .remove(position)
+            .expect("queued IO Inspector command position must remain valid");
+        let lane = command.first_dispatch_lane();
+        assert!(
+            state
+                .active_first_dispatch_lanes
+                .insert(lane, command.command_id)
+                .is_none(),
+            "a first-dispatch lane must have at most one active command"
+        );
+        Some(claim_pause_command(
+            command,
+            RendererRuntimeInspectorCommandClaim::Inspector,
+        ))
+    }
+
+    pub(crate) fn first_dispatch_guard(
+        &self,
+        command: &RendererInspectorPauseCommand,
+    ) -> RendererInspectorFirstDispatchGuard {
+        let lane = command.first_dispatch_lane();
+        let state = self.shared.state.lock();
+        assert_eq!(
+            state.active_first_dispatch_lanes.get(&lane),
+            Some(&command.command_id),
+            "a claimed Inspector command must own its first-dispatch lane"
+        );
+        drop(state);
+        RendererInspectorFirstDispatchGuard {
+            bridge: self.clone(),
+            active: Some((lane, command.command_id)),
+        }
+    }
+
+    fn finish_first_dispatch(&self, lane: RendererInspectorFirstDispatchLane, command_id: u64) {
+        let has_waiting_io = {
+            let mut state = self.shared.state.lock();
+            assert_eq!(
+                state.active_first_dispatch_lanes.remove(&lane),
+                Some(command_id),
+                "only the active Inspector command may release its first-dispatch lane"
+            );
+            self.shared.command_ready.notify_all();
+            state
+                .commands
+                .iter()
+                .any(|command| command.metadata.route() == RendererInspectorCommandRoute::Io)
+        };
+        if has_waiting_io {
+            self.request_io_interrupt();
         }
     }
 
@@ -564,7 +779,7 @@ impl RendererInspectorPauseBridge {
         state.quit_requested = false;
         // Commands that lost the nested-loop race to Debugger.resume stay
         // queued. Every live route has an owner fallback queued before it is
-        // exposed to the caller, so normal owner dispatch claims them after V8
+        // exposed to the caller, so owner dispatch claims them after V8
         // unwinds instead of reporting a synthetic cancellation.
     }
 
@@ -627,7 +842,7 @@ impl RendererInspectorPauseBridge {
     ) {
         let route = {
             let state = self.shared.state.lock();
-            if state.target_closed || state.phase == RendererInspectorPausePhase::Running {
+            if state.target_closed {
                 return;
             }
             state.route.clone()
@@ -644,7 +859,7 @@ impl RendererInspectorPauseBridge {
             )
             .resolve()
             .unwrap_or_else(|_| {
-                panic!("Inspector pause state update must have resolved source identity")
+                panic!("Inspector IO state update must have resolved source identity")
             }),
         );
     }
@@ -899,17 +1114,26 @@ mod tests {
 
         let (response, _response_rx) = response_sender(41);
         let command_route = bridge.enqueue_command(
+            RendererDevToolsAgentToken::allocate(),
             None,
+            RendererInspectorCommandRoute::MainThread,
             None,
             r#"{"id":41,"method":"Debugger.stepOut","params":{}}"#.to_owned(),
             response,
         );
+        assert_eq!(
+            command_route.metadata().route(),
+            RendererInspectorCommandRoute::MainThread
+        );
         let command = bridge
             .wait_for_command()
             .expect("the nested pause loop should claim stepOut");
+        let first_dispatch = bridge.first_dispatch_guard(&command);
+        assert_eq!(command.metadata, command_route.metadata().clone());
         let dispatch = bridge.begin_command_dispatch(&command);
         outbound.mark_command_response(41, true);
         drop(dispatch);
+        drop(first_dispatch);
         bridge.leave_pause();
         let resumed = expect_immediate_command_output(
             outbound.route_notification(&json!({"method": "Debugger.resumed", "params": {}})),
@@ -953,7 +1177,9 @@ mod tests {
 
         let (response, _response_rx) = response_sender(43);
         let command_route = bridge.enqueue_command(
+            RendererDevToolsAgentToken::allocate(),
             None,
+            RendererInspectorCommandRoute::MainThread,
             None,
             r#"{"id":43,"method":"Debugger.stepOut","params":{}}"#.to_owned(),
             response,
@@ -961,9 +1187,11 @@ mod tests {
         let command = bridge
             .wait_for_command()
             .expect("the nested pause loop should claim stepOut");
+        let first_dispatch = bridge.first_dispatch_guard(&command);
         let dispatch = bridge.begin_command_dispatch(&command);
         outbound.mark_command_response(43, true);
         drop(dispatch);
+        drop(first_dispatch);
         bridge.leave_pause();
         assert!(
             expect_immediate_command_output(
@@ -1000,7 +1228,9 @@ mod tests {
 
         let (response, _response_rx) = response_sender(42);
         let command_route = bridge.enqueue_command(
+            RendererDevToolsAgentToken::allocate(),
             None,
+            RendererInspectorCommandRoute::MainThread,
             None,
             r#"{"id":42,"method":"Debugger.stepOut","params":{}}"#.to_owned(),
             response,
@@ -1008,9 +1238,11 @@ mod tests {
         let command = bridge
             .wait_for_command()
             .expect("the nested pause loop should claim stepOut");
+        let first_dispatch = bridge.first_dispatch_guard(&command);
         let dispatch = bridge.begin_command_dispatch(&command);
         outbound.mark_command_response(42, false);
         drop(dispatch);
+        drop(first_dispatch);
 
         assert!(
             bridge
@@ -1076,55 +1308,252 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn command_queued_while_running_can_be_claimed_by_a_racing_pause() {
+    async fn pause_loop_accepts_main_while_io_can_overtake_on_its_own_lane() {
         let bridge = RendererInspectorPauseBridge::default();
         configure_page(&bridge, PageId::new_for_testing(1));
-        let (response, response_rx) = response_sender(7);
-        let route = bridge.enqueue_command(
+        let agent_token = RendererDevToolsAgentToken::allocate();
+        let (main_response, main_response_rx) = response_sender(7);
+        let main_route = bridge.enqueue_command(
+            agent_token,
             None,
+            RendererInspectorCommandRoute::MainThread,
             Some("evaluate".to_owned()),
             r#"{"id":7,"method":"Runtime.evaluate","params":{"expression":"42"}}"#.to_owned(),
-            response,
+            main_response,
+        );
+        let (io_response, io_response_rx) = response_sender(8);
+        let io_route = bridge.enqueue_command(
+            agent_token,
+            None,
+            RendererInspectorCommandRoute::Io,
+            None,
+            r#"{"id":8,"method":"Runtime.terminateExecution"}"#.to_owned(),
+            io_response,
+        );
+
+        assert_eq!(
+            main_route.metadata().session(),
+            &DevToolsSessionKey::Primary
+        );
+        assert_eq!(
+            main_route.metadata().route(),
+            RendererInspectorCommandRoute::MainThread
         );
         assert!(
-            route.requires_owner_fallback(),
+            main_route.requires_owner_fallback(),
             "the command should initially schedule an owner fallback"
         );
-        let command_id = route.command_id();
 
         assert!(expect_immediate_preface(route_paused(&bridge)).is_empty());
         assert!(bridge.enter_pause());
-        let command = bridge
-            .wait_for_command()
-            .expect("the pause loop should claim the pre-pause command");
+        let io_command = bridge
+            .claim_io_command_for_interrupt()
+            .expect("the IO callback may overtake an earlier independent Main command");
+        let io_first_dispatch = bridge.first_dispatch_guard(&io_command);
+        assert_eq!(io_command.metadata, io_route.metadata().clone());
         assert_eq!(
-            command.owner_context_resolution_action.as_deref(),
-            Some("evaluate"),
-            "the owner-only context resolution metadata must stay attached to the command"
+            io_route.wait_for_claim().await,
+            Ok(RendererRuntimeInspectorCommandClaim::Inspector)
         );
+        io_command
+            .response
+            .send(json!({"id": 8, "result": {}}))
+            .expect("IO response receiver should remain open");
+        assert_eq!(io_response_rx.await.expect("IO response").call_id, 8);
+        drop(io_first_dispatch);
 
+        // A normal debugger pause pumps Chromium's main-thread DevTools
+        // receiver too. Main does not interrupt running JavaScript, but it is
+        // eligible once V8 has entered the nested message loop.
+        let main_command = bridge
+            .wait_for_command()
+            .expect("the nested pause loop should claim Main work");
+        let main_first_dispatch = bridge.first_dispatch_guard(&main_command);
+        assert_eq!(main_command.metadata, main_route.metadata().clone());
         assert_eq!(
-            route.wait_for_claim().await,
-            Ok(RendererRuntimeInspectorCommandClaim::Pause)
+            main_command.owner_context_resolution_action.as_deref(),
+            Some("evaluate"),
+            "owner context-resolution metadata must stay attached"
         );
-        assert!(
-            bridge.claim_command_for_owner(command_id).is_none(),
-            "the delayed owner fallback must not dispatch a command already claimed by pause"
+        assert_eq!(
+            main_route.wait_for_claim().await,
+            Ok(RendererRuntimeInspectorCommandClaim::Inspector)
         );
-        command
+        main_command
             .response
             .send(json!({"id": 7, "result": {"result": {"value": 42}}}))
-            .expect("test response receiver should remain open");
-        assert_eq!(
-            response_rx.await.expect("test response").call_id,
-            7,
-            "the claimed command must retain its original response sender"
-        );
+            .expect("Main response receiver should remain open");
+        assert_eq!(main_response_rx.await.expect("Main response").call_id, 7);
+        drop(main_first_dispatch);
+
+        bridge.request_quit();
+        assert!(bridge.wait_for_command().is_none());
         bridge.leave_pause();
     }
 
+    #[test]
+    fn active_owner_io_dispatch_cannot_be_overtaken_by_its_io_successor() {
+        let bridge = RendererInspectorPauseBridge::default();
+        let agent_token = RendererDevToolsAgentToken::allocate();
+        let (first_response, _first_response_rx) = response_sender(11);
+        let first_route = bridge.enqueue_command(
+            agent_token,
+            None,
+            RendererInspectorCommandRoute::Io,
+            None,
+            r#"{"id":11,"method":"Debugger.pause"}"#.to_owned(),
+            first_response,
+        );
+        let (second_response, _second_response_rx) = response_sender(12);
+        let second_route = bridge.enqueue_command(
+            agent_token,
+            None,
+            RendererInspectorCommandRoute::Io,
+            None,
+            r#"{"id":12,"method":"Runtime.terminateExecution"}"#.to_owned(),
+            second_response,
+        );
+
+        let first = bridge
+            .claim_command_for_owner(first_route.command_id())
+            .expect("the first IO command should be owner-claimable while V8 is idle");
+        let first_dispatch = bridge.first_dispatch_guard(&first);
+        assert!(
+            bridge.claim_io_command_for_interrupt().is_none(),
+            "an interrupt callback must not overtake an owner-claimed IO predecessor"
+        );
+
+        drop(first_dispatch);
+        let second = bridge
+            .claim_io_command_for_interrupt()
+            .expect("the IO successor should become claimable after first dispatch");
+        assert_eq!(second.command_id, second_route.command_id());
+        let second_dispatch = bridge.first_dispatch_guard(&second);
+        drop(second_dispatch);
+    }
+
+    #[test]
+    fn first_dispatch_fifo_is_scoped_to_the_exact_agent_session_and_route() {
+        let bridge = RendererInspectorPauseBridge::default();
+        let agent_token = RendererDevToolsAgentToken::allocate();
+        let (first_response, _first_response_rx) = response_sender(21);
+        let first_route = bridge.enqueue_command(
+            agent_token,
+            None,
+            RendererInspectorCommandRoute::Io,
+            None,
+            r#"{"id":21,"method":"Debugger.pause"}"#.to_owned(),
+            first_response,
+        );
+        let (second_response, _second_response_rx) = response_sender(22);
+        let second_route = bridge.enqueue_command(
+            agent_token,
+            None,
+            RendererInspectorCommandRoute::Io,
+            None,
+            r#"{"id":22,"method":"Runtime.terminateExecution"}"#.to_owned(),
+            second_response,
+        );
+        let (other_response, _other_response_rx) = response_sender(23);
+        let other_route = bridge.enqueue_command(
+            agent_token,
+            Some("SID-other".to_owned()),
+            RendererInspectorCommandRoute::Io,
+            None,
+            r#"{"id":23,"method":"Debugger.pause"}"#.to_owned(),
+            other_response,
+        );
+
+        let first = bridge
+            .claim_io_command_for_interrupt()
+            .expect("the first primary-session IO command should be claimable");
+        assert_eq!(first.command_id, first_route.command_id());
+        let first_dispatch = bridge.first_dispatch_guard(&first);
+
+        let other = bridge
+            .claim_io_command_for_interrupt()
+            .expect("a different session lane must remain independent");
+        assert_eq!(other.command_id, other_route.command_id());
+        let other_dispatch = bridge.first_dispatch_guard(&other);
+        assert!(
+            bridge.claim_io_command_for_interrupt().is_none(),
+            "the primary-session successor must not overtake its active predecessor"
+        );
+        drop(other_dispatch);
+        assert!(
+            bridge.claim_io_command_for_interrupt().is_none(),
+            "releasing another session must not release the primary lane"
+        );
+
+        drop(first_dispatch);
+        let second = bridge
+            .claim_io_command_for_interrupt()
+            .expect("the exact-lane successor should become claimable once");
+        assert_eq!(second.command_id, second_route.command_id());
+        let second_dispatch = bridge.first_dispatch_guard(&second);
+        drop(second_dispatch);
+        assert!(bridge.claim_io_command_for_interrupt().is_none());
+    }
+
     #[tokio::test]
-    async fn unclaimed_pause_command_is_handed_to_owner_after_resume() {
+    async fn page_teardown_cancels_waiters_while_an_io_dispatch_is_in_flight() {
+        let bridge = RendererInspectorPauseBridge::default();
+        let page_id = PageId::new_for_testing(1);
+        configure_page(&bridge, page_id);
+        let agent_token = RendererDevToolsAgentToken::allocate();
+        let (active_response, _active_response_rx) = response_sender(31);
+        let active_route = bridge.enqueue_command(
+            agent_token,
+            None,
+            RendererInspectorCommandRoute::Io,
+            None,
+            r#"{"id":31,"method":"Debugger.pause"}"#.to_owned(),
+            active_response,
+        );
+        let (waiting_response, waiting_response_rx) = response_sender(32);
+        let waiting_route = bridge.enqueue_command(
+            agent_token,
+            None,
+            RendererInspectorCommandRoute::Io,
+            None,
+            r#"{"id":32,"method":"Runtime.terminateExecution"}"#.to_owned(),
+            waiting_response,
+        );
+
+        let active = bridge
+            .claim_io_command_for_interrupt()
+            .expect("the first IO command should enter dispatch");
+        assert_eq!(active.command_id, active_route.command_id());
+        let active_dispatch = bridge.first_dispatch_guard(&active);
+        bridge.detach_page(page_id);
+
+        let canceled = waiting_response_rx
+            .await
+            .expect("teardown must settle the queued IO response");
+        let response = canceled
+            .output
+            .protocol_response(32)
+            .expect("teardown cancellation response");
+        assert_eq!(
+            response["error"]["message"],
+            json!("Inspector page closed while paused")
+        );
+        assert_eq!(waiting_route.command_id(), 2);
+
+        drop(active_dispatch);
+        assert!(
+            bridge
+                .shared
+                .state
+                .lock()
+                .active_first_dispatch_lanes
+                .is_empty(),
+            "an in-flight callback must release its lane safely after teardown"
+        );
+    }
+
+    #[tokio::test]
+    async fn main_thread_command_is_handed_to_owner_after_resume() {
         let bridge = RendererInspectorPauseBridge::default();
         configure_page(&bridge, PageId::new_for_testing(1));
         assert!(
@@ -1138,7 +1567,9 @@ mod tests {
 
         let (response, response_rx) = response_sender(9);
         let route = bridge.enqueue_command(
+            RendererDevToolsAgentToken::allocate(),
             None,
+            RendererInspectorCommandRoute::MainThread,
             Some("evaluate".to_owned()),
             r#"{"id":9,"method":"Runtime.evaluate","params":{"expression":"42"}}"#.to_owned(),
             response,
@@ -1220,7 +1651,9 @@ mod tests {
         configure_page(&bridge, PageId::new_for_testing(1));
         let (response, response_rx) = response_sender(8);
         let route = bridge.enqueue_command(
+            RendererDevToolsAgentToken::allocate(),
             None,
+            RendererInspectorCommandRoute::MainThread,
             None,
             r#"{"id":8,"method":"Runtime.getIsolateId"}"#.to_owned(),
             response,

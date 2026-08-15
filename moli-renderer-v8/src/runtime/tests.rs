@@ -1,13 +1,14 @@
 use super::{
     ExternalRawDocumentBodyStream, JsLocalExecutor, JsRuntime, JsRuntimeOwner, PageVmInitStage,
     PreparedRendererDocument, RendererCaptureScreenshotReply, RendererDragData,
-    RendererDraggedDirectory, RendererDraggedFile, RendererInspectorProtocolConfiguration,
-    RendererInspectorSessionRestoreSnapshot, RendererOutputItem, RendererOutputPublication,
-    RendererOutputResidenceIdentity, RendererOutputTransportMessage,
-    RendererOutputTransportReceiver, RendererOutputTransportSender, RendererOwnerAction,
-    RendererPageCommand, RendererPageHandle, RendererPageReply, RendererPageTestingHandle,
-    RendererPendingPopupActivation, RendererPreparedDocumentCommitConfiguration,
-    RendererProtocolObservation, RendererRuntimeCommandOutput, RendererRuntimeInspectorMessage,
+    RendererDraggedDirectory, RendererDraggedFile, RendererInspectorCommandRoute,
+    RendererInspectorProtocolConfiguration, RendererInspectorSessionRestoreSnapshot,
+    RendererOutputItem, RendererOutputPublication, RendererOutputResidenceIdentity,
+    RendererOutputTransportMessage, RendererOutputTransportReceiver, RendererOutputTransportSender,
+    RendererOwnerAction, RendererPageCommand, RendererPageHandle, RendererPageReply,
+    RendererPageTestingHandle, RendererPendingPopupActivation,
+    RendererPreparedDocumentCommitConfiguration, RendererProtocolObservation,
+    RendererRuntimeCommandOutput, RendererRuntimeInspectorMessage,
     RendererRuntimeInspectorResponseSender,
 };
 use crate::local_executor::{is_on_script_execution_lane_for, scope_on_scaffold_js_local_executor};
@@ -3753,9 +3754,10 @@ async fn replacement_navigation_releases_old_inspector_deferred_response_callbac
         let (response_tx, mut response_rx) = oneshot::channel();
         let (dispatch, _) = page
             .run_async_command(
-                RendererPageCommand::DispatchRuntimeProtocolMessageWithDeferredResponse {
+                RendererPageCommand::dispatch_runtime_protocol_message_with_deferred_response(
                     inspector_session_id,
-                    raw_json: serde_json::json!({
+                    RendererInspectorCommandRoute::MainThread,
+                    serde_json::json!({
                         "id": call_id,
                         "method": "Runtime.evaluate",
                         "params": {
@@ -3766,11 +3768,11 @@ async fn replacement_navigation_releases_old_inspector_deferred_response_callbac
                         },
                     })
                     .to_string(),
-                    deferred_response: RendererRuntimeInspectorResponseSender::new(
+                    RendererRuntimeInspectorResponseSender::new(
                         call_id,
                         response_tx,
                     ),
-                },
+                ),
             )
             .await
             .expect("never-settling Runtime.evaluate should register a deferred callback");
@@ -3816,9 +3818,10 @@ async fn replacement_navigation_releases_old_inspector_deferred_response_callbac
     let (replacement_response_tx, mut replacement_response_rx) = oneshot::channel();
     let replacement_completion = page
         .enqueue_async_command(
-            RendererPageCommand::DispatchRuntimeProtocolMessageWithDeferredResponse {
-                inspector_session_id: Some("session-a".to_owned()),
-                raw_json: serde_json::json!({
+            RendererPageCommand::dispatch_runtime_protocol_message_with_deferred_response(
+                Some("session-a".to_owned()),
+                RendererInspectorCommandRoute::MainThread,
+                serde_json::json!({
                     "id": reused_call_id,
                     "method": "Runtime.evaluate",
                     "params": {
@@ -3828,11 +3831,11 @@ async fn replacement_navigation_releases_old_inspector_deferred_response_callbac
                     },
                 })
                 .to_string(),
-                deferred_response: RendererRuntimeInspectorResponseSender::new(
+                RendererRuntimeInspectorResponseSender::new(
                     reused_call_id,
                     replacement_response_tx,
                 ),
-            },
+            ),
         )
         .expect("replacement PageVM command should enqueue")
         .wait()
@@ -3880,9 +3883,10 @@ async fn runtime_binding_replay_cannot_consume_same_id_frontend_deferred_respons
     let (response_tx, mut response_rx) = oneshot::channel();
     let (dispatch, _) = page
         .run_async_command(
-            RendererPageCommand::DispatchRuntimeProtocolMessageWithDeferredResponse {
-                inspector_session_id: None,
-                raw_json: serde_json::json!({
+            RendererPageCommand::dispatch_runtime_protocol_message_with_deferred_response(
+                None,
+                RendererInspectorCommandRoute::MainThread,
+                serde_json::json!({
                     "id": colliding_call_id,
                     "method": "Runtime.evaluate",
                     "params": {
@@ -3892,11 +3896,11 @@ async fn runtime_binding_replay_cannot_consume_same_id_frontend_deferred_respons
                     },
                 })
                 .to_string(),
-                deferred_response: RendererRuntimeInspectorResponseSender::new(
+                RendererRuntimeInspectorResponseSender::new(
                     colliding_call_id,
                     response_tx,
                 ),
-            },
+            ),
         )
         .await
         .expect("frontend awaitPromise should remain deferred");
@@ -9185,9 +9189,9 @@ async fn runtime_enable_waits_for_queued_child_realm_before_reporting_contexts()
         })
         .expect("child realm setup command should enqueue");
     let enable = page
-        .enqueue_async_command(RendererPageCommand::RuntimeEnableEvents {
-            inspector_session_id: Some("SID-runtime-enable-child-barrier".to_owned()),
-        })
+        .enqueue_async_command(RendererPageCommand::runtime_enable_events(Some(
+            "SID-runtime-enable-child-barrier".to_owned(),
+        )))
         .expect("Runtime.enable command should enqueue behind child realm setup");
 
     let setup = setup
@@ -9646,13 +9650,13 @@ async fn apply_runtime_protocol_state_keeps_session_binding_replay_scoped() {
     };
 
     let (reply, _) = page
-        .run_async_command(RendererPageCommand::ApplyRuntimeProtocolState {
-            inspector_session_id: Some("SID-primary".to_owned()),
-            session_restore_snapshots: Vec::new(),
-            isolated_worlds: Vec::new(),
-            stored_runtime_bindings: vec![stored_only_binding],
-            session_runtime_bindings: Vec::new(),
-        })
+        .run_async_command(RendererPageCommand::apply_runtime_protocol_state(
+            Some("SID-primary".to_owned()),
+            Vec::new(),
+            Vec::new(),
+            vec![stored_only_binding],
+            Vec::new(),
+        ))
         .await
         .expect("runtime protocol state should apply");
     assert!(
@@ -16177,15 +16181,16 @@ async fn command_turn_output_scope_is_removed_after_command_error() {
     let (invalid_response_tx, _invalid_response_rx) = oneshot::channel();
     let invalid = page
         .enqueue_async_command(
-            RendererPageCommand::DispatchRuntimeProtocolMessageWithContextResolutionAndDeferredResponse {
-                inspector_session_id: None,
-                action: "evaluate".to_owned(),
-                raw_json: "{".to_owned(),
-                deferred_response: RendererRuntimeInspectorResponseSender::new(
+            RendererPageCommand::dispatch_runtime_protocol_message_with_context_resolution_and_deferred_response(
+                None,
+                RendererInspectorCommandRoute::MainThread,
+                "evaluate".to_owned(),
+                "{".to_owned(),
+                RendererRuntimeInspectorResponseSender::new(
                     710_220,
                     invalid_response_tx,
                 ),
-            },
+            ),
         )
         .expect("invalid Runtime.evaluate should enqueue")
         .wait()
@@ -16199,9 +16204,10 @@ async fn command_turn_output_scope_is_removed_after_command_error() {
     let (response_tx, _response_rx) = oneshot::channel();
     let completion = page
         .enqueue_async_command(
-            RendererPageCommand::DispatchRuntimeProtocolMessageWithDeferredResponse {
-                inspector_session_id: None,
-                raw_json: serde_json::json!({
+            RendererPageCommand::dispatch_runtime_protocol_message_with_deferred_response(
+                None,
+                RendererInspectorCommandRoute::MainThread,
+                serde_json::json!({
                     "id": call_id,
                     "method": "Runtime.evaluate",
                     "params": {
@@ -16210,11 +16216,8 @@ async fn command_turn_output_scope_is_removed_after_command_error() {
                     },
                 })
                 .to_string(),
-                deferred_response: RendererRuntimeInspectorResponseSender::new(
-                    call_id,
-                    response_tx,
-                ),
-            },
+                RendererRuntimeInspectorResponseSender::new(call_id, response_tx),
+            ),
         )
         .expect("the command after an error should enqueue")
         .wait()
@@ -16260,9 +16263,10 @@ async fn runtime_document_close_completion_parks_lifecycle_until_capability_rele
     let (response_tx, _response_rx) = oneshot::channel();
     let completion = page
         .enqueue_async_command(
-            RendererPageCommand::DispatchRuntimeProtocolMessageWithDeferredResponse {
-                inspector_session_id: None,
-                raw_json: serde_json::json!({
+            RendererPageCommand::dispatch_runtime_protocol_message_with_deferred_response(
+                None,
+                RendererInspectorCommandRoute::MainThread,
+                serde_json::json!({
                     "id": call_id,
                     "method": "Runtime.evaluate",
                     "params": {
@@ -16271,11 +16275,11 @@ async fn runtime_document_close_completion_parks_lifecycle_until_capability_rele
                     },
                 })
                 .to_string(),
-                deferred_response: RendererRuntimeInspectorResponseSender::new(
+                RendererRuntimeInspectorResponseSender::new(
                     call_id,
                     response_tx,
                 ),
-            },
+            ),
         )
         .expect("Runtime.evaluate should enqueue")
         .wait()
@@ -17196,10 +17200,11 @@ async fn dispatch_runtime_protocol_with_output_for_test(
 ) -> anyhow::Result<(Vec<serde_json::Value>, RendererRuntimeCommandOutput)> {
     let raw_json = serde_json::to_string(&request)?;
     let output = page
-        .enqueue_async_command(RendererPageCommand::DispatchRuntimeProtocolMessage {
-            inspector_session_id: None,
+        .enqueue_async_command(RendererPageCommand::dispatch_runtime_protocol_message(
+            None,
+            RendererInspectorCommandRoute::MainThread,
             raw_json,
-        })
+        ))
         .expect("runtime protocol command should enqueue")
         .wait()
         .await?;
@@ -17224,11 +17229,12 @@ async fn dispatch_runtime_protocol_with_context_resolution_for_test(
     let raw_json = serde_json::to_string(&request)?;
     let (reply, _) = page
         .run_async_command(
-            RendererPageCommand::DispatchRuntimeProtocolMessageWithContextResolution {
-                inspector_session_id: None,
-                action: action.to_owned(),
+            RendererPageCommand::dispatch_runtime_protocol_message_with_context_resolution(
+                None,
+                RendererInspectorCommandRoute::MainThread,
+                action.to_owned(),
                 raw_json,
-            },
+            ),
         )
         .await?;
     match reply {
@@ -17263,9 +17269,9 @@ async fn runtime_enable_events_for_inspector_session_for_test(
     inspector_session_id: Option<&str>,
 ) -> anyhow::Result<Vec<serde_json::Value>> {
     let (reply, _) = page
-        .run_async_command(RendererPageCommand::RuntimeEnableEvents {
-            inspector_session_id: inspector_session_id.map(str::to_owned),
-        })
+        .run_async_command(RendererPageCommand::runtime_enable_events(
+            inspector_session_id.map(str::to_owned),
+        ))
         .await?;
     match reply {
         RendererPageReply::RuntimeInspectorProtocolMessages(output) => Ok(output
@@ -17407,12 +17413,12 @@ async fn add_runtime_binding_for_test(
     execution_context_id: Option<i64>,
 ) -> anyhow::Result<()> {
     let (reply, _) = page
-        .run_async_command(RendererPageCommand::AddRuntimeBinding {
-            inspector_session_id: None,
-            name: name.to_owned(),
-            execution_context_name: execution_context_name.map(str::to_owned),
+        .run_async_command(RendererPageCommand::add_runtime_binding(
+            None,
+            name.to_owned(),
+            execution_context_name.map(str::to_owned),
             execution_context_id,
-        })
+        ))
         .await?;
     match reply {
         RendererPageReply::Unit => Ok(()),

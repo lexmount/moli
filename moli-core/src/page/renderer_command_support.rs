@@ -372,10 +372,12 @@ impl Page {
         inspector_session_id: Option<String>,
         object_id: &str,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::ComputedStylePropertiesForObjectId {
-            inspector_session_id,
-            object_id: object_id.to_owned(),
-        })
+        self.start_page_command(
+            RendererPageCommand::computed_style_properties_for_object_id(
+                inspector_session_id,
+                object_id.to_owned(),
+            ),
+        )
     }
 
     pub fn finish_computed_style_properties(
@@ -399,10 +401,10 @@ impl Page {
         inspector_session_id: Option<String>,
         object_id: &str,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::NodeHasGeometryForObjectId {
+        self.start_page_command(RendererPageCommand::node_has_geometry_for_object_id(
             inspector_session_id,
-            object_id: object_id.to_owned(),
-        })
+            object_id.to_owned(),
+        ))
     }
 
     pub fn start_scroll_node_into_view_if_needed_for_object_id_in_inspector_session(
@@ -411,11 +413,11 @@ impl Page {
         object_id: &str,
         rect: Option<moli_page_types::DomScrollIntoViewRect>,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::ScrollObjectNodeIntoViewIfNeeded {
+        self.start_page_command(RendererPageCommand::scroll_object_node_into_view_if_needed(
             inspector_session_id,
-            object_id: object_id.to_owned(),
+            object_id.to_owned(),
             rect,
-        })
+        ))
     }
 
     pub fn start_scroll_backend_node_into_view_if_needed(
@@ -482,10 +484,10 @@ impl Page {
         inspector_session_id: Option<String>,
         object_id: &str,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::ClientRectForObjectId {
+        self.start_page_command(RendererPageCommand::client_rect_for_object_id(
             inspector_session_id,
-            object_id: object_id.to_owned(),
-        })
+            object_id.to_owned(),
+        ))
     }
 
     pub fn finish_client_rect_for_object_id(
@@ -546,10 +548,10 @@ impl Page {
         inspector_session_id: Option<String>,
         object_id: &str,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::DocumentGeometryForObjectId {
+        self.start_page_command(RendererPageCommand::document_geometry_for_object_id(
             inspector_session_id,
-            object_id: object_id.to_owned(),
-        })
+            object_id.to_owned(),
+        ))
     }
 
     pub fn finish_document_geometry_for_object_id(
@@ -714,10 +716,10 @@ impl Page {
         inspector_session_id: Option<String>,
         object_id: String,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::FocusDocumentNodeForObjectId {
+        self.start_page_command(RendererPageCommand::focus_document_node_for_object_id(
             inspector_session_id,
             object_id,
-        })
+        ))
     }
 
     pub fn start_autofill_trigger(
@@ -773,12 +775,12 @@ impl Page {
         files: Vec<super::SelectedFile>,
         append: bool,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::SetFileInputFilesForObjectId {
+        self.start_page_command(RendererPageCommand::set_file_input_files_for_object_id(
             inspector_session_id,
-            object_id: object_id.to_owned(),
+            object_id.to_owned(),
             files,
             append,
-        })
+        ))
     }
 
     pub fn finish_set_file_input_files_for_object_id(
@@ -802,13 +804,13 @@ impl Page {
         depth: i32,
         pierce: bool,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::DocumentNodeSnapshotForObjectId {
+        self.start_page_command(RendererPageCommand::document_node_snapshot_for_object_id(
             inspector_session_id,
             include_whitespace,
-            object_id: object_id.to_owned(),
+            object_id.to_owned(),
             depth,
             pierce,
-        })
+        ))
     }
 
     pub fn finish_document_node_snapshot_for_object_id(
@@ -1420,11 +1422,11 @@ impl Page {
         object_id: &str,
         include_shadow_dom: bool,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::OuterHtmlForObjectId {
+        self.start_page_command(RendererPageCommand::outer_html_for_object_id(
             inspector_session_id,
-            object_id: object_id.to_owned(),
+            object_id.to_owned(),
             include_shadow_dom,
-        })
+        ))
     }
 
     pub fn finish_outer_html_for_object_id(
@@ -1570,12 +1572,14 @@ impl Page {
         execution_context_id: Option<i64>,
         object_group: Option<&str>,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::ResolveRuntimeObjectForBackendNodeId {
-            inspector_session_id,
-            backend_node_id,
-            execution_context_id,
-            object_group: object_group.map(str::to_owned),
-        })
+        self.start_page_command(
+            RendererPageCommand::resolve_runtime_object_for_backend_node_id(
+                inspector_session_id,
+                backend_node_id,
+                execution_context_id,
+                object_group.map(str::to_owned),
+            ),
+        )
     }
 
     pub fn finish_resolve_runtime_object_for_backend_node_id(
@@ -1593,10 +1597,10 @@ impl Page {
         inspector_session_id: Option<String>,
         object_id: String,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::ResolveBlobObject {
+        self.start_page_command(RendererPageCommand::resolve_blob_object(
             inspector_session_id,
             object_id,
-        })
+        ))
     }
 
     pub fn finish_resolve_blob_object(

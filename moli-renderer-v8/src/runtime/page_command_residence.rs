@@ -2,16 +2,17 @@
 //!
 //! A Page entry is temporarily checked out while an owner turn runs, so
 //! Inspector-session ordering cannot live in `RendererPageLocalEntry`. This
-//! residence stays in the stable Page slot and admits each session's commands
-//! in arrival order until they reach their first V8 dispatch. Independent
-//! sessions on the same Page have independent lanes.
+//! residence stays in the stable Page slot and admits each `(session, route)`
+//! stream in arrival order until commands reach their first V8 dispatch.
+//! Independent sessions and Chromium-style main-thread/IO routes on the same
+//! Page have independent lanes.
 
 use std::collections::{BTreeMap, VecDeque};
 
 pub(super) struct PageCommandFirstDispatchResidence<Key, Command> {
     /// Presence of a lane is the stable marker for its active command, which
     /// has already moved to the renderer owner. The deque retains only later
-    /// same-session commands.
+    /// same-lane commands.
     lanes: BTreeMap<Key, VecDeque<Command>>,
 }
 
@@ -37,9 +38,9 @@ impl<Key, Command> Default for PageCommandFirstDispatchResidence<Key, Command> {
 }
 
 impl<Key: Ord, Command> PageCommandFirstDispatchResidence<Key, Command> {
-    /// Returns the command when it owns its session's active dispatch slot. A
+    /// Returns the command when it owns its lane's active dispatch slot. A
     /// `None` result means the Page residence retained it behind a predecessor
-    /// from the same session.
+    /// from the same lane.
     pub(super) fn admit(&mut self, key: Key, command: Command) -> Option<Command> {
         match self.lanes.entry(key) {
             std::collections::btree_map::Entry::Vacant(entry) => {
@@ -53,7 +54,7 @@ impl<Key: Ord, Command> PageCommandFirstDispatchResidence<Key, Command> {
         }
     }
 
-    /// Releases one session's active command and returns its next FIFO waiter,
+    /// Releases one lane's active command and returns its next FIFO waiter,
     /// which inherits the lane without an intermediate idle state.
     pub(super) fn complete(&mut self, key: &Key) -> Option<Command> {
         debug_assert!(
@@ -79,32 +80,68 @@ impl<Key: Ord, Command> PageCommandFirstDispatchResidence<Key, Command> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::RendererInspectorCommandRoute;
+
+    type Lane = (&'static str, RendererInspectorCommandRoute);
 
     #[test]
-    fn each_inspector_session_owns_an_independent_fifo_dispatch_lane() {
+    fn each_inspector_session_and_route_owns_an_independent_fifo_dispatch_lane() {
         let mut first_page = PageCommandFirstDispatchResidence::default();
         let mut other_page = PageCommandFirstDispatchResidence::default();
+        let session_a_main: Lane = ("session-a", RendererInspectorCommandRoute::MainThread);
+        let session_a_io: Lane = ("session-a", RendererInspectorCommandRoute::Io);
+        let session_b_main: Lane = ("session-b", RendererInspectorCommandRoute::MainThread);
 
-        assert_eq!(first_page.admit("session-a", "a-first"), Some("a-first"));
-        assert_eq!(first_page.admit("session-a", "a-second"), None);
         assert_eq!(
-            first_page.admit("session-b", "b-first"),
+            first_page.admit(session_a_main, "a-main-first"),
+            Some("a-main-first")
+        );
+        assert_eq!(first_page.admit(session_a_main, "a-main-second"), None);
+        assert_eq!(
+            first_page.admit(session_a_io, "a-io-first"),
+            Some("a-io-first"),
+            "an IO command must not wait for main-thread work in the same session"
+        );
+        assert_eq!(
+            first_page.admit(session_b_main, "b-first"),
             Some("b-first"),
             "a parked command must not block a different Inspector session"
         );
-        assert_eq!(first_page.admit("session-b", "b-second"), None);
+        assert_eq!(first_page.admit(session_b_main, "b-second"), None);
 
-        assert_eq!(other_page.admit("session-a", "other"), Some("other"));
-        assert_eq!(other_page.complete(&"session-a"), None);
+        assert_eq!(other_page.admit(session_a_main, "other"), Some("other"));
+        assert_eq!(other_page.complete(&session_a_main), None);
 
-        assert_eq!(first_page.complete(&"session-b"), Some("b-second"));
-        assert_eq!(first_page.complete(&"session-b"), None);
-        assert_eq!(first_page.complete(&"session-a"), Some("a-second"));
-        assert_eq!(first_page.complete(&"session-a"), None);
+        assert_eq!(first_page.complete(&session_b_main), Some("b-second"));
+        assert_eq!(first_page.complete(&session_b_main), None);
+        assert_eq!(first_page.complete(&session_a_io), None);
+        assert_eq!(first_page.complete(&session_a_main), Some("a-main-second"));
+        assert_eq!(first_page.complete(&session_a_main), None);
 
         assert_eq!(
-            first_page.admit("session-a", "a-after-idle"),
+            first_page.admit(session_a_main, "a-after-idle"),
             Some("a-after-idle")
+        );
+    }
+
+    #[test]
+    fn retiring_a_page_drains_waiters_and_resets_every_lane() {
+        let mut residence = PageCommandFirstDispatchResidence::default();
+        let main: Lane = ("session-a", RendererInspectorCommandRoute::MainThread);
+        let io: Lane = ("session-a", RendererInspectorCommandRoute::Io);
+
+        assert_eq!(residence.admit(main, "main-active"), Some("main-active"));
+        assert_eq!(residence.admit(main, "main-waiting"), None);
+        assert_eq!(residence.admit(io, "io-active"), Some("io-active"));
+        assert_eq!(residence.admit(io, "io-waiting"), None);
+
+        let mut drained = residence.drain_waiting();
+        drained.sort_unstable();
+        assert_eq!(drained, ["io-waiting", "main-waiting"]);
+        assert_eq!(
+            residence.admit(main, "main-after-retirement"),
+            Some("main-after-retirement"),
+            "retirement must not leave a stale active-lane marker"
         );
     }
 }

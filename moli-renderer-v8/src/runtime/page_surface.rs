@@ -3528,8 +3528,267 @@ pub enum RendererDomDebuggerDomBreakpointResolution {
     UnknownType(String),
 }
 
+/// Chromium routes Page DevTools work through separate main-thread and IO
+/// session ingress paths. Ordering is guaranteed within one session and one
+/// route, while an IO command may overtake main-thread work that has not
+/// reached its first dispatch yet.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum RendererInspectorCommandRoute {
+    MainThread,
+    Io,
+}
+
+/// The command owns its `(Page, session, route)` lane until its first access to
+/// the frontend V8 Inspector session. Protocol response completion is not part
+/// of this lifetime: V8 may complete a response asynchronously, and holding the
+/// lane for that response could prevent a later resume command from running.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RendererInspectorFirstDispatchLifecycle {
+    OrderedUntilFirstDispatch,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RendererInspectorCommandMetadata {
+    session: DevToolsSessionKey,
+    route: RendererInspectorCommandRoute,
+    first_dispatch: RendererInspectorFirstDispatchLifecycle,
+}
+
+impl RendererInspectorCommandMetadata {
+    pub fn new(inspector_session_id: Option<String>, route: RendererInspectorCommandRoute) -> Self {
+        Self {
+            session: DevToolsSessionKey::from_wire_session_id(
+                inspector_session_id
+                    .as_deref()
+                    .filter(|session_id| !session_id.is_empty()),
+            ),
+            route,
+            first_dispatch: RendererInspectorFirstDispatchLifecycle::OrderedUntilFirstDispatch,
+        }
+    }
+
+    pub fn session(&self) -> &DevToolsSessionKey {
+        &self.session
+    }
+
+    pub fn route(&self) -> RendererInspectorCommandRoute {
+        self.route
+    }
+
+    pub fn first_dispatch_lifecycle(&self) -> RendererInspectorFirstDispatchLifecycle {
+        self.first_dispatch
+    }
+}
+
+/// Strongly typed DevToolsSession ingress. The payload deliberately does not
+/// carry another session id: every operation that accesses a frontend
+/// `V8InspectorSession` must obtain its identity and dispatch policy from this
+/// envelope.
+pub struct RendererInspectorCommandEnvelope {
+    metadata: RendererInspectorCommandMetadata,
+    command: RendererInspectorPageCommand,
+}
+
+impl RendererInspectorCommandEnvelope {
+    fn new(
+        inspector_session_id: Option<String>,
+        route: RendererInspectorCommandRoute,
+        command: RendererInspectorPageCommand,
+    ) -> Self {
+        Self::with_metadata(
+            RendererInspectorCommandMetadata::new(inspector_session_id, route),
+            command,
+        )
+    }
+
+    fn with_metadata(
+        metadata: RendererInspectorCommandMetadata,
+        command: RendererInspectorPageCommand,
+    ) -> Self {
+        Self { metadata, command }
+    }
+
+    pub fn metadata(&self) -> &RendererInspectorCommandMetadata {
+        &self.metadata
+    }
+
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        RendererInspectorCommandMetadata,
+        RendererInspectorPageCommand,
+    ) {
+        (self.metadata, self.command)
+    }
+
+    pub(crate) fn requires_materialized_child_realms(&self) -> bool {
+        matches!(
+            &self.command,
+            RendererInspectorPageCommand::RuntimeEnableEvents
+        )
+    }
+
+    pub(crate) fn cdp_nav_timing_label(&self) -> Option<&'static str> {
+        match &self.command {
+            RendererInspectorPageCommand::DispatchQueuedRuntimeInspectorCommand { .. } => {
+                Some("DispatchQueuedRuntimeInspectorCommand")
+            }
+            RendererInspectorPageCommand::RuntimeEnableEvents => Some("RuntimeEnableEvents"),
+            RendererInspectorPageCommand::ApplyRuntimeProtocolState { .. } => {
+                Some("ApplyRuntimeProtocolState")
+            }
+            RendererInspectorPageCommand::DetachRuntimeInspectorSession { .. } => {
+                Some("DetachRuntimeInspectorSession")
+            }
+            RendererInspectorPageCommand::DocumentNodeSnapshotForObjectId { .. } => {
+                Some("DocumentNodeSnapshotForObjectId")
+            }
+            RendererInspectorPageCommand::AccessibilityTreePayloadsForObjectId { .. } => {
+                Some("AccessibilityTreePayloadsForObjectId")
+            }
+            RendererInspectorPageCommand::AccessibilityNodeAndAncestorPayloadsForObjectId {
+                ..
+            } => Some("AccessibilityNodeAndAncestorPayloadsForObjectId"),
+            RendererInspectorPageCommand::AccessibilityPartialTreePayloadsForObjectId {
+                ..
+            } => Some("AccessibilityPartialTreePayloadsForObjectId"),
+            RendererInspectorPageCommand::OuterHtmlForObjectId { .. } => {
+                Some("OuterHtmlForObjectId")
+            }
+            RendererInspectorPageCommand::ScrollObjectNodeIntoViewIfNeeded { .. } => {
+                Some("ScrollObjectNodeIntoViewIfNeeded")
+            }
+            RendererInspectorPageCommand::ClientRectForObjectId { .. } => {
+                Some("ClientRectForObjectId")
+            }
+            RendererInspectorPageCommand::DocumentGeometryForObjectId { .. } => {
+                Some("DocumentGeometryForObjectId")
+            }
+            RendererInspectorPageCommand::NodeHasGeometryForObjectId { .. } => {
+                Some("NodeHasGeometryForObjectId")
+            }
+            RendererInspectorPageCommand::SetFileInputFilesForObjectId { .. } => {
+                Some("SetFileInputFilesForObjectId")
+            }
+            RendererInspectorPageCommand::ResolveRuntimeObjectForBackendNodeId { .. } => {
+                Some("ResolveRuntimeObjectForBackendNodeId")
+            }
+            RendererInspectorPageCommand::ResolveBlobObject { .. } => Some("ResolveBlobObject"),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn uses_cpu_throttling(&self) -> bool {
+        matches!(
+            &self.command,
+            RendererInspectorPageCommand::DispatchRuntimeProtocolMessage { .. }
+                | RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithDeferredResponse { .. }
+                | RendererInspectorPageCommand::DispatchQueuedRuntimeInspectorCommand { .. }
+                | RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithContextResolution { .. }
+                | RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithContextResolutionAndDeferredResponse { .. }
+                | RendererInspectorPageCommand::DomDebuggerGetEventListeners { .. }
+                | RendererInspectorPageCommand::FocusDocumentNodeForObjectId { .. }
+        )
+    }
+}
+
+pub(crate) enum RendererInspectorPageCommand {
+    DispatchRuntimeProtocolMessage {
+        raw_json: String,
+    },
+    DispatchRuntimeProtocolMessageWithDeferredResponse {
+        raw_json: String,
+        deferred_response: RendererRuntimeInspectorResponseSender,
+    },
+    DispatchQueuedRuntimeInspectorCommand {
+        command_id: u64,
+    },
+    DispatchRuntimeProtocolMessageWithContextResolution {
+        action: String,
+        raw_json: String,
+    },
+    DispatchRuntimeProtocolMessageWithContextResolutionAndDeferredResponse {
+        action: String,
+        raw_json: String,
+        deferred_response: RendererRuntimeInspectorResponseSender,
+    },
+    RuntimeEnableEvents,
+    ApplyRuntimeProtocolState {
+        session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
+        isolated_worlds: Vec<crate::protocol_types::RuntimeIsolatedWorldDefinition>,
+        stored_runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
+        session_runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
+    },
+    DetachRuntimeInspectorSession {
+        pause_guard: RendererRuntimeInspectorSessionDetachGuard,
+    },
+    AddRuntimeBinding {
+        name: String,
+        execution_context_name: Option<String>,
+        execution_context_id: Option<i64>,
+    },
+    DomDebuggerGetEventListeners {
+        object_id: String,
+        depth: i32,
+        pierce: bool,
+    },
+    ComputedStylePropertiesForObjectId {
+        object_id: String,
+    },
+    ScrollObjectNodeIntoViewIfNeeded {
+        object_id: String,
+        rect: Option<moli_page_types::DomScrollIntoViewRect>,
+    },
+    ClientRectForObjectId {
+        object_id: String,
+    },
+    DocumentGeometryForObjectId {
+        object_id: String,
+    },
+    NodeHasGeometryForObjectId {
+        object_id: String,
+    },
+    FocusDocumentNodeForObjectId {
+        object_id: String,
+    },
+    SetFileInputFilesForObjectId {
+        object_id: String,
+        files: Vec<crate::dom::native::SelectedFile>,
+        append: bool,
+    },
+    DocumentNodeSnapshotForObjectId {
+        include_whitespace: bool,
+        object_id: String,
+        depth: i32,
+        pierce: bool,
+    },
+    AccessibilityTreePayloadsForObjectId {
+        object_id: String,
+    },
+    AccessibilityNodeAndAncestorPayloadsForObjectId {
+        object_id: String,
+    },
+    AccessibilityPartialTreePayloadsForObjectId {
+        object_id: String,
+        fetch_relatives: bool,
+    },
+    OuterHtmlForObjectId {
+        object_id: String,
+        include_shadow_dom: bool,
+    },
+    ResolveRuntimeObjectForBackendNodeId {
+        backend_node_id: u32,
+        execution_context_id: Option<i64>,
+        object_group: Option<String>,
+    },
+    ResolveBlobObject {
+        object_id: String,
+    },
+}
+
 #[non_exhaustive]
 pub enum RendererPageCommand {
+    Inspector(RendererInspectorCommandEnvelope),
     EvaluateExpression {
         expression: String,
         await_promise: bool,
@@ -3616,36 +3875,6 @@ pub enum RendererPageCommand {
         auto_repeat: bool,
         should_insert_text: bool,
     },
-    DispatchRuntimeProtocolMessage {
-        inspector_session_id: Option<String>,
-        raw_json: String,
-    },
-    DispatchRuntimeProtocolMessageWithDeferredResponse {
-        inspector_session_id: Option<String>,
-        raw_json: String,
-        deferred_response: RendererRuntimeInspectorResponseSender,
-    },
-    DispatchQueuedRuntimeInspectorCommand {
-        command_id: u64,
-        inspector_session_id: Option<String>,
-    },
-    DispatchRuntimeProtocolMessageWithContextResolution {
-        inspector_session_id: Option<String>,
-        action: String,
-        raw_json: String,
-    },
-    DispatchRuntimeProtocolMessageWithContextResolutionAndDeferredResponse {
-        inspector_session_id: Option<String>,
-        action: String,
-        raw_json: String,
-        deferred_response: RendererRuntimeInspectorResponseSender,
-    },
-    DomDebuggerGetEventListeners {
-        inspector_session_id: Option<String>,
-        object_id: String,
-        depth: i32,
-        pierce: bool,
-    },
     DomDebuggerConfigureEventListenerBreakpoint {
         inspector_session_id: Option<String>,
         breakpoint: RendererDomDebuggerEventListenerBreakpoint,
@@ -3661,26 +3890,6 @@ pub enum RendererPageCommand {
         frontend_node_id: u32,
         breakpoint_type: String,
         enabled: bool,
-    },
-    RuntimeEnableEvents {
-        inspector_session_id: Option<String>,
-    },
-    ApplyRuntimeProtocolState {
-        inspector_session_id: Option<String>,
-        session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
-        isolated_worlds: Vec<crate::protocol_types::RuntimeIsolatedWorldDefinition>,
-        stored_runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
-        session_runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
-    },
-    DetachRuntimeInspectorSession {
-        inspector_session_id: Option<String>,
-        pause_guard: RendererRuntimeInspectorSessionDetachGuard,
-    },
-    AddRuntimeBinding {
-        inspector_session_id: Option<String>,
-        name: String,
-        execution_context_name: Option<String>,
-        execution_context_id: Option<i64>,
     },
     CreateIsolatedWorld {
         name: String,
@@ -3741,34 +3950,17 @@ pub enum RendererPageCommand {
     ComputedStylePropertiesForBackendNodeId {
         backend_node_id: u32,
     },
-    ComputedStylePropertiesForObjectId {
-        inspector_session_id: Option<String>,
-        object_id: String,
-    },
     SetInlineStyleSheetTextForStyleSheetId {
         inspector_session_id: Option<String>,
         style_sheet_id: String,
         text: String,
     },
-    ScrollObjectNodeIntoViewIfNeeded {
-        inspector_session_id: Option<String>,
-        object_id: String,
-        rect: Option<moli_page_types::DomScrollIntoViewRect>,
-    },
     ScrollBackendNodeIntoViewIfNeeded {
         backend_node_id: u32,
         rect: Option<moli_page_types::DomScrollIntoViewRect>,
     },
-    ClientRectForObjectId {
-        inspector_session_id: Option<String>,
-        object_id: String,
-    },
     ClientRectForBackendNodeId {
         backend_node_id: u32,
-    },
-    DocumentGeometryForObjectId {
-        inspector_session_id: Option<String>,
-        object_id: String,
     },
     DocumentGeometryForBackendNodeId {
         backend_node_id: u32,
@@ -3779,10 +3971,6 @@ pub enum RendererPageCommand {
         y: f64,
         include_user_agent_shadow_dom: bool,
         ignore_pointer_events_none: bool,
-    },
-    NodeHasGeometryForObjectId {
-        inspector_session_id: Option<String>,
-        object_id: String,
     },
     NodeHasGeometryForBackendNodeId {
         backend_node_id: u32,
@@ -3801,29 +3989,12 @@ pub enum RendererPageCommand {
     FocusDocumentBackendNode {
         backend_node_id: u32,
     },
-    FocusDocumentNodeForObjectId {
-        inspector_session_id: Option<String>,
-        object_id: String,
-    },
     TriggerAutofill(RendererAutofillTriggerRequest),
     ResetNavigationHistory,
     SetFileInputFilesForBackendNodeId {
         backend_node_id: u32,
         files: Vec<crate::dom::native::SelectedFile>,
         append: bool,
-    },
-    SetFileInputFilesForObjectId {
-        inspector_session_id: Option<String>,
-        object_id: String,
-        files: Vec<crate::dom::native::SelectedFile>,
-        append: bool,
-    },
-    DocumentNodeSnapshotForObjectId {
-        inspector_session_id: Option<String>,
-        include_whitespace: bool,
-        object_id: String,
-        depth: i32,
-        pierce: bool,
     },
     DocumentNodeSnapshotForBackendNodeId {
         backend_node_id: u32,
@@ -3964,19 +4135,6 @@ pub enum RendererPageCommand {
     AccessibilityNodePayloadForChildFrame {
         frame_id: String,
     },
-    AccessibilityTreePayloadsForObjectId {
-        inspector_session_id: Option<String>,
-        object_id: String,
-    },
-    AccessibilityNodeAndAncestorPayloadsForObjectId {
-        inspector_session_id: Option<String>,
-        object_id: String,
-    },
-    AccessibilityPartialTreePayloadsForObjectId {
-        inspector_session_id: Option<String>,
-        object_id: String,
-        fetch_relatives: bool,
-    },
     StyleSheetPayloadForStyleSheetId {
         inspector_session_id: Option<String>,
         style_sheet_id: String,
@@ -3990,11 +4148,6 @@ pub enum RendererPageCommand {
     OuterHtmlForDocument {
         include_shadow_dom: bool,
     },
-    OuterHtmlForObjectId {
-        inspector_session_id: Option<String>,
-        object_id: String,
-        include_shadow_dom: bool,
-    },
     OuterHtmlForBackendNodeId {
         backend_node_id: u32,
         include_shadow_dom: bool,
@@ -4005,16 +4158,6 @@ pub enum RendererPageCommand {
     SerializeHtml,
     LayoutMetrics,
     CaptureScreenshot(RendererCaptureScreenshotRequest),
-    ResolveRuntimeObjectForBackendNodeId {
-        inspector_session_id: Option<String>,
-        backend_node_id: u32,
-        execution_context_id: Option<i64>,
-        object_group: Option<String>,
-    },
-    ResolveBlobObject {
-        inspector_session_id: Option<String>,
-        object_id: String,
-    },
     BlobBytesForUuid {
         uuid: String,
     },
@@ -4169,37 +4312,351 @@ pub enum RendererRuntimeRemoteObjectResolution {
 }
 
 impl RendererPageCommand {
-    /// Returns the V8 Inspector session whose message order owns this command's
-    /// first-dispatch boundary. Direct Inspector commands and the owner fallback
-    /// for pause-routable commands share the same session lane, preventing
-    /// same-session overtaking without coupling independent sessions.
-    pub(super) fn first_dispatch_inspector_session(&self) -> Option<DevToolsSessionKey> {
-        let inspector_session_id = match self {
-            Self::DispatchRuntimeProtocolMessage {
-                inspector_session_id,
-                ..
-            }
-            | Self::DispatchRuntimeProtocolMessageWithDeferredResponse {
-                inspector_session_id,
-                ..
-            }
-            | Self::DispatchQueuedRuntimeInspectorCommand {
-                inspector_session_id,
-                ..
-            }
-            | Self::DispatchRuntimeProtocolMessageWithContextResolution {
-                inspector_session_id,
-                ..
-            }
-            | Self::DispatchRuntimeProtocolMessageWithContextResolutionAndDeferredResponse {
-                inspector_session_id,
-                ..
-            } => inspector_session_id.as_deref(),
-            _ => return None,
-        };
-        Some(DevToolsSessionKey::from_wire_session_id(
+    fn inspector_command(
+        inspector_session_id: Option<String>,
+        route: RendererInspectorCommandRoute,
+        command: RendererInspectorPageCommand,
+    ) -> Self {
+        Self::Inspector(RendererInspectorCommandEnvelope::new(
             inspector_session_id,
+            route,
+            command,
         ))
+    }
+
+    pub fn dispatch_runtime_protocol_message(
+        inspector_session_id: Option<String>,
+        route: RendererInspectorCommandRoute,
+        raw_json: String,
+    ) -> Self {
+        Self::inspector_command(
+            inspector_session_id,
+            route,
+            RendererInspectorPageCommand::DispatchRuntimeProtocolMessage { raw_json },
+        )
+    }
+
+    pub fn dispatch_runtime_protocol_message_with_deferred_response(
+        inspector_session_id: Option<String>,
+        route: RendererInspectorCommandRoute,
+        raw_json: String,
+        deferred_response: RendererRuntimeInspectorResponseSender,
+    ) -> Self {
+        Self::inspector_command(
+            inspector_session_id,
+            route,
+            RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithDeferredResponse {
+                raw_json,
+                deferred_response,
+            },
+        )
+    }
+
+    pub fn dispatch_queued_runtime_inspector_command(
+        metadata: RendererInspectorCommandMetadata,
+        command_id: u64,
+    ) -> Self {
+        Self::Inspector(RendererInspectorCommandEnvelope::with_metadata(
+            metadata,
+            RendererInspectorPageCommand::DispatchQueuedRuntimeInspectorCommand { command_id },
+        ))
+    }
+
+    pub fn dispatch_runtime_protocol_message_with_context_resolution(
+        inspector_session_id: Option<String>,
+        route: RendererInspectorCommandRoute,
+        action: String,
+        raw_json: String,
+    ) -> Self {
+        Self::inspector_command(
+            inspector_session_id,
+            route,
+            RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithContextResolution {
+                action,
+                raw_json,
+            },
+        )
+    }
+
+    pub fn dispatch_runtime_protocol_message_with_context_resolution_and_deferred_response(
+        inspector_session_id: Option<String>,
+        route: RendererInspectorCommandRoute,
+        action: String,
+        raw_json: String,
+        deferred_response: RendererRuntimeInspectorResponseSender,
+    ) -> Self {
+        Self::inspector_command(
+            inspector_session_id,
+            route,
+            RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithContextResolutionAndDeferredResponse {
+                action,
+                raw_json,
+                deferred_response,
+            },
+        )
+    }
+
+    pub fn runtime_enable_events(inspector_session_id: Option<String>) -> Self {
+        Self::inspector_command(
+            inspector_session_id,
+            RendererInspectorCommandRoute::MainThread,
+            RendererInspectorPageCommand::RuntimeEnableEvents,
+        )
+    }
+
+    pub fn apply_runtime_protocol_state(
+        inspector_session_id: Option<String>,
+        session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
+        isolated_worlds: Vec<crate::protocol_types::RuntimeIsolatedWorldDefinition>,
+        stored_runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
+        session_runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
+    ) -> Self {
+        Self::inspector_command(
+            inspector_session_id,
+            RendererInspectorCommandRoute::MainThread,
+            RendererInspectorPageCommand::ApplyRuntimeProtocolState {
+                session_restore_snapshots,
+                isolated_worlds,
+                stored_runtime_bindings,
+                session_runtime_bindings,
+            },
+        )
+    }
+
+    pub fn detach_runtime_inspector_session(
+        inspector_session_id: Option<String>,
+        pause_guard: RendererRuntimeInspectorSessionDetachGuard,
+    ) -> Self {
+        Self::inspector_command(
+            inspector_session_id,
+            RendererInspectorCommandRoute::Io,
+            RendererInspectorPageCommand::DetachRuntimeInspectorSession { pause_guard },
+        )
+    }
+
+    pub fn add_runtime_binding(
+        inspector_session_id: Option<String>,
+        name: String,
+        execution_context_name: Option<String>,
+        execution_context_id: Option<i64>,
+    ) -> Self {
+        Self::inspector_command(
+            inspector_session_id,
+            RendererInspectorCommandRoute::MainThread,
+            RendererInspectorPageCommand::AddRuntimeBinding {
+                name,
+                execution_context_name,
+                execution_context_id,
+            },
+        )
+    }
+
+    pub fn dom_debugger_get_event_listeners(
+        inspector_session_id: Option<String>,
+        object_id: String,
+        depth: i32,
+        pierce: bool,
+    ) -> Self {
+        Self::inspector_command(
+            inspector_session_id,
+            RendererInspectorCommandRoute::MainThread,
+            RendererInspectorPageCommand::DomDebuggerGetEventListeners {
+                object_id,
+                depth,
+                pierce,
+            },
+        )
+    }
+
+    pub fn computed_style_properties_for_object_id(
+        inspector_session_id: Option<String>,
+        object_id: String,
+    ) -> Self {
+        Self::inspector_command(
+            inspector_session_id,
+            RendererInspectorCommandRoute::MainThread,
+            RendererInspectorPageCommand::ComputedStylePropertiesForObjectId { object_id },
+        )
+    }
+
+    pub fn scroll_object_node_into_view_if_needed(
+        inspector_session_id: Option<String>,
+        object_id: String,
+        rect: Option<moli_page_types::DomScrollIntoViewRect>,
+    ) -> Self {
+        Self::inspector_command(
+            inspector_session_id,
+            RendererInspectorCommandRoute::MainThread,
+            RendererInspectorPageCommand::ScrollObjectNodeIntoViewIfNeeded { object_id, rect },
+        )
+    }
+
+    pub fn client_rect_for_object_id(
+        inspector_session_id: Option<String>,
+        object_id: String,
+    ) -> Self {
+        Self::inspector_command(
+            inspector_session_id,
+            RendererInspectorCommandRoute::MainThread,
+            RendererInspectorPageCommand::ClientRectForObjectId { object_id },
+        )
+    }
+
+    pub fn document_geometry_for_object_id(
+        inspector_session_id: Option<String>,
+        object_id: String,
+    ) -> Self {
+        Self::inspector_command(
+            inspector_session_id,
+            RendererInspectorCommandRoute::MainThread,
+            RendererInspectorPageCommand::DocumentGeometryForObjectId { object_id },
+        )
+    }
+
+    pub fn node_has_geometry_for_object_id(
+        inspector_session_id: Option<String>,
+        object_id: String,
+    ) -> Self {
+        Self::inspector_command(
+            inspector_session_id,
+            RendererInspectorCommandRoute::MainThread,
+            RendererInspectorPageCommand::NodeHasGeometryForObjectId { object_id },
+        )
+    }
+
+    pub fn focus_document_node_for_object_id(
+        inspector_session_id: Option<String>,
+        object_id: String,
+    ) -> Self {
+        Self::inspector_command(
+            inspector_session_id,
+            RendererInspectorCommandRoute::MainThread,
+            RendererInspectorPageCommand::FocusDocumentNodeForObjectId { object_id },
+        )
+    }
+
+    pub fn set_file_input_files_for_object_id(
+        inspector_session_id: Option<String>,
+        object_id: String,
+        files: Vec<crate::dom::native::SelectedFile>,
+        append: bool,
+    ) -> Self {
+        Self::inspector_command(
+            inspector_session_id,
+            RendererInspectorCommandRoute::MainThread,
+            RendererInspectorPageCommand::SetFileInputFilesForObjectId {
+                object_id,
+                files,
+                append,
+            },
+        )
+    }
+
+    pub fn document_node_snapshot_for_object_id(
+        inspector_session_id: Option<String>,
+        include_whitespace: bool,
+        object_id: String,
+        depth: i32,
+        pierce: bool,
+    ) -> Self {
+        Self::inspector_command(
+            inspector_session_id,
+            RendererInspectorCommandRoute::MainThread,
+            RendererInspectorPageCommand::DocumentNodeSnapshotForObjectId {
+                include_whitespace,
+                object_id,
+                depth,
+                pierce,
+            },
+        )
+    }
+
+    pub fn accessibility_tree_payloads_for_object_id(
+        inspector_session_id: Option<String>,
+        object_id: String,
+    ) -> Self {
+        Self::inspector_command(
+            inspector_session_id,
+            RendererInspectorCommandRoute::MainThread,
+            RendererInspectorPageCommand::AccessibilityTreePayloadsForObjectId { object_id },
+        )
+    }
+
+    pub fn accessibility_node_and_ancestor_payloads_for_object_id(
+        inspector_session_id: Option<String>,
+        object_id: String,
+    ) -> Self {
+        Self::inspector_command(
+            inspector_session_id,
+            RendererInspectorCommandRoute::MainThread,
+            RendererInspectorPageCommand::AccessibilityNodeAndAncestorPayloadsForObjectId {
+                object_id,
+            },
+        )
+    }
+
+    pub fn accessibility_partial_tree_payloads_for_object_id(
+        inspector_session_id: Option<String>,
+        object_id: String,
+        fetch_relatives: bool,
+    ) -> Self {
+        Self::inspector_command(
+            inspector_session_id,
+            RendererInspectorCommandRoute::MainThread,
+            RendererInspectorPageCommand::AccessibilityPartialTreePayloadsForObjectId {
+                object_id,
+                fetch_relatives,
+            },
+        )
+    }
+
+    pub fn outer_html_for_object_id(
+        inspector_session_id: Option<String>,
+        object_id: String,
+        include_shadow_dom: bool,
+    ) -> Self {
+        Self::inspector_command(
+            inspector_session_id,
+            RendererInspectorCommandRoute::MainThread,
+            RendererInspectorPageCommand::OuterHtmlForObjectId {
+                object_id,
+                include_shadow_dom,
+            },
+        )
+    }
+
+    pub fn resolve_runtime_object_for_backend_node_id(
+        inspector_session_id: Option<String>,
+        backend_node_id: u32,
+        execution_context_id: Option<i64>,
+        object_group: Option<String>,
+    ) -> Self {
+        Self::inspector_command(
+            inspector_session_id,
+            RendererInspectorCommandRoute::MainThread,
+            RendererInspectorPageCommand::ResolveRuntimeObjectForBackendNodeId {
+                backend_node_id,
+                execution_context_id,
+                object_group,
+            },
+        )
+    }
+
+    pub fn resolve_blob_object(inspector_session_id: Option<String>, object_id: String) -> Self {
+        Self::inspector_command(
+            inspector_session_id,
+            RendererInspectorCommandRoute::MainThread,
+            RendererInspectorPageCommand::ResolveBlobObject { object_id },
+        )
+    }
+
+    /// Metadata is structurally present for every command that can access a
+    /// frontend V8 Inspector session; no command-variant allowlist is involved.
+    pub fn inspector_metadata(&self) -> Option<&RendererInspectorCommandMetadata> {
+        match self {
+            Self::Inspector(envelope) => Some(envelope.metadata()),
+            _ => None,
+        }
     }
 
     pub(crate) fn interruptible_by_javascript_dialog(&self) -> bool {
@@ -4220,13 +4677,8 @@ impl RendererPageCommand {
 
     pub(crate) fn cdp_nav_timing_label(&self) -> Option<&'static str> {
         match self {
-            Self::RuntimeEnableEvents { .. } => Some("RuntimeEnableEvents"),
-            Self::DispatchQueuedRuntimeInspectorCommand { .. } => {
-                Some("DispatchQueuedRuntimeInspectorCommand")
-            }
+            Self::Inspector(envelope) => envelope.cdp_nav_timing_label(),
             Self::DocumentStorageKeySnapshot => Some("DocumentStorageKeySnapshot"),
-            Self::ApplyRuntimeProtocolState { .. } => Some("ApplyRuntimeProtocolState"),
-            Self::DetachRuntimeInspectorSession { .. } => Some("DetachRuntimeInspectorSession"),
             Self::CreateIsolatedWorldRuntimeActivity { .. } => {
                 Some("CreateIsolatedWorldRuntimeActivity")
             }
@@ -4242,7 +4694,6 @@ impl RendererPageCommand {
             Self::ChildFrameDocumentRootNodeReference { .. } => {
                 Some("ChildFrameDocumentRootNodeReference")
             }
-            Self::DocumentNodeSnapshotForObjectId { .. } => Some("DocumentNodeSnapshotForObjectId"),
             Self::DocumentNodeSnapshotForBackendNodeId { .. } => {
                 Some("DocumentNodeSnapshotForBackendNodeId")
             }
@@ -4316,36 +4767,20 @@ impl RendererPageCommand {
             Self::AccessibilityNodePayloadForChildFrame { .. } => {
                 Some("AccessibilityNodePayloadForChildFrame")
             }
-            Self::AccessibilityTreePayloadsForObjectId { .. } => {
-                Some("AccessibilityTreePayloadsForObjectId")
-            }
-            Self::AccessibilityNodeAndAncestorPayloadsForObjectId { .. } => {
-                Some("AccessibilityNodeAndAncestorPayloadsForObjectId")
-            }
-            Self::AccessibilityPartialTreePayloadsForObjectId { .. } => {
-                Some("AccessibilityPartialTreePayloadsForObjectId")
-            }
             Self::OuterHtmlForDocument { .. } => Some("OuterHtmlForDocument"),
-            Self::OuterHtmlForObjectId { .. } => Some("OuterHtmlForObjectId"),
             Self::OuterHtmlForBackendNodeId { .. } => Some("OuterHtmlForBackendNodeId"),
             Self::RenderPageDump { .. } => Some("RenderPageDump"),
             Self::SerializeHtml => Some("SerializeHtml"),
             Self::LayoutMetrics => Some("LayoutMetrics"),
             Self::CaptureScreenshot(_) => Some("CaptureScreenshot"),
-            Self::ScrollObjectNodeIntoViewIfNeeded { .. } => {
-                Some("ScrollObjectNodeIntoViewIfNeeded")
-            }
             Self::ScrollBackendNodeIntoViewIfNeeded { .. } => {
                 Some("ScrollBackendNodeIntoViewIfNeeded")
             }
-            Self::ClientRectForObjectId { .. } => Some("ClientRectForObjectId"),
             Self::ClientRectForBackendNodeId { .. } => Some("ClientRectForBackendNodeId"),
-            Self::DocumentGeometryForObjectId { .. } => Some("DocumentGeometryForObjectId"),
             Self::DocumentGeometryForBackendNodeId { .. } => {
                 Some("DocumentGeometryForBackendNodeId")
             }
             Self::DocumentHitTest { .. } => Some("DocumentHitTest"),
-            Self::NodeHasGeometryForObjectId { .. } => Some("NodeHasGeometryForObjectId"),
             Self::NodeHasGeometryForBackendNodeId { .. } => Some("NodeHasGeometryForBackendNodeId"),
             Self::RemoveDocumentBackendNodeId { .. } => Some("RemoveDocumentBackendNodeId"),
             Self::EditDocumentNode { .. } => Some("EditDocumentNode"),
@@ -4356,11 +4791,6 @@ impl RendererPageCommand {
             Self::SetFileInputFilesForBackendNodeId { .. } => {
                 Some("SetFileInputFilesForBackendNodeId")
             }
-            Self::SetFileInputFilesForObjectId { .. } => Some("SetFileInputFilesForObjectId"),
-            Self::ResolveRuntimeObjectForBackendNodeId { .. } => {
-                Some("ResolveRuntimeObjectForBackendNodeId")
-            }
-            Self::ResolveBlobObject { .. } => Some("ResolveBlobObject"),
             Self::BlobBytesForUuid { .. } => Some("BlobBytesForUuid"),
             Self::DocumentFrontendNodeIdsForBackendNodeIds { .. } => {
                 Some("DocumentFrontendNodeIdsForBackendNodeIds")
@@ -4374,6 +4804,87 @@ impl RendererPageCommand {
             }
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod renderer_inspector_command_envelope_tests {
+    use super::*;
+
+    fn assert_metadata(
+        command: &RendererPageCommand,
+        session: DevToolsSessionKey,
+        route: RendererInspectorCommandRoute,
+    ) {
+        let metadata = command
+            .inspector_metadata()
+            .expect("every frontend V8 Inspector operation must carry command metadata");
+        assert_eq!(metadata.session(), &session);
+        assert_eq!(metadata.route(), route);
+        assert_eq!(
+            metadata.first_dispatch_lifecycle(),
+            RendererInspectorFirstDispatchLifecycle::OrderedUntilFirstDispatch
+        );
+    }
+
+    #[test]
+    fn raw_special_and_runtime_object_commands_share_one_inspector_boundary() {
+        let attached = Some("SID-envelope".to_owned());
+        let main_thread_commands = [
+            RendererPageCommand::runtime_enable_events(attached.clone()),
+            RendererPageCommand::apply_runtime_protocol_state(
+                attached.clone(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            ),
+            RendererPageCommand::add_runtime_binding(
+                attached.clone(),
+                "binding".to_owned(),
+                None,
+                None,
+            ),
+            RendererPageCommand::computed_style_properties_for_object_id(
+                attached,
+                "runtime-object".to_owned(),
+            ),
+        ];
+        for command in &main_thread_commands {
+            assert_metadata(
+                command,
+                DevToolsSessionKey::Attached("SID-envelope".to_owned()),
+                RendererInspectorCommandRoute::MainThread,
+            );
+        }
+
+        let io_command = RendererPageCommand::dispatch_runtime_protocol_message(
+            None,
+            RendererInspectorCommandRoute::Io,
+            r#"{"id":1,"method":"Runtime.terminateExecution"}"#.to_owned(),
+        );
+        assert_metadata(
+            &io_command,
+            DevToolsSessionKey::Primary,
+            RendererInspectorCommandRoute::Io,
+        );
+
+        assert!(
+            RendererPageCommand::PageDiagnosticsSnapshot
+                .inspector_metadata()
+                .is_none(),
+            "ordinary Page commands must remain outside Inspector lanes"
+        );
+    }
+
+    #[test]
+    fn empty_wire_session_id_normalizes_to_the_primary_session() {
+        let command = RendererPageCommand::runtime_enable_events(Some(String::new()));
+        assert_metadata(
+            &command,
+            DevToolsSessionKey::Primary,
+            RendererInspectorCommandRoute::MainThread,
+        );
     }
 }
 

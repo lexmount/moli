@@ -17,7 +17,9 @@ use super::navigation::{
     PageCreationNavigationFailurePublisher, PageCreationResolution, PageCreationRetirement,
     PageNavigationOwnerFailure, page_creation_navigation_failure_scope,
 };
-use super::owner::{RenderRuntimePendingTurn, RendererCreateStreamingRawPageRequest};
+use super::owner::{
+    PageCommandFirstDispatchLane, RenderRuntimePendingTurn, RendererCreateStreamingRawPageRequest,
+};
 use super::owner_deadline_index::OwnerDeadlineIndex;
 use super::owner_local::RendererAttachedPage;
 use super::owner_maintenance::{
@@ -45,7 +47,6 @@ use crate::script_vm::{
     RendererPageScriptEnvironment,
 };
 use crate::{RendererNavigationReplyPolicy, RendererTopLevelNavigationDispatch};
-use moli_page_types::DevToolsSessionKey;
 use tokio::sync::oneshot;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -654,7 +655,7 @@ struct RendererOwnerLocalPageSlot {
     owner_slot: RendererPageSlotHandle,
     turn_scheduler: PageTurnScheduler<RendererPageLocalEntry>,
     page_command_first_dispatch:
-        PageCommandFirstDispatchResidence<DevToolsSessionKey, RenderRuntimePendingTurn>,
+        PageCommandFirstDispatchResidence<PageCommandFirstDispatchLane, RenderRuntimePendingTurn>,
     owner_maintenance: RendererPageOwnerMaintenanceResidence,
     task_sources: RendererPageOwnedTaskSources,
     lifecycle_gate: Option<LifecycleGate>,
@@ -1559,24 +1560,24 @@ pub(super) fn take_entry_for_command_on_bound_owner_local_store(
 
 pub(super) fn admit_page_command_first_dispatch_on_bound_owner_local_store(
     token: RendererPageToken,
-    inspector_session: DevToolsSessionKey,
+    lane: PageCommandFirstDispatchLane,
     turn: RenderRuntimePendingTurn,
 ) -> Option<RenderRuntimePendingTurn> {
     with_bound_render_runtime_owner_local_store_session(|session| {
         session
             .store
-            .admit_page_command_first_dispatch(token, inspector_session, turn)
+            .admit_page_command_first_dispatch(token, lane, turn)
     })
 }
 
 pub(super) fn complete_page_command_first_dispatch_on_bound_owner_local_store(
     token: RendererPageToken,
-    inspector_session: &DevToolsSessionKey,
+    lane: &PageCommandFirstDispatchLane,
 ) -> Option<RenderRuntimePendingTurn> {
     with_bound_render_runtime_owner_local_store_session(|session| {
         session
             .store
-            .complete_page_command_first_dispatch(token, inspector_session)
+            .complete_page_command_first_dispatch(token, lane)
     })
 }
 
@@ -2907,7 +2908,7 @@ impl RendererOwnerLocalStore {
     fn admit_page_command_first_dispatch(
         &mut self,
         token: RendererPageToken,
-        inspector_session: DevToolsSessionKey,
+        lane: PageCommandFirstDispatchLane,
         turn: RenderRuntimePendingTurn,
     ) -> Option<RenderRuntimePendingTurn> {
         let Some(page_slot) = self
@@ -2919,20 +2920,18 @@ impl RendererOwnerLocalStore {
             // remains responsible for its protocol reply.
             return Some(turn);
         };
-        page_slot
-            .page_command_first_dispatch
-            .admit(inspector_session, turn)
+        page_slot.page_command_first_dispatch.admit(lane, turn)
     }
 
     fn complete_page_command_first_dispatch(
         &mut self,
         token: RendererPageToken,
-        inspector_session: &DevToolsSessionKey,
+        lane: &PageCommandFirstDispatchLane,
     ) -> Option<RenderRuntimePendingTurn> {
         self.page_hosts
             .get_mut(&token.local_host_id)
             .and_then(|host| host.pages.get_mut(&token.page_id))
-            .and_then(|slot| slot.page_command_first_dispatch.complete(inspector_session))
+            .and_then(|slot| slot.page_command_first_dispatch.complete(lane))
     }
 
     fn checkout_entry_for_owner_turn(

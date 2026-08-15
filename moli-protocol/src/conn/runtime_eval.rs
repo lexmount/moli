@@ -15,7 +15,8 @@ use moli_core::{
         DocumentNodeObjectSnapshot, DocumentNodeRuntimeObjectResolution,
         MAX_INSPECTOR_PROTOCOL_VALUE_DEPTH, RendererAgentAttachmentId, RendererCommandTurnOutput,
         RendererDomBidiNodeBindingResolution, RendererDomBidiNodeSharedIdResolution,
-        RendererRuntimeCommandOutput, RendererRuntimeInspectorMessage, RendererRuntimeRealmInfo,
+        RendererInspectorCommandRoute, RendererRuntimeCommandOutput,
+        RendererRuntimeInspectorMessage, RendererRuntimeRealmInfo,
     },
 };
 
@@ -4231,7 +4232,7 @@ impl CdpConnection {
         Some(RendererRuntimeInspectorMessage::protocol(message))
     }
 
-    fn runtime_inspector_pause_active_for_session_owner(
+    pub(crate) fn runtime_inspector_pause_active_for_session_owner(
         &mut self,
         session_id: Option<&str>,
     ) -> bool {
@@ -4275,9 +4276,18 @@ impl CdpConnection {
         } else {
             self.runtime_session_owner_page_mut(session_id)?
         };
-        let pending = page
-            .start_runtime_protocol_message_for_inspector_session(inspector_session_id, raw_json)
-            .map_err(|error| format!("runtime inspector dispatch failed: {error}"))?;
+        let pending = if allow_suspended_document_access {
+            page.start_runtime_interrupt_protocol_message_for_inspector_session(
+                inspector_session_id,
+                raw_json,
+            )
+        } else {
+            page.start_runtime_protocol_message_for_inspector_session(
+                inspector_session_id,
+                raw_json,
+            )
+        }
+        .map_err(|error| format!("runtime inspector dispatch failed: {error}"))?;
         Ok(PendingRuntimeProtocolMessageDispatch {
             session_id: session_id.map(str::to_owned),
             route,
@@ -4340,6 +4350,11 @@ impl CdpConnection {
         };
         let pending = match page.start_routable_runtime_protocol_message_for_inspector_session(
             inspector_session_id,
+            if allow_suspended_document_access {
+                RendererInspectorCommandRoute::Io
+            } else {
+                RendererInspectorCommandRoute::MainThread
+            },
             None,
             raw_json,
             response_sender,
@@ -4415,6 +4430,7 @@ impl CdpConnection {
         };
         let pending = match page.start_routable_runtime_protocol_message_for_inspector_session(
             inspector_session_id,
+            RendererInspectorCommandRoute::MainThread,
             Some(action.to_owned()),
             raw_json,
             response_sender,
@@ -4444,7 +4460,7 @@ impl CdpConnection {
             moli_core::page::CompletedRuntimeInspectorCommandDispatch::Owner(completion) => {
                 *completion
             }
-            moli_core::page::CompletedRuntimeInspectorCommandDispatch::Pause
+            moli_core::page::CompletedRuntimeInspectorCommandDispatch::Inspector
             | moli_core::page::CompletedRuntimeInspectorCommandDispatch::Canceled => {
                 return Ok(None);
             }
@@ -4604,7 +4620,7 @@ impl CdpConnection {
                 moli_core::page::CompletedRuntimeInspectorCommandDispatch::Owner(completion) => {
                     *completion
                 }
-                moli_core::page::CompletedRuntimeInspectorCommandDispatch::Pause
+                moli_core::page::CompletedRuntimeInspectorCommandDispatch::Inspector
                 | moli_core::page::CompletedRuntimeInspectorCommandDispatch::Canceled => {
                     continue;
                 }

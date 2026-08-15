@@ -1,3 +1,4 @@
+use super::page_surface::RendererInspectorPageCommand;
 use super::*;
 
 impl PageVm {
@@ -8,6 +9,9 @@ impl PageVm {
         let throttling_started =
             renderer_page_command_uses_cpu_throttling(&command).then(std::time::Instant::now);
         let result = match command {
+            RendererPageCommand::Inspector(command) => {
+                self.dispatch_renderer_inspector_command(command)
+            }
             RendererPageCommand::EvaluateExpression {
                 expression,
                 await_promise,
@@ -126,12 +130,6 @@ impl PageVm {
             RendererPageCommand::FocusDocumentBackendNode { backend_node_id } => self
                 .focus_document_backend_node(backend_node_id)
                 .map(RendererPageReply::DomFocusOutcome),
-            RendererPageCommand::FocusDocumentNodeForObjectId {
-                inspector_session_id,
-                object_id,
-            } => self
-                .focus_document_node_for_object_id(inspector_session_id.as_deref(), &object_id)
-                .map(RendererPageReply::DomFocusOutcome),
             RendererPageCommand::TriggerAutofill(request) => self
                 .trigger_autofill(request)
                 .map(RendererPageReply::AutofillTriggerOutcome),
@@ -145,19 +143,6 @@ impl PageVm {
                 append,
             } => Ok(RendererPageReply::OptionalBool(
                 self.set_file_input_files_for_backend_node_id(backend_node_id, files, append)?,
-            )),
-            RendererPageCommand::SetFileInputFilesForObjectId {
-                inspector_session_id,
-                object_id,
-                files,
-                append,
-            } => Ok(RendererPageReply::OptionalBool(
-                self.set_file_input_files_for_object_id(
-                    inspector_session_id.as_deref(),
-                    &object_id,
-                    files,
-                    append,
-                )?,
             )),
             RendererPageCommand::InsertTextIntoActiveControl(text) => self
                 .insert_text_into_active_control(&text)
@@ -181,99 +166,6 @@ impl PageVm {
                     should_insert_text,
                 )
                 .map(RendererPageReply::InputDispatchOutcome),
-            RendererPageCommand::DispatchRuntimeProtocolMessage {
-                inspector_session_id,
-                raw_json,
-            } => self
-                .dispatch_runtime_protocol_message_for_inspector_session(
-                    inspector_session_id.as_deref(),
-                    &raw_json,
-                )
-                .map(RendererRuntimeCommandOutput::from_messages)
-                .map(RendererPageReply::RuntimeInspectorProtocolMessages),
-            RendererPageCommand::DispatchRuntimeProtocolMessageWithDeferredResponse {
-                inspector_session_id,
-                raw_json,
-                deferred_response,
-            } => self
-                .dispatch_runtime_protocol_message_for_inspector_session_with_deferred_response(
-                    inspector_session_id.as_deref(),
-                    &raw_json,
-                    deferred_response,
-                )
-                .map(RendererRuntimeCommandOutput::from_messages)
-                .map(RendererPageReply::RuntimeInspectorProtocolMessages),
-            RendererPageCommand::DispatchQueuedRuntimeInspectorCommand { command_id, .. } => self
-                .dispatch_queued_runtime_inspector_command(command_id)
-                .map(RendererRuntimeCommandOutput::from_messages)
-                .map(RendererPageReply::RuntimeInspectorProtocolMessages),
-            RendererPageCommand::DispatchRuntimeProtocolMessageWithContextResolution {
-                inspector_session_id,
-                action,
-                raw_json,
-            } => self
-                .dispatch_runtime_protocol_message_for_inspector_session_with_context_resolution(
-                    inspector_session_id.as_deref(),
-                    &action,
-                    &raw_json,
-                )
-                .map(RendererRuntimeCommandOutput::from_messages)
-                .map(RendererPageReply::RuntimeInspectorProtocolMessages),
-            RendererPageCommand::DispatchRuntimeProtocolMessageWithContextResolutionAndDeferredResponse {
-                inspector_session_id,
-                action,
-                raw_json,
-                deferred_response,
-            } => self
-                .dispatch_runtime_protocol_message_for_inspector_session_with_context_resolution_and_deferred_response(
-                    inspector_session_id.as_deref(),
-                    &action,
-                    &raw_json,
-                    deferred_response,
-                )
-                .map(RendererRuntimeCommandOutput::from_messages)
-                .map(RendererPageReply::RuntimeInspectorProtocolMessages),
-            RendererPageCommand::RuntimeEnableEvents {
-                inspector_session_id,
-            } => self
-                .runtime_enable_events(inspector_session_id.as_deref())
-                .map(RendererPageReply::RuntimeInspectorProtocolMessages),
-            RendererPageCommand::ApplyRuntimeProtocolState {
-                inspector_session_id,
-                session_restore_snapshots,
-                isolated_worlds,
-                stored_runtime_bindings,
-                session_runtime_bindings,
-            } => {
-                self.apply_runtime_protocol_state(
-                    inspector_session_id.as_deref(),
-                    &session_restore_snapshots,
-                    &isolated_worlds,
-                    &stored_runtime_bindings,
-                    &session_runtime_bindings,
-                )?;
-                Ok(RendererPageReply::Unit)
-            }
-            RendererPageCommand::DetachRuntimeInspectorSession {
-                inspector_session_id,
-                pause_guard: _pause_guard,
-            } => Ok(RendererPageReply::Bool(
-                self.detach_runtime_inspector_session(inspector_session_id.as_deref()),
-            )),
-            RendererPageCommand::AddRuntimeBinding {
-                inspector_session_id,
-                name,
-                execution_context_name,
-                execution_context_id,
-            } => {
-                self.add_runtime_binding(
-                    inspector_session_id.as_deref(),
-                    &name,
-                    execution_context_name.as_deref(),
-                    execution_context_id,
-                )?;
-                Ok(RendererPageReply::Unit)
-            }
             RendererPageCommand::CreateIsolatedWorld {
                 name,
                 grant_universal_access,
@@ -429,19 +321,6 @@ impl PageVm {
                     self.vm_mut().performance_metric_snapshot()?,
                 )),
             ),
-            RendererPageCommand::DomDebuggerGetEventListeners {
-                inspector_session_id,
-                object_id,
-                depth,
-                pierce,
-            } => Ok(RendererPageReply::DomDebuggerEventListeners(
-                self.vm_mut().dom_debugger_event_listeners(
-                    inspector_session_id.as_deref(),
-                    &object_id,
-                    depth,
-                    pierce,
-                )?,
-            )),
             RendererPageCommand::DomDebuggerConfigureEventListenerBreakpoint {
                 inspector_session_id,
                 breakpoint,
@@ -528,15 +407,6 @@ impl PageVm {
                     self.computed_style_properties_for_backend_node_id(backend_node_id)?,
                 ))
             }
-            RendererPageCommand::ComputedStylePropertiesForObjectId {
-                inspector_session_id,
-                object_id,
-            } => Ok(RendererPageReply::ComputedStyleProperties(
-                self.computed_style_properties_for_object_id(
-                    inspector_session_id.as_deref(),
-                    &object_id,
-                )?,
-            )),
             RendererPageCommand::SetInlineStyleSheetTextForStyleSheetId {
                 inspector_session_id,
                 style_sheet_id,
@@ -548,43 +418,17 @@ impl PageVm {
                     &text,
                 )
                 .map(RendererPageReply::Bool),
-            RendererPageCommand::ScrollObjectNodeIntoViewIfNeeded {
-                inspector_session_id,
-                object_id,
-                rect,
-            } => self
-                .scroll_node_into_view_if_needed_for_object_id(
-                    inspector_session_id.as_deref(),
-                    &object_id,
-                    rect,
-                )
-                .map(RendererPageReply::ScrollIntoViewResult),
             RendererPageCommand::ScrollBackendNodeIntoViewIfNeeded {
                 backend_node_id,
                 rect,
             } => self
                 .scroll_backend_node_into_view_if_needed(backend_node_id, rect)
                 .map(RendererPageReply::ScrollIntoViewResult),
-            RendererPageCommand::ClientRectForObjectId {
-                inspector_session_id,
-                object_id,
-            } => Ok(RendererPageReply::OptionalDocumentNodeClientRect(
-                self.client_rect_for_object_id(inspector_session_id.as_deref(), &object_id)?,
-            )),
             RendererPageCommand::ClientRectForBackendNodeId { backend_node_id } => Ok(
                 RendererPageReply::OptionalDocumentNodeClientRect(
                     self.client_rect_for_backend_node_id(backend_node_id)?,
                 ),
             ),
-            RendererPageCommand::DocumentGeometryForObjectId {
-                inspector_session_id,
-                object_id,
-            } => Ok(RendererPageReply::OptionalDocumentNodeGeometry(
-                self.document_geometry_for_object_id(
-                    inspector_session_id.as_deref(),
-                    &object_id,
-                )?,
-            )),
             RendererPageCommand::DocumentGeometryForBackendNodeId { backend_node_id } => Ok(
                 RendererPageReply::OptionalDocumentNodeGeometry(
                     self.document_geometry_for_backend_node_id(backend_node_id)?,
@@ -605,12 +449,6 @@ impl PageVm {
                     ignore_pointer_events_none,
                 )?,
             )),
-            RendererPageCommand::NodeHasGeometryForObjectId {
-                inspector_session_id,
-                object_id,
-            } => Ok(RendererPageReply::OptionalBool(
-                self.node_has_geometry_for_object_id(inspector_session_id.as_deref(), &object_id)?,
-            )),
             RendererPageCommand::NodeHasGeometryForBackendNodeId { backend_node_id } => {
                 Ok(RendererPageReply::OptionalBool(
                     self.node_has_geometry_for_backend_node_id(backend_node_id)?,
@@ -619,26 +457,6 @@ impl PageVm {
             RendererPageCommand::RemoveDocumentBackendNodeId { backend_node_id } => self
                 .remove_document_backend_node_id(backend_node_id)
                 .map(RendererPageReply::Bool),
-            RendererPageCommand::DocumentNodeSnapshotForObjectId {
-                inspector_session_id,
-                include_whitespace,
-                object_id,
-                depth,
-                pierce,
-            } => {
-                self.configure_document_dom_agent_session(
-                    inspector_session_id.as_deref(),
-                    include_whitespace,
-                );
-                Ok(RendererPageReply::OptionalDocumentNodeObjectSnapshot(
-                    Box::new(self.document_node_snapshot_for_object_id(
-                        inspector_session_id.as_deref(),
-                        &object_id,
-                        depth,
-                        pierce,
-                    )?),
-                ))
-            }
             RendererPageCommand::DocumentNodeSnapshotForBackendNodeId {
                 backend_node_id,
                 depth,
@@ -963,35 +781,6 @@ impl PageVm {
                     self.accessibility_node_payload_for_child_frame(&frame_id),
                 ))
             }
-            RendererPageCommand::AccessibilityTreePayloadsForObjectId {
-                inspector_session_id,
-                object_id,
-            } => Ok(RendererPageReply::OptionalAccessibilityPayloadsForObjectId(
-                self.accessibility_tree_payloads_for_object_id(
-                    inspector_session_id.as_deref(),
-                    &object_id,
-                )?,
-            )),
-            RendererPageCommand::AccessibilityNodeAndAncestorPayloadsForObjectId {
-                inspector_session_id,
-                object_id,
-            } => Ok(RendererPageReply::OptionalAccessibilityPayloadsForObjectId(
-                self.accessibility_node_and_ancestor_payloads_for_object_id(
-                    inspector_session_id.as_deref(),
-                    &object_id,
-                )?,
-            )),
-            RendererPageCommand::AccessibilityPartialTreePayloadsForObjectId {
-                inspector_session_id,
-                object_id,
-                fetch_relatives,
-            } => Ok(RendererPageReply::OptionalAccessibilityPayloadsForObjectId(
-                self.accessibility_partial_tree_payloads_for_object_id(
-                    inspector_session_id.as_deref(),
-                    &object_id,
-                    fetch_relatives,
-                )?,
-            )),
             RendererPageCommand::StyleSheetPayloadForStyleSheetId {
                 inspector_session_id,
                 style_sheet_id,
@@ -1017,17 +806,6 @@ impl PageVm {
                     self.outer_html_for_document(include_shadow_dom),
                 ))
             }
-            RendererPageCommand::OuterHtmlForObjectId {
-                inspector_session_id,
-                object_id,
-                include_shadow_dom,
-            } => Ok(RendererPageReply::OptionalString(
-                self.outer_html_for_object_id(
-                    inspector_session_id.as_deref(),
-                    &object_id,
-                    include_shadow_dom,
-                )?,
-            )),
             RendererPageCommand::OuterHtmlForBackendNodeId {
                 backend_node_id,
                 include_shadow_dom,
@@ -1046,28 +824,6 @@ impl PageVm {
             RendererPageCommand::CaptureScreenshot(request) => self
                 .capture_screenshot(request)
                 .map(RendererPageReply::CaptureScreenshot),
-            RendererPageCommand::ResolveRuntimeObjectForBackendNodeId {
-                inspector_session_id,
-                backend_node_id,
-                execution_context_id,
-                object_group,
-            } => Ok(RendererPageReply::RuntimeRemoteObjectResolution(
-                self.resolve_runtime_object_for_backend_node_id(
-                    inspector_session_id.as_deref(),
-                    backend_node_id,
-                    execution_context_id,
-                    object_group.as_deref(),
-                )?,
-            )),
-            RendererPageCommand::ResolveBlobObject {
-                inspector_session_id,
-                object_id,
-            } => Ok(RendererPageReply::BlobUuid(
-                self.vm_mut().blob_uuid_for_runtime_object_id(
-                    inspector_session_id.as_deref(),
-                    &object_id,
-                )?,
-            )),
             RendererPageCommand::BlobBytesForUuid { uuid } => Ok(
                 RendererPageReply::OptionalBlobBytes(self.vm().blob_bytes_for_uuid(&uuid)),
             ),
@@ -1360,6 +1116,231 @@ impl PageVm {
         result
     }
 
+    fn dispatch_renderer_inspector_command(
+        &mut self,
+        envelope: RendererInspectorCommandEnvelope,
+    ) -> Result<RendererPageReply> {
+        let (metadata, command) = envelope.into_parts();
+        let inspector_session_id = metadata.session().wire_session_id();
+        match command {
+            RendererInspectorPageCommand::DispatchRuntimeProtocolMessage { raw_json } => self
+                .dispatch_runtime_protocol_message_for_inspector_session(
+                    inspector_session_id,
+                    &raw_json,
+                )
+                .map(RendererRuntimeCommandOutput::from_messages)
+                .map(RendererPageReply::RuntimeInspectorProtocolMessages),
+            RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithDeferredResponse {
+                raw_json,
+                deferred_response,
+            } => self
+                .dispatch_runtime_protocol_message_for_inspector_session_with_deferred_response(
+                    inspector_session_id,
+                    &raw_json,
+                    deferred_response,
+                )
+                .map(RendererRuntimeCommandOutput::from_messages)
+                .map(RendererPageReply::RuntimeInspectorProtocolMessages),
+            RendererInspectorPageCommand::DispatchQueuedRuntimeInspectorCommand {
+                command_id,
+            } => self
+                .dispatch_queued_runtime_inspector_command(command_id)
+                .map(RendererRuntimeCommandOutput::from_messages)
+                .map(RendererPageReply::RuntimeInspectorProtocolMessages),
+            RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithContextResolution {
+                action,
+                raw_json,
+            } => self
+                .dispatch_runtime_protocol_message_for_inspector_session_with_context_resolution(
+                    inspector_session_id,
+                    &action,
+                    &raw_json,
+                )
+                .map(RendererRuntimeCommandOutput::from_messages)
+                .map(RendererPageReply::RuntimeInspectorProtocolMessages),
+            RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithContextResolutionAndDeferredResponse {
+                action,
+                raw_json,
+                deferred_response,
+            } => self
+                .dispatch_runtime_protocol_message_for_inspector_session_with_context_resolution_and_deferred_response(
+                    inspector_session_id,
+                    &action,
+                    &raw_json,
+                    deferred_response,
+                )
+                .map(RendererRuntimeCommandOutput::from_messages)
+                .map(RendererPageReply::RuntimeInspectorProtocolMessages),
+            RendererInspectorPageCommand::RuntimeEnableEvents => self
+                .runtime_enable_events(inspector_session_id)
+                .map(RendererPageReply::RuntimeInspectorProtocolMessages),
+            RendererInspectorPageCommand::ApplyRuntimeProtocolState {
+                session_restore_snapshots,
+                isolated_worlds,
+                stored_runtime_bindings,
+                session_runtime_bindings,
+            } => {
+                self.apply_runtime_protocol_state(
+                    inspector_session_id,
+                    &session_restore_snapshots,
+                    &isolated_worlds,
+                    &stored_runtime_bindings,
+                    &session_runtime_bindings,
+                )?;
+                Ok(RendererPageReply::Unit)
+            }
+            RendererInspectorPageCommand::DetachRuntimeInspectorSession {
+                pause_guard: _pause_guard,
+            } => Ok(RendererPageReply::Bool(
+                self.detach_runtime_inspector_session(inspector_session_id),
+            )),
+            RendererInspectorPageCommand::AddRuntimeBinding {
+                name,
+                execution_context_name,
+                execution_context_id,
+            } => {
+                self.add_runtime_binding(
+                    inspector_session_id,
+                    &name,
+                    execution_context_name.as_deref(),
+                    execution_context_id,
+                )?;
+                Ok(RendererPageReply::Unit)
+            }
+            RendererInspectorPageCommand::DomDebuggerGetEventListeners {
+                object_id,
+                depth,
+                pierce,
+            } => Ok(RendererPageReply::DomDebuggerEventListeners(
+                self.vm_mut().dom_debugger_event_listeners(
+                    inspector_session_id,
+                    &object_id,
+                    depth,
+                    pierce,
+                )?,
+            )),
+            RendererInspectorPageCommand::ComputedStylePropertiesForObjectId { object_id } => {
+                Ok(RendererPageReply::ComputedStyleProperties(
+                    self.computed_style_properties_for_object_id(
+                        inspector_session_id,
+                        &object_id,
+                    )?,
+                ))
+            }
+            RendererInspectorPageCommand::ScrollObjectNodeIntoViewIfNeeded { object_id, rect } => {
+                self.scroll_node_into_view_if_needed_for_object_id(
+                    inspector_session_id,
+                    &object_id,
+                    rect,
+                )
+                .map(RendererPageReply::ScrollIntoViewResult)
+            }
+            RendererInspectorPageCommand::ClientRectForObjectId { object_id } => {
+                Ok(RendererPageReply::OptionalDocumentNodeClientRect(
+                    self.client_rect_for_object_id(inspector_session_id, &object_id)?,
+                ))
+            }
+            RendererInspectorPageCommand::DocumentGeometryForObjectId { object_id } => {
+                Ok(RendererPageReply::OptionalDocumentNodeGeometry(
+                    self.document_geometry_for_object_id(inspector_session_id, &object_id)?,
+                ))
+            }
+            RendererInspectorPageCommand::NodeHasGeometryForObjectId { object_id } => {
+                Ok(RendererPageReply::OptionalBool(
+                    self.node_has_geometry_for_object_id(inspector_session_id, &object_id)?,
+                ))
+            }
+            RendererInspectorPageCommand::FocusDocumentNodeForObjectId { object_id } => self
+                .focus_document_node_for_object_id(inspector_session_id, &object_id)
+                .map(RendererPageReply::DomFocusOutcome),
+            RendererInspectorPageCommand::SetFileInputFilesForObjectId {
+                object_id,
+                files,
+                append,
+            } => Ok(RendererPageReply::OptionalBool(
+                self.set_file_input_files_for_object_id(
+                    inspector_session_id,
+                    &object_id,
+                    files,
+                    append,
+                )?,
+            )),
+            RendererInspectorPageCommand::DocumentNodeSnapshotForObjectId {
+                include_whitespace,
+                object_id,
+                depth,
+                pierce,
+            } => {
+                self.configure_document_dom_agent_session(
+                    inspector_session_id,
+                    include_whitespace,
+                );
+                Ok(RendererPageReply::OptionalDocumentNodeObjectSnapshot(
+                    Box::new(self.document_node_snapshot_for_object_id(
+                        inspector_session_id,
+                        &object_id,
+                        depth,
+                        pierce,
+                    )?),
+                ))
+            }
+            RendererInspectorPageCommand::AccessibilityTreePayloadsForObjectId { object_id } => {
+                Ok(RendererPageReply::OptionalAccessibilityPayloadsForObjectId(
+                    self.accessibility_tree_payloads_for_object_id(
+                        inspector_session_id,
+                        &object_id,
+                    )?,
+                ))
+            }
+            RendererInspectorPageCommand::AccessibilityNodeAndAncestorPayloadsForObjectId {
+                object_id,
+            } => Ok(RendererPageReply::OptionalAccessibilityPayloadsForObjectId(
+                self.accessibility_node_and_ancestor_payloads_for_object_id(
+                    inspector_session_id,
+                    &object_id,
+                )?,
+            )),
+            RendererInspectorPageCommand::AccessibilityPartialTreePayloadsForObjectId {
+                object_id,
+                fetch_relatives,
+            } => Ok(RendererPageReply::OptionalAccessibilityPayloadsForObjectId(
+                self.accessibility_partial_tree_payloads_for_object_id(
+                    inspector_session_id,
+                    &object_id,
+                    fetch_relatives,
+                )?,
+            )),
+            RendererInspectorPageCommand::OuterHtmlForObjectId {
+                object_id,
+                include_shadow_dom,
+            } => Ok(RendererPageReply::OptionalString(
+                self.outer_html_for_object_id(
+                    inspector_session_id,
+                    &object_id,
+                    include_shadow_dom,
+                )?,
+            )),
+            RendererInspectorPageCommand::ResolveRuntimeObjectForBackendNodeId {
+                backend_node_id,
+                execution_context_id,
+                object_group,
+            } => Ok(RendererPageReply::RuntimeRemoteObjectResolution(
+                self.resolve_runtime_object_for_backend_node_id(
+                    inspector_session_id,
+                    backend_node_id,
+                    execution_context_id,
+                    object_group.as_deref(),
+                )?,
+            )),
+            RendererInspectorPageCommand::ResolveBlobObject { object_id } => {
+                Ok(RendererPageReply::BlobUuid(
+                    self.vm_mut()
+                        .blob_uuid_for_runtime_object_id(inspector_session_id, &object_id)?,
+                ))
+            }
+        }
+    }
+
     async fn apply_cpu_throttling_delay_after_page_command(
         &self,
         started: Option<std::time::Instant>,
@@ -1387,6 +1368,9 @@ impl PageVm {
 }
 
 fn renderer_page_command_uses_cpu_throttling(command: &RendererPageCommand) -> bool {
+    if let RendererPageCommand::Inspector(envelope) = command {
+        return envelope.uses_cpu_throttling();
+    }
     matches!(
         command,
         RendererPageCommand::EvaluateExpression { .. }
@@ -1398,12 +1382,6 @@ fn renderer_page_command_uses_cpu_throttling(command: &RendererPageCommand) -> b
             | RendererPageCommand::DispatchDragEventAtPoint { .. }
             | RendererPageCommand::InsertTextIntoActiveControl(_)
             | RendererPageCommand::DispatchKeyEvent { .. }
-            | RendererPageCommand::DispatchRuntimeProtocolMessage { .. }
-            | RendererPageCommand::DispatchRuntimeProtocolMessageWithDeferredResponse { .. }
-            | RendererPageCommand::DispatchQueuedRuntimeInspectorCommand { .. }
-            | RendererPageCommand::DispatchRuntimeProtocolMessageWithContextResolution { .. }
-            | RendererPageCommand::DispatchRuntimeProtocolMessageWithContextResolutionAndDeferredResponse { .. }
-            | RendererPageCommand::DomDebuggerGetEventListeners { .. }
             | RendererPageCommand::DomDebuggerConfigureEventListenerBreakpoint { .. }
             | RendererPageCommand::DomDebuggerConfigureXhrBreakpoint { .. }
             | RendererPageCommand::DomDebuggerConfigureDomBreakpoint { .. }
@@ -1414,7 +1392,6 @@ fn renderer_page_command_uses_cpu_throttling(command: &RendererPageCommand) -> b
             | RendererPageCommand::MutateDocumentBackendNodeAttribute { .. }
             | RendererPageCommand::EditDocumentNode { .. }
             | RendererPageCommand::FocusDocumentBackendNode { .. }
-            | RendererPageCommand::FocusDocumentNodeForObjectId { .. }
             | RendererPageCommand::SetDocumentContent { .. }
     )
 }

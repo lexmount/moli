@@ -461,17 +461,21 @@ impl PageWireAction {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DebuggerWireAction {
     Interruptible,
-    ExecutionControl,
+    IoExecutionControl,
+    MainThreadExecutionControl,
     Other,
 }
 
 impl DebuggerWireAction {
     fn is_interruptible(self) -> bool {
-        matches!(self, Self::Interruptible | Self::ExecutionControl)
+        matches!(self, Self::Interruptible | Self::IoExecutionControl)
     }
 
     fn executes_page_javascript(self) -> bool {
-        self == Self::ExecutionControl
+        matches!(
+            self,
+            Self::IoExecutionControl | Self::MainThreadExecutionControl
+        )
     }
 }
 
@@ -516,8 +520,10 @@ impl DebuggerWireAction {
             | "setBreakpoint"
             | "setBreakpointByUrl"
             | "setBreakpointsActive" => Self::Interruptible,
-            "continueToLocation" | "restartFrame" | "resume" | "stepInto" | "stepOut"
-            | "stepOver" => Self::ExecutionControl,
+            "resume" => Self::IoExecutionControl,
+            "continueToLocation" | "restartFrame" | "stepInto" | "stepOut" | "stepOver" => {
+                Self::MainThreadExecutionControl
+            }
             _ => Self::Other,
         }
     }
@@ -673,12 +679,7 @@ mod tests {
             "Debugger.getStackTrace",
             "Debugger.pause",
             "Debugger.removeBreakpoint",
-            "Debugger.continueToLocation",
-            "Debugger.restartFrame",
             "Debugger.resume",
-            "Debugger.stepInto",
-            "Debugger.stepOut",
-            "Debugger.stepOver",
             "Debugger.setBreakpoint",
             "Debugger.setBreakpointByUrl",
             "Debugger.setBreakpointsActive",
@@ -695,7 +696,12 @@ mod tests {
         }
 
         for method in [
+            "Debugger.continueToLocation",
             "Debugger.enable",
+            "Debugger.restartFrame",
+            "Debugger.stepInto",
+            "Debugger.stepOut",
+            "Debugger.stepOver",
             "Performance.enable",
             "Runtime.getIsolateId",
         ] {

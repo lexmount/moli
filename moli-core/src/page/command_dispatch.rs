@@ -18,12 +18,12 @@ pub struct PendingRuntimeInspectorCommandDispatch {
 
 /// Identifies which execution owner consumed one routable Inspector command.
 ///
-/// `Pause` commands complete inside V8's nested message loop while the Page
-/// actor is blocked. Callers must not synchronously re-enter that Page before
-/// exposing the Inspector response, because only the client can resume it.
+/// `Inspector` claims complete either in V8's interrupt callback or its nested
+/// message loop while the Page actor is blocked. Callers must not synchronously
+/// re-enter that Page before exposing the Inspector response.
 pub enum CompletedRuntimeInspectorCommandDispatch {
     Owner(Box<CompletedPageCommand>),
-    Pause,
+    Inspector,
     Canceled,
 }
 
@@ -349,8 +349,8 @@ impl PendingRuntimeInspectorCommandDispatch {
                 RendererRuntimeInspectorCommandClaim::Owner => Err(anyhow::anyhow!(
                     "runtime inspector command was claimed by owner without an owner task"
                 )),
-                RendererRuntimeInspectorCommandClaim::Pause => {
-                    Ok(CompletedRuntimeInspectorCommandDispatch::Pause)
+                RendererRuntimeInspectorCommandClaim::Inspector => {
+                    Ok(CompletedRuntimeInspectorCommandDispatch::Inspector)
                 }
                 RendererRuntimeInspectorCommandClaim::Canceled => {
                     Ok(CompletedRuntimeInspectorCommandDispatch::Canceled)
@@ -369,8 +369,8 @@ impl PendingRuntimeInspectorCommandDispatch {
                         .await
                         .map(Box::new)
                         .map(CompletedRuntimeInspectorCommandDispatch::Owner),
-                    RendererRuntimeInspectorCommandClaim::Pause => {
-                        Ok(CompletedRuntimeInspectorCommandDispatch::Pause)
+                    RendererRuntimeInspectorCommandClaim::Inspector => {
+                        Ok(CompletedRuntimeInspectorCommandDispatch::Inspector)
                     }
                     RendererRuntimeInspectorCommandClaim::Canceled => {
                         Ok(CompletedRuntimeInspectorCommandDispatch::Canceled)
@@ -386,8 +386,8 @@ impl PendingRuntimeInspectorCommandDispatch {
                             completion,
                         )))
                     }
-                    RendererRuntimeInspectorCommandClaim::Pause => {
-                        Ok(CompletedRuntimeInspectorCommandDispatch::Pause)
+                    RendererRuntimeInspectorCommandClaim::Inspector => {
+                        Ok(CompletedRuntimeInspectorCommandDispatch::Inspector)
                     }
                     RendererRuntimeInspectorCommandClaim::Canceled => {
                         Ok(CompletedRuntimeInspectorCommandDispatch::Canceled)

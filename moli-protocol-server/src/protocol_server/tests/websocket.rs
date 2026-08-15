@@ -1453,6 +1453,166 @@ async fn websocket_cdp_debugger_pause_interrupts_in_flight_runtime_evaluate() {
 }
 
 #[tokio::test]
+async fn websocket_cdp_io_terminate_interrupts_busy_main_thread_and_skips_main_follower() {
+    let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
+    let (mut socket, _) = connect_async(format!(
+        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
+    ))
+    .await
+    .expect("connect to cdp websocket");
+    let session_id = cdp_create_default_session_and_navigate(
+        &mut socket,
+        "data:text/html,<body>IO interrupt</body>",
+    )
+    .await;
+
+    let enabled = send_cdp_command(
+        &mut socket,
+        6,
+        "Debugger.enable",
+        Some(&session_id),
+        json!({}),
+    )
+    .await;
+    assert!(
+        enabled
+            .iter()
+            .any(|message| message["id"] == json!(6_u64) && message.get("error").is_none()),
+        "Debugger.enable should succeed: {enabled:#?}"
+    );
+
+    socket
+        .send(WsMessage::Text(
+            json!({
+                "id": 7_u64,
+                "method": "Runtime.evaluate",
+                "sessionId": session_id,
+                "params": {
+                    "expression": "debugger; for (;;) {}",
+                    "returnByValue": true,
+                }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("send the non-yielding MainThread Runtime.evaluate");
+    let mut observed = recv_until_match(&mut socket, |message| {
+        message["sessionId"].as_str() == Some(session_id.as_str())
+            && message["method"] == json!("Debugger.paused")
+    })
+    .await;
+    assert!(
+        observed.iter().all(|message| message["id"] != json!(7_u64)),
+        "the busy Runtime.evaluate must still be in flight at its debugger barrier: {observed:#?}"
+    );
+
+    observed.extend(
+        send_cdp_command(
+            &mut socket,
+            8,
+            "Debugger.resume",
+            Some(&session_id),
+            json!({}),
+        )
+        .await,
+    );
+    if observed.iter().all(|message| {
+        message["sessionId"].as_str() != Some(session_id.as_str())
+            || message["method"] != json!("Debugger.resumed")
+    }) {
+        observed.extend(
+            recv_until_match(&mut socket, |message| {
+                message["sessionId"].as_str() == Some(session_id.as_str())
+                    && message["method"] == json!("Debugger.resumed")
+            })
+            .await,
+        );
+    }
+    assert!(
+        observed.iter().all(|message| message["id"] != json!(7_u64)),
+        "the resumed Runtime.evaluate must enter its non-yielding loop: {observed:#?}"
+    );
+
+    // This MainThread follower is deliberately queued before the IO command.
+    // An interrupt callback must skip it, dispatch terminateExecution, and
+    // leave the follower for ordinary owner dispatch after V8 unwinds.
+    socket
+        .send(WsMessage::Text(
+            json!({
+                "id": 9_u64,
+                "method": "Runtime.evaluate",
+                "sessionId": session_id,
+                "params": {
+                    "expression": "6 * 7",
+                    "returnByValue": true,
+                }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("queue the MainThread follower");
+    let terminated = tokio::time::timeout(
+        Duration::from_secs(10),
+        send_cdp_command(
+            &mut socket,
+            10,
+            "Runtime.terminateExecution",
+            Some(&session_id),
+            json!({}),
+        ),
+    )
+    .await
+    .expect("IO terminateExecution must interrupt non-yielding MainThread JavaScript");
+    observed.extend(terminated);
+
+    let mut saw_busy_response = observed.iter().any(|message| message["id"] == json!(7_u64));
+    let mut saw_follower_response = observed.iter().any(|message| message["id"] == json!(9_u64));
+    if !saw_busy_response || !saw_follower_response {
+        observed.extend(
+            recv_until_match(&mut socket, |message| {
+                saw_busy_response |= message["id"] == json!(7_u64);
+                saw_follower_response |= message["id"] == json!(9_u64);
+                saw_busy_response && saw_follower_response
+            })
+            .await,
+        );
+    }
+
+    let terminate_response = observed
+        .iter()
+        .find(|message| message["id"] == json!(10_u64))
+        .expect("terminateExecution response");
+    assert_eq!(
+        terminate_response["result"],
+        json!({}),
+        "terminateExecution must complete through the IO V8 interrupt: {observed:#?}"
+    );
+    let busy_response = observed
+        .iter()
+        .find(|message| message["id"] == json!(7_u64))
+        .expect("terminated Runtime.evaluate response");
+    assert!(
+        busy_response.get("error").is_some()
+            || busy_response["result"]["exceptionDetails"].is_object(),
+        "the non-yielding evaluation must report termination: {busy_response:#?}"
+    );
+    let follower_response = observed
+        .iter()
+        .find(|message| message["id"] == json!(9_u64))
+        .expect("MainThread follower response");
+    assert_eq!(
+        follower_response["result"]["result"]["value"],
+        json!(42),
+        "the skipped MainThread follower must run normally after termination: {observed:#?}"
+    );
+
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(protocol_server).await;
+}
+
+#[tokio::test]
 async fn websocket_cdp_raw_client_runtime_evaluate_immediately_after_page_navigate_succeeds() {
     // Regression test for the raw-CDP race: a raw client can pipeline
     // `Runtime.evaluate` directly behind `Page.navigate` without waiting for a
@@ -4989,7 +5149,7 @@ async fn websocket_cdp_debugger_step_out_responds_before_resumed_and_caller_paus
 }
 
 #[tokio::test]
-async fn websocket_cdp_debugger_pause_allows_auxiliary_runtime_commands() {
+async fn websocket_cdp_debugger_pause_allows_auxiliary_main_thread_commands() {
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
     let (mut socket, _) = connect_async(format!(
         "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
@@ -5074,10 +5234,9 @@ async fn websocket_cdp_debugger_pause_allows_auxiliary_runtime_commands() {
         !observed.iter().any(|message| message["id"] == json!(6_u64)),
         "Runtime.evaluate must remain pending while the renderer owner is paused: {observed:#?}"
     );
-    // V8's nested inspector loop owns this command while the Page actor is
-    // blocked by the first evaluate. Its response and pause-bridge events are
-    // owner-independent; trying to capture a Page-owner output snapshot before
-    // publishing the response deadlocks because the client cannot resume.
+    // Chromium's normal debugger loop pumps its main-thread DevTools receiver.
+    // This command must therefore reach the auxiliary V8 session even though
+    // the ordinary Page owner turn that entered the pause has not returned.
     let auxiliary_evaluate = tokio::time::timeout(
         Duration::from_secs(5),
         send_cdp_command(
@@ -5089,14 +5248,14 @@ async fn websocket_cdp_debugger_pause_allows_auxiliary_runtime_commands() {
         ),
     )
     .await
-    .expect("auxiliary Runtime.evaluate must complete while the Page owner is paused");
+    .expect("auxiliary Main Runtime.evaluate must complete in the debugger loop");
     assert!(
         auxiliary_evaluate.iter().any(|message| {
             message["id"] == json!(7_u64)
                 && message["sessionId"] == json!(auxiliary_session_id)
                 && message["result"]["result"]["value"] == json!(42)
         }),
-        "pause-loop Runtime.evaluate should complete before resume: {auxiliary_evaluate:#?}"
+        "pause-loop Main Runtime.evaluate should complete before resume: {auxiliary_evaluate:#?}"
     );
 
     let auxiliary_object = tokio::time::timeout(
@@ -5110,7 +5269,7 @@ async fn websocket_cdp_debugger_pause_allows_auxiliary_runtime_commands() {
         ),
     )
     .await
-    .expect("object-valued Runtime.evaluate must complete while the Page owner is paused");
+    .expect("object-valued Main Runtime.evaluate must complete in the debugger loop");
     assert!(
         auxiliary_object.iter().any(|message| {
             message["id"] == json!(51_u64)
@@ -5120,8 +5279,7 @@ async fn websocket_cdp_debugger_pause_allows_auxiliary_runtime_commands() {
                     .as_str()
                     .is_some_and(|object_id| !object_id.is_empty())
         }),
-        "pause-loop object response must not enter Page-owner node normalization: \
-         {auxiliary_object:#?}"
+        "pause-loop object response must remain owner-independent: {auxiliary_object:#?}"
     );
 
     socket
@@ -5131,9 +5289,9 @@ async fn websocket_cdp_debugger_pause_allows_auxiliary_runtime_commands() {
                 "method": "Runtime.evaluate",
                 "sessionId": auxiliary_session_id,
                 "params": {
-                "expression": "Promise.resolve(43)",
-                "awaitPromise": true,
-                "returnByValue": true
+                    "expression": "Promise.resolve(43)",
+                    "awaitPromise": true,
+                    "returnByValue": true
                 }
             })
             .to_string()

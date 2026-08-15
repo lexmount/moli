@@ -137,10 +137,12 @@ impl Page {
         inspector_session_id: Option<String>,
         object_id: &str,
     ) -> anyhow::Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::AccessibilityTreePayloadsForObjectId {
-            inspector_session_id,
-            object_id: object_id.to_owned(),
-        })
+        self.start_page_command(
+            RendererPageCommand::accessibility_tree_payloads_for_object_id(
+                inspector_session_id,
+                object_id.to_owned(),
+            ),
+        )
     }
 
     pub fn start_accessibility_node_and_ancestor_payloads_for_object_id(
@@ -149,10 +151,10 @@ impl Page {
         object_id: &str,
     ) -> anyhow::Result<PendingPageCommand> {
         self.start_page_command(
-            RendererPageCommand::AccessibilityNodeAndAncestorPayloadsForObjectId {
+            RendererPageCommand::accessibility_node_and_ancestor_payloads_for_object_id(
                 inspector_session_id,
-                object_id: object_id.to_owned(),
-            },
+                object_id.to_owned(),
+            ),
         )
     }
 
@@ -163,11 +165,11 @@ impl Page {
         fetch_relatives: bool,
     ) -> anyhow::Result<PendingPageCommand> {
         self.start_page_command(
-            RendererPageCommand::AccessibilityPartialTreePayloadsForObjectId {
+            RendererPageCommand::accessibility_partial_tree_payloads_for_object_id(
                 inspector_session_id,
-                object_id: object_id.to_owned(),
+                object_id.to_owned(),
                 fetch_relatives,
-            },
+            ),
         )
     }
 

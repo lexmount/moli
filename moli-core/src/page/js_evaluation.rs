@@ -16,8 +16,9 @@ use crate::RendererOutputFence;
 use crate::renderer::{
     RendererDomDebuggerDomBreakpointResolution, RendererDomDebuggerEventListenerBreakpoint,
     RendererDomDebuggerEventListenersResolution, RendererDomDebuggerXhrBreakpoint,
-    RendererPageCommand, RendererPageReply, RendererPerformanceMetricSnapshot,
-    RendererRuntimeHeapUsage, RendererRuntimeInspectorResponseSender,
+    RendererInspectorCommandRoute, RendererPageCommand, RendererPageReply,
+    RendererPerformanceMetricSnapshot, RendererRuntimeHeapUsage,
+    RendererRuntimeInspectorResponseSender,
 };
 
 fn dedupe_runtime_context_created_events(events: &mut Vec<RuntimeContextRestoreEvent>) {
@@ -473,10 +474,36 @@ impl Page {
         inspector_session_id: Option<String>,
         raw_json: String,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::DispatchRuntimeProtocolMessage {
+        self.start_runtime_protocol_message_for_inspector_session_with_route(
             inspector_session_id,
+            RendererInspectorCommandRoute::MainThread,
             raw_json,
-        })
+        )
+    }
+
+    pub fn start_runtime_interrupt_protocol_message_for_inspector_session(
+        &self,
+        inspector_session_id: Option<String>,
+        raw_json: String,
+    ) -> Result<PendingPageCommand> {
+        self.start_runtime_protocol_message_for_inspector_session_with_route(
+            inspector_session_id,
+            RendererInspectorCommandRoute::Io,
+            raw_json,
+        )
+    }
+
+    fn start_runtime_protocol_message_for_inspector_session_with_route(
+        &self,
+        inspector_session_id: Option<String>,
+        route: RendererInspectorCommandRoute,
+        raw_json: String,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::dispatch_runtime_protocol_message(
+            inspector_session_id,
+            route,
+            raw_json,
+        ))
     }
 
     pub fn start_runtime_protocol_message_with_deferred_response(
@@ -497,37 +524,53 @@ impl Page {
         raw_json: String,
         deferred_response: RendererRuntimeInspectorResponseSender,
     ) -> Result<PendingPageCommand> {
+        self.start_runtime_protocol_message_for_inspector_session_with_deferred_response_and_route(
+            inspector_session_id,
+            RendererInspectorCommandRoute::MainThread,
+            raw_json,
+            deferred_response,
+        )
+    }
+
+    fn start_runtime_protocol_message_for_inspector_session_with_deferred_response_and_route(
+        &self,
+        inspector_session_id: Option<String>,
+        route: RendererInspectorCommandRoute,
+        raw_json: String,
+        deferred_response: RendererRuntimeInspectorResponseSender,
+    ) -> Result<PendingPageCommand> {
         self.start_page_command(
-            RendererPageCommand::DispatchRuntimeProtocolMessageWithDeferredResponse {
+            RendererPageCommand::dispatch_runtime_protocol_message_with_deferred_response(
                 inspector_session_id,
+                route,
                 raw_json,
                 deferred_response,
-            },
+            ),
         )
     }
 
     pub fn start_routable_runtime_protocol_message_for_inspector_session(
         &self,
         inspector_session_id: Option<String>,
+        inspector_route: RendererInspectorCommandRoute,
         owner_context_resolution_action: Option<String>,
         raw_json: String,
         deferred_response: RendererRuntimeInspectorResponseSender,
     ) -> Result<PendingRuntimeInspectorCommandDispatch> {
-        let owner_fallback_inspector_session_id = inspector_session_id.clone();
         let route = self.handle.enqueue_routable_runtime_inspector_command(
             inspector_session_id,
+            inspector_route,
             owner_context_resolution_action,
             raw_json,
             deferred_response,
         );
         let owner_pending = if route.requires_owner_fallback() {
             let command_id = route.command_id();
-            match self.start_page_command(
-                RendererPageCommand::DispatchQueuedRuntimeInspectorCommand {
-                    command_id,
-                    inspector_session_id: owner_fallback_inspector_session_id,
-                },
-            ) {
+            let command = RendererPageCommand::dispatch_queued_runtime_inspector_command(
+                route.metadata().clone(),
+                command_id,
+            );
+            match self.start_page_command(command) {
                 Ok(pending) => Some(pending),
                 Err(error) => {
                     self.handle.cancel_queued_runtime_inspector_command(
@@ -567,11 +610,12 @@ impl Page {
         raw_json: String,
     ) -> Result<PendingPageCommand> {
         self.start_page_command(
-            RendererPageCommand::DispatchRuntimeProtocolMessageWithContextResolution {
+            RendererPageCommand::dispatch_runtime_protocol_message_with_context_resolution(
                 inspector_session_id,
+                RendererInspectorCommandRoute::MainThread,
                 action,
                 raw_json,
-            },
+            ),
         )
     }
 
@@ -597,12 +641,13 @@ impl Page {
         deferred_response: RendererRuntimeInspectorResponseSender,
     ) -> Result<PendingPageCommand> {
         self.start_page_command(
-            RendererPageCommand::DispatchRuntimeProtocolMessageWithContextResolutionAndDeferredResponse {
+            RendererPageCommand::dispatch_runtime_protocol_message_with_context_resolution_and_deferred_response(
                 inspector_session_id,
+                RendererInspectorCommandRoute::MainThread,
                 action,
                 raw_json,
                 deferred_response,
-            },
+            ),
         )
     }
 
@@ -697,9 +742,9 @@ impl Page {
         &self,
         inspector_session_id: Option<&str>,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::RuntimeEnableEvents {
-            inspector_session_id: inspector_session_id.map(str::to_owned),
-        })
+        self.start_page_command(RendererPageCommand::runtime_enable_events(
+            inspector_session_id.map(str::to_owned),
+        ))
     }
 
     pub fn finish_runtime_enable_events(
@@ -747,10 +792,10 @@ impl Page {
     ) -> Result<bool> {
         let pause_guard = self.handle.arm_runtime_inspector_session_detach();
         let reply = self
-            .dispatch_page_command_async(RendererPageCommand::DetachRuntimeInspectorSession {
-                inspector_session_id: inspector_session_id.map(str::to_owned),
+            .dispatch_page_command_async(RendererPageCommand::detach_runtime_inspector_session(
+                inspector_session_id.map(str::to_owned),
                 pause_guard,
-            })
+            ))
             .await?;
         expect_page_reply!(
             reply,
@@ -821,12 +866,12 @@ impl Page {
         depth: i32,
         pierce: bool,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::DomDebuggerGetEventListeners {
+        self.start_page_command(RendererPageCommand::dom_debugger_get_event_listeners(
             inspector_session_id,
             object_id,
             depth,
             pierce,
-        })
+        ))
     }
 
     pub fn finish_dom_debugger_get_event_listeners(
@@ -937,12 +982,12 @@ impl Page {
         execution_context_name: Option<&str>,
         execution_context_id: Option<i64>,
     ) -> Result<()> {
-        let command = RendererPageCommand::AddRuntimeBinding {
+        let command = RendererPageCommand::add_runtime_binding(
             inspector_session_id,
-            name: name.to_owned(),
-            execution_context_name: execution_context_name.map(str::to_owned),
+            name.to_owned(),
+            execution_context_name.map(str::to_owned),
             execution_context_id,
-        };
+        );
         self.dispatch_unit_page_command_async(command, "add runtime binding")
             .await
     }
@@ -1047,13 +1092,14 @@ impl Page {
         stored_runtime_bindings: &[RuntimeBindingRegistration],
         session_runtime_bindings: &[RuntimeBindingRegistration],
     ) -> Result<Option<RendererOutputFence>> {
-        let pending = self.start_page_command(RendererPageCommand::ApplyRuntimeProtocolState {
-            inspector_session_id: inspector_session_id.clone(),
-            session_restore_snapshots: session_restore_snapshots.to_vec(),
-            isolated_worlds: isolated_worlds.to_vec(),
-            stored_runtime_bindings: stored_runtime_bindings.to_vec(),
-            session_runtime_bindings: session_runtime_bindings.to_vec(),
-        })?;
+        let pending =
+            self.start_page_command(RendererPageCommand::apply_runtime_protocol_state(
+                inspector_session_id.clone(),
+                session_restore_snapshots.to_vec(),
+                isolated_worlds.to_vec(),
+                stored_runtime_bindings.to_vec(),
+                session_runtime_bindings.to_vec(),
+            ))?;
         let completion = pending.wait().await?;
         let output = self.finish_page_command_turn(completion);
         let (completion, predecessor) = output.into_completion_and_predecessor();
