@@ -12,8 +12,12 @@ pub struct PendingPageCommand {
 }
 
 pub struct PendingRuntimeInspectorCommandDispatch {
-    route: RendererRuntimeInspectorCommandRoute,
-    owner_pending: Option<PendingPageCommand>,
+    kind: PendingRuntimeInspectorCommandDispatchKind,
+}
+
+enum PendingRuntimeInspectorCommandDispatchKind {
+    MainThread(PendingPageCommand),
+    Io(RendererRuntimeInspectorCommandRoute),
 }
 
 /// Identifies which execution owner consumed one routable Inspector command.
@@ -85,15 +89,24 @@ impl CompletedPageCommand {
 impl Page {
     pub(crate) fn start_page_command(
         &self,
-        command: RendererPageCommand,
+        mut command: RendererPageCommand,
     ) -> Result<PendingPageCommand> {
+        if let Some(attachment_id) = self.renderer_agent_attachment_id {
+            command.bind_inspector_attachment(attachment_id);
+        }
         Ok(PendingPageCommand {
             pending: self.handle.enqueue_protocol_command(command)?,
             renderer_agent_attachment_id: self.renderer_agent_attachment_id,
         })
     }
 
-    fn start_full_page_command(&self, command: RendererPageCommand) -> Result<PendingPageCommand> {
+    fn start_full_page_command(
+        &self,
+        mut command: RendererPageCommand,
+    ) -> Result<PendingPageCommand> {
+        if let Some(attachment_id) = self.renderer_agent_attachment_id {
+            command.bind_inspector_attachment(attachment_id);
+        }
         Ok(PendingPageCommand {
             pending: self.handle.enqueue_async_command(command)?,
             renderer_agent_attachment_id: self.renderer_agent_attachment_id,
@@ -108,14 +121,26 @@ impl Page {
         completion.output
     }
 
-    pub(crate) fn pending_runtime_inspector_command_dispatch(
-        route: RendererRuntimeInspectorCommandRoute,
-        owner_pending: Option<PendingPageCommand>,
+    fn pending_runtime_inspector_command_dispatch(
+        kind: PendingRuntimeInspectorCommandDispatchKind,
     ) -> PendingRuntimeInspectorCommandDispatch {
-        PendingRuntimeInspectorCommandDispatch {
-            route,
-            owner_pending,
-        }
+        PendingRuntimeInspectorCommandDispatch { kind }
+    }
+
+    pub(crate) fn pending_main_thread_runtime_inspector_command_dispatch(
+        pending: PendingPageCommand,
+    ) -> PendingRuntimeInspectorCommandDispatch {
+        Self::pending_runtime_inspector_command_dispatch(
+            PendingRuntimeInspectorCommandDispatchKind::MainThread(pending),
+        )
+    }
+
+    pub(crate) fn pending_io_runtime_inspector_command_dispatch(
+        route: RendererRuntimeInspectorCommandRoute,
+    ) -> PendingRuntimeInspectorCommandDispatch {
+        Self::pending_runtime_inspector_command_dispatch(
+            PendingRuntimeInspectorCommandDispatchKind::Io(route),
+        )
     }
 
     pub(crate) fn finish_page_command(
@@ -339,53 +364,14 @@ impl PendingPageCommand {
 
 impl PendingRuntimeInspectorCommandDispatch {
     pub async fn wait(self) -> Result<CompletedRuntimeInspectorCommandDispatch> {
-        let Self {
-            route,
-            owner_pending,
-        } = self;
-        let Some(owner_pending) = owner_pending else {
-            let claim = route.wait_for_claim().await.map_err(anyhow::Error::msg)?;
-            return match claim {
-                RendererRuntimeInspectorCommandClaim::Owner => Err(anyhow::anyhow!(
-                    "runtime inspector command was claimed by owner without an owner task"
-                )),
-                RendererRuntimeInspectorCommandClaim::Inspector => {
-                    Ok(CompletedRuntimeInspectorCommandDispatch::Inspector)
-                }
-                RendererRuntimeInspectorCommandClaim::Canceled => {
-                    Ok(CompletedRuntimeInspectorCommandDispatch::Canceled)
-                }
-            };
-        };
-
-        let mut claim = Box::pin(route.wait_for_claim());
-        let mut owner = Box::pin(owner_pending.wait());
-        tokio::select! {
-            biased;
-            claim = &mut claim => {
-                let claim = claim.map_err(anyhow::Error::msg)?;
-                match claim {
-                    RendererRuntimeInspectorCommandClaim::Owner => owner
-                        .await
-                        .map(Box::new)
-                        .map(CompletedRuntimeInspectorCommandDispatch::Owner),
-                    RendererRuntimeInspectorCommandClaim::Inspector => {
-                        Ok(CompletedRuntimeInspectorCommandDispatch::Inspector)
-                    }
-                    RendererRuntimeInspectorCommandClaim::Canceled => {
-                        Ok(CompletedRuntimeInspectorCommandDispatch::Canceled)
-                    }
-                }
-            }
-            owner = &mut owner => {
-                let completion = owner?;
-                let claim = claim.await.map_err(anyhow::Error::msg)?;
-                match claim {
-                    RendererRuntimeInspectorCommandClaim::Owner => {
-                        Ok(CompletedRuntimeInspectorCommandDispatch::Owner(Box::new(
-                            completion,
-                        )))
-                    }
+        match self.kind {
+            PendingRuntimeInspectorCommandDispatchKind::MainThread(pending) => pending
+                .wait()
+                .await
+                .map(Box::new)
+                .map(CompletedRuntimeInspectorCommandDispatch::Owner),
+            PendingRuntimeInspectorCommandDispatchKind::Io(route) => {
+                match route.wait_for_claim().await.map_err(anyhow::Error::msg)? {
                     RendererRuntimeInspectorCommandClaim::Inspector => {
                         Ok(CompletedRuntimeInspectorCommandDispatch::Inspector)
                     }

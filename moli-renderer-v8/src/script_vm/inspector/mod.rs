@@ -27,7 +27,9 @@ pub(super) use self::outbound::ScriptVmInspectorCommandTurnOutputScope;
 #[cfg(test)]
 use self::v8_backend::RendererInspectorClientUniqueIdState;
 pub(in crate::script_vm) use self::v8_backend::RendererInspectorIsolateBackend;
-pub(crate) use self::v8_backend::RendererInspectorIsolateBackendHandle;
+pub(crate) use self::v8_backend::{
+    RendererInspectorIsolateBackendHandle, dispatch_inspector_io_owner_wake,
+};
 #[cfg(test)]
 use crate::runtime::{
     RendererRuntimeCommandOutputRecorder, RendererRuntimeInspectorResponseSender,
@@ -53,6 +55,7 @@ pub(crate) struct DocumentInspectorBinding {
     agent: RendererDevToolsAgent,
     backend: RefCell<DocumentInspectorBackendState>,
     pause_bridge: RendererInspectorPauseBridge,
+    io_ingress: crate::script_vm::inspector_io::RendererInspectorIoIngress,
 }
 
 impl std::fmt::Debug for DocumentInspectorBinding {
@@ -93,11 +96,13 @@ pub(super) struct ReportedExecutionContext {
 impl DocumentInspectorBinding {
     pub(crate) fn new(isolate_backend: RendererInspectorIsolateBackendHandle) -> Self {
         let pause_bridge = isolate_backend.pause_bridge();
+        let io_ingress = isolate_backend.io_ingress();
         Self {
             context_registrations: DocumentInspectorContextRegistrations::default(),
             agent: RendererDevToolsAgent::new(isolate_backend),
             backend: RefCell::new(DocumentInspectorBackendState::new()),
             pause_bridge,
+            io_ingress,
         }
     }
 
@@ -111,6 +116,10 @@ impl DocumentInspectorBinding {
 
     pub(crate) fn pause_bridge(&self) -> RendererInspectorPauseBridge {
         self.pause_bridge.clone()
+    }
+
+    pub(crate) fn io_ingress(&self) -> crate::script_vm::inspector_io::RendererInspectorIoIngress {
+        self.io_ingress.clone()
     }
 
     pub(crate) fn dom_debugger_pause_scheduler(&self) -> RendererDomDebuggerPauseScheduler {

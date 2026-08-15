@@ -3479,6 +3479,7 @@ impl RendererOwnerLocalStore {
             }
             let javascript_dialog_broker = entry.page_vm().javascript_dialog_broker();
             let inspector_pause_bridge = entry.page_vm().inspector_pause_bridge();
+            let inspector_io_ingress = entry.page_vm().inspector_io_ingress();
             let page_state = Self::commit_current_vm_page_state_on_entry(&mut entry)?;
             let initial_runtime_realms = entry.page_vm_mut().vm_mut().runtime_realm_inventory();
             let devtools_agent_token = entry.page_vm().devtools_agent_token();
@@ -3490,6 +3491,7 @@ impl RendererOwnerLocalStore {
             Ok((
                 javascript_dialog_broker,
                 inspector_pause_bridge,
+                inspector_io_ingress,
                 page_state,
                 devtools_agent_token,
                 creation_diagnostics,
@@ -3517,6 +3519,7 @@ impl RendererOwnerLocalStore {
             |(
                 javascript_dialog_broker,
                 inspector_pause_bridge,
+                inspector_io_ingress,
                 page_state,
                 devtools_agent_token,
                 mut creation_diagnostics,
@@ -3530,6 +3533,7 @@ impl RendererOwnerLocalStore {
                         page_context_cancel_tx,
                         javascript_dialog_broker,
                         inspector_pause_bridge,
+                        inspector_io_ingress,
                         page_state,
                         creation_diagnostics,
                         creation_artifacts,
@@ -3971,6 +3975,10 @@ impl RendererOwnerLocalStore {
                     .expect("an attached Page must own a renderer script environment")
                     .output_journal(),
             );
+        attached_entry
+            .page_vm()
+            .inspector_io_ingress()
+            .configure_owner_wake(owner.owner_state.inspector_io_wake_tx.clone());
         let _ = attached_entry
             .page_vm_mut()
             .replay_pending_owner_wakes_after_attach(has_page_task_source);

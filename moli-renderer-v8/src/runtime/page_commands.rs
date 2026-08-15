@@ -1120,8 +1120,8 @@ impl PageVm {
         &mut self,
         envelope: RendererInspectorCommandEnvelope,
     ) -> Result<RendererPageReply> {
-        let (metadata, command) = envelope.into_parts();
-        let inspector_session_id = metadata.session().wire_session_id();
+        let (ticket, command) = envelope.into_main_thread_parts();
+        let inspector_session_id = ticket.session().wire_session_id();
         match command {
             RendererInspectorPageCommand::DispatchRuntimeProtocolMessage { raw_json } => self
                 .dispatch_runtime_protocol_message_for_inspector_session(
@@ -1139,12 +1139,6 @@ impl PageVm {
                     &raw_json,
                     deferred_response,
                 )
-                .map(RendererRuntimeCommandOutput::from_messages)
-                .map(RendererPageReply::RuntimeInspectorProtocolMessages),
-            RendererInspectorPageCommand::DispatchQueuedRuntimeInspectorCommand {
-                command_id,
-            } => self
-                .dispatch_queued_runtime_inspector_command(command_id)
                 .map(RendererRuntimeCommandOutput::from_messages)
                 .map(RendererPageReply::RuntimeInspectorProtocolMessages),
             RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithContextResolution {

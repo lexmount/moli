@@ -22,6 +22,7 @@ pub struct RendererAttachedPage {
     pub(super) javascript_dialog_broker: RendererJavaScriptDialogBroker,
     pub(super) inspector_pause_bridge:
         crate::script_vm::inspector_pause::RendererInspectorPauseBridge,
+    pub(super) inspector_io_ingress: crate::script_vm::inspector_io::RendererInspectorIoIngress,
     pub(super) page_state: Arc<RendererPageState>,
     pub(super) creation_diagnostics: RendererPageCreationDiagnostics,
     pub(super) creation_artifacts: RendererPageCreationArtifacts,
@@ -69,6 +70,7 @@ impl RendererAttachedPage {
                 page_context_cancel_tx: self.page_context_cancel_tx,
                 javascript_dialog_broker: self.javascript_dialog_broker,
                 inspector_pause_bridge: self.inspector_pause_bridge,
+                inspector_io_ingress: self.inspector_io_ingress,
                 committed_document_post_response_continuation: self
                     .committed_document_post_response_continuation,
                 _not_send: PhantomData,
@@ -89,6 +91,7 @@ pub struct RendererPageHandle {
     page_context_cancel_tx: RendererPageContextCancelSender,
     javascript_dialog_broker: RendererJavaScriptDialogBroker,
     inspector_pause_bridge: crate::script_vm::inspector_pause::RendererInspectorPauseBridge,
+    inspector_io_ingress: crate::script_vm::inspector_io::RendererInspectorIoIngress,
     committed_document_post_response_continuation:
         Option<RendererPageCommandPostResponseContinuation>,
     _not_send: PhantomData<Rc<()>>,
@@ -163,27 +166,12 @@ impl RendererPageHandle {
         self.javascript_dialog_broker.take_pending()
     }
 
-    pub fn enqueue_routable_runtime_inspector_command(
+    pub fn enqueue_runtime_inspector_io_command(
         &self,
-        inspector_session_id: Option<String>,
-        route: RendererInspectorCommandRoute,
-        owner_context_resolution_action: Option<String>,
-        raw_json: String,
-        response: RendererRuntimeInspectorResponseSender,
-    ) -> crate::script_vm::inspector_pause::RendererRuntimeInspectorCommandRoute {
-        self.inspector_pause_bridge.enqueue_command(
-            self.devtools_agent_token,
-            inspector_session_id,
-            route,
-            owner_context_resolution_action,
-            raw_json,
-            response,
-        )
-    }
-
-    pub fn cancel_queued_runtime_inspector_command(&self, command_id: u64, message: &str) {
-        self.inspector_pause_bridge
-            .cancel_queued_command(command_id, message);
+        envelope: RendererInspectorCommandEnvelope,
+    ) -> RendererRuntimeInspectorCommandRoute {
+        self.inspector_io_ingress
+            .enqueue_command(self.devtools_agent_token, envelope)
     }
 
     pub fn runtime_inspector_pause_active(&self) -> bool {
@@ -320,6 +308,8 @@ impl RendererPageHandle {
             return Ok(());
         };
         self.inspector_pause_bridge.close_target();
+        self.inspector_io_ingress
+            .close("Inspector target closed with its Page handle");
         self.javascript_dialog_broker.dismiss_pending();
         self.page_context_cancel_tx
             .cancel(RendererPageContextCancelReason::PageClosed);
@@ -393,7 +383,10 @@ impl Drop for RendererPageHandle {
         let Some(token) = self.token.take() else {
             return;
         };
-        self.inspector_pause_bridge.detach_page(token.page_id);
+        if self.inspector_pause_bridge.detach_page(token.page_id) {
+            self.inspector_io_ingress
+                .cancel_all_queued("Inspector Page handle was dropped");
+        }
         self.javascript_dialog_broker.dismiss_pending();
         self.page_context_cancel_tx
             .cancel(RendererPageContextCancelReason::PageClosed);

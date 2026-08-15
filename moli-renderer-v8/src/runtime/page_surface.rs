@@ -22,6 +22,7 @@ use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
     rc::Rc,
+    sync::atomic::{AtomicU64, Ordering},
 };
 use tokio::sync::oneshot;
 
@@ -3547,24 +3548,40 @@ pub enum RendererInspectorFirstDispatchLifecycle {
     OrderedUntilFirstDispatch,
 }
 
+static NEXT_RENDERER_INSPECTOR_INGRESS_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RendererInspectorCommandMetadata {
+pub struct RendererInspectorIngressTicket {
+    attachment: Option<RendererAgentAttachmentId>,
     session: DevToolsSessionKey,
     route: RendererInspectorCommandRoute,
-    first_dispatch: RendererInspectorFirstDispatchLifecycle,
+    sequence: u64,
 }
 
-impl RendererInspectorCommandMetadata {
-    pub fn new(inspector_session_id: Option<String>, route: RendererInspectorCommandRoute) -> Self {
+impl RendererInspectorIngressTicket {
+    pub fn new(
+        attachment: Option<RendererAgentAttachmentId>,
+        inspector_session_id: Option<String>,
+        route: RendererInspectorCommandRoute,
+    ) -> Self {
         Self {
+            attachment,
             session: DevToolsSessionKey::from_wire_session_id(
                 inspector_session_id
                     .as_deref()
                     .filter(|session_id| !session_id.is_empty()),
             ),
             route,
-            first_dispatch: RendererInspectorFirstDispatchLifecycle::OrderedUntilFirstDispatch,
+            sequence: NEXT_RENDERER_INSPECTOR_INGRESS_SEQUENCE
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |sequence| {
+                    sequence.checked_add(1)
+                })
+                .expect("renderer Inspector ingress sequence overflow"),
         }
+    }
+
+    pub fn attachment(&self) -> Option<RendererAgentAttachmentId> {
+        self.attachment
     }
 
     pub fn session(&self) -> &DevToolsSessionKey {
@@ -3575,8 +3592,19 @@ impl RendererInspectorCommandMetadata {
         self.route
     }
 
-    pub fn first_dispatch_lifecycle(&self) -> RendererInspectorFirstDispatchLifecycle {
-        self.first_dispatch
+    pub fn sequence(&self) -> u64 {
+        self.sequence
+    }
+
+    fn bind_attachment(&mut self, attachment: RendererAgentAttachmentId) {
+        if let Some(bound) = self.attachment {
+            assert_eq!(
+                bound, attachment,
+                "an Inspector ingress ticket cannot be retargeted to another attachment"
+            );
+        } else {
+            self.attachment = Some(attachment);
+        }
     }
 }
 
@@ -3585,8 +3613,17 @@ impl RendererInspectorCommandMetadata {
 /// `V8InspectorSession` must obtain its identity and dispatch policy from this
 /// envelope.
 pub struct RendererInspectorCommandEnvelope {
-    metadata: RendererInspectorCommandMetadata,
-    command: RendererInspectorPageCommand,
+    ticket: RendererInspectorIngressTicket,
+    first_dispatch: RendererInspectorFirstDispatchLifecycle,
+    payload: RendererInspectorCommandPayload,
+}
+
+enum RendererInspectorCommandPayload {
+    MainThread(RendererInspectorPageCommand),
+    Io {
+        raw_json: String,
+        response: Option<RendererRuntimeInspectorResponseSender>,
+    },
 }
 
 impl RendererInspectorCommandEnvelope {
@@ -3595,44 +3632,94 @@ impl RendererInspectorCommandEnvelope {
         route: RendererInspectorCommandRoute,
         command: RendererInspectorPageCommand,
     ) -> Self {
-        Self::with_metadata(
-            RendererInspectorCommandMetadata::new(inspector_session_id, route),
-            command,
-        )
+        assert_eq!(
+            route,
+            RendererInspectorCommandRoute::MainThread,
+            "a Page-owned Inspector payload must use the MainThread route"
+        );
+        Self {
+            ticket: RendererInspectorIngressTicket::new(None, inspector_session_id, route),
+            first_dispatch: RendererInspectorFirstDispatchLifecycle::OrderedUntilFirstDispatch,
+            payload: RendererInspectorCommandPayload::MainThread(command),
+        }
     }
 
-    fn with_metadata(
-        metadata: RendererInspectorCommandMetadata,
-        command: RendererInspectorPageCommand,
+    #[doc(hidden)]
+    pub fn new_io(
+        ticket: RendererInspectorIngressTicket,
+        raw_json: String,
+        response: Option<RendererRuntimeInspectorResponseSender>,
     ) -> Self {
-        Self { metadata, command }
+        assert_eq!(
+            ticket.route(),
+            RendererInspectorCommandRoute::Io,
+            "an Inspector IO payload must use the IO route"
+        );
+        Self {
+            ticket,
+            first_dispatch: RendererInspectorFirstDispatchLifecycle::OrderedUntilFirstDispatch,
+            payload: RendererInspectorCommandPayload::Io { raw_json, response },
+        }
     }
 
-    pub fn metadata(&self) -> &RendererInspectorCommandMetadata {
-        &self.metadata
+    pub fn ticket(&self) -> &RendererInspectorIngressTicket {
+        &self.ticket
     }
 
-    pub(crate) fn into_parts(
+    pub fn first_dispatch_lifecycle(&self) -> RendererInspectorFirstDispatchLifecycle {
+        self.first_dispatch
+    }
+
+    fn bind_attachment(&mut self, attachment: RendererAgentAttachmentId) {
+        self.ticket.bind_attachment(attachment);
+    }
+
+    pub(crate) fn into_main_thread_parts(
         self,
-    ) -> (
-        RendererInspectorCommandMetadata,
-        RendererInspectorPageCommand,
-    ) {
-        (self.metadata, self.command)
+    ) -> (RendererInspectorIngressTicket, RendererInspectorPageCommand) {
+        let RendererInspectorCommandPayload::MainThread(command) = self.payload else {
+            panic!("an Inspector IO envelope cannot enter Page owner dispatch");
+        };
+        (self.ticket, command)
+    }
+
+    fn main_thread_payload(&self) -> &RendererInspectorPageCommand {
+        let RendererInspectorCommandPayload::MainThread(command) = &self.payload else {
+            panic!("an Inspector IO envelope cannot enter Page owner dispatch");
+        };
+        command
+    }
+
+    pub(crate) fn io_raw_json(&self) -> &str {
+        let RendererInspectorCommandPayload::Io { raw_json, .. } = &self.payload else {
+            panic!("a MainThread Inspector envelope cannot enter IO dispatch");
+        };
+        raw_json
+    }
+
+    pub(crate) fn io_response(&self) -> Option<&RendererRuntimeInspectorResponseSender> {
+        let RendererInspectorCommandPayload::Io { response, .. } = &self.payload else {
+            panic!("a MainThread Inspector envelope cannot enter IO dispatch");
+        };
+        response.as_ref()
+    }
+
+    pub(crate) fn take_io_response(&mut self) -> Option<RendererRuntimeInspectorResponseSender> {
+        let RendererInspectorCommandPayload::Io { response, .. } = &mut self.payload else {
+            panic!("a MainThread Inspector envelope cannot enter IO dispatch");
+        };
+        response.take()
     }
 
     pub(crate) fn requires_materialized_child_realms(&self) -> bool {
         matches!(
-            &self.command,
+            self.main_thread_payload(),
             RendererInspectorPageCommand::RuntimeEnableEvents
         )
     }
 
     pub(crate) fn cdp_nav_timing_label(&self) -> Option<&'static str> {
-        match &self.command {
-            RendererInspectorPageCommand::DispatchQueuedRuntimeInspectorCommand { .. } => {
-                Some("DispatchQueuedRuntimeInspectorCommand")
-            }
+        match self.main_thread_payload() {
             RendererInspectorPageCommand::RuntimeEnableEvents => Some("RuntimeEnableEvents"),
             RendererInspectorPageCommand::ApplyRuntimeProtocolState { .. } => {
                 Some("ApplyRuntimeProtocolState")
@@ -3680,10 +3767,9 @@ impl RendererInspectorCommandEnvelope {
 
     pub(crate) fn uses_cpu_throttling(&self) -> bool {
         matches!(
-            &self.command,
+            self.main_thread_payload(),
             RendererInspectorPageCommand::DispatchRuntimeProtocolMessage { .. }
                 | RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithDeferredResponse { .. }
-                | RendererInspectorPageCommand::DispatchQueuedRuntimeInspectorCommand { .. }
                 | RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithContextResolution { .. }
                 | RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithContextResolutionAndDeferredResponse { .. }
                 | RendererInspectorPageCommand::DomDebuggerGetEventListeners { .. }
@@ -3699,9 +3785,6 @@ pub(crate) enum RendererInspectorPageCommand {
     DispatchRuntimeProtocolMessageWithDeferredResponse {
         raw_json: String,
         deferred_response: RendererRuntimeInspectorResponseSender,
-    },
-    DispatchQueuedRuntimeInspectorCommand {
-        command_id: u64,
     },
     DispatchRuntimeProtocolMessageWithContextResolution {
         action: String,
@@ -4317,6 +4400,11 @@ impl RendererPageCommand {
         route: RendererInspectorCommandRoute,
         command: RendererInspectorPageCommand,
     ) -> Self {
+        assert_eq!(
+            route,
+            RendererInspectorCommandRoute::MainThread,
+            "IO Inspector commands must enter RendererInspectorIoIngress"
+        );
         Self::Inspector(RendererInspectorCommandEnvelope::new(
             inspector_session_id,
             route,
@@ -4350,16 +4438,6 @@ impl RendererPageCommand {
                 deferred_response,
             },
         )
-    }
-
-    pub fn dispatch_queued_runtime_inspector_command(
-        metadata: RendererInspectorCommandMetadata,
-        command_id: u64,
-    ) -> Self {
-        Self::Inspector(RendererInspectorCommandEnvelope::with_metadata(
-            metadata,
-            RendererInspectorPageCommand::DispatchQueuedRuntimeInspectorCommand { command_id },
-        ))
     }
 
     pub fn dispatch_runtime_protocol_message_with_context_resolution(
@@ -4429,7 +4507,7 @@ impl RendererPageCommand {
     ) -> Self {
         Self::inspector_command(
             inspector_session_id,
-            RendererInspectorCommandRoute::Io,
+            RendererInspectorCommandRoute::MainThread,
             RendererInspectorPageCommand::DetachRuntimeInspectorSession { pause_guard },
         )
     }
@@ -4652,10 +4730,25 @@ impl RendererPageCommand {
 
     /// Metadata is structurally present for every command that can access a
     /// frontend V8 Inspector session; no command-variant allowlist is involved.
-    pub fn inspector_metadata(&self) -> Option<&RendererInspectorCommandMetadata> {
+    pub fn inspector_ticket(&self) -> Option<&RendererInspectorIngressTicket> {
         match self {
-            Self::Inspector(envelope) => Some(envelope.metadata()),
+            Self::Inspector(envelope) => Some(envelope.ticket()),
             _ => None,
+        }
+    }
+
+    pub fn inspector_first_dispatch_lifecycle(
+        &self,
+    ) -> Option<RendererInspectorFirstDispatchLifecycle> {
+        match self {
+            Self::Inspector(envelope) => Some(envelope.first_dispatch_lifecycle()),
+            _ => None,
+        }
+    }
+
+    pub fn bind_inspector_attachment(&mut self, attachment: RendererAgentAttachmentId) {
+        if let Self::Inspector(envelope) = self {
+            envelope.bind_attachment(attachment);
         }
     }
 
@@ -4811,19 +4904,20 @@ impl RendererPageCommand {
 mod renderer_inspector_command_envelope_tests {
     use super::*;
 
-    fn assert_metadata(
+    fn assert_ticket(
         command: &RendererPageCommand,
         session: DevToolsSessionKey,
         route: RendererInspectorCommandRoute,
     ) {
-        let metadata = command
-            .inspector_metadata()
-            .expect("every frontend V8 Inspector operation must carry command metadata");
-        assert_eq!(metadata.session(), &session);
-        assert_eq!(metadata.route(), route);
+        let ticket = command
+            .inspector_ticket()
+            .expect("every frontend V8 Inspector operation must carry an ingress ticket");
+        assert_eq!(ticket.session(), &session);
+        assert_eq!(ticket.route(), route);
+        assert!(ticket.sequence() > 0);
         assert_eq!(
-            metadata.first_dispatch_lifecycle(),
-            RendererInspectorFirstDispatchLifecycle::OrderedUntilFirstDispatch
+            command.inspector_first_dispatch_lifecycle(),
+            Some(RendererInspectorFirstDispatchLifecycle::OrderedUntilFirstDispatch)
         );
     }
 
@@ -4851,40 +4945,73 @@ mod renderer_inspector_command_envelope_tests {
             ),
         ];
         for command in &main_thread_commands {
-            assert_metadata(
+            assert_ticket(
                 command,
                 DevToolsSessionKey::Attached("SID-envelope".to_owned()),
                 RendererInspectorCommandRoute::MainThread,
             );
         }
 
-        let io_command = RendererPageCommand::dispatch_runtime_protocol_message(
-            None,
-            RendererInspectorCommandRoute::Io,
-            r#"{"id":1,"method":"Runtime.terminateExecution"}"#.to_owned(),
-        );
-        assert_metadata(
-            &io_command,
-            DevToolsSessionKey::Primary,
-            RendererInspectorCommandRoute::Io,
-        );
-
         assert!(
             RendererPageCommand::PageDiagnosticsSnapshot
-                .inspector_metadata()
+                .inspector_ticket()
                 .is_none(),
             "ordinary Page commands must remain outside Inspector lanes"
         );
     }
 
     #[test]
+    #[should_panic(expected = "IO Inspector commands must enter RendererInspectorIoIngress")]
+    fn io_command_cannot_use_the_main_thread_page_envelope() {
+        let _ = RendererPageCommand::dispatch_runtime_protocol_message(
+            None,
+            RendererInspectorCommandRoute::Io,
+            r#"{"id":1,"method":"Runtime.terminateExecution"}"#.to_owned(),
+        );
+    }
+
+    #[test]
     fn empty_wire_session_id_normalizes_to_the_primary_session() {
         let command = RendererPageCommand::runtime_enable_events(Some(String::new()));
-        assert_metadata(
+        assert_ticket(
             &command,
             DevToolsSessionKey::Primary,
             RendererInspectorCommandRoute::MainThread,
         );
+    }
+
+    #[test]
+    fn ingress_tickets_bind_one_attachment_and_allocate_monotonic_sequences() {
+        let mut first = RendererPageCommand::runtime_enable_events(Some("SID-first".to_owned()));
+        let second = RendererPageCommand::runtime_enable_events(Some("SID-second".to_owned()));
+        let first_sequence = first
+            .inspector_ticket()
+            .expect("first Inspector ticket")
+            .sequence();
+        let second_sequence = second
+            .inspector_ticket()
+            .expect("second Inspector ticket")
+            .sequence();
+        assert!(second_sequence > first_sequence);
+
+        let attachment = RendererAgentAttachmentId::allocate();
+        first.bind_inspector_attachment(attachment);
+        first.bind_inspector_attachment(attachment);
+        assert_eq!(
+            first
+                .inspector_ticket()
+                .expect("bound Inspector ticket")
+                .attachment(),
+            Some(attachment)
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot be retargeted to another attachment")]
+    fn ingress_ticket_cannot_be_retargeted_during_navigation() {
+        let mut command = RendererPageCommand::runtime_enable_events(None);
+        command.bind_inspector_attachment(RendererAgentAttachmentId::allocate());
+        command.bind_inspector_attachment(RendererAgentAttachmentId::allocate());
     }
 }
 

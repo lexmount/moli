@@ -329,12 +329,12 @@ pub use self::page_surface::{
     RendererDomSearchRegistration, RendererDomSearchResultNode, RendererDomSearchResultsResolution,
     RendererDomSnapshotCaptureOptions, RendererDomSnapshotCapturePayload, RendererDragData,
     RendererDragDataItem, RendererDraggedDirectory, RendererDraggedFile, RendererGeometryQuad,
-    RendererInputDispatchOutcome, RendererInspectorCommandEnvelope,
-    RendererInspectorCommandMetadata, RendererInspectorCommandRoute,
-    RendererInspectorFirstDispatchLifecycle, RendererInspectorProtocolConfiguration,
-    RendererInspectorProtocolConfigurationCommand, RendererInspectorSessionRestoreSnapshot,
-    RendererJavaScriptDialogId, RendererJavaScriptDialogSource, RendererLayoutMetrics,
-    RendererMainDocumentCommit, RendererMoliDomMemoryDiagnostics, RendererMoliMemoryDiagnostics,
+    RendererInputDispatchOutcome, RendererInspectorCommandEnvelope, RendererInspectorCommandRoute,
+    RendererInspectorFirstDispatchLifecycle, RendererInspectorIngressTicket,
+    RendererInspectorProtocolConfiguration, RendererInspectorProtocolConfigurationCommand,
+    RendererInspectorSessionRestoreSnapshot, RendererJavaScriptDialogId,
+    RendererJavaScriptDialogSource, RendererLayoutMetrics, RendererMainDocumentCommit,
+    RendererMoliDomMemoryDiagnostics, RendererMoliMemoryDiagnostics,
     RendererMoliMemoryScopeDiagnostics, RendererMoliRuntimeMemoryDiagnostics, RendererPageCommand,
     RendererPageCommandPostResponseContinuation, RendererPageCookieFacadeSnapshotReply,
     RendererPageCreationDiagnostics, RendererPageDiagnosticsSnapshot, RendererPageDumpFormat,
@@ -403,7 +403,7 @@ pub use self::protocol_output::{
 };
 pub use self::service_worker_run::RendererServiceWorkerRunIdentity;
 pub(crate) use crate::renderer::PageVmInitStage;
-pub use crate::script_vm::inspector_pause::{
+pub use crate::script_vm::inspector_io::{
     RendererRuntimeInspectorCommandClaim, RendererRuntimeInspectorCommandRoute,
 };
 pub(crate) use crate::service_worker_runtime::{

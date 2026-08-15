@@ -16,7 +16,8 @@ use crate::RendererOutputFence;
 use crate::renderer::{
     RendererDomDebuggerDomBreakpointResolution, RendererDomDebuggerEventListenerBreakpoint,
     RendererDomDebuggerEventListenersResolution, RendererDomDebuggerXhrBreakpoint,
-    RendererInspectorCommandRoute, RendererPageCommand, RendererPageReply,
+    RendererInspectorCommandEnvelope, RendererInspectorCommandRoute,
+    RendererInspectorIngressTicket, RendererPageCommand, RendererPageReply,
     RendererPerformanceMetricSnapshot, RendererRuntimeHeapUsage,
     RendererRuntimeInspectorResponseSender,
 };
@@ -474,34 +475,9 @@ impl Page {
         inspector_session_id: Option<String>,
         raw_json: String,
     ) -> Result<PendingPageCommand> {
-        self.start_runtime_protocol_message_for_inspector_session_with_route(
-            inspector_session_id,
-            RendererInspectorCommandRoute::MainThread,
-            raw_json,
-        )
-    }
-
-    pub fn start_runtime_interrupt_protocol_message_for_inspector_session(
-        &self,
-        inspector_session_id: Option<String>,
-        raw_json: String,
-    ) -> Result<PendingPageCommand> {
-        self.start_runtime_protocol_message_for_inspector_session_with_route(
-            inspector_session_id,
-            RendererInspectorCommandRoute::Io,
-            raw_json,
-        )
-    }
-
-    fn start_runtime_protocol_message_for_inspector_session_with_route(
-        &self,
-        inspector_session_id: Option<String>,
-        route: RendererInspectorCommandRoute,
-        raw_json: String,
-    ) -> Result<PendingPageCommand> {
         self.start_page_command(RendererPageCommand::dispatch_runtime_protocol_message(
             inspector_session_id,
-            route,
+            RendererInspectorCommandRoute::MainThread,
             raw_json,
         ))
     }
@@ -524,25 +500,10 @@ impl Page {
         raw_json: String,
         deferred_response: RendererRuntimeInspectorResponseSender,
     ) -> Result<PendingPageCommand> {
-        self.start_runtime_protocol_message_for_inspector_session_with_deferred_response_and_route(
-            inspector_session_id,
-            RendererInspectorCommandRoute::MainThread,
-            raw_json,
-            deferred_response,
-        )
-    }
-
-    fn start_runtime_protocol_message_for_inspector_session_with_deferred_response_and_route(
-        &self,
-        inspector_session_id: Option<String>,
-        route: RendererInspectorCommandRoute,
-        raw_json: String,
-        deferred_response: RendererRuntimeInspectorResponseSender,
-    ) -> Result<PendingPageCommand> {
         self.start_page_command(
             RendererPageCommand::dispatch_runtime_protocol_message_with_deferred_response(
                 inspector_session_id,
-                route,
+                RendererInspectorCommandRoute::MainThread,
                 raw_json,
                 deferred_response,
             ),
@@ -557,36 +518,65 @@ impl Page {
         raw_json: String,
         deferred_response: RendererRuntimeInspectorResponseSender,
     ) -> Result<PendingRuntimeInspectorCommandDispatch> {
-        let route = self.handle.enqueue_routable_runtime_inspector_command(
-            inspector_session_id,
-            inspector_route,
-            owner_context_resolution_action,
-            raw_json,
-            deferred_response,
-        );
-        let owner_pending = if route.requires_owner_fallback() {
-            let command_id = route.command_id();
-            let command = RendererPageCommand::dispatch_queued_runtime_inspector_command(
-                route.metadata().clone(),
-                command_id,
-            );
-            match self.start_page_command(command) {
-                Ok(pending) => Some(pending),
-                Err(error) => {
-                    self.handle.cancel_queued_runtime_inspector_command(
-                        command_id,
-                        "Failed to enqueue runtime inspector owner command",
-                    );
-                    return Err(error);
-                }
+        match inspector_route {
+            RendererInspectorCommandRoute::MainThread => {
+                let command = match owner_context_resolution_action {
+                    Some(action) => RendererPageCommand::dispatch_runtime_protocol_message_with_context_resolution_and_deferred_response(
+                        inspector_session_id,
+                        RendererInspectorCommandRoute::MainThread,
+                        action,
+                        raw_json,
+                        deferred_response,
+                    ),
+                    None => RendererPageCommand::dispatch_runtime_protocol_message_with_deferred_response(
+                        inspector_session_id,
+                        RendererInspectorCommandRoute::MainThread,
+                        raw_json,
+                        deferred_response,
+                    ),
+                };
+                self.start_page_command(command)
+                    .map(Self::pending_main_thread_runtime_inspector_command_dispatch)
             }
-        } else {
-            None
-        };
-        Ok(Self::pending_runtime_inspector_command_dispatch(
-            route,
-            owner_pending,
-        ))
+            RendererInspectorCommandRoute::Io => {
+                if owner_context_resolution_action.is_some() {
+                    return Err(anyhow!(
+                        "an IO Inspector command cannot require Page owner context resolution"
+                    ));
+                }
+                let route = self.handle.enqueue_runtime_inspector_io_command(
+                    RendererInspectorCommandEnvelope::new_io(
+                        RendererInspectorIngressTicket::new(
+                            self.renderer_agent_attachment_id,
+                            inspector_session_id,
+                            RendererInspectorCommandRoute::Io,
+                        ),
+                        raw_json,
+                        Some(deferred_response),
+                    ),
+                );
+                Ok(Self::pending_io_runtime_inspector_command_dispatch(route))
+            }
+        }
+    }
+
+    pub fn start_runtime_inspector_io_message_without_response(
+        &self,
+        inspector_session_id: Option<String>,
+        raw_json: String,
+    ) -> Result<PendingRuntimeInspectorCommandDispatch> {
+        let route = self.handle.enqueue_runtime_inspector_io_command(
+            RendererInspectorCommandEnvelope::new_io(
+                RendererInspectorIngressTicket::new(
+                    self.renderer_agent_attachment_id,
+                    inspector_session_id,
+                    RendererInspectorCommandRoute::Io,
+                ),
+                raw_json,
+                None,
+            ),
+        );
+        Ok(Self::pending_io_runtime_inspector_command_dispatch(route))
     }
 
     pub fn runtime_inspector_pause_active(&self) -> bool {

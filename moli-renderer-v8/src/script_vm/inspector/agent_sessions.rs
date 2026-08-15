@@ -1,11 +1,10 @@
 use super::{
     InspectorOutbound,
     context_registry::DocumentInspectorContextGroupId,
-    v8_backend::{RendererInspectorIsolateBackend, RendererInspectorPauseSessionRegistration},
+    v8_backend::{RendererInspectorIsolateBackend, RendererInspectorSessionExecutorRegistration},
 };
 use crate::protocol_types::RuntimeBindingRegistration;
 use crate::runtime::RendererTurnOutputJournal;
-use crate::script_vm::inspector_pause::RendererInspectorPauseBridge;
 use moli_page_types::{DevToolsSessionKey, RendererDevToolsAgentToken, V8InspectorSessionState};
 use std::{collections::HashMap, rc::Rc};
 
@@ -76,13 +75,14 @@ impl RendererDevToolsSessionConnection {
 
     fn outbound(
         &self,
-        pause_bridge: &RendererInspectorPauseBridge,
+        backend: &RendererInspectorIsolateBackend,
         session_key: DevToolsSessionKey,
     ) -> InspectorOutbound {
+        let pause_bridge = backend.pause_bridge();
         InspectorOutbound::for_frontend(
             self.agent_token,
             session_key.clone(),
-            pause_bridge.outbound_route(self.agent_token, session_key),
+            pause_bridge.outbound_route(backend.io_ingress(), self.agent_token, session_key),
             self.output_journal.clone(),
         )
     }
@@ -124,7 +124,7 @@ impl RendererDevToolsAgentSessions {
             .cloned()
             .unwrap_or_default();
         let session = self.frontend.entry(session_key.clone()).or_insert_with(|| {
-            let outbound = connection.outbound(&backend.pause_bridge(), session_key.clone());
+            let outbound = connection.outbound(backend, session_key.clone());
             RendererDevToolsSession::connect(
                 backend,
                 connection.context_group_id,
@@ -184,14 +184,14 @@ impl RendererDevToolsAgentSessions {
                     session,
                     outbound,
                     replayed_runtime_bindings,
-                    _pause_registration,
+                    _executor_registration,
                 } = previous;
                 drop(session);
-                drop(_pause_registration);
+                drop(_executor_registration);
                 (outbound, replayed_runtime_bindings)
             }
             None => (
-                connection.outbound(&backend.pause_bridge(), session_key.clone()),
+                connection.outbound(backend, session_key.clone()),
                 Vec::new(),
             ),
         };
@@ -213,7 +213,7 @@ impl RendererDevToolsAgentSessions {
         session_key: DevToolsSessionKey,
     ) {
         self.frontend.entry(session_key.clone()).or_insert_with(|| {
-            let outbound = connection.outbound(&backend.pause_bridge(), session_key.clone());
+            let outbound = connection.outbound(backend, session_key.clone());
             RendererDevToolsSession::connect(
                 backend,
                 connection.context_group_id,
@@ -340,7 +340,7 @@ struct RendererDevToolsSession {
     session: Rc<v8::inspector::V8InspectorSession>,
     outbound: InspectorOutbound,
     replayed_runtime_bindings: Vec<RuntimeBindingRegistration>,
-    _pause_registration: Option<RendererInspectorPauseSessionRegistration>,
+    _executor_registration: Option<RendererInspectorSessionExecutorRegistration>,
 }
 
 impl RendererDevToolsSession {
@@ -349,7 +349,7 @@ impl RendererDevToolsSession {
         context_group_id: DocumentInspectorContextGroupId,
         outbound: InspectorOutbound,
         state: Option<&V8InspectorSessionState>,
-        pause_session: Option<(RendererDevToolsAgentToken, DevToolsSessionKey)>,
+        frontend_session_route: Option<(RendererDevToolsAgentToken, DevToolsSessionKey)>,
     ) -> Self {
         let first_attach_state = b"{}";
         let state = state.map_or(
@@ -364,8 +364,8 @@ impl RendererDevToolsSession {
             state,
         );
         let session = Rc::new(session);
-        let pause_registration = pause_session.map(|(agent_token, session_key)| {
-            backend.register_pause_session(
+        let executor_registration = frontend_session_route.map(|(agent_token, session_key)| {
+            backend.register_session_executor_route(
                 context_group_id,
                 agent_token,
                 session_key,
@@ -377,7 +377,7 @@ impl RendererDevToolsSession {
             session,
             outbound,
             replayed_runtime_bindings: Vec::new(),
-            _pause_registration: pause_registration,
+            _executor_registration: executor_registration,
         }
     }
 

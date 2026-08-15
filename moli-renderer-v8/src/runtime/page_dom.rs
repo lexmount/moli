@@ -743,34 +743,6 @@ impl PageVm {
         )
     }
 
-    pub(crate) fn dispatch_queued_runtime_inspector_command(
-        &mut self,
-        command_id: u64,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
-        let pause_bridge = self.inspector_pause_bridge();
-        let Some(command) = pause_bridge.claim_command_for_owner(command_id) else {
-            return Ok(Vec::new());
-        };
-        let mut first_dispatch = pause_bridge.first_dispatch_guard(&command);
-        let inspector_session = command.metadata.session().clone();
-        let inspector_session_id = inspector_session.wire_session_id();
-        match command.owner_context_resolution_action.as_deref() {
-            Some(action) => self.dispatch_queued_runtime_protocol_message_with_context_resolution(
-                inspector_session_id,
-                action,
-                &command.raw_json,
-                command.response,
-                &mut first_dispatch,
-            ),
-            None => self.dispatch_runtime_protocol_message_with_command_output_at_first_dispatch(
-                inspector_session_id,
-                &command.raw_json,
-                command.response,
-                Some(&mut first_dispatch),
-            ),
-        }
-    }
-
     pub(crate) fn dispatch_runtime_protocol_message_for_inspector_session_with_context_resolution(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -830,65 +802,11 @@ impl PageVm {
         )
     }
 
-    fn dispatch_queued_runtime_protocol_message_with_context_resolution(
-        &mut self,
-        inspector_session_id: Option<&str>,
-        action: &str,
-        raw_json: &str,
-        deferred_response: RendererRuntimeInspectorResponseSender,
-        first_dispatch: &mut crate::script_vm::inspector_pause::RendererInspectorFirstDispatchGuard,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
-        if action == "evaluate" {
-            // The child-default fast path dispatches while probing, so expose
-            // its first-dispatch edge before entering that helper.
-            first_dispatch.release();
-            if let Some(messages) = self.try_dispatch_child_default_runtime_evaluate(raw_json)? {
-                let call_id = deferred_response.call_id();
-                if let Some(message) = messages.into_iter().next()
-                    && let Err(message) =
-                        deferred_response.send(message.into_v8_inspector_message())
-                {
-                    tracing::debug!(
-                        call_id,
-                        message = ?message,
-                        "dropping child-frame runtime response because deferred receiver was closed"
-                    );
-                }
-                return Ok(Vec::new());
-            }
-        }
-        let prepared_json =
-            self.prepare_runtime_protocol_message_with_context_resolution(action, raw_json)?;
-        self.dispatch_runtime_protocol_message_with_command_output_at_first_dispatch(
-            inspector_session_id,
-            &prepared_json,
-            deferred_response,
-            Some(first_dispatch),
-        )
-    }
-
     fn dispatch_runtime_protocol_message_with_command_output(
         &mut self,
         inspector_session_id: Option<&str>,
         raw_json: &str,
-        deferred_response: RendererRuntimeInspectorResponseSender,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
-        self.dispatch_runtime_protocol_message_with_command_output_at_first_dispatch(
-            inspector_session_id,
-            raw_json,
-            deferred_response,
-            None,
-        )
-    }
-
-    fn dispatch_runtime_protocol_message_with_command_output_at_first_dispatch(
-        &mut self,
-        inspector_session_id: Option<&str>,
-        raw_json: &str,
         mut deferred_response: RendererRuntimeInspectorResponseSender,
-        mut first_dispatch: Option<
-            &mut crate::script_vm::inspector_pause::RendererInspectorFirstDispatchGuard,
-        >,
     ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
         ensure!(
             self.pending_runtime_command_output.is_none(),
@@ -925,9 +843,6 @@ impl PageVm {
             lifecycle_target:
                 PageVmRuntimeCommandLifecycleTarget::AwaitingExplicitDocumentReplacement,
         });
-        if let Some(first_dispatch) = first_dispatch.as_mut() {
-            first_dispatch.release();
-        }
         let dispatch_result = self
             .vm_mut()
             .dispatch_inspector_protocol_message_for_session_with_deferred_response_and_command_output(

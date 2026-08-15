@@ -713,10 +713,14 @@ mod tests {
         pause_bridge.configure_page_route(journal.clone());
         let agent_token = RendererDevToolsAgentToken::allocate();
         let session = DevToolsSessionKey::Primary;
+        let io_ingress = crate::script_vm::inspector_io::RendererInspectorIoIngress::new(
+            pause_bridge.pause_loop_wake(),
+            None,
+        );
         let outbound = InspectorOutbound::for_frontend(
             agent_token,
             session.clone(),
-            pause_bridge.outbound_route(agent_token, session.clone()),
+            pause_bridge.outbound_route(io_ingress, agent_token, session.clone()),
             Some(journal.clone()),
         );
         let recorder = RendererCommandTurnOutputRecorder::default();

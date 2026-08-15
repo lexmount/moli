@@ -79,7 +79,10 @@ use crate::page_task_queue::{
 };
 use crate::referrer_policy::response_referrer_policy_from_headers;
 use crate::render_runtime::{RenderRuntimeEnvelope, RenderRuntimeHandle, RenderRuntimeOwner};
-use crate::script_vm::{PendingRuntimeEvaluateCall, RendererDocumentIsolateBootstrap};
+use crate::script_vm::{
+    PendingRuntimeEvaluateCall, RendererDocumentIsolateBootstrap, dispatch_inspector_io_owner_wake,
+    inspector_io::RendererInspectorIoOwnerWake,
+};
 use crate::service_worker_runtime::{
     ServiceWorkerRuntimeOwnerWake, service_worker_owner_wake_channel,
 };
@@ -380,7 +383,6 @@ struct PageCommandFirstDispatchIdentity {
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) struct PageCommandFirstDispatchLane {
     inspector_session: DevToolsSessionKey,
-    route: RendererInspectorCommandRoute,
 }
 
 impl RenderRuntimePendingTurn {
@@ -676,16 +678,20 @@ impl RenderRuntimeTurn {
     ) -> Option<PageCommandFirstDispatchIdentity> {
         match self {
             Self::RunLivePageCommand { token, command, .. } => {
-                command.inspector_metadata().map(|metadata| {
+                command.inspector_ticket().map(|ticket| {
                     debug_assert_eq!(
-                        metadata.first_dispatch_lifecycle(),
-                        RendererInspectorFirstDispatchLifecycle::OrderedUntilFirstDispatch,
+                        ticket.route(),
+                        RendererInspectorCommandRoute::MainThread,
+                        "IO Inspector commands must bypass owner admission",
+                    );
+                    debug_assert_eq!(
+                        command.inspector_first_dispatch_lifecycle(),
+                        Some(RendererInspectorFirstDispatchLifecycle::OrderedUntilFirstDispatch,),
                     );
                     PageCommandFirstDispatchIdentity {
                         token: *token,
                         lane: PageCommandFirstDispatchLane {
-                            inspector_session: metadata.session().clone(),
-                            route: metadata.route(),
+                            inspector_session: ticket.session().clone(),
                         },
                     }
                 })
@@ -907,6 +913,7 @@ pub(super) struct RendererOwnerState {
     pub(super) local_executor: JsLocalExecutor,
     pub(super) next_page_id: Arc<AtomicU64>,
     pub(super) page_wake_tx: mpsc::UnboundedSender<RendererOwnerWake>,
+    pub(super) inspector_io_wake_tx: mpsc::UnboundedSender<RendererInspectorIoOwnerWake>,
     pub(super) browser_context_runtime: RendererBrowserContextRuntime,
     pub(super) owner_local_host_id: RendererOwnerLocalHostId,
     layout_policy: Mutex<RendererOwnerLayoutPolicyState>,
@@ -1693,6 +1700,7 @@ impl RendererOwnerHandle {
         browser_context_runtime: RendererBrowserContextRuntime,
     ) -> (Self, RenderRuntimeOwner) {
         let (page_wake_tx, page_wake_rx) = mpsc::unbounded_channel();
+        let (inspector_io_wake_tx, inspector_io_wake_rx) = mpsc::unbounded_channel();
         let (shared_worker_wake_tx, shared_worker_wake_rx) = shared_worker_owner_wake_channel();
         browser_context_runtime.add_shared_worker_owner_wake_sender(shared_worker_wake_tx);
         let (service_worker_wake_tx, service_worker_wake_rx) = service_worker_owner_wake_channel();
@@ -1706,6 +1714,7 @@ impl RendererOwnerHandle {
             local_executor,
             next_page_id,
             page_wake_tx,
+            inspector_io_wake_tx,
             browser_context_runtime,
             owner_local_host_id,
             layout_policy: Mutex::new(RendererOwnerLayoutPolicyState::default()),
@@ -1722,6 +1731,7 @@ impl RendererOwnerHandle {
         let render_runtime_owner = RenderRuntimeOwner::spawn(
             provisional.clone(),
             page_wake_rx,
+            inspector_io_wake_rx,
             shared_worker_wake_rx,
             service_worker_wake_rx,
         );
@@ -2457,10 +2467,10 @@ impl RendererOwnerHandle {
         }
     }
 
-    /// The stable Page slot owns each Inspector `(session, route)` arrival
-    /// order. Chromium intentionally separates main-thread and IO ingress,
-    /// so each route has its own FIFO lane. Only the command that owns that
-    /// lane enters the owner-wide runnable queue; other routes, sessions and
+    /// The stable Page slot owns each MainThread Inspector session's arrival
+    /// order. IO commands use their physically separate ingress and never
+    /// enter this owner admission structure. Only the command that owns the
+    /// session lane enters the owner-wide runnable queue; other sessions and
     /// non-Inspector Page commands remain independent.
     fn admit_page_command_first_dispatch(
         turn: RenderRuntimePendingTurn,
@@ -2495,6 +2505,7 @@ impl RendererOwnerHandle {
         &self,
         mut rx: mpsc::UnboundedReceiver<RenderRuntimeEnvelope>,
         mut page_wake_rx: mpsc::UnboundedReceiver<RendererOwnerWake>,
+        mut inspector_io_wake_rx: mpsc::UnboundedReceiver<RendererInspectorIoOwnerWake>,
         mut shared_worker_wake_rx: mpsc::UnboundedReceiver<SharedWorkerRuntimeOwnerWake>,
         mut service_worker_wake_rx: mpsc::UnboundedReceiver<ServiceWorkerRuntimeOwnerWake>,
     ) {
@@ -2560,6 +2571,15 @@ impl RendererOwnerHandle {
                 // deadline cannot masquerade as, or outrank, an HTML task.
                 if !pending_turns.has_owner_maintenance_turn() {
                     self.enqueue_one_due_owner_maintenance_turn(&mut pending_turns);
+                }
+                // IO Inspector ingress is independent of normal owner command
+                // admission. Give at most one command an owner execution
+                // chance at each boundary, then continue with the ordinary
+                // pending turn so sustained IO cannot starve MainThread work.
+                match inspector_io_wake_rx.try_recv() {
+                    Ok(wake) => dispatch_inspector_io_owner_wake(wake),
+                    Err(mpsc::error::TryRecvError::Empty) => {}
+                    Err(mpsc::error::TryRecvError::Disconnected) => {}
                 }
                 if let Some(mut pending_turn) = pending_turns.pop_front() {
                     if pending_turn.allow_command_overtake
@@ -2931,6 +2951,12 @@ impl RendererOwnerHandle {
                             &mut parked_turns,
                             &mut pending_turns,
                         );
+                    }
+                    inspector_io_wake_opt = inspector_io_wake_rx.recv() => {
+                        let Some(wake) = inspector_io_wake_opt else {
+                            break;
+                        };
+                        dispatch_inspector_io_owner_wake(wake);
                     }
                     shared_worker_wake_opt = shared_worker_wake_rx.recv() => {
                         let Some(wake) = shared_worker_wake_opt else {
@@ -7069,16 +7095,14 @@ mod tests {
     }
 
     #[test]
-    fn first_dispatch_identity_uses_the_exact_inspector_session_and_route() {
+    fn first_dispatch_identity_uses_the_exact_main_thread_inspector_session() {
         let token = RendererPageToken::new_for_testing(PageId::new_for_testing(8));
         let attached = RenderRuntimeTurn::RunLivePageCommand {
             token,
-            command: RendererPageCommand::dispatch_queued_runtime_inspector_command(
-                RendererInspectorCommandMetadata::new(
-                    Some("SID-aux".to_owned()),
-                    RendererInspectorCommandRoute::MainThread,
-                ),
-                1,
+            command: RendererPageCommand::dispatch_runtime_protocol_message(
+                Some("SID-aux".to_owned()),
+                RendererInspectorCommandRoute::MainThread,
+                r#"{"id":1,"method":"Runtime.evaluate","params":{"expression":"1"}}"#.to_owned(),
             ),
             capture_policy: RendererPageStateCapturePolicy::ProtocolTurn,
         };
@@ -7088,16 +7112,16 @@ mod tests {
                 token,
                 lane: PageCommandFirstDispatchLane {
                     inspector_session: DevToolsSessionKey::Attached("SID-aux".to_owned()),
-                    route: RendererInspectorCommandRoute::MainThread,
                 },
             })
         );
 
         let primary = RenderRuntimeTurn::RunLivePageCommand {
             token,
-            command: RendererPageCommand::dispatch_queued_runtime_inspector_command(
-                RendererInspectorCommandMetadata::new(None, RendererInspectorCommandRoute::Io),
-                2,
+            command: RendererPageCommand::dispatch_runtime_protocol_message(
+                None,
+                RendererInspectorCommandRoute::MainThread,
+                r#"{"id":2,"method":"Runtime.evaluate","params":{"expression":"2"}}"#.to_owned(),
             ),
             capture_policy: RendererPageStateCapturePolicy::ProtocolTurn,
         };
@@ -7107,7 +7131,6 @@ mod tests {
                 token,
                 lane: PageCommandFirstDispatchLane {
                     inspector_session: DevToolsSessionKey::Primary,
-                    route: RendererInspectorCommandRoute::Io,
                 },
             })
         );
@@ -7140,25 +7163,13 @@ mod tests {
             RendererInspectorCommandRoute::MainThread,
             r#"{"id":1,"method":"Runtime.disable"}"#.to_owned(),
         ));
-        let raw_io = turn_for(RendererPageCommand::dispatch_runtime_protocol_message(
-            Some("SID-shared-lane".to_owned()),
-            RendererInspectorCommandRoute::Io,
-            r#"{"id":2,"method":"Runtime.terminateExecution"}"#.to_owned(),
-        ));
-
         let enable_identity = enable
             .live_page_command_first_dispatch_identity()
             .expect("Runtime.enable must enter the Inspector boundary");
         let main_identity = raw_main
             .live_page_command_first_dispatch_identity()
             .expect("raw main-thread dispatch must enter the Inspector boundary");
-        let io_identity = raw_io
-            .live_page_command_first_dispatch_identity()
-            .expect("raw IO dispatch must enter the Inspector boundary");
-
         assert_eq!(enable_identity, main_identity);
-        assert_ne!(enable_identity, io_identity);
-        assert_eq!(io_identity.lane.route, RendererInspectorCommandRoute::Io);
     }
 
     #[test]

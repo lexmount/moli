@@ -80,46 +80,38 @@ impl<Key: Ord, Command> PageCommandFirstDispatchResidence<Key, Command> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::RendererInspectorCommandRoute;
 
-    type Lane = (&'static str, RendererInspectorCommandRoute);
+    type Lane = &'static str;
 
     #[test]
-    fn each_inspector_session_and_route_owns_an_independent_fifo_dispatch_lane() {
+    fn each_main_thread_inspector_session_owns_an_independent_fifo_dispatch_lane() {
         let mut first_page = PageCommandFirstDispatchResidence::default();
         let mut other_page = PageCommandFirstDispatchResidence::default();
-        let session_a_main: Lane = ("session-a", RendererInspectorCommandRoute::MainThread);
-        let session_a_io: Lane = ("session-a", RendererInspectorCommandRoute::Io);
-        let session_b_main: Lane = ("session-b", RendererInspectorCommandRoute::MainThread);
+        let session_a: Lane = "session-a";
+        let session_b: Lane = "session-b";
 
         assert_eq!(
-            first_page.admit(session_a_main, "a-main-first"),
+            first_page.admit(session_a, "a-main-first"),
             Some("a-main-first")
         );
-        assert_eq!(first_page.admit(session_a_main, "a-main-second"), None);
+        assert_eq!(first_page.admit(session_a, "a-main-second"), None);
         assert_eq!(
-            first_page.admit(session_a_io, "a-io-first"),
-            Some("a-io-first"),
-            "an IO command must not wait for main-thread work in the same session"
-        );
-        assert_eq!(
-            first_page.admit(session_b_main, "b-first"),
+            first_page.admit(session_b, "b-first"),
             Some("b-first"),
             "a parked command must not block a different Inspector session"
         );
-        assert_eq!(first_page.admit(session_b_main, "b-second"), None);
+        assert_eq!(first_page.admit(session_b, "b-second"), None);
 
-        assert_eq!(other_page.admit(session_a_main, "other"), Some("other"));
-        assert_eq!(other_page.complete(&session_a_main), None);
+        assert_eq!(other_page.admit(session_a, "other"), Some("other"));
+        assert_eq!(other_page.complete(&session_a), None);
 
-        assert_eq!(first_page.complete(&session_b_main), Some("b-second"));
-        assert_eq!(first_page.complete(&session_b_main), None);
-        assert_eq!(first_page.complete(&session_a_io), None);
-        assert_eq!(first_page.complete(&session_a_main), Some("a-main-second"));
-        assert_eq!(first_page.complete(&session_a_main), None);
+        assert_eq!(first_page.complete(&session_b), Some("b-second"));
+        assert_eq!(first_page.complete(&session_b), None);
+        assert_eq!(first_page.complete(&session_a), Some("a-main-second"));
+        assert_eq!(first_page.complete(&session_a), None);
 
         assert_eq!(
-            first_page.admit(session_a_main, "a-after-idle"),
+            first_page.admit(session_a, "a-after-idle"),
             Some("a-after-idle")
         );
     }
@@ -127,17 +119,17 @@ mod tests {
     #[test]
     fn retiring_a_page_drains_waiters_and_resets_every_lane() {
         let mut residence = PageCommandFirstDispatchResidence::default();
-        let main: Lane = ("session-a", RendererInspectorCommandRoute::MainThread);
-        let io: Lane = ("session-a", RendererInspectorCommandRoute::Io);
+        let main: Lane = "session-a";
+        let other: Lane = "session-b";
 
         assert_eq!(residence.admit(main, "main-active"), Some("main-active"));
         assert_eq!(residence.admit(main, "main-waiting"), None);
-        assert_eq!(residence.admit(io, "io-active"), Some("io-active"));
-        assert_eq!(residence.admit(io, "io-waiting"), None);
+        assert_eq!(residence.admit(other, "other-active"), Some("other-active"));
+        assert_eq!(residence.admit(other, "other-waiting"), None);
 
         let mut drained = residence.drain_waiting();
         drained.sort_unstable();
-        assert_eq!(drained, ["io-waiting", "main-waiting"]);
+        assert_eq!(drained, ["main-waiting", "other-waiting"]);
         assert_eq!(
             residence.admit(main, "main-after-retirement"),
             Some("main-after-retirement"),

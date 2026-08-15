@@ -7,6 +7,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use super::page_task_queue::RendererOwnerWake;
 use super::runtime::{RendererOwnerCommand, RendererOwnerHandle, RendererOwnerReply};
+use super::script_vm::inspector_io::RendererInspectorIoOwnerWake;
 use super::service_worker_runtime::ServiceWorkerRuntimeOwnerWake;
 use super::shared_worker_runtime::SharedWorkerRuntimeOwnerWake;
 
@@ -92,6 +93,7 @@ impl RenderRuntimeOwner {
     pub(crate) fn spawn(
         owner: RendererOwnerHandle,
         page_wake_rx: mpsc::UnboundedReceiver<RendererOwnerWake>,
+        inspector_io_wake_rx: mpsc::UnboundedReceiver<RendererInspectorIoOwnerWake>,
         shared_worker_wake_rx: mpsc::UnboundedReceiver<SharedWorkerRuntimeOwnerWake>,
         service_worker_wake_rx: mpsc::UnboundedReceiver<ServiceWorkerRuntimeOwnerWake>,
     ) -> Self {
@@ -113,6 +115,7 @@ impl RenderRuntimeOwner {
                     owner,
                     rx,
                     page_wake_rx,
+                    inspector_io_wake_rx,
                     shared_worker_wake_rx,
                     service_worker_wake_rx,
                 ));
@@ -232,6 +235,7 @@ async fn render_runtime_main_loop(
     owner: RendererOwnerHandle,
     rx: mpsc::UnboundedReceiver<RenderRuntimeEnvelope>,
     page_wake_rx: mpsc::UnboundedReceiver<RendererOwnerWake>,
+    inspector_io_wake_rx: mpsc::UnboundedReceiver<RendererInspectorIoOwnerWake>,
     shared_worker_wake_rx: mpsc::UnboundedReceiver<SharedWorkerRuntimeOwnerWake>,
     service_worker_wake_rx: mpsc::UnboundedReceiver<ServiceWorkerRuntimeOwnerWake>,
 ) {
@@ -239,6 +243,7 @@ async fn render_runtime_main_loop(
         .run_render_runtime_loop(
             rx,
             page_wake_rx,
+            inspector_io_wake_rx,
             shared_worker_wake_rx,
             service_worker_wake_rx,
         )

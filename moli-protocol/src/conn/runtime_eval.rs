@@ -4246,7 +4246,9 @@ impl CdpConnection {
         raw_json: String,
     ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
         self.start_runtime_protocol_message_for_session_owner_with_access(
-            session_id, raw_json, false,
+            session_id,
+            raw_json,
+            RendererInspectorCommandRoute::MainThread,
         )
     }
 
@@ -4256,7 +4258,9 @@ impl CdpConnection {
         raw_json: String,
     ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
         self.start_runtime_protocol_message_for_session_owner_with_access(
-            session_id, raw_json, true,
+            session_id,
+            raw_json,
+            RendererInspectorCommandRoute::Io,
         )
     }
 
@@ -4264,34 +4268,37 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         raw_json: String,
-        allow_suspended_document_access: bool,
+        inspector_route: RendererInspectorCommandRoute,
     ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
         let route = self.runtime_protocol_message_page_route_for_session_owner(session_id)?;
         let raw_json =
             self.rewrite_runtime_inspector_command_for_session_owner(session_id, &raw_json, None)?;
         let inspector_session_id =
             self.target_renderer_runtime_inspector_session_id_for_session(session_id);
-        let page = if allow_suspended_document_access {
-            self.runtime_session_owner_page_mut_for_interruptible_control(session_id)?
-        } else {
-            self.runtime_session_owner_page_mut(session_id)?
+        let page = match inspector_route {
+            RendererInspectorCommandRoute::MainThread => {
+                self.runtime_session_owner_page_mut(session_id)?
+            }
+            RendererInspectorCommandRoute::Io => {
+                self.runtime_session_owner_page_mut_for_interruptible_control(session_id)?
+            }
         };
-        let pending = if allow_suspended_document_access {
-            page.start_runtime_interrupt_protocol_message_for_inspector_session(
-                inspector_session_id,
-                raw_json,
-            )
-        } else {
-            page.start_runtime_protocol_message_for_inspector_session(
-                inspector_session_id,
-                raw_json,
-            )
+        let pending = match inspector_route {
+            RendererInspectorCommandRoute::MainThread => page
+                .start_runtime_protocol_message_for_inspector_session(
+                    inspector_session_id,
+                    raw_json,
+                )
+                .map(PendingRuntimeProtocolMessageDispatchKind::Page),
+            RendererInspectorCommandRoute::Io => page
+                .start_runtime_inspector_io_message_without_response(inspector_session_id, raw_json)
+                .map(PendingRuntimeProtocolMessageDispatchKind::Routable),
         }
         .map_err(|error| format!("runtime inspector dispatch failed: {error}"))?;
         Ok(PendingRuntimeProtocolMessageDispatch {
             session_id: session_id.map(str::to_owned),
             route,
-            pending: PendingRuntimeProtocolMessageDispatchKind::Page(pending),
+            pending,
             deferred_response_rx: None,
         })
     }
@@ -4303,7 +4310,10 @@ impl CdpConnection {
         command_id: u64,
     ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
         self.start_runtime_protocol_message_for_session_owner_with_deferred_response_and_access(
-            session_id, descriptor, command_id, false,
+            session_id,
+            descriptor,
+            command_id,
+            RendererInspectorCommandRoute::MainThread,
         )
     }
 
@@ -4314,7 +4324,10 @@ impl CdpConnection {
         command_id: u64,
     ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
         self.start_runtime_protocol_message_for_session_owner_with_deferred_response_and_access(
-            session_id, descriptor, command_id, true,
+            session_id,
+            descriptor,
+            command_id,
+            RendererInspectorCommandRoute::Io,
         )
     }
 
@@ -4323,7 +4336,7 @@ impl CdpConnection {
         session_id: Option<&str>,
         descriptor: RendererCommandDescriptor,
         command_id: u64,
-        allow_suspended_document_access: bool,
+        inspector_route: RendererInspectorCommandRoute,
     ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
         let route = self.runtime_protocol_message_page_route_for_session_owner(session_id)?;
         let (correlation, raw_json, response_sender, response_receiver) = self
@@ -4335,11 +4348,15 @@ impl CdpConnection {
             )?;
         let inspector_session_id =
             self.target_renderer_runtime_inspector_session_id_for_session(session_id);
-        let page = match if allow_suspended_document_access {
-            self.runtime_session_owner_page_mut_for_interruptible_control(session_id)
-        } else {
-            self.runtime_session_owner_page_mut(session_id)
-        } {
+        let page_result = match inspector_route {
+            RendererInspectorCommandRoute::MainThread => {
+                self.runtime_session_owner_page_mut(session_id)
+            }
+            RendererInspectorCommandRoute::Io => {
+                self.runtime_session_owner_page_mut_for_interruptible_control(session_id)
+            }
+        };
+        let page = match page_result {
             Ok(page) => page,
             Err(error) => {
                 let removed =
@@ -4350,11 +4367,7 @@ impl CdpConnection {
         };
         let pending = match page.start_routable_runtime_protocol_message_for_inspector_session(
             inspector_session_id,
-            if allow_suspended_document_access {
-                RendererInspectorCommandRoute::Io
-            } else {
-                RendererInspectorCommandRoute::MainThread
-            },
+            inspector_route,
             None,
             raw_json,
             response_sender,

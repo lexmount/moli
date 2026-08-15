@@ -1832,6 +1832,12 @@ impl PageVm {
         self.vm().inspector_pause_bridge()
     }
 
+    pub(crate) fn inspector_io_ingress(
+        &self,
+    ) -> crate::script_vm::inspector_io::RendererInspectorIoIngress {
+        self.vm().inspector_io_ingress()
+    }
+
     pub(super) fn close_for_context_teardown(&mut self) {
         let _ = self.document_lifecycle.request_termination(
             self.document_lifecycle.identity(),

@@ -29,7 +29,7 @@ impl DevToolsSessionKey {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct RendererDevToolsAgentToken(NonZeroU64);
 
 impl RendererDevToolsAgentToken {
