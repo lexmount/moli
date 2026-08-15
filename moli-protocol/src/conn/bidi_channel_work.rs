@@ -22,7 +22,7 @@ impl BidiChannelPageOwner {
     ///
     /// Callers using the implicit `None` session must invoke this while the
     /// target's owner-route override is installed. `owner_scope` freezes that
-    /// route, while `attachment` freezes the target Page generation and exact
+    /// route, while `attachment` freezes the target Page residence and exact
     /// protocol session.
     pub(crate) fn capture(conn: &CdpConnection, session_id: Option<&str>) -> Option<Self> {
         Some(Self {
@@ -173,20 +173,22 @@ mod tests {
         browser_context.set_active_target_id("TID-owner");
         browser_context.attach_active_session("SID-owner".to_owned());
         conn.browser_context = Some(browser_context);
+        conn.runtime_session_owner_slot_mut(Some("SID-owner"))
+            .expect("test runtime slot")
+            .set_page_attachment_id_for_test(1);
         conn
     }
 
     #[test]
-    fn page_owner_rejects_replacement_generation() {
+    fn page_owner_rejects_replacement_attachment() {
         let mut conn = connection_with_page_session();
         let owner =
             BidiChannelPageOwner::capture(&conn, Some("SID-owner")).expect("test Page attachment");
         assert!(owner.is_current(&conn));
 
-        let next_generation = owner.attachment.page_owner().loaded_page_generation() + 1;
         conn.runtime_session_owner_slot_mut(Some("SID-owner"))
             .expect("test runtime slot")
-            .set_loaded_page_generation(next_generation);
+            .replace_page_attachment_id_for_test();
 
         assert!(
             !owner.is_current(&conn),

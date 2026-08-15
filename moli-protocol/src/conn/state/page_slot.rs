@@ -80,6 +80,7 @@ impl Hash for DocumentNavigationToken {
 #[derive(Debug)]
 pub(crate) struct PendingNavigationRequest {
     token: DocumentNavigationToken,
+    page_attachment_id: TargetPageAttachmentId,
     cancellation_handles: Vec<moli_fetch::FetchCancelHandle>,
     background_completion_pending: bool,
     committed: bool,
@@ -89,6 +90,7 @@ impl PendingNavigationRequest {
     fn new(token: DocumentNavigationToken) -> Self {
         Self {
             token,
+            page_attachment_id: TargetPageAttachmentId::allocate(),
             cancellation_handles: vec![moli_fetch::FetchCancelHandle::new()],
             background_completion_pending: false,
             committed: false,
@@ -309,20 +311,74 @@ impl InitialDocumentPageBuildWaiter {
 /// because both builds used the same target/session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PendingRendererPageBinding {
+    PageBuild {
+        renderer_page: RendererPageResidenceIdentity,
+        page_attachment_id: TargetPageAttachmentId,
+    },
     InitialDocumentBuild {
         renderer_page: RendererPageResidenceIdentity,
+        page_attachment_id: TargetPageAttachmentId,
     },
     DocumentNavigation {
         navigation: DocumentNavigationToken,
         renderer_page: RendererPageResidenceIdentity,
+        page_attachment_id: TargetPageAttachmentId,
     },
 }
 
 impl PendingRendererPageBinding {
     fn renderer_page(&self) -> RendererPageResidenceIdentity {
         match self {
-            Self::InitialDocumentBuild { renderer_page }
+            Self::PageBuild { renderer_page, .. }
+            | Self::InitialDocumentBuild { renderer_page, .. }
             | Self::DocumentNavigation { renderer_page, .. } => *renderer_page,
+        }
+    }
+
+    fn page_attachment_id(&self) -> TargetPageAttachmentId {
+        match self {
+            Self::PageBuild {
+                page_attachment_id, ..
+            }
+            | Self::InitialDocumentBuild {
+                page_attachment_id, ..
+            }
+            | Self::DocumentNavigation {
+                page_attachment_id, ..
+            } => *page_attachment_id,
+        }
+    }
+}
+
+/// Current residence of the target's Page slot.
+///
+/// The residence id is always present so output captured while a target has no
+/// installed Page cannot later match a different empty or attached residence.
+/// Only `Attached` exposes a Page attachment id to Page-bound operations such
+/// as Input ACK cleanup and renderer lifecycle routing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CurrentTargetPageResidence {
+    Absent(TargetPageAttachmentId),
+    Attached(TargetPageAttachmentId),
+}
+
+impl Default for CurrentTargetPageResidence {
+    fn default() -> Self {
+        Self::Absent(TargetPageAttachmentId::allocate())
+    }
+}
+
+impl CurrentTargetPageResidence {
+    fn id(self) -> TargetPageAttachmentId {
+        match self {
+            Self::Absent(id) | Self::Attached(id) => id,
+        }
+    }
+
+    fn attachment_id(self) -> Option<TargetPageAttachmentId> {
+        match self {
+            Self::Absent(_) => None,
+            Self::Attached(id) => Some(id),
         }
     }
 }
@@ -331,8 +387,7 @@ impl PendingRendererPageBinding {
 pub(crate) struct TargetPageSlot {
     loaded_page: Option<Page>,
     loaded_page_absence_reason: TargetPageAbsenceReason,
-    page_attachment_id: Option<TargetPageAttachmentId>,
-    loaded_page_generation: u64,
+    page_residence: CurrentTargetPageResidence,
     page_residence_publisher: Option<TargetPageResidencePublisher>,
     pending_navigation_request: Option<PendingNavigationRequest>,
     committed_document_navigation: Option<DocumentNavigationToken>,
@@ -366,7 +421,7 @@ impl TargetPageSlot {
     pub(crate) fn with_loaded_page_for_test(loaded_page: Page) -> Self {
         Self {
             loaded_page: Some(loaded_page),
-            page_attachment_id: Some(TargetPageAttachmentId::allocate()),
+            page_residence: CurrentTargetPageResidence::Attached(TargetPageAttachmentId::allocate()),
             ..Default::default()
         }
     }
@@ -423,8 +478,10 @@ impl TargetPageSlot {
         {
             return false;
         }
-        self.pending_renderer_page =
-            Some(PendingRendererPageBinding::InitialDocumentBuild { renderer_page });
+        self.pending_renderer_page = Some(PendingRendererPageBinding::InitialDocumentBuild {
+            renderer_page,
+            page_attachment_id: TargetPageAttachmentId::allocate(),
+        });
         true
     }
 
@@ -467,14 +524,32 @@ impl TargetPageSlot {
         page: Option<Page>,
         absence_reason: TargetPageAbsenceReason,
     ) -> Option<Page> {
+        let next_page_residence = match page.as_ref() {
+            Some(page) => {
+                let renderer_page = RendererPageResidenceIdentity::from_page(page);
+                let attachment_id = match self.pending_renderer_page.as_ref() {
+                    Some(binding) => {
+                        assert_eq!(
+                            binding.renderer_page(),
+                            renderer_page,
+                            "installed Page must match its explicit renderer Page reservation"
+                        );
+                        binding.page_attachment_id()
+                    }
+                    None => TargetPageAttachmentId::allocate(),
+                };
+                CurrentTargetPageResidence::Attached(attachment_id)
+            }
+            None => CurrentTargetPageResidence::Absent(TargetPageAttachmentId::allocate()),
+        };
         if self.loaded_page.is_some() || page.is_some() {
-            self.advance_loaded_page_generation();
+            self.finish_renderer_document_lifecycle_observers(
+                RendererDocumentLifecycleObservation::Superseded,
+            );
         }
-        self.pending_renderer_page = None;
         if page.is_some() {
             self.complete_initial_document_page_build();
             self.loaded_page_absence_reason = TargetPageAbsenceReason::NoTarget;
-            self.page_attachment_id = Some(TargetPageAttachmentId::allocate());
         } else {
             if self.loaded_page_absence_reason
                 == TargetPageAbsenceReason::InitialDocumentPageBuildInProgress
@@ -482,8 +557,9 @@ impl TargetPageSlot {
                 self.fail_initial_document_page_build("InitialDocumentPageBuildCancelled".into());
             }
             self.loaded_page_absence_reason = absence_reason;
-            self.page_attachment_id = None;
         }
+        self.page_residence = next_page_residence;
+        self.pending_renderer_page = None;
         let previous = std::mem::replace(&mut self.loaded_page, page);
         self.supersede_page_residence();
         previous
@@ -499,15 +575,63 @@ impl TargetPageSlot {
     }
 
     pub(crate) fn page_attachment_id(&self) -> Option<TargetPageAttachmentId> {
-        self.page_attachment_id
+        self.page_residence.attachment_id()
     }
 
-    pub(crate) fn loaded_page_generation(&self) -> u64 {
-        self.loaded_page_generation
+    pub(crate) fn page_residence_id(&self) -> TargetPageAttachmentId {
+        self.page_residence.id()
+    }
+
+    pub(crate) fn pending_page_attachment_id(&self) -> Option<TargetPageAttachmentId> {
+        self.pending_renderer_page
+            .as_ref()
+            .map(PendingRendererPageBinding::page_attachment_id)
+            .or_else(|| {
+                self.pending_navigation_request
+                    .as_ref()
+                    .filter(|request| !request.committed)
+                    .map(|request| request.page_attachment_id)
+            })
+    }
+
+    pub(crate) fn reserve_renderer_page_attachment(
+        &mut self,
+        renderer_page: RendererPageResidenceIdentity,
+    ) -> TargetPageAttachmentId {
+        if let Some(binding) = self.pending_renderer_page.as_ref() {
+            if binding.renderer_page() == renderer_page {
+                return binding.page_attachment_id();
+            }
+            // A newly reserved renderer Page supersedes an earlier build that
+            // never reached installation. Its old output-owner binding remains
+            // harmless because this slot no longer routes that renderer Page.
+            self.pending_renderer_page = None;
+        }
+
+        if let Some(request) = self
+            .pending_navigation_request
+            .as_ref()
+            .filter(|request| !request.committed)
+        {
+            let page_attachment_id = request.page_attachment_id;
+            self.pending_renderer_page = Some(PendingRendererPageBinding::DocumentNavigation {
+                navigation: request.token.clone(),
+                renderer_page,
+                page_attachment_id,
+            });
+            return page_attachment_id;
+        }
+
+        let page_attachment_id = TargetPageAttachmentId::allocate();
+        self.pending_renderer_page = Some(PendingRendererPageBinding::PageBuild {
+            renderer_page,
+            page_attachment_id,
+        });
+        page_attachment_id
     }
 
     pub(crate) fn page_residence_token(&mut self) -> Option<TargetPageResidenceToken> {
-        let attachment_id = self.page_attachment_id?;
+        let attachment_id = self.page_attachment_id()?;
         let publisher = self
             .page_residence_publisher
             .get_or_insert_with(|| TargetPageResidencePublisher::new(attachment_id));
@@ -520,38 +644,37 @@ impl TargetPageSlot {
         }
     }
 
-    fn advance_loaded_page_generation(&mut self) {
-        self.finish_renderer_document_lifecycle_observers(
-            RendererDocumentLifecycleObservation::Superseded,
-        );
-        self.loaded_page_generation = self.loaded_page_generation.wrapping_add(1);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn bump_loaded_page_generation(&mut self) {
-        self.advance_loaded_page_generation();
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_loaded_page_generation(&mut self, generation: u64) {
-        if self.loaded_page_generation == generation {
-            return;
-        }
-        self.finish_renderer_document_lifecycle_observers(
-            RendererDocumentLifecycleObservation::Superseded,
-        );
-        self.loaded_page_generation = generation;
-    }
-
     #[cfg(test)]
     pub(crate) fn set_page_attachment_id_for_test(&mut self, raw: u64) -> TargetPageAttachmentId {
         let attachment_id = TargetPageAttachmentId::from_raw_for_test(raw);
-        let attachment_changed = self.page_attachment_id != Some(attachment_id);
-        self.page_attachment_id = Some(attachment_id);
+        self.install_page_attachment_id_for_test(attachment_id);
+        attachment_id
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_page_attachment_id_for_test(&mut self) -> TargetPageAttachmentId {
+        let mut attachment_id = TargetPageAttachmentId::allocate();
+        while self.page_residence.id() == attachment_id {
+            attachment_id = TargetPageAttachmentId::allocate();
+        }
+        self.install_page_attachment_id_for_test(attachment_id);
+        attachment_id
+    }
+
+    #[cfg(test)]
+    pub(crate) fn install_page_attachment_id_for_test(
+        &mut self,
+        attachment_id: TargetPageAttachmentId,
+    ) {
+        let attachment_changed = self.page_residence.id() != attachment_id
+            || self.page_residence.attachment_id().is_none();
+        self.page_residence = CurrentTargetPageResidence::Attached(attachment_id);
         if attachment_changed {
+            self.finish_renderer_document_lifecycle_observers(
+                RendererDocumentLifecycleObservation::Superseded,
+            );
             self.supersede_page_residence();
         }
-        attachment_id
     }
 
     pub(crate) fn start_document_navigation(
@@ -632,13 +755,33 @@ impl TargetPageSlot {
             .pending_navigation_request
             .as_ref()
             .is_some_and(|request| request.matches(token) && !request.committed)
-            || self.pending_renderer_page.is_some()
         {
             return false;
+        }
+        if let Some(binding) = self.pending_renderer_page.as_ref() {
+            return matches!(
+                binding,
+                PendingRendererPageBinding::DocumentNavigation {
+                    navigation,
+                    renderer_page: bound_renderer_page,
+                    page_attachment_id,
+                } if navigation == token
+                    && *bound_renderer_page == renderer_page
+                    && Some(*page_attachment_id)
+                        == self
+                            .pending_navigation_request
+                            .as_ref()
+                            .map(|request| request.page_attachment_id)
+            );
         }
         self.pending_renderer_page = Some(PendingRendererPageBinding::DocumentNavigation {
             navigation: token.clone(),
             renderer_page,
+            page_attachment_id: self
+                .pending_navigation_request
+                .as_ref()
+                .expect("validated pending navigation request must remain installed")
+                .page_attachment_id,
         });
         true
     }
@@ -776,7 +919,7 @@ impl TargetPageSlot {
             );
             return Vec::new();
         }
-        let Some(page_attachment_id) = self.page_attachment_id else {
+        let Some(page_attachment_id) = self.page_attachment_id() else {
             tracing::debug!(
                 ?active_document,
                 ?active_epoch,
@@ -945,7 +1088,7 @@ impl TargetPageSlot {
             .binding
             .as_ref()
             .is_some_and(|binding| {
-                Some(binding.page_attachment_id) == self.page_attachment_id
+                Some(binding.page_attachment_id) == self.page_attachment_id()
                     && binding.navigation.as_ref().is_none_or(|navigation| {
                         self.committed_document_navigation.as_ref() == Some(navigation)
                     })
@@ -1096,7 +1239,7 @@ impl TargetPageSlot {
             .binding
             .as_ref()
             .filter(|binding| {
-                Some(binding.page_attachment_id) == self.page_attachment_id
+                Some(binding.page_attachment_id) == self.page_attachment_id()
                     && binding.navigation.as_ref().is_none_or(|navigation| {
                         self.committed_document_navigation.as_ref() == Some(navigation)
                     })
@@ -1261,7 +1404,7 @@ impl TargetPageSlot {
             .as_ref()
             .filter(|binding| {
                 binding.loader_id == loader_id
-                    && Some(binding.page_attachment_id) == self.page_attachment_id
+                    && Some(binding.page_attachment_id) == self.page_attachment_id()
             })
             .cloned()
         else {
@@ -1368,20 +1511,33 @@ mod page_residence_tests {
     use crate::conn::TargetPageResidenceObservation;
 
     #[test]
-    fn attachment_token_ignores_generation_and_terminates_on_attachment_replacement() {
+    fn empty_slot_residence_is_stable_until_the_slot_transitions() {
+        let mut slot = TargetPageSlot::default();
+        let initial = slot.page_residence_id();
+
+        assert_eq!(slot.page_residence_id(), initial);
+        assert_eq!(slot.page_attachment_id(), None);
+        assert!(
+            slot.replace_loaded_page_with_reason(None, TargetPageAbsenceReason::TestFixture)
+                .is_none()
+        );
+        assert_ne!(slot.page_residence_id(), initial);
+        assert_eq!(slot.page_attachment_id(), None);
+    }
+
+    #[test]
+    fn attachment_token_terminates_on_attachment_replacement() {
         let mut slot = TargetPageSlot::default();
         slot.set_page_attachment_id_for_test(91);
         let token = slot
             .page_residence_token()
             .expect("the installed attachment should expose its lifetime token");
 
-        slot.bump_loaded_page_generation();
-
         let mut wait = Box::pin(token.wait());
         let mut context = Context::from_waker(Waker::noop());
         assert!(
             matches!(wait.as_mut().poll(&mut context), Poll::Pending),
-            "changing only the slot generation must not terminate an attachment token"
+            "a live attachment token must remain pending"
         );
 
         slot.set_page_attachment_id_for_test(92);
@@ -1424,6 +1580,33 @@ mod pending_renderer_page_tests {
     }
 
     #[test]
+    fn navigation_reservation_preallocates_one_exact_page_attachment() {
+        let mut slot = TargetPageSlot::default();
+        let current_residence = slot.page_residence_id();
+        let navigation =
+            slot.start_document_navigation("TID-pending-page".to_owned(), "LOADER-next".to_owned());
+        let reserved_attachment = slot
+            .pending_page_attachment_id()
+            .expect("navigation should reserve its future Page attachment");
+        let reserved_page = renderer_page(8, 20);
+
+        assert_ne!(reserved_attachment, current_residence);
+        assert_eq!(
+            slot.reserve_renderer_page_attachment(reserved_page),
+            reserved_attachment
+        );
+        assert_eq!(
+            slot.reserve_renderer_page_attachment(reserved_page),
+            reserved_attachment,
+            "revisiting the same renderer Page reservation must be idempotent"
+        );
+        assert!(
+            slot.bind_pending_document_navigation_renderer_page(&navigation, reserved_page),
+            "the navigation binding should accept its already-reserved renderer Page"
+        );
+    }
+
+    #[test]
     fn navigation_binding_cannot_follow_a_superseding_navigation() {
         let mut slot = TargetPageSlot::default();
         let first = slot
@@ -1433,7 +1616,7 @@ mod pending_renderer_page_tests {
         assert!(slot.routes_renderer_page(first_page));
         assert!(
             !slot.bind_pending_document_navigation_renderer_page(&first, renderer_page(8, 23),),
-            "one navigation generation cannot replace its bound renderer Page"
+            "one navigation request cannot replace its bound renderer Page"
         );
 
         let second = slot
@@ -1482,7 +1665,7 @@ mod renderer_document_lifecycle_tests {
 
     fn page_slot_with_attachment() -> TargetPageSlot {
         TargetPageSlot {
-            page_attachment_id: Some(TargetPageAttachmentId::allocate()),
+            page_residence: CurrentTargetPageResidence::Attached(TargetPageAttachmentId::allocate()),
             ..Default::default()
         }
     }
@@ -1545,7 +1728,8 @@ mod renderer_document_lifecycle_tests {
         );
         assert!(slot.renderer_document_lifecycle_binding().is_some());
 
-        slot.page_attachment_id = None;
+        slot.page_residence =
+            CurrentTargetPageResidence::Absent(TargetPageAttachmentId::allocate());
         assert!(
             slot.renderer_document_lifecycle_binding().is_none(),
             "a binding from a removed Page attachment must never remain current"

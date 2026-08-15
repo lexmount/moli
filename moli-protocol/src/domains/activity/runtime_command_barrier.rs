@@ -945,12 +945,9 @@ mod tests {
         let mut conn = connection_with_loaded_page().await;
         let mut barriers = RuntimeCommandOutputBarriers::default();
         let permit = admit_registered_command(&mut conn, &mut barriers, 21);
-        let source_owner = conn
-            .target_page_residence_identity_for_session(Some(SESSION_ID))
-            .expect("source Page should have an exact residence");
         conn.runtime_session_owner_slot_mut(Some(SESSION_ID))
             .expect("runtime slot should remain installed")
-            .set_loaded_page_generation(source_owner.loaded_page_generation() + 1);
+            .replace_page_attachment_id_for_test();
         let mut command_context = CommandDispatchContext::default();
 
         route_same_document_navigation(
@@ -986,9 +983,6 @@ mod tests {
         let mut conn = connection_with_loaded_page().await;
         let mut barriers = RuntimeCommandOutputBarriers::default();
         let permit = admit_registered_command(&mut conn, &mut barriers, 30);
-        let source_owner = conn
-            .target_page_residence_identity_for_session(Some(SESSION_ID))
-            .expect("source Page should have an exact residence");
         let mut command_context = CommandDispatchContext::default();
 
         route_top_level_navigation_for_command(
@@ -1003,7 +997,7 @@ mod tests {
 
         conn.runtime_session_owner_slot_mut(Some(SESSION_ID))
             .expect("runtime slot should remain installed")
-            .set_loaded_page_generation(source_owner.loaded_page_generation() + 1);
+            .replace_page_attachment_id_for_test();
         assert_eq!(
             barriers
                 .release(&mut conn, permit, &mut command_context)

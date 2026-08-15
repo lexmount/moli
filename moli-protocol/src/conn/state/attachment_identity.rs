@@ -6,6 +6,11 @@ use std::{
 static NEXT_TARGET_PAGE_ATTACHMENT_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_NAVIGATION_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
+/// Opaque identity for one current or reserved target Page residence.
+///
+/// An empty target slot owns a tombstone identity so output captured before a
+/// Page exists cannot match a later Page or a later empty slot. Once a Page is
+/// attached, this same id also keys its directly terminable residence token.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct TargetPageAttachmentId(NonZeroU64);
 

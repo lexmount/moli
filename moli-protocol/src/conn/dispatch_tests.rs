@@ -614,17 +614,11 @@ async fn devtools_script_navigation_exact_cursor_rejects_replaced_page_owner_act
         let mut route_scope = ctx
             .conn
             .scoped_none_session_owner_route_override(route.clone());
-        let next_generation = route_scope
-            .conn_mut()
-            .runtime_session_owner_slot(None)
-            .expect("created target runtime slot")
-            .loaded_page_generation()
-            + 1;
         route_scope
             .conn_mut()
             .runtime_session_owner_slot_mut(None)
             .expect("created target runtime slot")
-            .set_loaded_page_generation(next_generation);
+            .replace_page_attachment_id_for_test();
     }
 
     let sent_start = ctx.sent.len();
@@ -2428,7 +2422,7 @@ async fn stale_initial_document_page_build_does_not_overwrite_committed_page() {
         &parsed_real_page_url,
     )
     .expect("real navigation identity should commit");
-    let generation_after_real_page = conn
+    let attachment_after_real_page = conn
         .browser_context
         .as_ref()
         .expect("browser context")
@@ -2561,7 +2555,7 @@ async fn stale_initial_document_page_build_does_not_overwrite_committed_page() {
     let browser_context = conn.browser_context.as_ref().expect("browser context");
     assert_eq!(
         browser_context.page_attachment_id(),
-        generation_after_real_page,
+        attachment_after_real_page,
         "discarding stale initial document build must not replace the current page"
     );
     assert_eq!(

@@ -81,7 +81,7 @@ fn trace_stale_source(dialog: &PreparedJavaScriptDialog) {
         source_document = ?dialog.source_document(),
         browser_context_id = page_owner.browser_context_id(),
         target_id = page_owner.target_id(),
-        loaded_page_generation = page_owner.loaded_page_generation(),
+        page_attachment_id = page_owner.page_attachment_id().get(),
         route = ?dialog.route(),
         "dismissing JavaScript dialog from a stale Page attachment or dialog scope"
     );

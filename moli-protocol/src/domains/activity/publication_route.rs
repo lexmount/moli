@@ -167,12 +167,12 @@ impl RendererPublicationOwner {
                     };
                     let projection = if runtime_slot.routes_current_renderer_page_owner(
                         *renderer_page,
-                        page_owner.loaded_page_generation(),
+                        page_owner.page_attachment_id(),
                     ) {
                         RendererPublicationProjection::CurrentPage
                     } else if runtime_slot.routes_retiring_renderer_page_owner(
                         *renderer_page,
-                        page_owner.loaded_page_generation(),
+                        page_owner.page_attachment_id(),
                     ) {
                         RendererPublicationProjection::RetiringNetworkOnly
                     } else {

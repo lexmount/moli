@@ -510,9 +510,9 @@ async fn memory_diagnostics_reports_page_vm_document_isolate_model() {
 }
 
 #[tokio::test]
-async fn replacing_or_retiring_a_loaded_page_advances_its_residence_generation() {
+async fn replacing_or_retiring_a_loaded_page_changes_its_attachment_identity() {
     let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new("BID-page-generation".to_owned()));
+    conn.browser_context = Some(BrowserContext::new("BID-page-attachment".to_owned()));
     let first_page = conn
         .load_page_via_runtime_async("data:text/html,<body>first</body>")
         .await
@@ -522,25 +522,35 @@ async fn replacing_or_retiring_a_loaded_page_advances_its_residence_generation()
         .await
         .expect("second Page");
     let context = conn.browser_context.as_mut().unwrap();
-    let initial_generation = context.active_target.runtime_slot.loaded_page_generation();
+    assert_eq!(
+        context.active_target.runtime_slot.page_attachment_id(),
+        None
+    );
 
     assert!(context.replace_loaded_page(Some(first_page)).is_none());
-    let first_generation = context.active_target.runtime_slot.loaded_page_generation();
-    assert_eq!(first_generation, initial_generation.wrapping_add(1));
+    let first_attachment = context
+        .active_target
+        .runtime_slot
+        .page_attachment_id()
+        .expect("first Page attachment");
 
     let first = context
         .replace_loaded_page(Some(second_page))
         .expect("first Page should be replaced");
-    let second_generation = context.active_target.runtime_slot.loaded_page_generation();
-    assert_eq!(second_generation, first_generation.wrapping_add(1));
+    let second_attachment = context
+        .active_target
+        .runtime_slot
+        .page_attachment_id()
+        .expect("second Page attachment");
+    assert_ne!(second_attachment, first_attachment);
     let _ = first.close_async().await;
 
     let second = context
         .clear_loaded_page_with_reason(TargetPageAbsenceReason::TargetClosed)
         .expect("second Page should be retired");
     assert_eq!(
-        context.active_target.runtime_slot.loaded_page_generation(),
-        second_generation.wrapping_add(1)
+        context.active_target.runtime_slot.page_attachment_id(),
+        None
     );
     let _ = second.close_async().await;
 }

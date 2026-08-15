@@ -2237,7 +2237,7 @@ mod tests {
     }
 
     fn test_page_owner() -> crate::conn::TargetPageResidenceIdentity {
-        crate::conn::TargetPageResidenceIdentity::new(
+        crate::conn::TargetPageResidenceIdentity::new_for_test(
             "BID-fetch-state".to_owned(),
             Some("TID-fetch-state".to_owned()),
             1,

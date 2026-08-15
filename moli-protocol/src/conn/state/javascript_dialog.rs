@@ -401,7 +401,7 @@ mod tests {
         let scope = TargetJavaScriptDialogScope::default();
         let prepared = TargetPreparedJavaScriptDialog::capture(
             TargetPageProtocolAttachmentIdentity::new(
-                TargetPageResidenceIdentity::new(
+                TargetPageResidenceIdentity::new_for_test(
                     "BID-dialog-drop".to_owned(),
                     Some("TID-dialog-drop".to_owned()),
                     1,

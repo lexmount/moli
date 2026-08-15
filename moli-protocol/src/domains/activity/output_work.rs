@@ -93,7 +93,11 @@ impl ProtocolOutputWork {
         frame_id: String,
         loader_id: String,
     ) -> Self {
-        let page_owner = TargetPageResidenceIdentity::new(browser_context_id, Some(target_id), 1);
+        let page_owner = TargetPageResidenceIdentity::new(
+            browser_context_id,
+            Some(target_id),
+            crate::conn::TargetPageAttachmentId::allocate(),
+        );
         let attachments = session_ids
             .into_iter()
             .map(|session_id| {

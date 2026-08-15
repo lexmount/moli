@@ -42,7 +42,7 @@ pub(crate) struct FinishedRendererDocumentNavigation {
 #[derive(Debug)]
 struct RetiringRendererDocumentOutput {
     renderer_page: RendererPageResidenceIdentity,
-    loaded_page_generation: u64,
+    page_attachment_id: TargetPageAttachmentId,
     binding: CommittedRendererDocumentBinding,
     network_agent: RetiringTargetNetworkAgentState,
 }
@@ -216,15 +216,15 @@ impl TargetRuntimeSlot {
             .map(|(loaded_page, binding)| {
                 (
                     RendererPageResidenceIdentity::from_page(loaded_page),
-                    self.page_slot.loaded_page_generation(),
+                    binding.page_attachment_id,
                     binding.clone(),
                 )
             });
         let retiring_document =
-            retiring_document.map(|(renderer_page, loaded_page_generation, binding)| {
+            retiring_document.map(|(renderer_page, page_attachment_id, binding)| {
                 RetiringRendererDocumentOutput {
                     renderer_page,
-                    loaded_page_generation,
+                    page_attachment_id,
                     binding,
                     network_agent: self.network_agent.rotate_document_for_replacement(),
                 }
@@ -291,27 +291,51 @@ impl TargetRuntimeSlot {
         self.page_slot.page_attachment_id()
     }
 
+    pub(crate) fn page_residence_id(&self) -> TargetPageAttachmentId {
+        self.page_slot.page_residence_id()
+    }
+
+    pub(crate) fn pending_page_attachment_id(&self) -> Option<TargetPageAttachmentId> {
+        self.page_slot.pending_page_attachment_id()
+    }
+
+    pub(crate) fn reserve_renderer_page_attachment(
+        &mut self,
+        renderer_page: RendererPageResidenceIdentity,
+    ) -> TargetPageAttachmentId {
+        self.page_slot
+            .reserve_renderer_page_attachment(renderer_page)
+    }
+
     #[cfg(test)]
     pub(crate) fn set_page_attachment_id_for_test(&mut self, raw: u64) -> TargetPageAttachmentId {
+        let attachment_changed = self
+            .page_slot
+            .page_attachment_id()
+            .map(TargetPageAttachmentId::get)
+            != Some(raw);
+        if attachment_changed {
+            self.javascript_dialog_scope.retire();
+        }
         self.page_slot.set_page_attachment_id_for_test(raw)
     }
 
-    pub(crate) fn loaded_page_generation(&self) -> u64 {
-        self.page_slot.loaded_page_generation()
-    }
-
     #[cfg(test)]
-    pub(crate) fn bump_loaded_page_generation(&mut self) {
+    pub(crate) fn replace_page_attachment_id_for_test(&mut self) -> TargetPageAttachmentId {
         self.javascript_dialog_scope.retire();
-        self.page_slot.bump_loaded_page_generation();
+        self.page_slot.replace_page_attachment_id_for_test()
     }
 
     #[cfg(test)]
-    pub(crate) fn set_loaded_page_generation(&mut self, generation: u64) {
-        if self.page_slot.loaded_page_generation() != generation {
+    pub(crate) fn install_page_attachment_id_for_test(
+        &mut self,
+        attachment_id: TargetPageAttachmentId,
+    ) {
+        if self.page_slot.page_attachment_id() != Some(attachment_id) {
             self.javascript_dialog_scope.retire();
         }
-        self.page_slot.set_loaded_page_generation(generation);
+        self.page_slot
+            .install_page_attachment_id_for_test(attachment_id);
     }
 
     pub(crate) fn javascript_dialog_scope_observer(&self) -> TargetJavaScriptDialogScopeObserver {
@@ -474,20 +498,19 @@ impl TargetRuntimeSlot {
     pub(crate) fn routes_current_renderer_page_owner(
         &self,
         renderer_page: RendererPageResidenceIdentity,
-        loaded_page_generation: u64,
+        page_attachment_id: TargetPageAttachmentId,
     ) -> bool {
-        self.page_slot.loaded_page_generation() == loaded_page_generation
+        self.page_slot.page_attachment_id() == Some(page_attachment_id)
             && self.page_slot.routes_renderer_page(renderer_page)
     }
 
     pub(crate) fn routes_retiring_renderer_page_owner(
         &self,
         renderer_page: RendererPageResidenceIdentity,
-        loaded_page_generation: u64,
+        page_attachment_id: TargetPageAttachmentId,
     ) -> bool {
         self.retiring_renderer_document_outputs.iter().any(|entry| {
-            entry.renderer_page == renderer_page
-                && entry.loaded_page_generation == loaded_page_generation
+            entry.renderer_page == renderer_page && entry.page_attachment_id == page_attachment_id
         })
     }
 
@@ -1462,7 +1485,7 @@ mod tests {
                     moli_core::RendererOwnerLocalHostId::new_for_testing(3),
                     page_id,
                 ),
-                loaded_page_generation: 1,
+                page_attachment_id: TargetPageAttachmentId::from_raw_for_test(1),
                 binding: CommittedRendererDocumentBinding {
                     renderer_frame: RendererFrameToken { page_id },
                     renderer_document: RendererDocumentToken {

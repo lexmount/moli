@@ -2491,7 +2491,7 @@ async fn page_navigate_network_failure_commits_error_document() {
         ctx.conn
             .target_page_residence_identity_for_session(Some("SID-1")),
         Some(before_target_page),
-        "current master installs navigation Documents as a new target Page generation"
+        "current master installs navigation Documents as a new target Page attachment"
     );
     assert_ne!(
         ctx.conn

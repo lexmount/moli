@@ -173,7 +173,7 @@ fn resolve_devtools_opener(
         tracing::debug!(
             browser_context_id = page_owner.browser_context_id(),
             target_id = page_owner.target_id(),
-            loaded_page_generation = page_owner.loaded_page_generation(),
+            page_attachment_id = page_owner.page_attachment_id().get(),
             ?root_document,
             ?window,
             "popup action retained after its exact opener browsing context disappeared"
@@ -207,7 +207,7 @@ mod tests {
     use super::*;
 
     fn page_owner(browser_context_id: &str, target_id: &str) -> TargetPageResidenceIdentity {
-        TargetPageResidenceIdentity::new(
+        TargetPageResidenceIdentity::new_for_test(
             browser_context_id.to_owned(),
             Some(target_id.to_owned()),
             7,

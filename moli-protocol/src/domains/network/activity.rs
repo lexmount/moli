@@ -715,7 +715,7 @@ mod tests {
 
         conn.runtime_session_owner_slot_mut(Some("SID-collision"))
             .expect("runtime owner should remain addressable")
-            .set_loaded_page_generation(1);
+            .replace_page_attachment_id_for_test();
         let replacement_owner = conn
             .target_page_residence_identity_for_session(Some("SID-collision"))
             .expect("replacement Page residence should exist");

@@ -2259,14 +2259,17 @@ impl<'a> TargetSessionOwnerMut<'a> {
             } => {
                 let committed_document_post_response_continuation =
                     page.take_committed_document_post_response_continuation();
-                let previous_page_owner = TargetPageResidenceIdentity::new(
-                    browser_context.id.clone(),
-                    Some(target_id.clone()),
-                    browser_context
-                        .background_target(target_id)?
-                        .runtime_slot
-                        .loaded_page_generation(),
-                );
+                let previous_page_owner = browser_context
+                    .background_target(target_id)?
+                    .runtime_slot
+                    .page_attachment_id()
+                    .map(|page_attachment_id| {
+                        TargetPageResidenceIdentity::new(
+                            browser_context.id.clone(),
+                            Some(target_id.clone()),
+                            page_attachment_id,
+                        )
+                    });
                 let primary_session_id = browser_context
                     .background_target(target_id)?
                     .session_id()
@@ -2357,7 +2360,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
                     target.runtime_slot.clear_websocket_artifacts();
                     previous
                 };
-                let replaced_page_owner = previous.as_ref().map(|_| previous_page_owner);
+                let replaced_page_owner = previous.as_ref().and(previous_page_owner);
                 if let Some(page) = previous {
                     let _ = page.close_async().await;
                 }
@@ -2973,44 +2976,79 @@ impl CdpConnection {
         // identity must never retain that mutable shorthand. Freeze the
         // concrete target now, otherwise a later `browsingContext.create`
         // can make output from the old Page resolve through the new active
-        // target while preserving the same browser-context id and generation.
+        // target while preserving the same browser-context id and residence.
         let target_id = routed_target_id.or_else(|| {
             self.browser_context_by_id(&browser_context_id)
                 .and_then(|browser_context| browser_context.active_target_id())
                 .map(str::to_owned)
         });
-        let loaded_page_generation = self
+        let page_attachment_id = self
             .runtime_session_owner_slot(session_id)
             .ok()?
-            .loaded_page_generation();
+            .page_residence_id();
         Some(TargetPageResidenceIdentity::new(
             browser_context_id,
             target_id,
-            loaded_page_generation,
+            page_attachment_id,
         ))
     }
 
-    /// Captures the residence that the next successfully installed Page will
-    /// occupy for `session_id`.
+    /// Captures the reserved residence of the Page currently being built for
+    /// `session_id`.
     ///
     /// Renderer construction can open and publish into its output stream
     /// before protocol commits that Page into the target slot. The reservation
-    /// must therefore bind to the generation produced by the pending install,
-    /// not the generation of the Page currently occupying the slot.
-    pub(crate) fn next_target_page_residence_identity_for_session(
+    /// therefore owns an explicit attachment id before renderer work starts;
+    /// callers never predict that identity from mutable current-Page state.
+    pub(crate) fn pending_target_page_residence_identity_for_session(
         &self,
         session_id: Option<&str>,
     ) -> Option<TargetPageResidenceIdentity> {
-        let current = self.target_page_residence_identity_for_session(session_id)?;
+        let (browser_context_id, routed_target_id) =
+            self.target_owner_identity_for_session(session_id)?;
+        let target_id = routed_target_id.or_else(|| {
+            self.browser_context_by_id(&browser_context_id)
+                .and_then(|browser_context| browser_context.active_target_id())
+                .map(str::to_owned)
+        });
+        let page_attachment_id = self
+            .runtime_session_owner_slot(session_id)
+            .ok()?
+            .pending_page_attachment_id()?;
         Some(TargetPageResidenceIdentity::new(
-            current.browser_context_id().to_owned(),
-            current.target_id().map(str::to_owned),
-            current.loaded_page_generation().wrapping_add(1),
+            browser_context_id,
+            target_id,
+            page_attachment_id,
+        ))
+    }
+
+    /// Binds a renderer Page reservation to its explicit future target Page
+    /// attachment and returns that exact residence identity.
+    pub(crate) fn reserve_target_page_residence_identity_for_session(
+        &mut self,
+        session_id: Option<&str>,
+        renderer_page: crate::conn::RendererPageResidenceIdentity,
+    ) -> Option<TargetPageResidenceIdentity> {
+        let (browser_context_id, routed_target_id) =
+            self.target_owner_identity_for_session(session_id)?;
+        let target_id = routed_target_id.or_else(|| {
+            self.browser_context_by_id(&browser_context_id)
+                .and_then(|browser_context| browser_context.active_target_id())
+                .map(str::to_owned)
+        });
+        let page_attachment_id = self
+            .runtime_session_owner_slot_mut(session_id)
+            .ok()?
+            .reserve_renderer_page_attachment(renderer_page);
+        Some(TargetPageResidenceIdentity::new(
+            browser_context_id,
+            target_id,
+            page_attachment_id,
         ))
     }
 
     /// Checks that deferred Page-owned work still addresses the same target
-    /// and installed Page generation from which it was captured.
+    /// Page-slot residence from which it was captured.
     pub(crate) fn target_page_residence_identity_is_current_for_session(
         &self,
         session_id: Option<&str>,
@@ -3099,7 +3137,7 @@ impl CdpConnection {
         Some(attachment)
     }
 
-    /// Checks both the target Page generation and the session that originally
+    /// Checks both the target Page residence and the session that originally
     /// captured an attachment-sensitive output.
     pub(crate) fn target_page_protocol_attachment_identity_is_current(
         &self,
@@ -3319,7 +3357,7 @@ impl CdpConnection {
     /// event produced for `session_id`'s owner.
     ///
     /// The returned identities freeze both the capture-time session and the
-    /// installed Page generation. A deferred output may later authorize these
+    /// Page-slot residence. A deferred output may later authorize these
     /// identities, but must never call `page_event_session_ids_for_session_owner`
     /// again: doing so could route an old Page's historical event through a
     /// replacement Page or a newly active implicit attachment.
@@ -3600,10 +3638,10 @@ mod tests {
     fn pending_subresource_fetch(internal_id: u64) -> PendingSubresourceFetchRequest {
         PendingSubresourceFetchRequest {
             residence: crate::conn::PendingSubresourceFetchResidence::InstalledPage(
-                crate::conn::TargetPageResidenceIdentity::new(
+                crate::conn::TargetPageResidenceIdentity::new_for_test(
                     "BID-target-session-owner".to_owned(),
                     Some("TID-frame".to_owned()),
-                    0,
+                    1,
                 ),
             ),
             owner_session_id: None,
@@ -4527,12 +4565,15 @@ mod tests {
     }
 
     #[test]
-    fn target_page_residence_identity_rejects_context_target_and_generation_collisions() {
+    fn target_page_residence_identity_rejects_context_target_and_attachment_collisions() {
         let mut conn = CdpConnection::default();
         let mut browser_context = BrowserContext::new("BID-page-residence".to_owned());
         browser_context.set_active_target_id("TID-page-residence");
         browser_context.attach_active_session("SID-page-residence");
         conn.browser_context = Some(browser_context);
+        conn.runtime_session_owner_slot_mut(Some("SID-page-residence"))
+            .expect("active target runtime slot")
+            .set_page_attachment_id_for_test(41);
 
         let current = conn
             .target_page_residence_identity_for_session(Some("SID-page-residence"))
@@ -4546,17 +4587,17 @@ mod tests {
             TargetPageResidenceIdentity::new(
                 "BID-other".to_owned(),
                 Some("TID-page-residence".to_owned()),
-                current.loaded_page_generation(),
+                current.page_attachment_id(),
             ),
             TargetPageResidenceIdentity::new(
                 "BID-page-residence".to_owned(),
                 Some("TID-other".to_owned()),
-                current.loaded_page_generation(),
+                current.page_attachment_id(),
             ),
             TargetPageResidenceIdentity::new(
                 "BID-page-residence".to_owned(),
                 Some("TID-page-residence".to_owned()),
-                current.loaded_page_generation() + 1,
+                crate::conn::TargetPageAttachmentId::allocate(),
             ),
         ] {
             assert!(
@@ -4575,6 +4616,9 @@ mod tests {
         let mut browser_context = BrowserContext::new("BID-implicit-page-residence".to_owned());
         browser_context.set_active_target_id("TID-original");
         conn.browser_context = Some(browser_context);
+        conn.runtime_session_owner_slot_mut(None)
+            .expect("implicit active runtime slot")
+            .set_page_attachment_id_for_test(1);
 
         let original = conn
             .target_page_residence_identity_for_session(None)

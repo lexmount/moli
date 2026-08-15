@@ -169,10 +169,10 @@ fn mark_page_domain_enabled(state: &mut crate::conn::TargetPageSessionState) {
         .page_screencast
         .start(crate::conn::PageScreencastConfig::default());
     state.javascript_dialog_state.push(target_dialog_for_test(
-        crate::conn::TargetPageResidenceIdentity::new(
+        crate::conn::TargetPageResidenceIdentity::new_for_test(
             "BID-dialog".to_owned(),
             Some("TID-dialog".to_owned()),
-            0,
+            1,
         ),
         "TID-dialog",
         "alert",
@@ -239,10 +239,10 @@ fn enable_page_domain_for_session(conn: &mut crate::conn::CdpConnection, session
             .page_session_state
             .javascript_dialog_state
             .push(target_dialog_for_test(
-                crate::conn::TargetPageResidenceIdentity::new(
+                crate::conn::TargetPageResidenceIdentity::new_for_test(
                     "BID-dialog".to_owned(),
                     Some("TID-dialog".to_owned()),
-                    0,
+                    1,
                 ),
                 "TID-dialog",
                 "alert",

@@ -49,7 +49,7 @@ fn load_dedicated_worker_target(ctx: &mut TestContext, session_id: &str) {
     let browser_context_id = "BID-dedicated".to_owned();
     let mut bc = BrowserContext::new(browser_context_id.clone());
     let mut target = crate::conn::DedicatedWorkerTargetState::new(
-        crate::conn::TargetPageResidenceIdentity::new(browser_context_id, None, 0),
+        crate::conn::TargetPageResidenceIdentity::new_for_test(browser_context_id, None, 1),
         moli_core::RendererOwnerLocalHostId::new_for_testing(1),
         82,
         "TID-dedicated-worker".to_owned(),

@@ -2285,7 +2285,7 @@ pub(crate) async fn navigate_page_owned_top_level_location_background_events_asy
             ?source_document,
             browser_context_id = owner.browser_context_id(),
             target_id = owner.target_id(),
-            loaded_page_generation = owner.loaded_page_generation(),
+            page_attachment_id = owner.page_attachment_id().get(),
             url = navigation.url(),
             "dropping top-level location navigation produced by a stale Page residence"
         );
@@ -3281,7 +3281,7 @@ mod producer_tests {
             ));
         conn.runtime_session_owner_slot_mut(Some("SID-dialog-stale-page"))
             .expect("test target runtime slot")
-            .set_loaded_page_generation(page_owner.loaded_page_generation() + 1);
+            .replace_page_attachment_id_for_test();
 
         let mut out = Vec::new();
         super::emit_javascript_dialog_activity_background_events_async(
@@ -4448,10 +4448,9 @@ mod producer_tests {
             "SID-child-page-owner",
             source_document,
         );
-        let source_owner = page_residence_identity_for_test(&conn, "SID-child-page-owner");
         conn.runtime_session_owner_slot_mut(Some("SID-child-page-owner"))
             .expect("test runtime owner")
-            .set_loaded_page_generation(source_owner.loaded_page_generation() + 1);
+            .replace_page_attachment_id_for_test();
 
         let mut events = Vec::new();
         super::emit_prepared_child_frame_activity(&mut conn, &mut events, activity, None).await;
@@ -4991,7 +4990,7 @@ mod producer_tests {
         let owner = page_residence_identity_for_test(&conn, "SID-stale-page-same-document");
         conn.runtime_session_owner_slot_mut(Some("SID-stale-page-same-document"))
             .expect("test runtime slot should exist")
-            .set_loaded_page_generation(owner.loaded_page_generation() + 1);
+            .replace_page_attachment_id_for_test();
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_same_document_navigations_for_test(
@@ -5181,7 +5180,7 @@ mod producer_tests {
         let owner = page_residence_identity_for_test(&conn, "SID-stale-page-location");
         conn.runtime_session_owner_slot_mut(Some("SID-stale-page-location"))
             .expect("test runtime slot should exist")
-            .set_loaded_page_generation(owner.loaded_page_generation() + 1);
+            .replace_page_attachment_id_for_test();
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_top_level_location_navigation_for_test(

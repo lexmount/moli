@@ -3700,10 +3700,14 @@ mod tests {
         let mut conn = CdpConnection::default();
         let mut context = BrowserContext::new("BID-1".to_owned());
         context.set_active_target_id("TID-page");
+        let page_attachment_id = context
+            .active_target
+            .runtime_slot
+            .set_page_attachment_id_for_test(1);
         let owner_page = TargetPageResidenceIdentity::new(
             "BID-1".to_owned(),
             Some("TID-page".to_owned()),
-            context.active_target.runtime_slot.loaded_page_generation(),
+            page_attachment_id,
         );
         conn.browser_context = Some(context);
         let owner_renderer_page = RendererPageResidenceIdentity::new(
@@ -4658,7 +4662,7 @@ mod tests {
         let _ = drain_target_lifecycle_events_for_test(&mut conn, loaded).await;
 
         let retained_target_id = "TID-other-worker".to_owned();
-        let retained_owner = TargetPageResidenceIdentity::new(
+        let retained_owner = TargetPageResidenceIdentity::new_for_test(
             "BID-1".to_owned(),
             Some("TID-other-page".to_owned()),
             7,
@@ -4681,7 +4685,7 @@ mod tests {
             .unwrap()
             .active_target
             .runtime_slot
-            .bump_loaded_page_generation();
+            .replace_page_attachment_id_for_test();
         let messages = protocol_messages(
             &retire_dedicated_worker_targets_for_replaced_page_async(&mut conn, &owner_page).await,
         );

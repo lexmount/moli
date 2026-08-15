@@ -2076,8 +2076,11 @@ mod producer_tests {
     #[test]
     fn input_prepared_slot_keeps_download_and_file_chooser_payloads_separate() {
         let source_document = renderer_document_identity_for_test(1, 1);
-        let owner =
-            TargetPageResidenceIdentity::new("BID-slot".to_owned(), Some("TID-slot".to_owned()), 1);
+        let owner = TargetPageResidenceIdentity::new_for_test(
+            "BID-slot".to_owned(),
+            Some("TID-slot".to_owned()),
+            1,
+        );
         let mut slot = super::InputPreparedOutputSlot::from_outputs(super::InputPreparedOutputs {
             download_activations: vec![RendererPendingDownloadActivation {
                 url: "https://example.test/download".to_owned(),
@@ -2372,7 +2375,7 @@ mod producer_tests {
         .expect("source file chooser should prepare");
         conn.runtime_session_owner_slot_mut(Some("SID-page-replacement"))
             .expect("test runtime slot should exist")
-            .set_loaded_page_generation(owner.loaded_page_generation() + 1);
+            .replace_page_attachment_id_for_test();
         let replacement_document = renderer_document_identity_for_test(2, 2);
         bind_renderer_document_for_test(
             &mut conn,

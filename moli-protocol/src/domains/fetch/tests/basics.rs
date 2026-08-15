@@ -27,10 +27,10 @@ fn pending_subresource_fetch_with_owner_kind(
 ) -> PendingSubresourceFetchRequest {
     PendingSubresourceFetchRequest {
         residence: crate::conn::PendingSubresourceFetchResidence::InstalledPage(
-            crate::conn::TargetPageResidenceIdentity::new(
+            crate::conn::TargetPageResidenceIdentity::new_for_test(
                 "BID-session-fetch".to_owned(),
                 Some("TID-session-fetch".to_owned()),
-                0,
+                1,
             ),
         ),
         owner_session_id: Some(owner_session_id.to_owned()),
@@ -52,10 +52,10 @@ fn pending_subresource_fetch_auth(
     owner_session_id: &str,
 ) -> PendingSubresourceFetchAuthRequest {
     PendingSubresourceFetchAuthRequest {
-        page_owner: crate::conn::TargetPageResidenceIdentity::new(
+        page_owner: crate::conn::TargetPageResidenceIdentity::new_for_test(
             "BID-session-fetch".to_owned(),
             Some("TID-session-fetch".to_owned()),
-            0,
+            1,
         ),
         owner_session_id: Some(owner_session_id.to_owned()),
         action_session_id: Some(owner_session_id.to_owned()),

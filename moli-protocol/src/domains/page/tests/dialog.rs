@@ -105,10 +105,10 @@ fn retiring_page_scope_and_clearing_dialog_state_dismisses_installed_dialog() {
 async fn pending_javascript_dialogs_are_preserved_per_parked_target() {
     fn dialog(target_id: &str, message: &str) -> crate::conn::TargetJavaScriptDialog {
         target_dialog_for_test(
-            crate::conn::TargetPageResidenceIdentity::new(
+            crate::conn::TargetPageResidenceIdentity::new_for_test(
                 "BID-1".to_owned(),
                 Some(target_id.to_owned()),
-                0,
+                1,
             ),
             target_id,
             "alert",
@@ -322,10 +322,10 @@ async fn get_javascript_dialog_text_peeks_without_closing_dialog() {
                 .page_session_state
                 .javascript_dialog_state
                 .push(target_dialog_for_test(
-                    crate::conn::TargetPageResidenceIdentity::new(
+                    crate::conn::TargetPageResidenceIdentity::new_for_test(
                         "BID-1".to_owned(),
                         Some("TID-1".to_owned()),
-                        0,
+                        1,
                     ),
                     "TID-1",
                     "alert",
@@ -409,10 +409,10 @@ async fn set_javascript_dialog_prompt_text_is_used_when_accepting_prompt() {
                 .page_session_state
                 .javascript_dialog_state
                 .push(target_dialog_for_test(
-                    crate::conn::TargetPageResidenceIdentity::new(
+                    crate::conn::TargetPageResidenceIdentity::new_for_test(
                         "BID-1".to_owned(),
                         Some("TID-1".to_owned()),
-                        0,
+                        1,
                     ),
                     "TID-1",
                     "prompt",
@@ -623,7 +623,7 @@ async fn handle_javascript_dialog_rejects_dialog_without_current_page_residence(
                 .page_session_state
                 .javascript_dialog_state
                 .push(target_dialog_for_test(
-                    crate::conn::TargetPageResidenceIdentity::new(
+                    crate::conn::TargetPageResidenceIdentity::new_for_test(
                         "BID-dialog-missing-frame".to_owned(),
                         Some("retired-target".to_owned()),
                         1,

@@ -812,7 +812,7 @@ mod tests {
             .expect("browser context should remain installed")
             .active_target
             .runtime_slot
-            .set_loaded_page_generation(page_owner.loaded_page_generation() + 1);
+            .replace_page_attachment_id_for_test();
 
         let mut events = Vec::new();
         super::emit_subresource_fetch_pause_outputs(

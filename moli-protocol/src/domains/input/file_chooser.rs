@@ -15,8 +15,8 @@ use crate::devtools_runtime::{
 /// The renderer resolves a live source node to a backend id before this value
 /// is built. Capture resolves the compact root-frame representation once.
 /// Apply may survive `document.open()` within the same Page, but a replacement
-/// Page generation retires the prepared activation before a colliding backend
-/// id can be observed.
+/// Page attachment replacement retires the prepared activation before a
+/// colliding backend id can be observed.
 #[derive(Debug, Eq, PartialEq)]
 pub(super) struct PreparedFileChooserActivation {
     page_owner: TargetPageResidenceIdentity,
@@ -150,7 +150,7 @@ fn trace_stale_activation(session_id: Option<&str>, activation: &PreparedFileCho
         backend_node_id = activation.backend_node_id,
         browser_context_id = activation.page_owner.browser_context_id(),
         target_id = activation.page_owner.target_id(),
-        loaded_page_generation = activation.page_owner.loaded_page_generation(),
+        page_attachment_id = activation.page_owner.page_attachment_id().get(),
         "dropping file chooser produced by a stale Page residence"
     );
 }

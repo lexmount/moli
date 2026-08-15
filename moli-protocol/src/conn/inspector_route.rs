@@ -158,7 +158,7 @@ impl CdpConnection {
             .commit_renderer_agent_candidate_transaction(candidate, renderer_page)
             .map_err(|error| error.to_string())?;
         let page_owner = self
-            .next_target_page_residence_identity_for_session(session_id)
+            .pending_target_page_residence_identity_for_session(session_id)
             .ok_or_else(|| "NavigationTargetOwnerMissing".to_owned())?;
         self.bind_renderer_page_output_owner(renderer_page, page_owner);
         Ok(transaction)

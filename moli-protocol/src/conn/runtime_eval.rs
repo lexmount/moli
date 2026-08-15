@@ -6660,13 +6660,9 @@ mod tests {
         conn.publish_bidi_channel_listener_start(listener);
         let held_listener_work = take_only_protocol_work(&mut conn);
 
-        let current_generation = conn
-            .runtime_session_owner_slot(Some("SID-active"))
-            .expect("test runtime slot")
-            .loaded_page_generation();
         conn.runtime_session_owner_slot_mut(Some("SID-active"))
             .expect("test runtime slot")
-            .set_loaded_page_generation(current_generation + 1);
+            .replace_page_attachment_id_for_test();
 
         let mut direct_events = Vec::new();
         let mut claimed_events = Vec::new();
@@ -6794,14 +6790,9 @@ mod tests {
         );
         let work = take_only_protocol_work(&mut conn);
 
-        let next_generation = conn
-            .runtime_session_owner_slot(Some("SID-active"))
-            .expect("test runtime slot")
-            .loaded_page_generation()
-            + 1;
         conn.runtime_session_owner_slot_mut(Some("SID-active"))
             .expect("test runtime slot")
-            .set_loaded_page_generation(next_generation);
+            .replace_page_attachment_id_for_test();
         conn.register_runtime_remote_object_ids_for_session_owner_with_group(
             Some("SID-active"),
             vec!["replacement-object".to_owned()],
@@ -6826,14 +6817,9 @@ mod tests {
         let listener = bidi_channel_listener_residence_for_test(&conn, "SID-active", "stale-reply");
         conn.register_pending_bidi_channel_listener(9, Some("SID-active"), listener);
 
-        let next_generation = conn
-            .runtime_session_owner_slot(Some("SID-active"))
-            .expect("test runtime slot")
-            .loaded_page_generation()
-            + 1;
         conn.runtime_session_owner_slot_mut(Some("SID-active"))
             .expect("test runtime slot")
-            .set_loaded_page_generation(next_generation);
+            .replace_page_attachment_id_for_test();
         conn.register_runtime_remote_object_ids_for_session_owner_with_group(
             Some("SID-active"),
             vec!["replacement-object".to_owned()],

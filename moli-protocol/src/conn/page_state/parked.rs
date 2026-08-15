@@ -1578,19 +1578,19 @@ impl BrowserContext {
         if expected.browser_context_id() != self.id {
             return false;
         }
-        let current_generation = match expected.target_id() {
+        let current_residence = match expected.target_id() {
             Some(target_id) if self.is_active_target(target_id) => {
-                Some(self.active_target.runtime_slot.loaded_page_generation())
+                Some(self.active_target.runtime_slot.page_residence_id())
             }
             Some(target_id) => self
                 .background_target(target_id)
-                .map(|target| target.runtime_slot.loaded_page_generation()),
+                .map(|target| target.runtime_slot.page_residence_id()),
             None if self.active_target_id().is_none() => {
-                Some(self.active_target.runtime_slot.loaded_page_generation())
+                Some(self.active_target.runtime_slot.page_residence_id())
             }
             None => None,
         };
-        current_generation == Some(expected.loaded_page_generation())
+        current_residence == Some(expected.page_attachment_id())
     }
 
     pub(crate) fn dedicated_worker_target_id_for_renderer_instance(

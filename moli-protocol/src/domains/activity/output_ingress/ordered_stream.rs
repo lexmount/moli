@@ -506,7 +506,7 @@ mod tests {
             browser_context_id: "BID-test".to_owned(),
             target_id: Some("TID-test".to_owned()),
             renderer_page,
-            page_owner: crate::conn::TargetPageResidenceIdentity::new(
+            page_owner: crate::conn::TargetPageResidenceIdentity::new_for_test(
                 "BID-test".to_owned(),
                 Some("TID-test".to_owned()),
                 1,

@@ -1894,7 +1894,7 @@ impl CdpConnection {
         // command; binding after `start_*` would leave a real cross-thread race
         // where the concrete FIFO receives its first publication ownerless.
         let page_owner = self
-            .next_target_page_residence_identity_for_session(session_id)
+            .pending_target_page_residence_identity_for_session(session_id)
             .ok_or_else(|| "initial document Page reservation lost its target owner".to_owned())?;
         self.bind_renderer_page_output_owner(renderer_page, page_owner);
         let pending = engine
@@ -2495,16 +2495,14 @@ impl CdpConnection {
                 Some(browser_context_id.as_str()),
                 "navigation Page reservation must bind inside its captured browser context"
             );
-            let page_owner = self
-                .next_target_page_residence_identity_for_session(session_id)
-                .expect("navigation Page reservation must retain its target owner");
-            self.bind_renderer_page_output_owner(
-                RendererPageResidenceIdentity::from_parts(
-                    page_reservation.local_host_id(),
-                    page_reservation.page_id(),
-                ),
-                page_owner,
+            let renderer_page = RendererPageResidenceIdentity::from_parts(
+                page_reservation.local_host_id(),
+                page_reservation.page_id(),
             );
+            let page_owner = self
+                .reserve_target_page_residence_identity_for_session(session_id, renderer_page)
+                .expect("navigation Page reservation must retain its target owner");
+            self.bind_renderer_page_output_owner(renderer_page, page_owner);
         }
     }
 

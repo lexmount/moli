@@ -250,11 +250,17 @@ impl BrowserContext {
     ) -> anyhow::Result<LoadedNavigationPageCommit> {
         let committed_document_post_response_continuation =
             page.take_committed_document_post_response_continuation();
-        let previous_page_owner = TargetPageResidenceIdentity::new(
-            self.id.clone(),
-            self.active_target_id_owned(),
-            self.active_target.runtime_slot.loaded_page_generation(),
-        );
+        let previous_page_owner =
+            self.active_target
+                .runtime_slot
+                .page_attachment_id()
+                .map(|page_attachment_id| {
+                    TargetPageResidenceIdentity::new(
+                        self.id.clone(),
+                        self.active_target_id_owned(),
+                        page_attachment_id,
+                    )
+                });
         let primary_session_id = self.active_session_id_owned();
         let previous_attachment = match renderer_attachment_commit {
             LoadedNavigationRendererAttachmentCommit::Prepare(renderer_agent_candidate) => self
@@ -300,7 +306,7 @@ impl BrowserContext {
             .owner_state
             .commit_document_title(committed_document_title);
         self.clear_active_target_runtime_remote_object_tracking();
-        let replaced_page_owner = previous.as_ref().map(|_| previous_page_owner);
+        let replaced_page_owner = previous.as_ref().and(previous_page_owner);
         if let Some(page) = previous {
             Self::close_page_best_effort(page).await;
         }

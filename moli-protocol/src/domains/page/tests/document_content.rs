@@ -2,19 +2,22 @@ use super::*;
 
 async fn install_document_content_test_page(ctx: &mut TestContext, url: &str) {
     load_bc_with_session(ctx, "BID-set-content", "TID-1", "SID-1", "about:blank");
+    let committed_document = {
+        let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
+        browser_context.set_target_url(url.to_owned());
+        browser_context
+            .start_document_navigation_for_active_target(LOADER_ID.to_owned())
+            .expect("document-content test navigation should start")
+    };
     let mut navigation = ctx
         .conn
-        .load_navigation_via_runtime_async(url)
+        .load_navigation_via_runtime_for_session_owner_async(Some("SID-1"), url)
         .await
         .expect("document-content test page should load");
     let navigation_engine = navigation.navigation_engine.take();
     let artifacts = navigation.page_creation_artifacts;
-    let committed_document = {
+    {
         let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
-        browser_context.set_target_url(url.to_owned());
-        let committed_document = browser_context
-            .start_document_navigation_for_active_target(LOADER_ID.to_owned())
-            .expect("document-content test navigation should start");
         let renderer_agent_candidate = browser_context
             .active_target
             .runtime_slot
@@ -43,8 +46,7 @@ async fn install_document_content_test_page(ctx: &mut TestContext, url: &str) {
                 .is_empty(),
             "the fixture should not leave buffered Inspector output behind"
         );
-        committed_document
-    };
+    }
     let (binding, _) = ctx.conn.bind_renderer_document_lifecycle_for_session_owner(
         Some("SID-1"),
         artifacts,
