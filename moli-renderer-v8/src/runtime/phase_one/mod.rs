@@ -1195,6 +1195,45 @@ html,body{margin:0;padding:0}
     }
 
     #[test]
+    fn layout_renderer_resolves_flex_ratio_content_block_sizes_and_transferred_maxima() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+.column{display:flex;flex-flow:column;align-items:start}
+.row{display:flex}
+#content-basis{aspect-ratio:1/1;background:rgb(51,11,111);min-height:0}
+#transferred-min{background:rgb(52,12,112);min-height:50px;aspect-ratio:2/1;min-width:0}
+#transferred-max{background:rgb(53,13,113);max-height:50px;aspect-ratio:2/1}
+</style></head><body>
+<div class=column><div id=content-basis><div style="width:100px"></div></div></div>
+<div class=row><div id=transferred-min></div></div>
+<div class=row><div id=transferred-max><div style="width:200px"></div></div></div>
+</body></html>"#,
+            )
+            .await;
+
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(51, 11, 111)),
+                moli_layout::PaintRect::new(0.0, 0.0, 100.0, 100.0),
+            );
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(52, 12, 112)),
+                moli_layout::PaintRect::new(0.0, 100.0, 100.0, 50.0),
+            );
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(53, 13, 113)),
+                moli_layout::PaintRect::new(0.0, 150.0, 100.0, 50.0),
+            );
+        }));
+    }
+
+    #[test]
     fn layout_renderer_resolves_cyclic_preferred_width_after_parent_contribution() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
