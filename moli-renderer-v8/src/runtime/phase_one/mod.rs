@@ -1084,6 +1084,65 @@ html,body{margin:0;padding:0}
     }
 
     #[test]
+    fn layout_renderer_preserves_the_flex_ratio_automatic_minimum() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+#host{display:flex;width:0;height:100px}
+#item{width:100px;height:100px;aspect-ratio:1;background:rgb(236,6,6)}
+</style></head><body>
+<div id=host><div id=item></div></div>
+</body></html>"#,
+            )
+            .await;
+
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(236, 6, 6)),
+                moli_layout::PaintRect::new(0.0, 0.0, 100.0, 100.0),
+            );
+        }));
+    }
+
+    #[test]
+    fn layout_renderer_transfers_definite_flex_stretch_into_the_automatic_minimum() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+#row{display:flex;width:0;height:100px}
+#row-item{aspect-ratio:1;background:rgb(17,181,73)}
+#column{display:flex;flex-direction:column;width:100px;height:0}
+#column-item{aspect-ratio:1;background:rgb(23,61,211)}
+</style></head><body>
+<div id=row><div id=row-item></div></div>
+<div id=column><div id=column-item></div></div>
+</body></html>"#,
+            )
+            .await;
+
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(17, 181, 73)),
+                moli_layout::PaintRect::new(0.0, 0.0, 100.0, 100.0),
+            );
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(23, 61, 211)),
+                moli_layout::PaintRect::new(0.0, 100.0, 100.0, 100.0),
+            );
+        }));
+    }
+
+    #[test]
     fn layout_renderer_resolves_cyclic_preferred_width_after_parent_contribution() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
