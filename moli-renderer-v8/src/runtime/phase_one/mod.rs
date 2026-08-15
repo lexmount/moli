@@ -1084,6 +1084,51 @@ html,body{margin:0;padding:0}
     }
 
     #[test]
+    fn layout_renderer_reruns_grid_tracks_after_ratio_resolves_the_block_size() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+.case{position:absolute;top:0;display:grid;aspect-ratio:1/1}
+#fill{left:0;width:100px}
+#fill>div{background:rgb(61,21,121)}
+#center{left:120px;width:100px;align-items:center}
+#center>div{width:100px;height:50px;background:rgb(62,22,122)}
+#vertical{left:240px;height:100px;writing-mode:vertical-rl}
+#vertical>div{background:rgb(63,23,123)}
+</style></head><body>
+<div id=fill class=case><div></div></div>
+<div id=center class=case><div></div></div>
+<div id=vertical class=case><div></div></div>
+</body></html>"#,
+            )
+            .await;
+
+            for (color, expected) in [
+                (
+                    rgb(61, 21, 121),
+                    moli_layout::PaintRect::new(0.0, 0.0, 100.0, 100.0),
+                ),
+                (
+                    rgb(62, 22, 122),
+                    moli_layout::PaintRect::new(120.0, 25.0, 100.0, 50.0),
+                ),
+                (
+                    rgb(63, 23, 123),
+                    moli_layout::PaintRect::new(240.0, 0.0, 100.0, 100.0),
+                ),
+            ] {
+                assert_paint_rect(solid_paint_rect(&snapshot, color), expected);
+            }
+        }));
+    }
+
+    #[test]
     fn layout_renderer_preserves_the_flex_ratio_automatic_minimum() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
