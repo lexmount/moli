@@ -2276,6 +2276,40 @@ td{width:10px;height:10px;padding:0;border:0;font-size:0}
     }
 
     #[test]
+    fn layout_renderer_applies_caption_constraints_at_the_table_wrapper_boundary() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}table{border-spacing:0}
+#intrinsic-caption{width:100px;background:rgb(70,30,130)}
+#intrinsic-caption>div{height:35px;margin:10px}
+#fixed-table{width:200px;height:100px}
+#centered-caption{width:50%;height:80%;margin-left:auto;margin-right:auto;background:rgb(71,31,131)}
+#centered-caption>div{width:10px;height:30px}
+</style></head><body>
+<table><caption id=intrinsic-caption><div></div><div></div></caption></table>
+<table id=fixed-table><caption id=centered-caption><div></div></caption></table>
+</body></html>"#,
+            )
+            .await;
+
+            let intrinsic = solid_paint_rect(&snapshot, rgb(70, 30, 130));
+            assert!((intrinsic.width - 100.0).abs() <= 0.01, "{intrinsic:?}");
+            assert!((intrinsic.height - 100.0).abs() <= 0.01, "{intrinsic:?}");
+
+            let centered = solid_paint_rect(&snapshot, rgb(71, 31, 131));
+            assert!((centered.x - 50.0).abs() <= 0.01, "{centered:?}");
+            assert!((centered.width - 100.0).abs() <= 0.01, "{centered:?}");
+            assert!((centered.height - 30.0).abs() <= 0.01, "{centered:?}");
+        }));
+    }
+
+    #[test]
     fn layout_renderer_computes_phase_four_special_formatting_geometry_from_native_dom_and_stylo() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
