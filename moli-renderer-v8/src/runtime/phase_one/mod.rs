@@ -1143,6 +1143,58 @@ html,body{margin:0;padding:0}
     }
 
     #[test]
+    fn layout_renderer_resolves_column_flex_ratio_content_suggestions() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+.host{display:flex;flex-direction:column;float:left;height:1px}
+.item{box-sizing:border-box;padding-left:15px;padding-top:10px}
+.item>div{height:190px}
+#a{background:rgb(41,1,101)}#b{background:rgb(42,2,102)}
+#c{background:rgb(43,3,103)}#d{background:rgb(44,4,104)}
+#e{background:rgb(45,5,105)}#f{background:rgb(46,6,106)}
+#g{background:rgb(47,7,107)}#h{background:rgb(48,8,108)}
+</style></head><body>
+<div class=host style="height:auto"><div id=a class=item style="min-height:0;width:25px;aspect-ratio:1/8"><div></div></div></div>
+<div class=host><div id=b class=item style="width:25px;aspect-ratio:1/1"><div></div></div></div>
+<div class=host><div id=c class=item style="min-width:25px;aspect-ratio:1/1"><div></div></div></div>
+<div class=host><div id=d class=item style="max-width:25px;width:100px;aspect-ratio:1/8"><div style="height:500px"></div></div></div>
+<div class=host style="height:auto"><div id=e class=item style="min-height:0;width:25px;aspect-ratio:auto 1/19"><div></div></div></div>
+<div class=host><div id=f class=item style="width:25px;aspect-ratio:auto 1/1"><div></div></div></div>
+<div class=host><div id=g class=item style="min-width:25px;aspect-ratio:auto 1/1"><div></div></div></div>
+<div class=host><div id=h class=item style="max-width:25px;width:100px;aspect-ratio:auto 1/19"><div style="height:500px"></div></div></div>
+</body></html>"#,
+            )
+            .await;
+
+            for (index, color) in [
+                rgb(41, 1, 101),
+                rgb(42, 2, 102),
+                rgb(43, 3, 103),
+                rgb(44, 4, 104),
+                rgb(45, 5, 105),
+                rgb(46, 6, 106),
+                rgb(47, 7, 107),
+                rgb(48, 8, 108),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                assert_paint_rect(
+                    solid_paint_rect(&snapshot, color),
+                    moli_layout::PaintRect::new(index as f32 * 25.0, 0.0, 25.0, 200.0),
+                );
+            }
+        }));
+    }
+
+    #[test]
     fn layout_renderer_resolves_cyclic_preferred_width_after_parent_contribution() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
