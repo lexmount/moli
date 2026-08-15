@@ -14,7 +14,7 @@ use super::document_lifecycle_observer::{
     RendererDocumentLifecycleObservation, RendererDocumentLifecycleObservationPublisher,
     RendererDocumentLifecycleObserver,
 };
-use super::page_residence_observer::{TargetPageResidenceObservation, TargetPageResidenceObserver};
+use super::page_residence_token::{TargetPageResidencePublisher, TargetPageResidenceToken};
 use super::{NavigationRequestId, RendererPageResidenceIdentity, TargetPageAttachmentId};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -333,7 +333,7 @@ pub(crate) struct TargetPageSlot {
     loaded_page_absence_reason: TargetPageAbsenceReason,
     page_attachment_id: Option<TargetPageAttachmentId>,
     loaded_page_generation: u64,
-    loaded_page_generation_publisher: Option<watch::Sender<u64>>,
+    page_residence_publisher: Option<TargetPageResidencePublisher>,
     pending_navigation_request: Option<PendingNavigationRequest>,
     committed_document_navigation: Option<DocumentNavigationToken>,
     renderer_document_lifecycle: RendererDocumentLifecycleProtocolState,
@@ -484,7 +484,9 @@ impl TargetPageSlot {
             self.loaded_page_absence_reason = absence_reason;
             self.page_attachment_id = None;
         }
-        std::mem::replace(&mut self.loaded_page, page)
+        let previous = std::mem::replace(&mut self.loaded_page, page);
+        self.supersede_page_residence();
+        previous
     }
 
     pub(crate) fn replace_loaded_page(&mut self, page: Option<Page>) -> Option<Page> {
@@ -504,19 +506,18 @@ impl TargetPageSlot {
         self.loaded_page_generation
     }
 
-    pub(crate) fn register_page_residence_observer(
-        &mut self,
-        expected_generation: u64,
-    ) -> TargetPageResidenceObserver {
-        if self.loaded_page_generation != expected_generation {
-            return TargetPageResidenceObserver::resolved(
-                TargetPageResidenceObservation::Superseded,
-            );
-        }
+    pub(crate) fn page_residence_token(&mut self) -> Option<TargetPageResidenceToken> {
+        let attachment_id = self.page_attachment_id?;
         let publisher = self
-            .loaded_page_generation_publisher
-            .get_or_insert_with(|| watch::channel(self.loaded_page_generation).0);
-        TargetPageResidenceObserver::new(expected_generation, publisher.subscribe())
+            .page_residence_publisher
+            .get_or_insert_with(|| TargetPageResidencePublisher::new(attachment_id));
+        Some(publisher.token())
+    }
+
+    fn supersede_page_residence(&mut self) {
+        if let Some(publisher) = self.page_residence_publisher.take() {
+            publisher.supersede();
+        }
     }
 
     fn advance_loaded_page_generation(&mut self) {
@@ -524,7 +525,6 @@ impl TargetPageSlot {
             RendererDocumentLifecycleObservation::Superseded,
         );
         self.loaded_page_generation = self.loaded_page_generation.wrapping_add(1);
-        self.publish_loaded_page_generation();
     }
 
     #[cfg(test)]
@@ -541,19 +541,16 @@ impl TargetPageSlot {
             RendererDocumentLifecycleObservation::Superseded,
         );
         self.loaded_page_generation = generation;
-        self.publish_loaded_page_generation();
-    }
-
-    fn publish_loaded_page_generation(&self) {
-        if let Some(publisher) = self.loaded_page_generation_publisher.as_ref() {
-            publisher.send_replace(self.loaded_page_generation);
-        }
     }
 
     #[cfg(test)]
     pub(crate) fn set_page_attachment_id_for_test(&mut self, raw: u64) -> TargetPageAttachmentId {
         let attachment_id = TargetPageAttachmentId::from_raw_for_test(raw);
+        let attachment_changed = self.page_attachment_id != Some(attachment_id);
         self.page_attachment_id = Some(attachment_id);
+        if attachment_changed {
+            self.supersede_page_residence();
+        }
         attachment_id
     }
 
@@ -1357,6 +1354,42 @@ impl TargetPageSlot {
                     && snapshot.load.is_some()
                     && snapshot.terminated.is_none()
             })
+    }
+}
+
+#[cfg(test)]
+mod page_residence_tests {
+    use std::{
+        future::Future,
+        task::{Context, Poll, Waker},
+    };
+
+    use super::*;
+    use crate::conn::TargetPageResidenceObservation;
+
+    #[test]
+    fn attachment_token_ignores_generation_and_terminates_on_attachment_replacement() {
+        let mut slot = TargetPageSlot::default();
+        slot.set_page_attachment_id_for_test(91);
+        let token = slot
+            .page_residence_token()
+            .expect("the installed attachment should expose its lifetime token");
+
+        slot.bump_loaded_page_generation();
+
+        let mut wait = Box::pin(token.wait());
+        let mut context = Context::from_waker(Waker::noop());
+        assert!(
+            matches!(wait.as_mut().poll(&mut context), Poll::Pending),
+            "changing only the slot generation must not terminate an attachment token"
+        );
+
+        slot.set_page_attachment_id_for_test(92);
+
+        assert!(matches!(
+            wait.as_mut().poll(&mut context),
+            Poll::Ready(TargetPageResidenceObservation::Superseded)
+        ));
     }
 }
 

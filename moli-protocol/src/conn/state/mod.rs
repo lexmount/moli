@@ -12,7 +12,7 @@ mod inspector;
 mod javascript_dialog;
 mod navigation;
 mod navigation_outcome;
-mod page_residence_observer;
+mod page_residence_token;
 mod page_resource;
 mod page_slot;
 mod parking;
@@ -57,9 +57,7 @@ pub(crate) use devtools_session::{
 pub(crate) use document_lifecycle_observer::{
     RendererDocumentLifecycleObservation, RendererDocumentLifecycleObserver,
 };
-pub(crate) use page_residence_observer::{
-    TargetPageResidenceObservation, TargetPageResidenceObserver,
-};
+pub(crate) use page_residence_token::{TargetPageResidenceObservation, TargetPageResidenceToken};
 
 pub use bounds::BrowserWindowBounds;
 

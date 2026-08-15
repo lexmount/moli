@@ -3,7 +3,11 @@ use super::super::*;
 use super::support::CdpPageHarness;
 use crate::conn::CdpCommandTaskStep;
 use serde_json::json;
-use std::time::Duration;
+use std::{
+    future::Future,
+    task::{Context, Poll, Waker},
+    time::Duration,
+};
 
 async fn expect_page_replacement_cleans_up_pending_input_ack(
     ctx: &mut TestContext,
@@ -17,6 +21,12 @@ async fn expect_page_replacement_cleans_up_pending_input_ack(
         .conn
         .target_page_residence_identity_for_session(Some(&page.session_id))
         .expect("the input command should have a Page owner");
+    let original_attachment = ctx
+        .conn
+        .runtime_session_owner_slot(Some(&page.session_id))
+        .expect("the input command should route to a Page slot")
+        .page_attachment_id()
+        .expect("the input command should have a concrete Page attachment");
     let raw = json!({
         "id": command_id,
         "method": method,
@@ -37,10 +47,9 @@ async fn expect_page_replacement_cleans_up_pending_input_ack(
     );
 
     let mut completion = Box::pin(pending.wait());
+    let mut poll_context = Context::from_waker(Waker::noop());
     assert!(
-        tokio::time::timeout(Duration::from_millis(25), &mut completion)
-            .await
-            .is_err(),
+        matches!(completion.as_mut().poll(&mut poll_context), Poll::Pending),
         "{method} must not reply before either its renderer ACK or Page replacement"
     );
 
@@ -53,7 +62,14 @@ async fn expect_page_replacement_cleans_up_pending_input_ack(
         .conn
         .target_page_residence_identity_for_session(Some(&page.session_id))
         .expect("the replacement should install a Page owner");
+    let replacement_attachment = ctx
+        .conn
+        .runtime_session_owner_slot(Some(&page.session_id))
+        .expect("the replacement should route to a Page slot")
+        .page_attachment_id()
+        .expect("the replacement should have a concrete Page attachment");
     assert_ne!(original_owner, replacement_owner);
+    assert_ne!(original_attachment, replacement_attachment);
 
     let completed = tokio::time::timeout(Duration::from_secs(5), &mut completion)
         .await

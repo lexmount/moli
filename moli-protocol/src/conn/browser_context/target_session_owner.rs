@@ -3021,24 +3021,20 @@ impl CdpConnection {
             == Some(expected)
     }
 
-    /// Observes replacement of the exact installed Page that admitted work.
-    pub(crate) fn register_target_page_residence_observer_for_session(
+    /// Captures the lifetime of the concrete Page attachment currently
+    /// addressed by `session_id`.
+    ///
+    /// The returned token is owned by that attachment rather than by a numeric
+    /// slot generation. Moving the whole target slot preserves it; replacing
+    /// or clearing the installed Page terminates it directly.
+    pub(crate) fn capture_target_page_residence_token_for_session(
         &mut self,
         session_id: Option<&str>,
-        expected: &TargetPageResidenceIdentity,
-    ) -> crate::conn::TargetPageResidenceObserver {
-        if !self.target_page_residence_identity_is_current_for_session(session_id, expected) {
-            return crate::conn::TargetPageResidenceObserver::resolved(
-                crate::conn::TargetPageResidenceObservation::Superseded,
-            );
-        }
-        let Ok(slot) = self.runtime_session_owner_slot_mut(session_id) else {
-            return crate::conn::TargetPageResidenceObserver::resolved(
-                crate::conn::TargetPageResidenceObservation::Unavailable,
-            );
-        };
-        slot.page_slot_mut()
-            .register_page_residence_observer(expected.loaded_page_generation())
+    ) -> Option<crate::conn::TargetPageResidenceToken> {
+        self.runtime_session_owner_slot_mut(session_id)
+            .ok()?
+            .page_slot_mut()
+            .page_residence_token()
     }
 
     /// Captures the exact protocol attachment currently addressing a Page.

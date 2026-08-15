@@ -1,6 +1,6 @@
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, Cmd, CommandDispatchContext,
-    TargetPageResidenceIdentity, TargetPageResidenceObservation, TargetPageResidenceObserver,
+    TargetPageResidenceIdentity, TargetPageResidenceObservation, TargetPageResidenceToken,
 };
 use crate::devtools_runtime::{
     DevToolsCommand, DevToolsCommandContext, DevToolsCommandResult,
@@ -61,7 +61,7 @@ pub(crate) struct PendingInputCommandDispatch {
     command_id: Option<u64>,
     session_id: Option<String>,
     owner: TargetPageResidenceIdentity,
-    owner_observer: Option<TargetPageResidenceObserver>,
+    page_residence_token: Option<TargetPageResidenceToken>,
     kind: PendingInputCommandKind,
     pending: PendingInputOperation,
 }
@@ -149,16 +149,16 @@ enum RendererInputWaitOutcome<T> {
 
 async fn wait_for_renderer_input_or_page_replacement<T>(
     completion: impl std::future::Future<Output = T>,
-    owner_observer: Option<TargetPageResidenceObserver>,
+    page_residence_token: Option<TargetPageResidenceToken>,
 ) -> RendererInputWaitOutcome<T> {
-    let Some(owner_observer) = owner_observer else {
+    let Some(page_residence_token) = page_residence_token else {
         return RendererInputWaitOutcome::Completed(completion.await);
     };
     tokio::pin!(completion);
     tokio::select! {
         biased;
         result = &mut completion => RendererInputWaitOutcome::Completed(result),
-        observation = owner_observer.wait() => {
+        observation = page_residence_token.wait() => {
             RendererInputWaitOutcome::PageResidence(observation)
         }
     }
@@ -174,7 +174,7 @@ impl PendingInputCommandDispatch {
             PendingInputOperation::Page(pending) => {
                 match wait_for_renderer_input_or_page_replacement(
                     pending.wait(),
-                    self.owner_observer,
+                    self.page_residence_token,
                 )
                 .await
                 {
@@ -193,7 +193,7 @@ impl PendingInputCommandDispatch {
             PendingInputOperation::RendererAckHeldForTest => {
                 match wait_for_renderer_input_or_page_replacement(
                     std::future::pending::<std::convert::Infallible>(),
-                    self.owner_observer,
+                    self.page_residence_token,
                 )
                 .await
                 {
@@ -223,7 +223,7 @@ impl PendingInputCommandDispatch {
         // gives lifecycle smoke tests a deterministic outstanding callback;
         // public CDP intentionally cannot pause that callback while also
         // scheduling a replacement of the same Page owner.
-        if !self.kind.uses_renderer_host_ack_cleanup() || self.owner_observer.is_none() {
+        if !self.kind.uses_renderer_host_ack_cleanup() || self.page_residence_token.is_none() {
             return false;
         }
         self.pending = PendingInputOperation::RendererAckHeldForTest;
@@ -1015,17 +1015,22 @@ fn start_page_input_command(
     let owner = conn
         .target_page_residence_identity_for_session(command_session_id)
         .ok_or_else(PendingInputCommandStartError::no_document_loaded)?;
+    let page_residence_token = if kind.uses_renderer_host_ack_cleanup() {
+        Some(
+            conn.capture_target_page_residence_token_for_session(command_session_id)
+                .ok_or_else(PendingInputCommandStartError::no_document_loaded)?,
+        )
+    } else {
+        None
+    };
     let page = loaded_page_mut(conn, command_session_id)
         .ok_or_else(PendingInputCommandStartError::no_document_loaded)?;
     let pending = start(page).map_err(PendingInputCommandStartError::renderer_error)?;
-    let owner_observer = kind.uses_renderer_host_ack_cleanup().then(|| {
-        conn.register_target_page_residence_observer_for_session(command_session_id, &owner)
-    });
     Ok(Some(PendingInputCommandDispatch {
         command_id,
         session_id: command_session_id.map(str::to_owned),
         owner,
-        owner_observer,
+        page_residence_token,
         kind,
         pending: PendingInputOperation::Page(pending),
     }))
