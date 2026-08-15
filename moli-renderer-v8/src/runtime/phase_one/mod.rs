@@ -1259,6 +1259,44 @@ html,body{margin:0;padding:0}
     }
 
     #[test]
+    fn layout_renderer_derives_intrinsic_inline_contributions_from_initial_block_geometry() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+#minimum{width:auto;height:25px;min-width:min-content;aspect-ratio:4/1;background:rgb(55,15,115)}
+#minimum>div{width:150px}
+#min-outer{width:min-content;background:rgb(56,16,116)}
+#max-outer{width:max-content;background:rgb(57,17,117)}
+.contribution{width:min-content;height:100px;aspect-ratio:1/1}
+#flex-host{display:flex}
+#flex-contribution{width:min-content;height:100px;aspect-ratio:1/1;flex-shrink:0;background:rgb(58,18,118)}
+</style></head><body>
+<div id=minimum><div></div></div>
+<div id=min-outer><div id=min-contribution class=contribution></div></div>
+<div id=max-outer><div id=max-contribution class=contribution></div></div>
+<div id=flex-host><div id=flex-contribution></div></div>
+</body></html>"#,
+            )
+            .await;
+
+            for (color, expected) in [
+                (rgb(55, 15, 115), moli_layout::PaintRect::new(0.0, 0.0, 100.0, 25.0)),
+                (rgb(56, 16, 116), moli_layout::PaintRect::new(0.0, 25.0, 100.0, 100.0)),
+                (rgb(57, 17, 117), moli_layout::PaintRect::new(0.0, 125.0, 100.0, 100.0)),
+                (rgb(58, 18, 118), moli_layout::PaintRect::new(0.0, 225.0, 100.0, 100.0)),
+            ] {
+                assert_paint_rect(solid_paint_rect(&snapshot, color), expected);
+            }
+        }));
+    }
+
+    #[test]
     fn layout_renderer_resolves_cyclic_preferred_width_after_parent_contribution() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
