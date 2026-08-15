@@ -1040,7 +1040,7 @@ html,body{margin:0;padding:0}
     }
 
     #[test]
-    fn layout_renderer_orders_content_block_sizing_ratio_and_explicit_stretch() {
+    fn layout_renderer_orders_content_block_and_flex_ratio_sizing() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -1056,11 +1056,14 @@ html,body{margin:0;padding:0}
 #ratio-scroll{height:auto;overflow:scroll;background:rgb(233,3,3)}
 #grid-host{display:grid;width:100px;height:100px;grid-template-columns:100px;grid-template-rows:100px}
 #grid-item{width:100px;height:auto;aspect-ratio:10;align-self:stretch;background:rgb(234,4,4)}
+#flex-host{display:flex;width:100px}
+#flex-item{width:50px;aspect-ratio:1;flex:1;min-height:0;background:rgb(235,5,5)}
 </style></head><body>
 <div id=ratio-auto class=target><div class=content></div></div>
 <div id=ratio-max class=target><div class=content></div></div>
 <div id=ratio-scroll class=target><div class=content></div></div>
 <div id=grid-host><div id=grid-item><div class=content></div></div></div>
+<div id=flex-host><div id=flex-item></div></div>
 </body></html>"#,
             )
             .await;
@@ -1070,6 +1073,7 @@ html,body{margin:0;padding:0}
                 (rgb(232, 2, 2), (0.0, 25.0, 100.0, 15.0)),
                 (rgb(233, 3, 3), (0.0, 40.0, 100.0, 10.0)),
                 (rgb(234, 4, 4), (0.0, 50.0, 100.0, 100.0)),
+                (rgb(235, 5, 5), (0.0, 150.0, 100.0, 100.0)),
             ] {
                 assert_paint_rect(
                     solid_paint_rect(&snapshot, color),
