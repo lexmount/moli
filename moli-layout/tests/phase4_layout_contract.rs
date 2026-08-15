@@ -420,6 +420,98 @@ fn table_caption_resolves_inline_auto_margins_without_a_block_percentage_basis()
 }
 
 #[test]
+fn anonymous_table_cells_preserve_internal_block_margin_collapsing() {
+    use LayoutElementCategory::Table;
+    use LayoutTableRole::{Row, Table as Root};
+
+    let source = Source(vec![
+        Node::element("root", "div", LayoutElementCategory::Generic, None, vec![1]),
+        Node::element("table", "table", Table(Root), None, vec![2, 6, 8]),
+        Node::element("first-row", "tr", Table(Row), None, vec![3, 5]),
+        Node::element(
+            "nested-margin-block",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            vec![4],
+        ),
+        Node::element(
+            "nested-empty-block",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            Vec::new(),
+        ),
+        Node::element(
+            "first-row-empty-block",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            Vec::new(),
+        ),
+        Node::element("second-row", "tr", Table(Row), None, vec![7]),
+        Node::element(
+            "second-row-empty-block",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            Vec::new(),
+        ),
+        Node::element("empty-row", "tr", Table(Row), None, Vec::new()),
+    ]);
+    let first_row = PaintColor::new(0.11, 0.61, 0.21, 1.0);
+    let second_row = PaintColor::new(0.12, 0.62, 0.22, 1.0);
+    let mut styles = Styles::default();
+    styles.primary.insert(
+        0,
+        style(LayoutDisplay::Block, PaintColor::TRANSPARENT)
+            .tap_taffy(|taffy| taffy.size.width = Dimension::length(200.0)),
+    );
+    styles.primary.insert(
+        1,
+        style(LayoutDisplay::Table, RED).tap_taffy(|taffy| {
+            taffy.size.height = Dimension::length(100.0);
+        }),
+    );
+    styles
+        .primary
+        .insert(2, style(LayoutDisplay::TableRow, first_row));
+    styles
+        .primary
+        .insert(6, style(LayoutDisplay::TableRow, second_row));
+    styles
+        .primary
+        .insert(8, style(LayoutDisplay::TableRow, PaintColor::TRANSPARENT));
+    styles.primary.insert(
+        3,
+        style(LayoutDisplay::Block, PaintColor::TRANSPARENT).tap_taffy(|taffy| {
+            taffy.size.width = Dimension::length(100.0);
+            taffy.margin.top = taffy::LengthPercentageAuto::length(50.0);
+            taffy.margin.bottom = taffy::LengthPercentageAuto::length(50.0);
+        }),
+    );
+    for block in [4, 5, 7] {
+        styles.primary.insert(
+            block,
+            style(LayoutDisplay::Block, PaintColor::TRANSPARENT).tap_taffy(|taffy| {
+                taffy.margin.top = taffy::LengthPercentageAuto::length(50.0);
+                taffy.margin.bottom = taffy::LengthPercentageAuto::length(50.0);
+            }),
+        );
+    }
+
+    let snapshot = render(&source, &mut styles, 200, 300);
+    let table = rect(&snapshot, RED);
+    let first = rect(&snapshot, first_row);
+    let second = rect(&snapshot, second_row);
+    assert_close(table.width, 100.0);
+    assert_close(table.height, 100.0);
+    assert_close(first.height, 50.0);
+    assert_close(second.y, 50.0);
+    assert_close(second.height, 50.0);
+}
+
+#[test]
 fn table_sections_use_visual_header_body_footer_order() {
     use LayoutElementCategory::Table;
     use LayoutTableRole::{BodyGroup, Cell, FooterGroup, HeaderGroup, Row, Table as Root};
