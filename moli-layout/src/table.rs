@@ -125,6 +125,7 @@ struct TableContext {
     rows: Vec<TableRow>,
     columns: Vec<TableColumn>,
     captions: Vec<LayoutBoxId>,
+    caption_min_inline_size: f32,
     detailed: Option<DetailedGridInfo>,
     collapsed_borders: bool,
     column_count: usize,
@@ -216,6 +217,7 @@ where
 {
     let mut context = build_table_context(world, root);
     context.resolve_used_table_box(inputs);
+    context.collect_caption_inline_constraints(world);
     context.collect_cell_inline_constraints(world);
     let grid_inputs = context.resolve_column_tracks(inputs);
     let mut output = {
@@ -351,6 +353,7 @@ where
         rows,
         columns,
         captions: grouped_children.captions,
+        caption_min_inline_size: 0.0,
         detailed: None,
         collapsed_borders: collapsed,
         column_count: max_columns,
@@ -401,6 +404,58 @@ impl TableContext {
             top: style_helpers::length(padding.top + spacing_padding.top),
             bottom: style_helpers::length(padding.bottom + spacing_padding.bottom),
         };
+    }
+
+    /// Measure the minimum outer inline contribution of every caption.
+    ///
+    /// A caption is a block box in the table wrapper, not a grid cell. Its
+    /// minimum contribution nevertheless places a lower bound on the table's
+    /// used inline size. Keep that constraint beside the column constraints
+    /// instead of manufacturing a grid track for captions; this mirrors
+    /// Blink's `ComputeCaptionConstraint` / `ComputeAssignableTableInlineSize`
+    /// split and leaves the CSS table box tree intact.
+    fn collect_caption_inline_constraints<N>(&mut self, world: &mut LayoutWorld<N>)
+    where
+        N: Copy + Debug + Eq + Hash,
+    {
+        let inline_axis = self.writing_mode.inline_axis();
+        let available_space = self.writing_mode.to_physical(LogicalSize {
+            inline_size: AvailableSpace::MinContent,
+            block_size: AvailableSpace::MaxContent,
+        });
+        let inputs = LayoutInput {
+            known_dimensions: Size::NONE,
+            definite_dimensions: Size::NONE,
+            parent_size: Size::NONE,
+            parent_writing_mode: self.writing_mode,
+            available_space,
+            sizing_mode: SizingMode::InherentSize,
+            sizing_purpose: SizingPurpose::IntrinsicContribution,
+            run_mode: RunMode::ComputeSize,
+            axis: RequestedAxis::from(inline_axis),
+            inline_auto_behavior: AutoSizeBehavior::FitContent,
+            block_auto_behavior: AutoSizeBehavior::FitContent,
+            block_margins_are_collapsible: Line::FALSE,
+        };
+
+        self.caption_min_inline_size = self
+            .captions
+            .iter()
+            .copied()
+            .map(|caption| {
+                let style = &world.boxes[caption.index()].style.taffy;
+                // Percentages are cyclic while the table wrapper's intrinsic
+                // inline size is being determined, and auto margins contribute
+                // zero. `None` expresses both rules at the sizing boundary.
+                let margin = style.margin.resolve_or_zero(None, resolve_stylo_calc_value);
+                let inline_margin = physical_inline_sum(self.writing_mode, margin);
+                let contribution = world
+                    .compute_child_size(caption.to_taffy(), inputs)
+                    .size
+                    .get_abs(inline_axis);
+                contribution + inline_margin
+            })
+            .fold(0.0, f32::max);
     }
 
     /// Gather cell measures after the table tree is complete. Fixed layout
@@ -468,12 +523,13 @@ impl TableContext {
             undistributable_space,
             self.layout_mode.is_fixed(),
         );
-        let used_inline_size = self.resolve_used_inline_size(
-            inputs,
-            grid_min_max.min,
-            grid_min_max.max,
-            inline_insets,
-        );
+        // Captions live in the wrapper formatting context rather than the
+        // column grid, but their minimum outer contribution constrains both
+        // intrinsic table contributions and the final used table width.
+        let table_min = grid_min_max.min.max(self.caption_min_inline_size);
+        let table_max = grid_min_max.max.max(self.caption_min_inline_size);
+        let used_inline_size =
+            self.resolve_used_inline_size(inputs, table_min, table_max, inline_insets);
         let assignable_inline_size = (used_inline_size - undistributable_space).max(0.0);
         let column_sizes = if self.layout_mode.is_fixed() {
             distribute_fixed_columns(assignable_inline_size, &self.column_constraints)
@@ -996,34 +1052,54 @@ where
     let percentage_basis = parent_writing_mode.to_logical(containing_size).inline_size;
     for (order, caption) in captions.iter().copied().enumerate() {
         let style = world.boxes[caption.index()].style.taffy.clone();
-        let margin = style
+        let mut margin = style
             .margin
             .resolve_or_zero(Some(percentage_basis), resolve_stylo_calc_value);
         y += margin.top;
+        let available_inline_size =
+            (percentage_basis - physical_inline_sum(parent_writing_mode, margin)).max(0.0);
+        let parent_size = parent_writing_mode.to_physical(LogicalSize {
+            inline_size: Some(percentage_basis),
+            // CSS Tables treats caption percentage block sizes as auto: the
+            // wrapper has no caption containing-block block size to expose.
+            block_size: None,
+        });
+        let available_space = parent_writing_mode.to_physical(LogicalSize {
+            inline_size: AvailableSpace::Definite(available_inline_size),
+            block_size: AvailableSpace::MaxContent,
+        });
         let inputs = LayoutInput {
-            known_dimensions: Size {
-                width: Some((width - margin.left - margin.right).max(0.0)),
-                height: None,
-            },
-            definite_dimensions: Size {
-                width: Some((width - margin.left - margin.right).max(0.0)),
-                height: None,
-            },
-            parent_size: containing_size.map(Some),
+            // The table supplies available margin-box space; the caption still
+            // owns its authored width/min/max. An automatic width stretches,
+            // while a specified width remains a real caption constraint.
+            known_dimensions: Size::NONE,
+            definite_dimensions: Size::NONE,
+            parent_size,
             parent_writing_mode,
-            available_space: Size {
-                width: AvailableSpace::Definite(width),
-                height: AvailableSpace::MaxContent,
-            },
+            available_space,
             sizing_mode: SizingMode::InherentSize,
             sizing_purpose: SizingPurpose::Layout,
             run_mode: RunMode::PerformLayout,
             axis: taffy::RequestedAxis::Both,
-            inline_auto_behavior: AutoSizeBehavior::FitContent,
+            inline_auto_behavior: AutoSizeBehavior::StretchImplicit,
             block_auto_behavior: AutoSizeBehavior::FitContent,
             block_margins_are_collapsible: Line::FALSE,
         };
         let output = world.compute_child_layout(caption.to_taffy(), inputs);
+        if parent_writing_mode.is_horizontal() {
+            let free_inline_space =
+                (width - output.size.width - margin.left - margin.right).max(0.0);
+            let auto_count = style.margin.left.is_auto() as u8 + style.margin.right.is_auto() as u8;
+            if auto_count > 0 {
+                let auto_margin = free_inline_space / f32::from(auto_count);
+                if style.margin.left.is_auto() {
+                    margin.left = auto_margin;
+                }
+                if style.margin.right.is_auto() {
+                    margin.right = auto_margin;
+                }
+            }
+        }
         set_box_layout(
             world,
             caption,
@@ -1031,6 +1107,7 @@ where
             output,
             order,
             Some(percentage_basis),
+            margin,
         );
         y += output.size.height + margin.bottom;
     }
@@ -1261,6 +1338,7 @@ fn set_box_layout<N>(
     output: LayoutOutput,
     order: usize,
     percentage_basis: Option<f32>,
+    margin: Rect<f32>,
 ) where
     N: Copy + Debug + Eq + Hash,
 {
@@ -1270,9 +1348,6 @@ fn set_box_layout<N>(
         .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
     let border = style
         .border
-        .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
-    let margin = style
-        .margin
         .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
     world.boxes[id.index()].unrounded_layout = Layout {
         order: u32::try_from(order).unwrap_or(u32::MAX),
