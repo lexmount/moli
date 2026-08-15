@@ -10963,6 +10963,69 @@ async fn webdriver_classic_execute_sync_honors_script_timeout() {
 }
 
 #[tokio::test]
+async fn webdriver_classic_execute_sync_timeout_interrupts_non_yielding_script() {
+    let app = build_router(test_state());
+
+    let session = classic_request_json(app.clone(), Method::POST, "/session").await;
+    let session_id = session["value"]["sessionId"]
+        .as_str()
+        .expect("classic session id");
+
+    let set_timeouts = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/timeouts"),
+        json!({ "script": 100 }),
+    )
+    .await;
+    assert_eq!(set_timeouts, json!({ "value": null }));
+
+    let (timeout_status, timeout_response) = tokio::time::timeout(
+        Duration::from_secs(10),
+        classic_request_status_and_json_with_body(
+            app.clone(),
+            Method::POST,
+            &format!("/session/{session_id}/execute/sync"),
+            json!({
+                "script": "for (;;) {}",
+                "args": []
+            }),
+        ),
+    )
+    .await
+    .expect("non-yielding script timeout must interrupt V8 and return");
+    assert_eq!(timeout_status, StatusCode::REQUEST_TIMEOUT);
+    assert_eq!(timeout_response["value"]["error"], json!("script timeout"));
+
+    let reset_timeouts = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/timeouts"),
+        json!({ "script": 1000 }),
+    )
+    .await;
+    assert_eq!(reset_timeouts, json!({ "value": null }));
+
+    let recovered = tokio::time::timeout(
+        Duration::from_secs(5),
+        classic_request_json_with_body(
+            app.clone(),
+            Method::POST,
+            &format!("/session/{session_id}/execute/sync"),
+            json!({
+                "script": "return 42;",
+                "args": []
+            }),
+        ),
+    )
+    .await
+    .expect("renderer must accept another script after timeout termination");
+    assert_eq!(recovered, json!({ "value": 42 }));
+
+    let _ = classic_request_json(app, Method::DELETE, &format!("/session/{session_id}")).await;
+}
+
+#[tokio::test]
 async fn webdriver_classic_execute_async_honors_script_timeout() {
     let app = build_router(test_state());
 

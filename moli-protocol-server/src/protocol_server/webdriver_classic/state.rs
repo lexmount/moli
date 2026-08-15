@@ -15,7 +15,7 @@ use moli_protocol::{
         DevToolsCommand, DevToolsCommandContext, DevToolsCommandResult, DevToolsDomNodeReference,
         DevToolsError, DevToolsErrorKind, DevToolsFrameId, DevToolsGetFrameOwnerCommand,
         DevToolsGetFrameOwnerResult, DevToolsGetFrameTreeCommand, DevToolsProtocol,
-        DevToolsSessionId, DevToolsTargetId,
+        DevToolsSessionId, DevToolsTargetId, DevToolsTerminateExecutionCommand,
     },
 };
 use moli_protocol_webdriver_classic::{
@@ -37,6 +37,8 @@ use super::super::webdriver_bidi::{
     BidiSocketActor, BidiSocketActorInput, SharedBidiSessionRegistry,
 };
 use super::super::{CookieProfileCommit, protocol_local_executor::spawn_protocol_local_task};
+
+const CLASSIC_SCRIPT_TERMINATION_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Default)]
 pub(in crate::protocol_server) struct SharedClassicSessionRegistry {
@@ -536,7 +538,17 @@ impl ClassicSessionRuntimeHandle {
         command: DevToolsCommand,
         timeout: Option<Duration>,
     ) -> Result<DevToolsCommandResult, DevToolsError> {
-        self.execute_with_options(command, timeout, None).await
+        self.execute_with_options(command, timeout, None, false)
+            .await
+    }
+
+    pub(super) async fn execute_script(
+        &self,
+        command: DevToolsCommand,
+        timeout: Option<Duration>,
+    ) -> Result<DevToolsCommandResult, DevToolsError> {
+        self.execute_with_options(command, timeout, None, true)
+            .await
     }
 
     pub(super) async fn execute_with_pending_navigation_wait(
@@ -545,7 +557,7 @@ impl ClassicSessionRuntimeHandle {
         timeout: Option<Duration>,
         pending_navigation_timeout: Option<Duration>,
     ) -> Result<DevToolsCommandResult, DevToolsError> {
-        self.execute_with_options(command, timeout, pending_navigation_timeout)
+        self.execute_with_options(command, timeout, pending_navigation_timeout, false)
             .await
     }
 
@@ -582,6 +594,7 @@ impl ClassicSessionRuntimeHandle {
         command: DevToolsCommand,
         timeout: Option<Duration>,
         pending_navigation_timeout: Option<Duration>,
+        terminate_execution_on_timeout: bool,
     ) -> Result<DevToolsCommandResult, DevToolsError> {
         let (response_tx, response_rx) = oneshot::channel();
         self.tx
@@ -589,6 +602,7 @@ impl ClassicSessionRuntimeHandle {
                 command: Box::new(command),
                 timeout,
                 pending_navigation_timeout,
+                terminate_execution_on_timeout,
                 response_tx,
             })
             .map_err(|_| {
@@ -793,6 +807,7 @@ enum ClassicSessionRuntimeRequest {
         command: Box<DevToolsCommand>,
         timeout: Option<Duration>,
         pending_navigation_timeout: Option<Duration>,
+        terminate_execution_on_timeout: bool,
         response_tx: oneshot::Sender<Result<DevToolsCommandResult, DevToolsError>>,
     },
     WaitForDocumentLifecycle {
@@ -880,9 +895,11 @@ async fn handle_classic_session_runtime_request(
             command,
             timeout,
             pending_navigation_timeout,
+            terminate_execution_on_timeout,
             response_tx,
         } => {
-            let execution = execute_classic_devtools_command_with_pending_navigation_retry(
+            let termination_context = command.context().clone();
+            let mut execution = execute_classic_devtools_command_with_pending_navigation_retry(
                 scheduler,
                 receivers,
                 *command,
@@ -890,6 +907,34 @@ async fn handle_classic_session_runtime_request(
                 pending_navigation_timeout,
             )
             .await;
+            if terminate_execution_on_timeout
+                && matches!(
+                    execution.result,
+                    Err(ref error) if error.kind == DevToolsErrorKind::Timeout
+                )
+            {
+                // Finish the IO-side termination before the HTTP handler
+                // releases argument handles or admits the next Classic
+                // command on this session.
+                let termination = execute_classic_devtools_command_once(
+                    scheduler,
+                    receivers,
+                    DevToolsCommand::TerminateExecution(DevToolsTerminateExecutionCommand {
+                        context: termination_context,
+                    }),
+                    Some(CLASSIC_SCRIPT_TERMINATION_TIMEOUT),
+                )
+                .await;
+                if let Err(error) = &termination.result {
+                    tracing::warn!(
+                        ?error,
+                        "failed to terminate timed-out WebDriver Classic script execution"
+                    );
+                }
+                execution
+                    .protocol_output
+                    .append(termination.protocol_output);
+            }
             let result = execution.result;
             let keep_attached = if let Some(attached) = attached_bidi.as_mut() {
                 attached

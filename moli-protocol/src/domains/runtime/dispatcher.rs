@@ -121,10 +121,17 @@ struct DevToolsRuntimeTarget {
 struct DevToolsRuntimeCommandDispatchState {
     internal_command_id: u64,
     command_context: DevToolsCommandContext,
+    result_kind: DevToolsRuntimeCommandResultKind,
     result_ownership: DevToolsResultOwnership,
     serialization_options: Option<DevToolsSerializationOptions>,
     target: DevToolsRuntimeTarget,
     target_realm: Option<DevToolsRealmId>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DevToolsRuntimeCommandResultKind {
+    Script,
+    Empty,
 }
 
 pub struct PendingDevToolsRuntimeCommandDispatch {
@@ -2143,13 +2150,22 @@ pub(crate) async fn execute_devtools_runtime_command_async_with_protocol_events(
     if let DevToolsCommand::LocateNodes(command) = command {
         return execute_devtools_locate_nodes_command_async(conn, command).await;
     }
+    let result_kind = devtools_runtime_command_result_kind(&command);
     let result_ownership = devtools_runtime_result_ownership(&command);
     let serialization_options = devtools_runtime_serialization_options(&command);
     let target = match devtools_runtime_target_async(conn, &command).await {
         Ok(target) => target,
         Err(error) => return DevToolsCommandExecutionOutput::new(Err(error)),
     };
-    let target_realm = devtools_realm_id_for_runtime_target_async(conn, &target).await;
+    // Control commands must reach their Inspector route without first asking
+    // the Page owner for realm inventory. That owner can be the JavaScript
+    // execution this command exists to interrupt.
+    let target_realm = match result_kind {
+        DevToolsRuntimeCommandResultKind::Script => {
+            devtools_realm_id_for_runtime_target_async(conn, &target).await
+        }
+        DevToolsRuntimeCommandResultKind::Empty => None,
+    };
     let mut route_scope = conn.scoped_none_session_owner_route_override(target.route.clone());
     if let DevToolsCommand::CallFunction(call_function) = &mut command
         && matches!(
@@ -2198,6 +2214,13 @@ pub(crate) async fn execute_devtools_runtime_command_async_with_protocol_events(
                         renderer_output_predecessor,
                     );
                 };
+                if result_kind == DevToolsRuntimeCommandResultKind::Empty {
+                    return DevToolsCommandExecutionOutput::from_parts(
+                        devtools_empty_result_from_response(response),
+                        protocol_events,
+                        renderer_output_predecessor,
+                    );
+                }
                 let mut result = match devtools_script_result_from_response(
                     response,
                     result_ownership,
@@ -2316,6 +2339,7 @@ impl CdpConnection {
                 .await;
         }
 
+        let result_kind = devtools_runtime_command_result_kind(&command);
         let result_ownership = devtools_runtime_result_ownership(&command);
         let serialization_options = devtools_runtime_serialization_options(&command);
         let target = match devtools_runtime_target_async(self, &command).await {
@@ -2331,7 +2355,15 @@ impl CdpConnection {
                     .await;
             }
         };
-        let target_realm = devtools_realm_id_for_runtime_target_async(self, &target).await;
+        // Keep the interrupt path free of Page-owner realm lookups. In
+        // particular, Runtime.terminateExecution must be able to enter its IO
+        // envelope while a MainThread script is not yielding.
+        let target_realm = match result_kind {
+            DevToolsRuntimeCommandResultKind::Script => {
+                devtools_realm_id_for_runtime_target_async(self, &target).await
+            }
+            DevToolsRuntimeCommandResultKind::Empty => None,
+        };
         let mut route_scope = self.scoped_none_session_owner_route_override(target.route.clone());
         if let DevToolsCommand::CallFunction(call_function) = &mut command
             && matches!(
@@ -2377,6 +2409,7 @@ impl CdpConnection {
         let state = DevToolsRuntimeCommandDispatchState {
             internal_command_id,
             command_context,
+            result_kind,
             result_ownership,
             serialization_options,
             target: target.clone(),
@@ -2456,6 +2489,16 @@ impl CdpConnection {
                 )
                 .await;
         };
+        if state.result_kind == DevToolsRuntimeCommandResultKind::Empty {
+            return self
+                .complete_devtools_runtime_direct_result(
+                    state.command_context,
+                    devtools_empty_result_from_response(response),
+                    protocol_events,
+                    renderer_output_predecessor,
+                )
+                .await;
+        }
         let mut result = match devtools_script_result_from_response(
             response,
             state.result_ownership,
@@ -3493,6 +3536,15 @@ fn devtools_runtime_result_ownership(command: &DevToolsCommand) -> DevToolsResul
     }
 }
 
+fn devtools_runtime_command_result_kind(
+    command: &DevToolsCommand,
+) -> DevToolsRuntimeCommandResultKind {
+    match command {
+        DevToolsCommand::TerminateExecution(_) => DevToolsRuntimeCommandResultKind::Empty,
+        _ => DevToolsRuntimeCommandResultKind::Script,
+    }
+}
+
 fn devtools_runtime_serialization_options(
     command: &DevToolsCommand,
 ) -> Option<DevToolsSerializationOptions> {
@@ -3547,6 +3599,13 @@ async fn devtools_runtime_target_async(
     conn: &mut CdpConnection,
     command: &DevToolsCommand,
 ) -> Result<DevToolsRuntimeTarget, DevToolsError> {
+    if let DevToolsCommand::TerminateExecution(command) = command {
+        let target_id =
+            command.context.target_id.as_ref().ok_or_else(|| {
+                DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "NoSuchTarget")
+            })?;
+        return devtools_runtime_control_target(conn, target_id);
+    }
     let (target_id, realm_id, world_name) = match command {
         DevToolsCommand::EvaluateScript(command) => (
             command.context.target_id.as_ref(),
@@ -3576,6 +3635,23 @@ async fn devtools_runtime_target_async(
         DevToolsErrorKind::NoSuchTarget,
         "NoSuchTarget",
     ))
+}
+
+fn devtools_runtime_control_target(
+    conn: &CdpConnection,
+    target_id: &DevToolsTargetId,
+) -> Result<DevToolsRuntimeTarget, DevToolsError> {
+    // Do not fall back to realm discovery here: it is a MainThread operation
+    // and would put the escape hatch behind the work it needs to interrupt.
+    let route = conn
+        .target_session_route_for_target_id(target_id.as_str())
+        .or_else(|| conn.target_session_route_for_child_frame_id(target_id.as_str()))
+        .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "NoSuchTarget"))?;
+    Ok(DevToolsRuntimeTarget {
+        route,
+        execution_context_id: None,
+        window_context_id: Some(target_id.clone()),
+    })
 }
 
 async fn devtools_runtime_context_target_async(
@@ -4574,6 +4650,30 @@ async fn start_protocol_neutral_runtime_command(
                 )),
             }
         }
+        DevToolsCommand::TerminateExecution(_) => {
+            let json = runtime_inspector_command_json(
+                internal_command_id,
+                "Runtime.terminateExecution",
+                &json!({}),
+            );
+            let parsed = match parse_synthesized_runtime_command(json) {
+                Ok(command) => command,
+                Err(message) => {
+                    return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(
+                        Some(internal_command_id),
+                        message,
+                    ));
+                }
+            };
+            let cmd = Cmd::from_parsed(&parsed)
+                .expect("synthesized Runtime command must contain a domain separator");
+            let MainRuntimeCommand::Inspector(command) =
+                MainRuntimeCommand::classify(RuntimeAction::TerminateExecution)
+            else {
+                unreachable!("Runtime.terminateExecution must use an Inspector command route")
+            };
+            start_main_runtime_inspector_command(route_scope.conn_mut(), &cmd, command)
+        }
         _ => RuntimeCommandTaskStep::Complete(CommandOutputPlan::from_devtools_error(
             DevToolsError::new(DevToolsErrorKind::Unsupported, "UnsupportedDevToolsCommand"),
         )),
@@ -5514,6 +5614,15 @@ fn devtools_script_result_from_response(
             target_realm,
         )),
     )))
+}
+
+fn devtools_empty_result_from_response(
+    response: Value,
+) -> Result<DevToolsCommandResult, DevToolsError> {
+    if let Some(error) = response.get("error") {
+        return Err(devtools_error_from_cdp_error_value(error));
+    }
+    Ok(DevToolsCommandResult::Empty)
 }
 
 fn validate_protocol_neutral_runtime_handle_realms(

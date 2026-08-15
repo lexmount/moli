@@ -42,6 +42,7 @@ pub(super) fn devtools_command_uses_interleaved_runtime_dispatch(
         DevToolsCommand::GetRealms(_)
             | DevToolsCommand::EvaluateScript(_)
             | DevToolsCommand::CallFunction(_)
+            | DevToolsCommand::TerminateExecution(_)
             | DevToolsCommand::LocateNodes(_)
             | DevToolsCommand::ReleaseObjects(_)
     )

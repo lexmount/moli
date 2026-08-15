@@ -2523,7 +2523,7 @@ pub(super) async fn webdriver_classic_execute_sync(
     apply_classic_script_argument_handles(&mut command, &script_argument_handles);
     let result = binding
         .runtime
-        .execute_inner(command, binding.timeouts.script.map(Duration::from_millis))
+        .execute_script(command, binding.timeouts.script.map(Duration::from_millis))
         .await;
     release_classic_remote_objects(
         &binding,
@@ -2594,7 +2594,7 @@ pub(super) async fn webdriver_classic_execute_async(
     apply_classic_script_argument_handles(&mut command, &script_argument_handles);
     let result = binding
         .runtime
-        .execute_inner(command, binding.timeouts.script.map(Duration::from_millis))
+        .execute_script(command, binding.timeouts.script.map(Duration::from_millis))
         .await;
     release_classic_remote_objects(
         &binding,
@@ -3866,7 +3866,7 @@ pub(super) async fn webdriver_classic_get_element_property(
     apply_classic_script_argument_handles(&mut command, &script_argument_handles);
     let result = binding
         .runtime
-        .execute_inner(command, binding.timeouts.script.map(Duration::from_millis))
+        .execute_script(command, binding.timeouts.script.map(Duration::from_millis))
         .await;
     release_classic_remote_objects(
         &binding,

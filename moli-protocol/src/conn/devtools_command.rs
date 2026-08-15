@@ -256,6 +256,7 @@ impl CdpConnection {
             command @ (DevToolsCommand::GetRealms(_)
             | DevToolsCommand::EvaluateScript(_)
             | DevToolsCommand::CallFunction(_)
+            | DevToolsCommand::TerminateExecution(_)
             | DevToolsCommand::LocateNodes(_)
             | DevToolsCommand::ReleaseObjects(_)) => {
                 let output = Box::pin(

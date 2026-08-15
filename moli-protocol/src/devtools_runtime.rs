@@ -216,6 +216,7 @@ pub enum DevToolsCommand {
     GetRealms(DevToolsGetRealmsCommand),
     EvaluateScript(DevToolsEvaluateScriptCommand),
     CallFunction(DevToolsCallFunctionCommand),
+    TerminateExecution(DevToolsTerminateExecutionCommand),
     ReleaseObjects(DevToolsReleaseObjectsCommand),
     CreateTarget(DevToolsCreateTargetCommand),
     CloseTarget(DevToolsCloseTargetCommand),
@@ -301,6 +302,7 @@ impl DevToolsCommand {
             DevToolsCommand::GetRealms(command) => &command.context,
             DevToolsCommand::EvaluateScript(command) => &command.context,
             DevToolsCommand::CallFunction(command) => &command.context,
+            DevToolsCommand::TerminateExecution(command) => &command.context,
             DevToolsCommand::ReleaseObjects(command) => &command.context,
             DevToolsCommand::CreateTarget(command) => &command.context,
             DevToolsCommand::CloseTarget(command) => &command.context,
@@ -466,6 +468,11 @@ pub struct DevToolsCallFunctionCommand {
     pub preserve_remote_metadata: bool,
     pub serialization_options: Option<DevToolsSerializationOptions>,
     pub materialize_bidi_script_result: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DevToolsTerminateExecutionCommand {
+    pub context: DevToolsCommandContext,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
