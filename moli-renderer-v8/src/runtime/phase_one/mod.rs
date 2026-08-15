@@ -1234,6 +1234,31 @@ html,body{margin:0;padding:0}
     }
 
     #[test]
+    fn layout_renderer_transfers_block_maximum_to_intrinsic_inline_size() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+#subject{width:max-content;max-height:100px;aspect-ratio:1/1;background:rgb(54,14,114)}
+</style></head><body>
+<div id=subject><div style="width:200px"></div></div>
+</body></html>"#,
+            )
+            .await;
+
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(54, 14, 114)),
+                moli_layout::PaintRect::new(0.0, 0.0, 100.0, 100.0),
+            );
+        }));
+    }
+
+    #[test]
     fn layout_renderer_resolves_cyclic_preferred_width_after_parent_contribution() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
