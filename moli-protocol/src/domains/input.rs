@@ -1,6 +1,6 @@
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, Cmd, CommandDispatchContext,
-    TargetPageResidenceIdentity,
+    TargetPageResidenceIdentity, TargetPageResidenceObservation, TargetPageResidenceObserver,
 };
 use crate::devtools_runtime::{
     DevToolsCommand, DevToolsCommandContext, DevToolsCommandResult,
@@ -61,6 +61,7 @@ pub(crate) struct PendingInputCommandDispatch {
     command_id: Option<u64>,
     session_id: Option<String>,
     owner: TargetPageResidenceIdentity,
+    owner_observer: Option<TargetPageResidenceObserver>,
     kind: PendingInputCommandKind,
     pending: PendingInputOperation,
 }
@@ -135,6 +136,30 @@ enum PendingInputOperation {
 
 enum CompletedInputOperation {
     Page(Box<Result<CompletedPageCommand, String>>),
+    PageResidenceSuperseded,
+    PageResidenceUnavailable,
+}
+
+enum RendererInputWaitOutcome<T> {
+    Completed(T),
+    PageResidence(TargetPageResidenceObservation),
+}
+
+async fn wait_for_renderer_input_or_page_replacement<T>(
+    completion: impl std::future::Future<Output = T>,
+    owner_observer: Option<TargetPageResidenceObserver>,
+) -> RendererInputWaitOutcome<T> {
+    let Some(owner_observer) = owner_observer else {
+        return RendererInputWaitOutcome::Completed(completion.await);
+    };
+    tokio::pin!(completion);
+    tokio::select! {
+        biased;
+        result = &mut completion => RendererInputWaitOutcome::Completed(result),
+        observation = owner_observer.wait() => {
+            RendererInputWaitOutcome::PageResidence(observation)
+        }
+    }
 }
 
 impl PendingInputCommandDispatch {
@@ -143,16 +168,32 @@ impl PendingInputCommandDispatch {
     }
 
     pub(crate) async fn wait(self) -> CompletedInputCommandDispatch {
+        let completed = match self.pending {
+            PendingInputOperation::Page(pending) => {
+                match wait_for_renderer_input_or_page_replacement(
+                    pending.wait(),
+                    self.owner_observer,
+                )
+                .await
+                {
+                    RendererInputWaitOutcome::Completed(result) => CompletedInputOperation::Page(
+                        Box::new(result.map_err(|error| error.to_string())),
+                    ),
+                    RendererInputWaitOutcome::PageResidence(
+                        TargetPageResidenceObservation::Superseded,
+                    ) => CompletedInputOperation::PageResidenceSuperseded,
+                    RendererInputWaitOutcome::PageResidence(
+                        TargetPageResidenceObservation::Unavailable,
+                    ) => CompletedInputOperation::PageResidenceUnavailable,
+                }
+            }
+        };
         CompletedInputCommandDispatch {
             command_id: self.command_id,
             session_id: self.session_id,
             owner: self.owner,
             kind: self.kind,
-            completed: match self.pending {
-                PendingInputOperation::Page(pending) => CompletedInputOperation::Page(Box::new(
-                    pending.wait().await.map_err(|error| error.to_string()),
-                )),
-            },
+            completed,
         }
     }
 }
@@ -164,6 +205,15 @@ impl CompletedInputCommandDispatch {
 
     pub(crate) fn session_id(&self) -> Option<&str> {
         self.session_id.as_deref()
+    }
+}
+
+impl PendingInputCommandKind {
+    fn uses_renderer_host_ack_cleanup(&self) -> bool {
+        // Chromium's InputInjector owns replacement cleanup for the mouse and
+        // key callback queues. Touch, drag, and IME commands have separate
+        // completion protocols and must keep waiting for those terminals.
+        matches!(self, Self::DispatchMouseEvent | Self::DispatchKeyEvent)
     }
 }
 
@@ -534,21 +584,13 @@ fn start_pending_input_command(
         InputAction::InsertText => {
             let text = key::parse_insert_text(cmd)
                 .map_err(|_| PendingInputCommandStartError::invalid_params())?;
-            let owner = conn
-                .target_page_residence_identity_for_session(cmd.session_id)
-                .ok_or_else(PendingInputCommandStartError::no_document_loaded)?;
-            let page = loaded_page_mut(conn, cmd.session_id)
-                .ok_or_else(PendingInputCommandStartError::no_document_loaded)?;
-            Ok(Some(PendingInputCommandDispatch {
-                command_id: cmd.id,
-                session_id: cmd.session_id.map(str::to_owned),
-                owner,
-                kind: PendingInputCommandKind::InsertText,
-                pending: PendingInputOperation::Page(
-                    page.start_insert_text_into_active_control(&text)
-                        .map_err(PendingInputCommandStartError::renderer_error)?,
-                ),
-            }))
+            start_page_input_command(
+                conn,
+                cmd.id,
+                cmd.session_id,
+                PendingInputCommandKind::InsertText,
+                |page| page.start_insert_text_into_active_control(&text),
+            )
         }
         InputAction::CancelDragging
         | InputAction::SetIgnoreInputEvents
@@ -911,17 +953,12 @@ fn start_devtools_dispatch_key_event_command(
     command_session_id: Option<&str>,
     command: DevToolsDispatchKeyEventCommand,
 ) -> Result<Option<PendingInputCommandDispatch>, PendingInputCommandStartError> {
-    let owner = conn
-        .target_page_residence_identity_for_session(command_session_id)
-        .ok_or_else(PendingInputCommandStartError::no_document_loaded)?;
-    let page = loaded_page_mut(conn, command_session_id)
-        .ok_or_else(PendingInputCommandStartError::no_document_loaded)?;
-    Ok(Some(PendingInputCommandDispatch {
+    start_page_input_command(
+        conn,
         command_id,
-        session_id: command_session_id.map(str::to_owned),
-        owner,
-        kind: PendingInputCommandKind::DispatchKeyEvent,
-        pending: PendingInputOperation::Page(
+        command_session_id,
+        PendingInputCommandKind::DispatchKeyEvent,
+        |page| {
             page.start_dispatch_key_event_with_outcome(
                 key::devtools_key_event_dom_event_name(command.event_type),
                 &command.key,
@@ -931,9 +968,8 @@ fn start_devtools_dispatch_key_event_command(
                 command.auto_repeat,
                 command.should_insert_text,
             )
-            .map_err(PendingInputCommandStartError::renderer_error)?,
-        ),
-    }))
+        },
+    )
 }
 
 fn start_page_input_command(
@@ -949,10 +985,14 @@ fn start_page_input_command(
     let page = loaded_page_mut(conn, command_session_id)
         .ok_or_else(PendingInputCommandStartError::no_document_loaded)?;
     let pending = start(page).map_err(PendingInputCommandStartError::renderer_error)?;
+    let owner_observer = kind.uses_renderer_host_ack_cleanup().then(|| {
+        conn.register_target_page_residence_observer_for_session(command_session_id, &owner)
+    });
     Ok(Some(PendingInputCommandDispatch {
         command_id,
         session_id: command_session_id.map(str::to_owned),
         owner,
+        owner_observer,
         kind,
         pending: PendingInputOperation::Page(pending),
     }))
@@ -1231,7 +1271,27 @@ async fn complete_pending_input_command(
 ) -> CompletedInputCommandResult {
     let session_id = completed.session_id.as_deref();
     let owner = completed.owner;
-    let completed_operation = completed.completed;
+    let completed_operation = match completed.completed {
+        CompletedInputOperation::Page(completed) => completed,
+        CompletedInputOperation::PageResidenceSuperseded => {
+            // Match InputInjector::Cleanup(): replacement of the widget/Page
+            // retires an outstanding mouse/key ACK as protocol success even
+            // when the old renderer never publishes its normal completion.
+            return CompletedInputCommandResult {
+                result: Ok(DevToolsCommandResult::Empty),
+                protocol_events: Vec::new(),
+            };
+        }
+        CompletedInputOperation::PageResidenceUnavailable => {
+            return CompletedInputCommandResult {
+                result: Err(DevToolsError::new(
+                    DevToolsErrorKind::Internal,
+                    "input command Page residence became unavailable",
+                )),
+                protocol_events: Vec::new(),
+            };
+        }
+    };
     let mut side_effects = InputCommandSideEffects::default();
 
     let result = match completed.kind {
@@ -1402,13 +1462,11 @@ pub(crate) async fn complete_pending_input_command_output_plan(
 }
 
 fn completed_page_command_result(
-    completed: CompletedInputOperation,
+    completed: Box<Result<CompletedPageCommand, String>>,
 ) -> Result<CompletedPageCommand, DevToolsError> {
-    match completed {
-        CompletedInputOperation::Page(result) => match *result {
-            Ok(completion) => Ok(completion),
-            Err(error) => Err(DevToolsError::new(DevToolsErrorKind::Internal, error)),
-        },
+    match *completed {
+        Ok(completion) => Ok(completion),
+        Err(error) => Err(DevToolsError::new(DevToolsErrorKind::Internal, error)),
     }
 }
 

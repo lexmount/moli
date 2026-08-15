@@ -14,6 +14,7 @@ use super::document_lifecycle_observer::{
     RendererDocumentLifecycleObservation, RendererDocumentLifecycleObservationPublisher,
     RendererDocumentLifecycleObserver,
 };
+use super::page_residence_observer::{TargetPageResidenceObservation, TargetPageResidenceObserver};
 use super::{NavigationRequestId, RendererPageResidenceIdentity, TargetPageAttachmentId};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -332,6 +333,7 @@ pub(crate) struct TargetPageSlot {
     loaded_page_absence_reason: TargetPageAbsenceReason,
     page_attachment_id: Option<TargetPageAttachmentId>,
     loaded_page_generation: u64,
+    loaded_page_generation_publisher: Option<watch::Sender<u64>>,
     pending_navigation_request: Option<PendingNavigationRequest>,
     committed_document_navigation: Option<DocumentNavigationToken>,
     renderer_document_lifecycle: RendererDocumentLifecycleProtocolState,
@@ -502,11 +504,27 @@ impl TargetPageSlot {
         self.loaded_page_generation
     }
 
+    pub(crate) fn register_page_residence_observer(
+        &mut self,
+        expected_generation: u64,
+    ) -> TargetPageResidenceObserver {
+        if self.loaded_page_generation != expected_generation {
+            return TargetPageResidenceObserver::resolved(
+                TargetPageResidenceObservation::Superseded,
+            );
+        }
+        let publisher = self
+            .loaded_page_generation_publisher
+            .get_or_insert_with(|| watch::channel(self.loaded_page_generation).0);
+        TargetPageResidenceObserver::new(expected_generation, publisher.subscribe())
+    }
+
     fn advance_loaded_page_generation(&mut self) {
         self.finish_renderer_document_lifecycle_observers(
             RendererDocumentLifecycleObservation::Superseded,
         );
         self.loaded_page_generation = self.loaded_page_generation.wrapping_add(1);
+        self.publish_loaded_page_generation();
     }
 
     #[cfg(test)]
@@ -516,12 +534,20 @@ impl TargetPageSlot {
 
     #[cfg(test)]
     pub(crate) fn set_loaded_page_generation(&mut self, generation: u64) {
-        if self.loaded_page_generation != generation {
-            self.finish_renderer_document_lifecycle_observers(
-                RendererDocumentLifecycleObservation::Superseded,
-            );
+        if self.loaded_page_generation == generation {
+            return;
         }
+        self.finish_renderer_document_lifecycle_observers(
+            RendererDocumentLifecycleObservation::Superseded,
+        );
         self.loaded_page_generation = generation;
+        self.publish_loaded_page_generation();
+    }
+
+    fn publish_loaded_page_generation(&self) {
+        if let Some(publisher) = self.loaded_page_generation_publisher.as_ref() {
+            publisher.send_replace(self.loaded_page_generation);
+        }
     }
 
     #[cfg(test)]

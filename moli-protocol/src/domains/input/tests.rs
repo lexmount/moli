@@ -288,6 +288,7 @@ async fn completed_mouse_event_does_not_restore_replaced_page_state() {
         command_id: Some(104),
         session_id: None,
         owner: original_owner.clone(),
+        owner_observer: None,
         kind: PendingInputCommandKind::DispatchMouseEvent,
         pending: PendingInputOperation::Page(pending),
     }
@@ -319,6 +320,49 @@ async fn completed_mouse_event_does_not_restore_replaced_page_state() {
             .is_some_and(|page| page.final_url().as_str() == replacement_url),
         "settling the original input command must not install its Page state into the replacement"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pending_mouse_event_acknowledges_when_page_is_replaced_before_renderer_completion() {
+    let mut ctx = TestContext::new();
+    with_loaded_document(&mut ctx, "<body>origin</body>").await;
+
+    let original_owner = ctx
+        .conn
+        .target_page_residence_identity_for_session(None)
+        .expect("the original Page should have a residence identity");
+    let observer = ctx
+        .conn
+        .register_target_page_residence_observer_for_session(None, &original_owner);
+
+    let replacement_url = "data:text/html,<body>replacement-before-completion</body>";
+    ctx.install_navigation_fixture_for_session_owner(replacement_url, None)
+        .await;
+
+    let wait =
+        wait_for_renderer_input_or_page_replacement(std::future::pending::<()>(), Some(observer));
+    let outcome = tokio::time::timeout(std::time::Duration::from_secs(1), wait)
+        .await
+        .expect("Page replacement should settle the pending input wait");
+    assert!(matches!(
+        outcome,
+        RendererInputWaitOutcome::PageResidence(TargetPageResidenceObservation::Superseded)
+    ));
+
+    let completed = complete_pending_input_command(
+        &mut ctx.conn,
+        CompletedInputCommandDispatch {
+            command_id: Some(105),
+            session_id: None,
+            owner: original_owner,
+            kind: PendingInputCommandKind::DispatchMouseEvent,
+            completed: CompletedInputOperation::PageResidenceSuperseded,
+        },
+        &mut CommandDispatchContext::default(),
+    )
+    .await;
+    assert!(matches!(completed.result, Ok(DevToolsCommandResult::Empty)));
+    assert!(completed.protocol_events.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]

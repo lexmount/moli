@@ -3021,6 +3021,26 @@ impl CdpConnection {
             == Some(expected)
     }
 
+    /// Observes replacement of the exact installed Page that admitted work.
+    pub(crate) fn register_target_page_residence_observer_for_session(
+        &mut self,
+        session_id: Option<&str>,
+        expected: &TargetPageResidenceIdentity,
+    ) -> crate::conn::TargetPageResidenceObserver {
+        if !self.target_page_residence_identity_is_current_for_session(session_id, expected) {
+            return crate::conn::TargetPageResidenceObserver::resolved(
+                crate::conn::TargetPageResidenceObservation::Superseded,
+            );
+        }
+        let Ok(slot) = self.runtime_session_owner_slot_mut(session_id) else {
+            return crate::conn::TargetPageResidenceObserver::resolved(
+                crate::conn::TargetPageResidenceObservation::Unavailable,
+            );
+        };
+        slot.page_slot_mut()
+            .register_page_residence_observer(expected.loaded_page_generation())
+    }
+
     /// Captures the exact protocol attachment currently addressing a Page.
     pub(crate) fn target_page_protocol_attachment_identity_for_session(
         &self,
