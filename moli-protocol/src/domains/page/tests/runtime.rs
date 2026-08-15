@@ -1130,6 +1130,7 @@ async fn runtime_evaluate_child_navigation_emits_child_frame_navigation_and_life
     })).await;
     let _ = take_response_by_id(&mut ctx, 522);
     let child_frame_id = child_frame_id_for_single_iframe(&mut ctx, 523).await;
+    wait_until_frame_stopped_loading(&mut ctx, &child_frame_id).await;
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -1181,6 +1182,7 @@ async fn runtime_evaluate_timeout_child_navigation_emits_child_frame_navigation_
     })).await;
     let _ = take_response_by_id(&mut ctx, 525);
     let child_frame_id = child_frame_id_for_single_iframe(&mut ctx, 526).await;
+    wait_until_frame_stopped_loading(&mut ctx, &child_frame_id).await;
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -1223,6 +1225,7 @@ async fn runtime_evaluate_child_location_navigation_emits_child_frame_navigation
     })).await;
     let _ = take_response_by_id(&mut ctx, 528);
     let child_frame_id = child_frame_id_for_single_iframe(&mut ctx, 529).await;
+    wait_until_frame_stopped_loading(&mut ctx, &child_frame_id).await;
     ctx.sent.clear();
 
     let child_url = "data:text/html,<body>location-child</body>";

@@ -391,7 +391,10 @@ mod tests {
 
     use serde_json::{Value, json};
 
-    use crate::{conn::BrowserContext, testing::TestContext};
+    use crate::{
+        conn::{BrowserContext, CdpCommandTaskStep},
+        testing::TestContext,
+    };
 
     // Full-workspace CI runs these renderer-owner tests alongside CPU-heavy
     // suites. Keep the guard diagnostic, but allow the same scheduling
@@ -407,37 +410,62 @@ mod tests {
         ctx.take_response_by_id(command_id)
     }
 
-    async fn run_pausing_evaluate_with_queued_resumes(
+    async fn run_pausing_evaluate_with_observed_resumes(
         ctx: &mut TestContext,
         evaluate: Value,
         resumes: Vec<Value>,
     ) {
-        // The socket actor can enqueue Debugger.resume while the renderer owner
-        // is inside V8's pause loop. Queue the same commands up front so this
-        // unit boundary does not rely on a wall-clock timer to regain control.
+        // Keep the pending Runtime.evaluate receiver alive while the test
+        // scheduler observes the real renderer publication. Dispatching the
+        // interruptible resume before that publication is racy: the interrupt
+        // channel can overtake the evaluate request and resume an idle
+        // inspector, leaving the later pause without a matching command.
         let evaluate_step = ctx.conn.start_command_dispatch(&evaluate.to_string());
-        let resume_steps = resumes
-            .into_iter()
-            .map(|resume| ctx.conn.start_command_dispatch(&resume.to_string()))
-            .collect::<Vec<_>>();
+        let CdpCommandTaskStep::Pending(evaluate_pending) = evaluate_step else {
+            panic!("a pausing Runtime.evaluate must remain pending until Debugger.resume");
+        };
+        let mut messages = Vec::new();
 
-        let (mut messages, scheduler_events) = tokio::time::timeout(
-            DOM_DEBUGGER_COMMAND_TIMEOUT,
-            ctx.complete_command_task_step_for_test(evaluate_step),
-        )
-        .await
-        .expect("queued Debugger.resume should release the paused Runtime.evaluate");
-        assert!(scheduler_events.is_empty(), "{scheduler_events:?}");
-        for resume_step in resume_steps {
+        for resume in resumes {
+            let resume_session_id = resume.get("sessionId").cloned();
+            let paused = ctx
+                .wait_for_scheduler_message("pause preceding Debugger.resume", |message| {
+                    message["method"] == json!("Debugger.paused")
+                        && match &resume_session_id {
+                            Some(session_id) => message.get("sessionId") == Some(session_id),
+                            None => message.get("sessionId").is_none(),
+                        }
+                })
+                .await;
+            messages.push(paused);
+
+            let resume_step = ctx.conn.start_command_dispatch(&resume.to_string());
             let (mut resume_messages, scheduler_events) = tokio::time::timeout(
                 DOM_DEBUGGER_COMMAND_TIMEOUT,
                 ctx.complete_command_task_step_for_test(resume_step),
             )
             .await
-            .expect("queued Debugger.resume should complete");
+            .expect("Debugger.resume should complete after its matching pause");
             assert!(scheduler_events.is_empty(), "{scheduler_events:?}");
             messages.append(&mut resume_messages);
         }
+
+        let evaluate_completed =
+            tokio::time::timeout(DOM_DEBUGGER_COMMAND_TIMEOUT, evaluate_pending.wait())
+                .await
+                .expect("Debugger.resume should release the paused Runtime.evaluate");
+        let evaluate_step = ctx
+            .conn
+            .complete_pending_command_dispatch(evaluate_completed)
+            .await;
+        let (mut evaluate_messages, scheduler_events) = tokio::time::timeout(
+            DOM_DEBUGGER_COMMAND_TIMEOUT,
+            ctx.complete_command_task_step_for_test(evaluate_step),
+        )
+        .await
+        .expect("resumed Runtime.evaluate should complete");
+        assert!(scheduler_events.is_empty(), "{scheduler_events:?}");
+        messages.append(&mut evaluate_messages);
         ctx.sent.extend(messages);
     }
 
@@ -579,7 +607,7 @@ mod tests {
         assert_eq!(set["result"], json!({}), "{set:?}");
 
         let output_start = ctx.sent.len();
-        run_pausing_evaluate_with_queued_resumes(
+        run_pausing_evaluate_with_observed_resumes(
             &mut ctx,
             json!({
                 "id": 86,
@@ -634,7 +662,7 @@ mod tests {
             .unwrap_or_else(|| panic!("subtree pause should bind the target node: {paused:?}"))
             as u32;
 
-        run_pausing_evaluate_with_queued_resumes(
+        run_pausing_evaluate_with_observed_resumes(
             &mut ctx,
             json!({
                 "id": 180,
@@ -725,7 +753,7 @@ mod tests {
         )
         .await;
         assert_eq!(set_attribute["result"], json!({}), "{set_attribute:?}");
-        run_pausing_evaluate_with_queued_resumes(
+        run_pausing_evaluate_with_observed_resumes(
             &mut ctx,
             json!({
                 "id": 92,
@@ -803,7 +831,7 @@ mod tests {
             json!({}),
             "{set_node_removed:?}"
         );
-        run_pausing_evaluate_with_queued_resumes(
+        run_pausing_evaluate_with_observed_resumes(
             &mut ctx,
             json!({
                 "id": 99,
@@ -1352,7 +1380,7 @@ mod tests {
         .await;
         assert_eq!(set["result"], json!({}), "{set:?}");
 
-        run_pausing_evaluate_with_queued_resumes(
+        run_pausing_evaluate_with_observed_resumes(
             &mut ctx,
             json!({
                 "id": 104,
@@ -1456,7 +1484,7 @@ mod tests {
         )
         .await;
         assert!(navigate["result"]["frameId"].is_string(), "{navigate:?}");
-        run_pausing_evaluate_with_queued_resumes(
+        run_pausing_evaluate_with_observed_resumes(
             &mut ctx,
             json!({
                 "id": 110,
@@ -1580,7 +1608,7 @@ mod tests {
         )
         .await;
         assert!(owner_enable.get("error").is_none(), "{owner_enable:?}");
-        run_pausing_evaluate_with_queued_resumes(
+        run_pausing_evaluate_with_observed_resumes(
             &mut ctx,
             json!({
                 "id": 125,
@@ -1788,7 +1816,7 @@ mod tests {
             assert_eq!(set["result"], json!({}), "{set:?}");
         }
 
-        run_pausing_evaluate_with_queued_resumes(
+        run_pausing_evaluate_with_observed_resumes(
             &mut ctx,
             json!({
                 "id": 204,
@@ -1828,7 +1856,7 @@ mod tests {
         );
         assert_eq!(ctx.take_response_by_id(205)["result"], json!({}));
 
-        run_pausing_evaluate_with_queued_resumes(
+        run_pausing_evaluate_with_observed_resumes(
             &mut ctx,
             json!({
                 "id": 206,
@@ -1888,7 +1916,7 @@ mod tests {
         )
         .await;
         assert_eq!(set_all["result"], json!({}), "{set_all:?}");
-        run_pausing_evaluate_with_queued_resumes(
+        run_pausing_evaluate_with_observed_resumes(
             &mut ctx,
             json!({
                 "id": 209,
@@ -1936,7 +1964,7 @@ mod tests {
         )
         .await;
         assert!(navigate["result"]["frameId"].is_string(), "{navigate:?}");
-        run_pausing_evaluate_with_queued_resumes(
+        run_pausing_evaluate_with_observed_resumes(
             &mut ctx,
             json!({
                 "id": 212,
@@ -2076,7 +2104,7 @@ mod tests {
         )
         .await;
         assert!(owner_enable.get("error").is_none(), "{owner_enable:?}");
-        run_pausing_evaluate_with_queued_resumes(
+        run_pausing_evaluate_with_observed_resumes(
             &mut ctx,
             json!({
                 "id": 304,
