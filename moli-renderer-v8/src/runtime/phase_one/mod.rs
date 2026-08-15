@@ -2310,6 +2310,49 @@ html,body{margin:0;padding:0}table{border-spacing:0}
     }
 
     #[test]
+    fn layout_renderer_preserves_internal_margin_collapse_in_anonymous_table_cells() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+#table{display:table;height:100px;background:rgb(72,32,132)}
+.row{display:table-row}
+#first-row{background:rgb(73,33,133)}
+#second-row{background:rgb(74,34,134)}
+.margin-block{margin:50px 0}
+#wide{width:100px}
+</style></head><body>
+<div id=table>
+  <div id=first-row class=row>
+    <div id=wide class=margin-block><div class=margin-block></div></div>
+    <div class=margin-block></div>
+  </div>
+  <div id=second-row class=row><div class=margin-block></div></div>
+  <div class=row></div>
+</div>
+</body></html>"#,
+            )
+            .await;
+
+            for (color, expected) in [
+                (rgb(72, 32, 132), (0.0, 0.0, 100.0, 100.0)),
+                (rgb(73, 33, 133), (0.0, 0.0, 100.0, 50.0)),
+                (rgb(74, 34, 134), (0.0, 50.0, 100.0, 50.0)),
+            ] {
+                assert_paint_rect(
+                    solid_paint_rect(&snapshot, color),
+                    moli_layout::PaintRect::new(expected.0, expected.1, expected.2, expected.3),
+                );
+            }
+        }));
+    }
+
+    #[test]
     fn layout_renderer_computes_phase_four_special_formatting_geometry_from_native_dom_and_stylo() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
