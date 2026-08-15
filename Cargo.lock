@@ -4459,7 +4459,7 @@ dependencies = [
 [[package]]
 name = "taffy"
 version = "0.13.0"
-source = "git+https://github.com/ldm0/taffy?rev=5065ad409c32e78fff82fc0a6ffb40a4ee107f7f#5065ad409c32e78fff82fc0a6ffb40a4ee107f7f"
+source = "git+https://github.com/ldm0/taffy?rev=3739153dc9edbbe48da1065710a26b40e73f991e#3739153dc9edbbe48da1065710a26b40e73f991e"
 dependencies = [
  "arrayvec",
  "serde",
