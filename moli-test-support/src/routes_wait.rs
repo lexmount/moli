@@ -69,6 +69,8 @@ const WAIT_UNTIL_OUTER_HTML_TAMPER_HTML: &str = "<!doctype html><html><body data
 // is around 500 ms; a 50 ms interval leaves enough margin under nextest load.
 const WAIT_UNTIL_INTERVAL_FETCH_HTML: &str = "<!doctype html><html><body data-state=\"init\"><script>window.addEventListener('load', () => { setInterval(() => { fetch('/wait-until-data').then(() => { document.body.setAttribute('data-ping', String((Number(document.body.getAttribute('data-ping') || '0') + 1))); }); }, 50); });</script></body></html>";
 const WAIT_UNTIL_INTERVAL_DOM_MUTATION_HTML: &str = "<!doctype html><html><body data-state=\"init\"><main id=\"mutation-count\">0</main><script>window.addEventListener('load', () => { setInterval(() => { const count = Number(document.body.getAttribute('data-mutation-count') || '0') + 1; document.body.setAttribute('data-mutation-count', String(count)); document.getElementById('mutation-count').textContent = String(count); }, 50); });</script></body></html>";
+const WAIT_UNTIL_SLOW_STATIC_HTML: &str =
+    "<!doctype html><html><body><main id=\"slow-main\">slow-main=ready</main></body></html>";
 const WAIT_UNTIL_HTTP_ERROR_NAVIGATION_CHALLENGE_HTML: &str = "<!doctype html><html><head><title>403 challenge</title></head><body><main id=\"challenge\">http-error-navigation=challenge</main><script>window.addEventListener('load', () => { setTimeout(() => { document.cookie = 'moli-http-error-navigation=passed; Path=/; Max-Age=3600; SameSite=Lax'; location.reload(); }, 75); });</script></body></html>";
 const WAIT_UNTIL_HTTP_ERROR_LATE_NAVIGATION_CHALLENGE_HTML: &str = "<!doctype html><html><head><title>late 403 challenge</title></head><body><main id=\"challenge\">http-error-navigation=late-challenge</main><script>window.addEventListener('load', () => { setTimeout(() => { document.cookie = 'moli-http-error-navigation=passed; Path=/; Max-Age=3600; SameSite=Lax'; location.reload(); }, 1200); });</script></body></html>";
 const WAIT_UNTIL_READINESS_HTTP_ERROR_CHALLENGE_HTML: &str = r#"<!doctype html>
@@ -254,6 +256,15 @@ pub(super) fn add_wait_routes(router: Router) -> Router {
         .route(
             "/wait-until-interval-dom-mutation",
             get(wait_until_interval_dom_mutation_page),
+        )
+        .route("/wait-until-slow-static", get(wait_until_slow_static_page))
+        .route(
+            "/wait-until-slow-interval-fetch",
+            get(wait_until_slow_interval_fetch_page),
+        )
+        .route(
+            "/wait-until-slow-interval-dom-mutation",
+            get(wait_until_slow_interval_dom_mutation_page),
         )
         .route(
             "/wait-until-http-error-navigation",
@@ -500,6 +511,24 @@ async fn wait_until_interval_fetch_page() -> Html<&'static str> {
 }
 
 async fn wait_until_interval_dom_mutation_page() -> Html<&'static str> {
+    Html(WAIT_UNTIL_INTERVAL_DOM_MUTATION_HTML)
+}
+
+// These delayed main-resource fixtures make timeout accounting observable:
+// the initial 500 ms must be deducted before NetworkIdle/DomStable starts.
+// A fresh readiness timeout would incorrectly extend the total by 500 ms.
+async fn wait_until_slow_static_page() -> Html<&'static str> {
+    sleep(Duration::from_millis(500)).await;
+    Html(WAIT_UNTIL_SLOW_STATIC_HTML)
+}
+
+async fn wait_until_slow_interval_fetch_page() -> Html<&'static str> {
+    sleep(Duration::from_millis(500)).await;
+    Html(WAIT_UNTIL_INTERVAL_FETCH_HTML)
+}
+
+async fn wait_until_slow_interval_dom_mutation_page() -> Html<&'static str> {
+    sleep(Duration::from_millis(500)).await;
     Html(WAIT_UNTIL_INTERVAL_DOM_MUTATION_HTML)
 }
 

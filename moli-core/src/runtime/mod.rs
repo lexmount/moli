@@ -12,7 +12,7 @@ use crate::{
     selector::QueryEngine,
 };
 use anyhow::Result;
-use anyhow::{Context, anyhow};
+use anyhow::{Context, anyhow, bail};
 use moli_cookie_jar::StoredCookie;
 use moli_fetch::{
     FetchCancelHandle, RawResponse, Request, StreamingRawResponse, ensure_http_status_success,
@@ -51,17 +51,6 @@ pub use navigation_engine::{
 };
 
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
-
-fn wait_until_outer_timeout(wait_until: RenderedDomWaitUntil, timeout: Duration) -> Duration {
-    match wait_until {
-        RenderedDomWaitUntil::NetworkIdle | RenderedDomWaitUntil::DomStable => {
-            timeout.saturating_add(Duration::from_secs(1))
-        }
-        RenderedDomWaitUntil::DomContentLoaded
-        | RenderedDomWaitUntil::Load
-        | RenderedDomWaitUntil::Done => timeout,
-    }
-}
 
 fn is_fetch_readiness_timeout(error: &anyhow::Error, wait_until: RenderedDomWaitUntil) -> bool {
     let expected = match wait_until {
@@ -149,6 +138,22 @@ pub enum RenderedDomWaitUntil {
     NetworkIdle,
     DomStable,
     Done,
+}
+
+impl RenderedDomWaitUntil {
+    /// The concrete lifecycle boundary at which a live `Page` can first be
+    /// handed back to the host. Network-idle and DOM-stable are observations
+    /// made on that live Page, after Load and DCL respectively.
+    fn base_stage(self) -> PageVmInitStage {
+        match self {
+            Self::DomContentLoaded | Self::DomStable => PageVmInitStage::DomContentLoaded,
+            Self::Load | Self::NetworkIdle | Self::Done => PageVmInitStage::Load,
+        }
+    }
+
+    fn has_best_effort_page_wait(self) -> bool {
+        matches!(self, Self::NetworkIdle | Self::DomStable)
+    }
 }
 
 #[derive(Debug)]
@@ -273,8 +278,7 @@ impl Browser {
     }
 
     pub async fn fetch_request(&self, request: Request) -> Result<Page> {
-        self.fetch_internal(request, PageVmInitStage::Load, None)
-            .await
+        self.fetch_internal(request, PageVmInitStage::Load).await
     }
 
     pub async fn fetch_request_with_wait_until(
@@ -283,44 +287,13 @@ impl Browser {
         wait_until: RenderedDomWaitUntil,
         timeout: Duration,
     ) -> Result<Page> {
-        let stage = match wait_until {
-            RenderedDomWaitUntil::DomContentLoaded => PageVmInitStage::DomContentLoaded,
-            RenderedDomWaitUntil::Load => PageVmInitStage::Load,
-            RenderedDomWaitUntil::NetworkIdle => PageVmInitStage::Load,
-            RenderedDomWaitUntil::DomStable => PageVmInitStage::DomContentLoaded,
-            RenderedDomWaitUntil::Done => PageVmInitStage::Load,
-        };
-
-        let raw_url = request.url.as_str().to_owned();
-        debug!(
-            url = %raw_url,
-            wait_until = ?wait_until,
-            timeout_ms = timeout.as_millis(),
-            stage = ?stage,
-            "starting fetch_with_wait_until deadline"
-        );
-        let outer_timeout = wait_until_outer_timeout(wait_until, timeout);
-        match tokio::time::timeout(
-            outer_timeout,
-            self.fetch_internal(request, stage, Some((wait_until, timeout))),
+        self.fetch_page_with_wait_until_deadline(
+            request,
+            wait_until,
+            FetchDeadline::new(timeout)?,
+            false,
         )
         .await
-        {
-            Ok(result) => result,
-            Err(_) => {
-                warn!(
-                    url = %raw_url,
-                    wait_until = ?wait_until,
-                    timeout_ms = timeout.as_millis(),
-                    stage = ?stage,
-                    "fetch_with_wait_until timed out"
-                );
-                Err(anyhow!(
-                    "fetch wait_until {wait_until:?} timed out after {} ms for `{raw_url}`",
-                    timeout.as_millis()
-                ))
-            }
-        }
     }
 
     pub async fn fetch_allow_http_error(&self, raw_url: &str) -> Result<Page> {
@@ -343,7 +316,7 @@ impl Browser {
     }
 
     pub async fn fetch_request_allow_http_error(&self, request: Request) -> Result<Page> {
-        self.fetch_allow_http_error_internal(request, PageVmInitStage::Load, None)
+        self.fetch_allow_http_error_internal(request, PageVmInitStage::Load)
             .await
     }
 
@@ -355,7 +328,6 @@ impl Browser {
             request,
             PageVmInitStage::Load,
             RendererReplyBoundary::Stage,
-            None,
         )
         .await
     }
@@ -366,44 +338,72 @@ impl Browser {
         wait_until: RenderedDomWaitUntil,
         timeout: Duration,
     ) -> Result<Page> {
-        let stage = match wait_until {
-            RenderedDomWaitUntil::DomContentLoaded => PageVmInitStage::DomContentLoaded,
-            RenderedDomWaitUntil::Load => PageVmInitStage::Load,
-            RenderedDomWaitUntil::NetworkIdle => PageVmInitStage::Load,
-            RenderedDomWaitUntil::DomStable => PageVmInitStage::DomContentLoaded,
-            RenderedDomWaitUntil::Done => PageVmInitStage::Load,
-        };
+        self.fetch_page_with_wait_until_deadline(
+            request,
+            wait_until,
+            FetchDeadline::new(timeout)?,
+            true,
+        )
+        .await
+    }
 
+    async fn fetch_page_with_wait_until_deadline(
+        &self,
+        request: Request,
+        wait_until: RenderedDomWaitUntil,
+        deadline: FetchDeadline,
+        allow_http_error: bool,
+    ) -> Result<Page> {
         let raw_url = request.url.as_str().to_owned();
+        let stage = wait_until.base_stage();
         debug!(
             url = %raw_url,
             wait_until = ?wait_until,
-            timeout_ms = timeout.as_millis(),
+            timeout_ms = deadline.timeout().as_millis(),
             stage = ?stage,
-            "starting fetch_allow_http_error_with_wait_until deadline"
+            "starting fetch_with_wait_until deadline"
         );
-        let outer_timeout = wait_until_outer_timeout(wait_until, timeout);
-        match tokio::time::timeout(
-            outer_timeout,
-            self.fetch_allow_http_error_internal(request, stage, Some((wait_until, timeout))),
+
+        // Materialization only reaches the concrete DCL/Load base stage. The
+        // selected stability observation is a separate Page operation so it
+        // can consume the remaining budget and soften only its own timeout.
+        let mut page = match tokio::time::timeout_at(
+            deadline.at(),
+            self.fetch_allow_http_error_internal(request, stage),
         )
         .await
         {
-            Ok(result) => result,
+            // Preserve transport and policy errors from the fetch itself. The
+            // outer deadline should add an error only when it actually wins.
+            Ok(result) => result?,
             Err(_) => {
                 warn!(
                     url = %raw_url,
                     wait_until = ?wait_until,
-                    timeout_ms = timeout.as_millis(),
+                    timeout_ms = deadline.timeout().as_millis(),
                     stage = ?stage,
-                    "fetch_allow_http_error_with_wait_until timed out"
+                    allow_http_error,
+                    "fetch_with_wait_until timed out"
                 );
-                Err(anyhow!(
-                    "fetch allow-http-error wait_until {wait_until:?} timed out after {} ms for `{raw_url}`",
-                    timeout.as_millis()
-                ))
+                if allow_http_error {
+                    bail!(
+                        "fetch allow-http-error wait_until {wait_until:?} timed out after {} ms for `{raw_url}`",
+                        deadline.timeout().as_millis()
+                    );
+                }
+                bail!(
+                    "fetch wait_until {wait_until:?} timed out after {} ms for `{raw_url}`",
+                    deadline.timeout().as_millis()
+                );
             }
+        };
+
+        self.wait_for_page_readiness_with_deadline(&mut page, wait_until, deadline)
+            .await?;
+        if !allow_http_error {
+            ensure_http_status_success(page.final_url().as_str(), page.status(), false)?;
         }
+        Ok(page)
     }
 
     pub async fn fetch_request_document_allow_http_error_with_wait_until(
@@ -427,17 +427,30 @@ impl Browser {
         wait_until: RenderedDomWaitUntil,
         deadline: FetchDeadline,
     ) -> Result<FetchedDocument> {
-        self.fetch_document_with_wait(
-            request,
-            wait_until,
-            deadline,
-            RendererReplyBoundary::Stage,
-            None,
-        )
-        .await
+        let fetched = self
+            .fetch_document_to_base_stage(
+                request,
+                wait_until,
+                deadline,
+                RendererReplyBoundary::Stage,
+                None,
+            )
+            .await?;
+
+        match fetched {
+            FetchedDocument::Page(mut page) => {
+                self.wait_for_page_readiness_with_deadline(&mut page, wait_until, deadline)
+                    .await?;
+                Ok(FetchedDocument::Page(page))
+            }
+            FetchedDocument::Raw(raw) => Ok(FetchedDocument::Raw(raw)),
+        }
     }
 
-    async fn fetch_document_with_wait(
+    /// Reaches the concrete lifecycle boundary that makes a live Page
+    /// available. For NetworkIdle and DomStable this is only the Load or DCL
+    /// base stage; their best-effort observation runs outside materialization.
+    async fn fetch_document_to_base_stage(
         &self,
         request: Request,
         wait_until: RenderedDomWaitUntil,
@@ -446,13 +459,7 @@ impl Browser {
         lifecycle_decider: Option<RendererLifecycleDecider>,
     ) -> Result<FetchedDocument> {
         let timeout = deadline.timeout();
-        let stage = match wait_until {
-            RenderedDomWaitUntil::DomContentLoaded => PageVmInitStage::DomContentLoaded,
-            RenderedDomWaitUntil::Load => PageVmInitStage::Load,
-            RenderedDomWaitUntil::NetworkIdle => PageVmInitStage::Load,
-            RenderedDomWaitUntil::DomStable => PageVmInitStage::DomContentLoaded,
-            RenderedDomWaitUntil::Done => PageVmInitStage::Load,
-        };
+        let stage = wait_until.base_stage();
 
         let raw_url = request.url.as_str().to_owned();
         debug!(
@@ -462,18 +469,11 @@ impl Browser {
             stage = ?stage,
             "starting fetch_document_allow_http_error_with_wait_until deadline"
         );
-        // Network-idle and DOM-stable return a best-effort Page after their
-        // renderer-side readiness timer expires. Keep the historical one-second
-        // transport cushion so that Page can cross the owner boundary, while
-        // the logical FetchDeadline remains expired for every later plan step.
-        let outer_deadline = match wait_until {
-            RenderedDomWaitUntil::NetworkIdle | RenderedDomWaitUntil::DomStable => {
-                deadline.at_with_cushion(Duration::from_secs(1))?
-            }
-            RenderedDomWaitUntil::DomContentLoaded
-            | RenderedDomWaitUntil::Load
-            | RenderedDomWaitUntil::Done => deadline.at(),
-        };
+        // This deadline is strict: if the response or base DCL/Load stage does
+        // not arrive in time, there is no Page on which best-effort readiness
+        // can operate. Only the later NetworkIdle/DomStable observation may
+        // soften an expired deadline.
+        let outer_deadline = deadline.at();
         let requested_url = request.url.clone();
         if is_about_blank_url(&requested_url) {
             return self
@@ -489,7 +489,6 @@ impl Browser {
                         stage,
                         reply_boundary,
                         lifecycle_decider,
-                        Some((wait_until, timeout)),
                         String::new(),
                     ),
                 )
@@ -542,7 +541,6 @@ impl Browser {
                         stage,
                         reply_boundary,
                         lifecycle_decider,
-                        Some((wait_until, timeout)),
                         streaming_raw_response_from_navigation_response(response)?,
                         document_fetch_context_seed,
                         reserved_client,
@@ -585,7 +583,6 @@ impl Browser {
                 stage,
                 reply_boundary,
                 lifecycle_decider,
-                Some((wait_until, timeout)),
                 response,
                 document_fetch_context_seed,
                 reserved_client,
@@ -722,53 +719,68 @@ impl Browser {
             .await
     }
 
-    async fn wait_for_fetch_readiness(
+    /// Observes NetworkIdle or DomStable with the unspent part of `deadline`.
+    ///
+    /// A timeout in this observation is deliberately best-effort: the Page
+    /// has already reached its required Load/DCL base stage, so the current
+    /// snapshot is returned with a warning. Errors unrelated to timeout still
+    /// fail the fetch. Concrete lifecycle modes are no-ops here.
+    pub async fn wait_for_page_readiness_with_deadline(
         &self,
         page: &mut Page,
-        raw_url: &str,
-        wait: Option<(RenderedDomWaitUntil, Duration)>,
+        wait_until: RenderedDomWaitUntil,
+        deadline: FetchDeadline,
     ) -> Result<()> {
-        let Some((wait_until, timeout)) = wait else {
+        if !wait_until.has_best_effort_page_wait() {
             return Ok(());
-        };
+        }
+
+        let loader = self.resource_request_client();
+        let remaining = deadline.remaining();
         let result = match wait_until {
             RenderedDomWaitUntil::NetworkIdle => {
-                page.wait_for_network_idle(&self.resource_request_client(), timeout)
-                    .await
+                tokio::time::timeout_at(
+                    deadline.at(),
+                    page.wait_for_network_idle(&loader, remaining),
+                )
+                .await
             }
             RenderedDomWaitUntil::DomStable => {
-                page.wait_for_dom_stable(&self.resource_request_client(), timeout)
+                tokio::time::timeout_at(deadline.at(), page.wait_for_dom_stable(&loader, remaining))
                     .await
             }
             RenderedDomWaitUntil::DomContentLoaded
             | RenderedDomWaitUntil::Load
-            | RenderedDomWaitUntil::Done => return Ok(()),
+            | RenderedDomWaitUntil::Done => unreachable!(
+                "concrete lifecycle modes returned before starting a best-effort Page wait"
+            ),
         };
 
-        match result {
-            Ok(()) => Ok(()),
-            Err(error) if is_fetch_readiness_timeout(&error, wait_until) => {
-                warn!(
-                    page_id = page.page_id(),
-                    url = %raw_url,
-                    final_url = %page.final_url(),
-                    wait_until = ?wait_until,
-                    timeout_ms = timeout.as_millis(),
-                    error = %error,
-                    "fetch readiness wait timed out; returning best-effort page"
-                );
-                Ok(())
+        let timeout_error = match result {
+            Ok(Ok(())) => return Ok(()),
+            Ok(Err(error)) if is_fetch_readiness_timeout(&error, wait_until) => error,
+            Ok(Err(error)) => {
+                return Err(error).with_context(|| {
+                    anyhow!("failed while waiting for page readiness {wait_until:?}")
+                });
             }
-            Err(error) => Err(error),
-        }
+            Err(error) => anyhow::Error::new(error),
+        };
+
+        warn!(
+            page_id = page.page_id(),
+            url = %page.requested_url(),
+            final_url = %page.final_url(),
+            wait_until = ?wait_until,
+            timeout_ms = deadline.timeout().as_millis(),
+            remaining_ms = remaining.as_millis(),
+            error = %timeout_error,
+            "fetch readiness wait timed out; returning best-effort page"
+        );
+        Ok(())
     }
 
-    async fn fetch_internal(
-        &self,
-        request: Request,
-        stage: PageVmInitStage,
-        wait: Option<(RenderedDomWaitUntil, Duration)>,
-    ) -> Result<Page> {
+    async fn fetch_internal(&self, request: Request, stage: PageVmInitStage) -> Result<Page> {
         let raw_url = request.url.as_str().to_owned();
         let requested_url = request.url.clone();
         if is_about_blank_url(&requested_url) {
@@ -779,7 +791,6 @@ impl Browser {
                     stage,
                     RendererReplyBoundary::Stage,
                     None,
-                    wait,
                     String::new(),
                 )
                 .await;
@@ -808,7 +819,6 @@ impl Browser {
                     stage,
                     RendererReplyBoundary::Stage,
                     None,
-                    wait,
                     response,
                     document_fetch_context_seed,
                     reserved_client,
@@ -826,7 +836,6 @@ impl Browser {
                 stage,
                 RendererReplyBoundary::Stage,
                 None,
-                wait,
                 response,
                 document_fetch_context_seed,
                 reserved_client,
@@ -840,7 +849,6 @@ impl Browser {
         &self,
         request: Request,
         stage: PageVmInitStage,
-        wait: Option<(RenderedDomWaitUntil, Duration)>,
     ) -> Result<Page> {
         let raw_url = request.url.as_str().to_owned();
         let requested_url = request.url.clone();
@@ -852,7 +860,6 @@ impl Browser {
                     stage,
                     RendererReplyBoundary::Stage,
                     None,
-                    wait,
                     String::new(),
                 )
                 .await;
@@ -880,7 +887,6 @@ impl Browser {
                     stage,
                     RendererReplyBoundary::Stage,
                     None,
-                    wait,
                     streaming_raw_response_from_navigation_response(response)?,
                     document_fetch_context_seed,
                     reserved_client,
@@ -895,7 +901,6 @@ impl Browser {
             stage,
             RendererReplyBoundary::Stage,
             None,
-            wait,
             response,
             document_fetch_context_seed,
             reserved_client,
@@ -908,7 +913,6 @@ impl Browser {
         request: Request,
         stage: PageVmInitStage,
         reply_boundary: RendererReplyBoundary,
-        wait: Option<(RenderedDomWaitUntil, Duration)>,
     ) -> Result<FetchedDocument> {
         let raw_url = request.url.as_str().to_owned();
         let requested_url = request.url.clone();
@@ -920,7 +924,6 @@ impl Browser {
                     stage,
                     reply_boundary,
                     None,
-                    wait,
                     String::new(),
                 )
                 .await
@@ -956,7 +959,6 @@ impl Browser {
                     stage,
                     reply_boundary,
                     None,
-                    wait,
                     streaming_raw_response_from_navigation_response(response)?,
                     document_fetch_context_seed,
                     reserved_client,
@@ -978,7 +980,6 @@ impl Browser {
             stage,
             reply_boundary,
             None,
-            wait,
             response,
             document_fetch_context_seed,
             reserved_client,
@@ -1045,14 +1046,12 @@ impl Browser {
         stage: PageVmInitStage,
         reply_boundary: RendererReplyBoundary,
         lifecycle_decider: Option<RendererLifecycleDecider>,
-        wait: Option<(RenderedDomWaitUntil, Duration)>,
         response_body: String,
     ) -> Result<Page> {
         let started = Instant::now();
         debug!(
             url = %raw_url,
             stage = ?stage,
-            wait = ?wait.map(|(wait_until, timeout)| (wait_until, timeout.as_millis())),
             "starting static html fetch_internal"
         );
 
@@ -1103,13 +1102,10 @@ impl Browser {
             .dispatch_command(RendererOwnerCommand::CreateHtmlPage(create_page_request))
             .await
             .with_context(|| anyhow!("failed to execute scripts for page `{raw_url}`"))?;
-        let mut page = materialize_page_created_reply(&renderer_owner, reply)?;
-        self.wait_for_fetch_readiness(&mut page, raw_url, wait)
-            .await?;
+        let page = materialize_page_created_reply(&renderer_owner, reply)?;
         info!(
             page_id = page.page_id(),
             url = %page.requested_url(),
-            wait_until = ?wait.map(|(until, timeout)| (until, timeout.as_millis())),
             elapsed_ms = started.elapsed().as_millis(),
             "static html fetch_internal completed"
         );
@@ -1123,7 +1119,6 @@ impl Browser {
         stage: PageVmInitStage,
         reply_boundary: RendererReplyBoundary,
         lifecycle_decider: Option<RendererLifecycleDecider>,
-        wait: Option<(RenderedDomWaitUntil, Duration)>,
         response: StreamingRawResponse,
         document_fetch_context_seed: DocumentFetchContextSeed,
         reserved_service_worker_client: Option<RendererReservedServiceWorkerClient>,
@@ -1132,7 +1127,6 @@ impl Browser {
         debug!(
             url = %raw_url,
             stage = ?stage,
-            wait = ?wait.map(|(wait_until, timeout)| (wait_until, timeout.as_millis())),
             "starting raw streaming fetch_internal"
         );
 
@@ -1223,17 +1217,14 @@ impl Browser {
                 "raw streaming page creation produced a pending download for `{raw_url}`"
             ));
         }
-        let mut page = Page::from_attached_handle_with_creation_artifacts(
+        let page = Page::from_attached_handle_with_creation_artifacts(
             handle,
             page_state,
             page_creation_artifacts,
         );
-        self.wait_for_fetch_readiness(&mut page, raw_url, wait)
-            .await?;
         info!(
             page_id = page.page_id(),
             url = %page.requested_url(),
-            wait_until = ?wait.map(|(until, timeout)| (until, timeout.as_millis())),
             elapsed_ms = started.elapsed().as_millis(),
             "raw streaming fetch_internal completed"
         );

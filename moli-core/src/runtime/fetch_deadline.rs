@@ -44,15 +44,6 @@ impl FetchDeadline {
         self.at
     }
 
-    pub(super) fn at_with_cushion(self, cushion: Duration) -> Result<tokio::time::Instant> {
-        self.at.checked_add(cushion).with_context(|| {
-            anyhow!(
-                "fetch readiness deadline with {} ms cleanup cushion exceeds the supported range",
-                cushion.as_millis()
-            )
-        })
-    }
-
     pub(super) async fn wait<T, F>(self, phase: &'static str, future: F) -> Result<T>
     where
         F: Future<Output = Result<T>>,

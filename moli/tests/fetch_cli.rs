@@ -2098,6 +2098,261 @@ fn cli_networkidle_timeout_logs_warning_and_returns_best_effort_output() -> Resu
     Ok(())
 }
 
+fn assert_cli_best_effort_stage_uses_remaining_deadline(
+    wait_until: &str,
+    path: &str,
+    expected_html: &str,
+) -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let server = runtime.block_on(FixtureServer::spawn())?;
+    // The main response consumes 500 ms. A fresh one-second stability timer
+    // would make this take roughly 1.5 s; one shared deadline must return a
+    // usable best-effort Page at roughly the one-second mark.
+    let started = std::time::Instant::now();
+    let output = run_moli([
+        "moli",
+        "fetch",
+        "--log-level",
+        "warn",
+        "--http-no-proxy",
+        "*",
+        "--wait-until",
+        wait_until,
+        "--timeout",
+        "1000",
+        "--dump",
+        "html",
+        &server.url(path),
+    ])?;
+    let elapsed = started.elapsed();
+
+    runtime.block_on(server.shutdown());
+
+    assert!(
+        output.status.success(),
+        "wait_until={wait_until} stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = clean_output(&output.stdout);
+    let stderr = clean_output(&output.stderr);
+    assert!(stdout.contains(expected_html), "stdout={stdout}");
+    assert!(
+        stderr.contains("fetch readiness wait timed out; returning best-effort page"),
+        "stderr={stderr}"
+    );
+    assert!(stderr.contains("timeout_ms=1000"), "stderr={stderr}");
+    assert!(stderr.contains("remaining_ms="), "stderr={stderr}");
+    assert!(
+        elapsed < std::time::Duration::from_millis(1_300),
+        "wait_until={wait_until} appears to have restarted its timeout: {elapsed:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn cli_networkidle_uses_only_the_deadline_left_after_a_slow_main_response() -> Result<()> {
+    assert_cli_best_effort_stage_uses_remaining_deadline(
+        "networkidle",
+        "/wait-until-slow-interval-fetch",
+        "data-state=\"init\"",
+    )
+}
+
+#[test]
+fn cli_domstable_uses_only_the_deadline_left_after_a_slow_main_response() -> Result<()> {
+    assert_cli_best_effort_stage_uses_remaining_deadline(
+        "domstable",
+        "/wait-until-slow-interval-dom-mutation",
+        "id=\"mutation-count\"",
+    )
+}
+
+#[test]
+fn cli_best_effort_stage_does_not_soften_a_slow_base_lifecycle_timeout() -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let server = runtime.block_on(FixtureServer::spawn())?;
+    let url = server.url("/wait-until-slow-static");
+
+    for wait_until in ["networkidle", "domstable"] {
+        // The response takes 500 ms, so at 200 ms no live Page exists yet.
+        // This is a hard base-stage failure, not a best-effort stability exit.
+        let started = std::time::Instant::now();
+        let output = run_moli([
+            "moli",
+            "fetch",
+            "--log-level",
+            "warn",
+            "--http-no-proxy",
+            "*",
+            "--wait-until",
+            wait_until,
+            "--timeout",
+            "200",
+            "--dump",
+            "html",
+            &url,
+        ])?;
+        let elapsed = started.elapsed();
+
+        let stdout = clean_output(&output.stdout);
+        let stderr = clean_output(&output.stderr);
+        assert!(!output.status.success(), "stdout={stdout}\nstderr={stderr}");
+        assert!(stdout.is_empty(), "stdout={stdout}");
+        assert!(stderr.contains("timed out after 200 ms"), "stderr={stderr}");
+        assert!(
+            !stderr.contains("returning best-effort page"),
+            "a base lifecycle timeout must not be softened: stderr={stderr}"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_millis(400),
+            "wait_until={wait_until} extended the hard base-stage timeout: {elapsed:?}"
+        );
+    }
+
+    runtime.block_on(server.shutdown());
+    Ok(())
+}
+
+#[test]
+fn cli_zero_deadline_cannot_enter_a_best_effort_page_stage() -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let server = runtime.block_on(FixtureServer::spawn())?;
+    let url = server.url("/wait-until-slow-static");
+
+    for wait_until in ["networkidle", "domstable"] {
+        let started = std::time::Instant::now();
+        let output = run_moli([
+            "moli",
+            "fetch",
+            "--log-level",
+            "warn",
+            "--http-no-proxy",
+            "*",
+            "--wait-until",
+            wait_until,
+            "--timeout",
+            "0",
+            "--dump",
+            "html",
+            &url,
+        ])?;
+
+        let stdout = clean_output(&output.stdout);
+        let stderr = clean_output(&output.stderr);
+        assert!(!output.status.success(), "stdout={stdout}\nstderr={stderr}");
+        assert!(stdout.is_empty(), "stdout={stdout}");
+        assert!(stderr.contains("timed out after 0 ms"), "stderr={stderr}");
+        assert!(
+            !stderr.contains("returning best-effort page"),
+            "zero budget cannot produce a Page to return: stderr={stderr}"
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(200),
+            "wait_until={wait_until} did not fail its zero deadline immediately"
+        );
+    }
+
+    runtime.block_on(server.shutdown());
+    Ok(())
+}
+
+fn assert_cli_quiet_page_uses_remaining_best_effort_budget(wait_until: &str) -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let server = runtime.block_on(FixtureServer::spawn())?;
+    let url = server.url("/wait-until-slow-static");
+    // After the 500 ms response, 250 ms remains. That is shorter than either
+    // stability window, although a freshly started timer would let this
+    // otherwise quiet page settle successfully.
+    let output = run_moli([
+        "moli",
+        "fetch",
+        "--log-level",
+        "warn",
+        "--http-no-proxy",
+        "*",
+        "--wait-until",
+        wait_until,
+        "--timeout",
+        "750",
+        "--dump",
+        "html",
+        &url,
+    ])?;
+
+    runtime.block_on(server.shutdown());
+
+    assert!(
+        output.status.success(),
+        "wait_until={wait_until} stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = clean_output(&output.stdout);
+    let stderr = clean_output(&output.stderr);
+    assert!(stdout.contains("slow-main=ready"), "stdout={stdout}");
+    assert!(
+        stderr.contains("fetch readiness wait timed out; returning best-effort page"),
+        "wait_until={wait_until} should use only the remaining budget: stderr={stderr}"
+    );
+    Ok(())
+}
+
+#[test]
+fn cli_quiet_page_networkidle_uses_remaining_best_effort_budget() -> Result<()> {
+    assert_cli_quiet_page_uses_remaining_best_effort_budget("networkidle")
+}
+
+#[test]
+fn cli_quiet_page_domstable_uses_remaining_best_effort_budget() -> Result<()> {
+    assert_cli_quiet_page_uses_remaining_best_effort_budget("domstable")
+}
+
+#[test]
+fn cli_post_readiness_wait_cannot_restart_an_exhausted_best_effort_deadline() -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let server = runtime.block_on(FixtureServer::spawn())?;
+    let url = server.url("/wait-until-slow-interval-fetch");
+    let started = std::time::Instant::now();
+    let output = run_moli([
+        "moli",
+        "fetch",
+        "--log-level",
+        "warn",
+        "--http-no-proxy",
+        "*",
+        "--wait-until",
+        "networkidle",
+        "--wait-selector",
+        "#never-appears",
+        "--timeout",
+        "1000",
+        "--dump",
+        "html",
+        &url,
+    ])?;
+    let elapsed = started.elapsed();
+    runtime.block_on(server.shutdown());
+
+    let stdout = clean_output(&output.stdout);
+    let stderr = clean_output(&output.stderr);
+    assert!(!output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stdout.is_empty(), "stdout={stdout}");
+    assert!(
+        stderr.contains("returning best-effort page"),
+        "stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("failed while waiting for selector `#never-appears`"),
+        "stderr={stderr}"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_millis(1_300),
+        "the selector appears to have received a fresh timeout: {elapsed:?}"
+    );
+    Ok(())
+}
+
 #[test]
 fn cli_domstable_waits_for_inflight_slow_fetch_content() -> Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;

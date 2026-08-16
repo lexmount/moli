@@ -2127,6 +2127,145 @@ async fn fetch_deadline_spans_lifecycle_selector_and_script_without_reset() -> R
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn best_effort_page_readiness_consumes_only_the_remaining_fetch_deadline() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let renderer_owner = browser.js_runtime.renderer_owner_handle();
+
+    for (wait_until, path, expected_html) in [
+        (
+            RenderedDomWaitUntil::NetworkIdle,
+            "/wait-until-slow-interval-fetch",
+            "data-state=\"init\"",
+        ),
+        (
+            RenderedDomWaitUntil::DomStable,
+            "/wait-until-slow-interval-dom-mutation",
+            "id=\"mutation-count\"",
+        ),
+    ] {
+        // The main response costs 500 ms. Readiness must receive only the
+        // roughly 500 ms left in this one-second plan, not a fresh second.
+        let deadline = FetchDeadline::new(Duration::from_secs(1))?;
+        let started = std::time::Instant::now();
+        let fetched = browser
+            .fetch_request_document_allow_http_error_with_wait_until_deadline(
+                Request::get(&server.url(path))?,
+                wait_until,
+                deadline,
+            )
+            .await?;
+        let elapsed = started.elapsed();
+        let FetchedDocument::Page(mut page) = fetched else {
+            panic!("HTML fixture unexpectedly produced a raw document");
+        };
+        let page_id = page.renderer_page_id();
+
+        assert!(
+            elapsed < Duration::from_millis(1_300),
+            "{wait_until:?} appears to have restarted its timeout after the slow main response: {elapsed:?}"
+        );
+        assert!(
+            page.serialize_html_async().await?.contains(expected_html),
+            "the best-effort Page must remain usable after {wait_until:?} expires"
+        );
+
+        let post_wait_started = std::time::Instant::now();
+        let error = browser
+            .wait_for_selector_with_deadline(&mut page, "#never-appears", deadline)
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .chain()
+                .any(|cause| cause.to_string().contains("timed out")),
+            "unexpected exhausted-deadline error: {error:?}"
+        );
+        assert!(
+            post_wait_started.elapsed() < Duration::from_millis(200),
+            "a post-readiness selector must not receive a fresh timeout"
+        );
+
+        tokio::time::timeout(Duration::from_secs(1), page.close_async()).await??;
+        assert!(
+            renderer_owner.record(page_id).is_none(),
+            "best-effort deadline cancellation must return the Page entry for close"
+        );
+    }
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn page_fetch_wait_until_apis_do_not_restart_best_effort_timeout() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+
+    for (wait_until, path) in [
+        (
+            RenderedDomWaitUntil::NetworkIdle,
+            "/wait-until-slow-interval-fetch",
+        ),
+        (
+            RenderedDomWaitUntil::DomStable,
+            "/wait-until-slow-interval-dom-mutation",
+        ),
+    ] {
+        let started = std::time::Instant::now();
+        let page = browser
+            .fetch_with_wait_until(&server.url(path), wait_until, Duration::from_secs(1))
+            .await?;
+
+        assert!(
+            started.elapsed() < Duration::from_millis(1_300),
+            "the Page-returning {wait_until:?} API appears to have started a fresh timeout"
+        );
+        page.close_async().await?;
+    }
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn best_effort_readiness_does_not_soften_a_base_lifecycle_timeout() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+
+    for wait_until in [
+        RenderedDomWaitUntil::NetworkIdle,
+        RenderedDomWaitUntil::DomStable,
+    ] {
+        // No Page exists at 200 ms because the main response itself takes
+        // 500 ms. Best effort applies only after the Load/DCL base boundary.
+        let started = std::time::Instant::now();
+        let error = browser
+            .fetch_request_document_allow_http_error_with_wait_until(
+                Request::get(&server.url("/wait-until-slow-static"))?,
+                wait_until,
+                Duration::from_millis(200),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(
+            error
+                .chain()
+                .any(|cause| cause.to_string().contains("timed out")),
+            "unexpected base lifecycle error: {error:?}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_millis(400),
+            "{wait_until:?} incorrectly softened or extended the base lifecycle timeout"
+        );
+    }
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn live_page_selector_wait_allows_unrelated_evaluate_while_pending() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
