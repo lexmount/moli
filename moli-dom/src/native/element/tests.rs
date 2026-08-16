@@ -211,6 +211,35 @@ fn svg_element_interface_name_specializes_standard_elements() {
 }
 
 #[test]
+fn svg_text_content_role_covers_text_tspan_and_text_path() {
+    for local_name in ["text", "tspan", "textPath"] {
+        let element = Element::new(
+            local_name.to_owned(),
+            "http://www.w3.org/2000/svg".to_owned(),
+            None,
+            Vec::new(),
+        );
+        assert!(element.is_svg_text_content_element(), "{local_name}");
+    }
+
+    for (namespace, local_name) in [
+        ("http://www.w3.org/2000/svg", "textpath"),
+        ("http://www.w3.org/1999/xhtml", "text"),
+    ] {
+        let element = Element::new(
+            local_name.to_owned(),
+            namespace.to_owned(),
+            None,
+            Vec::new(),
+        );
+        assert!(
+            !element.is_svg_text_content_element(),
+            "{namespace} {local_name}"
+        );
+    }
+}
+
+#[test]
 fn mathml_element_interface_name_uses_mathml_element() {
     assert_eq!(mathml_element_interface_name("math"), "MathMLElement");
     assert_eq!(mathml_element_interface_name("mrow"), "MathMLElement");
