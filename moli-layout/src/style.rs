@@ -774,12 +774,12 @@ impl ResolvedLayoutStyle {
         taffy.justify_items = taffy_item_alignment((position_style.justify_items.computed.0).0);
         taffy.justify_self = taffy_item_alignment(position_style.justify_self.0);
         let size = Size {
-            width: project_taffy_size_dimension(&position_style.width, taffy.size.width),
-            height: project_taffy_size_dimension(&position_style.height, taffy.size.height),
+            width: project_taffy_size_value(&position_style.width, taffy.size.width),
+            height: project_taffy_size_value(&position_style.height, taffy.size.height),
         };
         let min_size = Size {
-            width: project_taffy_size_dimension(&position_style.min_width, taffy.min_size.width),
-            height: project_taffy_size_dimension(&position_style.min_height, taffy.min_size.height),
+            width: project_taffy_size_value(&position_style.min_width, taffy.min_size.width),
+            height: project_taffy_size_value(&position_style.min_height, taffy.min_size.height),
         };
         let max_size = Size {
             width: project_taffy_max_size_dimension(
@@ -791,6 +791,7 @@ impl ResolvedLayoutStyle {
                 taffy.max_size.height,
             ),
         };
+        let flex_basis = project_taffy_flex_basis(&position_style.flex_basis, taffy.flex_basis);
         let anchor_sizing_deferred = [
             size.width,
             size.height,
@@ -798,24 +799,19 @@ impl ResolvedLayoutStyle {
             min_size.height,
             max_size.width,
             max_size.height,
+            flex_basis,
         ]
         .into_iter()
         .any(|projection| projection.anchor_sizing_deferred);
         taffy.size = size.map(|projection| projection.dimension);
         taffy.min_size = min_size.map(|projection| projection.dimension);
         taffy.max_size = max_size.map(|projection| projection.dimension);
+        taffy.flex_basis = flex_basis.dimension;
         // Taffy's generic leaf algorithm transfers aspect ratios before a
         // replaced-element measure callback runs. CSS Sizing 4 defines zero,
         // infinite and NaN ratios as degenerate, so normalize them at the
         // Stylo/Taffy seam instead of relying only on replaced measurement.
         taffy.aspect_ratio = preferred_aspect_ratio.numeric_ratio();
-        if matches!(position_style.flex_basis, GenericFlexBasis::Content) {
-            // Blitz's fixed stylo_taffy revision predates Taffy's typed
-            // `content` flex-basis. Preserve the Stylo distinction here so
-            // Taffy ignores the preferred main size and follows the content
-            // flex-base-size algorithm instead of treating it as `auto`.
-            taffy.flex_basis = taffy::Dimension::content();
-        }
         taffy.item_is_table = matches!(display, LayoutDisplay::Table | LayoutDisplay::InlineTable);
         let sticky_inset = taffy.inset;
         let establishes_transform_containing_block =
@@ -1865,13 +1861,14 @@ impl TaffyDimensionProjection {
     }
 }
 
-/// Project one computed main/minimum size through a single capability seam.
+/// Project one computed CSS `<width>` value through a single capability seam.
 ///
-/// Intrinsic and stretch keywords are supported on both physical axes. Anchor
-/// sizing is different: resolving it requires the anchor-query context, so the
-/// generic Stylo/Taffy fallback remains in force and the same projection marks
-/// that missing context for diagnostics.
-fn project_taffy_size_dimension(
+/// Width, height, minimum sizes, and `flex-basis` share this grammar. Intrinsic
+/// and stretch keywords therefore retain the same typed layout meaning on
+/// every path. Anchor sizing is different: resolving it requires the
+/// anchor-query context, so the generic Stylo/Taffy fallback remains in force
+/// and the same projection marks that missing context for diagnostics.
+fn project_taffy_size_value(
     size: &GenericSize<style::values::computed::NonNegativeLengthPercentage>,
     fallback: taffy::Dimension,
 ) -> TaffyDimensionProjection {
@@ -1899,6 +1896,24 @@ fn project_taffy_size_dimension(
         GenericSize::AnchorSizeFunction(_) | GenericSize::AnchorContainingCalcFunction(_) => {
             TaffyDimensionProjection::deferred(fallback)
         }
+    }
+}
+
+/// Preserve the complete `flex-basis` grammar at the browser/layout boundary.
+///
+/// The pinned `stylo_taffy` converter predates Taffy's typed content and
+/// intrinsic bases. Reusing the shared `<width>` projection keeps `auto`,
+/// `content`, intrinsic functions, stretch, and deferred anchor sizing
+/// distinguishable until the flex algorithm has its constraint space.
+fn project_taffy_flex_basis(
+    flex_basis: &style::values::computed::FlexBasis,
+    fallback: taffy::Dimension,
+) -> TaffyDimensionProjection {
+    match flex_basis {
+        GenericFlexBasis::Content => {
+            TaffyDimensionProjection::supported(taffy::Dimension::content())
+        }
+        GenericFlexBasis::Size(size) => project_taffy_size_value(size, fallback),
     }
 }
 
@@ -2407,6 +2422,23 @@ pub(crate) fn resolve_stylo_calc_value(calc_ptr: *const (), parent_size: f32) ->
     // originating `ComputedValues` until the containing `LayoutWorld` drops.
     let calc = unsafe { &*(calc_ptr as *const CalcLengthPercentage) };
     calc.resolve(CSSPixelLength::new(parent_size)).px()
+}
+
+#[cfg(test)]
+mod sizing_projection_tests {
+    use super::*;
+
+    #[test]
+    fn flex_basis_projection_preserves_typed_sizing_functions() {
+        let project = |basis| project_taffy_flex_basis(&basis, taffy::Dimension::auto()).dimension;
+
+        assert!(project(GenericFlexBasis::Content).is_content());
+        assert!(project(GenericFlexBasis::Size(GenericSize::MinContent)).is_min_content());
+        assert!(project(GenericFlexBasis::Size(GenericSize::MaxContent)).is_max_content());
+        assert!(project(GenericFlexBasis::Size(GenericSize::FitContent)).is_fit_content());
+        assert!(project(GenericFlexBasis::Size(GenericSize::Stretch)).is_stretch());
+        assert!(project(GenericFlexBasis::Size(GenericSize::Auto)).is_auto());
+    }
 }
 
 #[cfg(test)]

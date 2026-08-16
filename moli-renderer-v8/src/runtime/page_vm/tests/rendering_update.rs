@@ -5766,3 +5766,58 @@ document.body.innerHTML = `
     .await
     .expect("flex percentage-minimum fixture should run");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_preserves_intrinsic_flex_basis_sizing_functions() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/flex-basis-intrinsics.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0}
+.inline-block{float:left;width:50px;height:50px}
+.flexbox{display:flex;width:75px;height:75px;margin-bottom:50px}
+.column{flex-flow:column}
+.item{flex-shrink:0;min-width:0;min-height:0}
+.orthogonal{writing-mode:vertical-rl}
+</style>`;
+document.body.innerHTML = `
+<div class=flexbox><div id=row-min class=item style="flex-basis:min-content"><i class=inline-block></i><i class=inline-block></i></div></div>
+<div class=flexbox><div id=row-max class=item style="flex-basis:max-content;width:300px"><i class=inline-block></i><i class=inline-block></i></div></div>
+<div class=flexbox><div id=row-fit class=item style="flex-basis:fit-content"><i class=inline-block></i><i class=inline-block></i></div></div>
+<div class=flexbox><div id=orthogonal-row-max class="item orthogonal" style="flex-basis:max-content;width:300px"><i class=inline-block></i><i class=inline-block></i></div></div>
+<div class="flexbox column"><div id=orthogonal-column-min class="item orthogonal" style="flex-basis:min-content"><i class=inline-block></i><i class=inline-block></i></div></div>
+<div class="flexbox column"><div id=orthogonal-column-fit class="item orthogonal" style="flex-basis:fit-content"><i class=inline-block></i><i class=inline-block></i></div></div>`;
+"installed"
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 800, 1.0))?
+            .expect("intrinsic flex-basis fixture should retain a root");
+
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                r#"[
+  document.getElementById("row-min").getBoundingClientRect().width,
+  document.getElementById("row-max").getBoundingClientRect().width,
+  document.getElementById("row-fit").getBoundingClientRect().width,
+  document.getElementById("orthogonal-row-max").getBoundingClientRect().width,
+  document.getElementById("orthogonal-column-min").getBoundingClientRect().height,
+  document.getElementById("orthogonal-column-fit").getBoundingClientRect().height,
+].join("|")"#,
+            )?,
+            "50|100|75|100|50|75",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("intrinsic flex-basis fixture should run");
+}
