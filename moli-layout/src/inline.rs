@@ -379,8 +379,40 @@ pub(crate) struct InlineTextUnit {
     pub(crate) style_box: LayoutBoxId,
     pub(crate) ancestors: Vec<LayoutBoxId>,
     pub(crate) sources: Vec<SourceOrigin>,
-    pub(crate) control: bool,
+    kind: InlineTextUnitKind,
     pub(crate) break_spaces_opportunity: bool,
+}
+
+/// Semantic identity retained for one unit in Parley's shared text stream.
+///
+/// A DOM `<br>` and a preserved newline both shape as U+000A, but only the
+/// former owns element geometry. Keeping that distinction beside the stream
+/// is the analogue of Blink's forced-line-break `InlineItem`: line breaking
+/// remains Parley's job while fragment provenance remains the browser's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InlineTextUnitKind {
+    Text,
+    Control,
+    ElementLineBreak { box_id: LayoutBoxId },
+}
+
+impl InlineTextUnitKind {
+    const fn is_control(self) -> bool {
+        matches!(self, Self::Control)
+    }
+
+    const fn element_line_break_box(self) -> Option<LayoutBoxId> {
+        match self {
+            Self::ElementLineBreak { box_id } => Some(box_id),
+            Self::Text | Self::Control => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct InlineResolvedStyleRun {
+    output_range: Range<usize>,
+    style_index: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -450,6 +482,10 @@ pub(crate) struct InlineFormattingContext {
     /// in style deduplication prevents glyph runs from crossing a box-state
     /// boundary even when their paint/font properties are otherwise equal.
     pub(crate) style_parents: Vec<LayoutBoxId>,
+    /// Browser-side index for Parley's resolved style runs. Glyphless flow
+    /// controls do not expose a glyph style index, but still need the exact
+    /// inline box strut and parent state used while shaping their text range.
+    pub(crate) resolved_style_runs: Vec<InlineResolvedStyleRun>,
     pub(crate) structural_boxes: Vec<InlineStructuralBox>,
     pub(crate) line_placements: Vec<InlineLinePlacement>,
     pub(crate) fragments: InlineFragments,
@@ -562,6 +598,13 @@ impl InlineFormattingContext {
             .unwrap_or(self.root_style)
     }
 
+    fn style_index_for_range(&self, range: &Range<usize>) -> Option<usize> {
+        self.resolved_style_runs
+            .iter()
+            .find(|run| ranges_overlap(&run.output_range, range))
+            .map(|run| run.style_index)
+    }
+
     fn box_includes_used_font_metrics(&self, box_id: LayoutBoxId) -> bool {
         if box_id == self.root_style {
             return self.root_includes_used_font_metrics;
@@ -582,6 +625,7 @@ pub(crate) struct InlineFragments {
     pub(crate) lines: Vec<InlineLineFragment>,
     pub(crate) text: Vec<InlineSourceFragment>,
     pub(crate) boxes: Vec<InlineBoxFragment>,
+    pub(crate) line_breaks: Vec<InlineLineBreakFragment>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -589,6 +633,7 @@ pub(crate) struct LineRelativeFragments {
     lines: Vec<LineRelativeLineFragment>,
     text: Vec<LineRelativeSourceFragment>,
     boxes: Vec<LineRelativeBoxFragment>,
+    line_breaks: Vec<LineRelativeLineBreakFragment>,
 }
 
 impl LineRelativeFragments {
@@ -603,7 +648,12 @@ impl LineRelativeFragments {
         coordinates: InlineCoordinateSpace,
         content_box_size: Size<f32>,
     ) -> InlineFragments {
-        let Self { lines, text, boxes } = self;
+        let Self {
+            lines,
+            text,
+            boxes,
+            line_breaks,
+        } = self;
         let flow_lines = lines.iter().map(|line| line.rect).collect::<Vec<_>>();
         let physical_lines = lines
             .iter()
@@ -647,6 +697,18 @@ impl LineRelativeFragments {
                     has_end_edge: inline_box.has_end_edge,
                 })
                 .collect(),
+            line_breaks: line_breaks
+                .into_iter()
+                .map(|line_break| InlineLineBreakFragment {
+                    line_index: line_break.line_index,
+                    box_id: line_break.box_id,
+                    rect: coordinates.to_physical_line_rect(
+                        flow_lines[line_break.line_index],
+                        line_break.rect,
+                        content_box_size,
+                    ),
+                })
+                .collect(),
         }
     }
 }
@@ -680,6 +742,20 @@ struct LineRelativeSourceFragment {
     source_byte_range: Range<usize>,
     source_utf16_range: Range<usize>,
     rtl: bool,
+    rect: LineRelativeRect,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct InlineLineBreakFragment {
+    pub(crate) line_index: usize,
+    pub(crate) box_id: LayoutBoxId,
+    pub(crate) rect: PaintRect,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct LineRelativeLineBreakFragment {
+    line_index: usize,
+    box_id: LayoutBoxId,
     rect: LineRelativeRect,
 }
 
@@ -847,6 +923,7 @@ pub(crate) fn build_inline_fragments(
     let mut fragments = LineRelativeFragments::default();
     let mut box_fragments = BTreeMap::<(usize, usize), FragmentAccumulator>::new();
     let mut source_fragments = BTreeMap::<SourceFragmentKey, FragmentAccumulator>::new();
+    let mut line_break_fragments = BTreeMap::<(usize, usize), FragmentAccumulator>::new();
 
     for (line_index, line) in layout.lines().enumerate() {
         let metrics = line.metrics();
@@ -875,6 +952,7 @@ pub(crate) fn build_inline_fragments(
                     .glyphs()
                     .next()
                     .map(|glyph| glyph.style_index())
+                    .or_else(|| context.style_index_for_range(&range))
                     .unwrap_or_default();
                 let vertical_offset = placement.map_or(0.0, |placement| {
                     placement.glyph_offset(run.index(), style_index)
@@ -908,6 +986,12 @@ pub(crate) fn build_inline_fragments(
                             .entry((ancestor.index(), line_index))
                             .or_default()
                             .include_inline_axis(rect.inline_offset, rect.inline_size);
+                    }
+                    if let Some(box_id) = unit.kind.element_line_break_box() {
+                        line_break_fragments
+                            .entry((box_id.index(), line_index))
+                            .or_default()
+                            .include(rect);
                     }
                 }
                 for source in context
@@ -999,6 +1083,17 @@ pub(crate) fn build_inline_fragments(
                 source_byte_range: key.source_byte_start..key.source_byte_end,
                 source_utf16_range: key.source_utf16_start..key.source_utf16_end,
                 rtl: key.rtl,
+                rect: line_rect.line_relative_rect(accumulator.rect(line_rect)?),
+            })
+        })
+        .collect();
+    fragments.line_breaks = line_break_fragments
+        .into_iter()
+        .filter_map(|((box_index, line_index), accumulator)| {
+            let line_rect = fragments.lines.get(line_index)?.rect;
+            Some(LineRelativeLineBreakFragment {
+                line_index,
+                box_id: LayoutBoxId::from_index(box_index),
                 rect: line_rect.line_relative_rect(accumulator.rect(line_rect)?),
             })
         })
@@ -1110,7 +1205,11 @@ pub(crate) fn build_inline_line_placements(
                     let run = glyph_run.run();
                     let run_metrics = run.metrics();
                     let paint = glyph_run.style().brush.paint;
-                    let style_index = glyph_run.glyphs().next().map(|glyph| glyph.style_index());
+                    let style_index = glyph_run
+                        .glyphs()
+                        .next()
+                        .map(|glyph| glyph.style_index())
+                        .or_else(|| context.style_index_for_range(&run.text_range()));
                     let structural_parent =
                         style_index.map_or(context.root_style, |index| context.style_parent(index));
                     let primary_strut = style_index
@@ -1908,10 +2007,10 @@ impl InlineBuildInput {
             // `vertical-align` belongs to the structural inline box, not to
             // each descendant glyph. Keep glyphs baseline-aligned within their
             // direct box state; closing that state moves the complete subtree.
-            base_style.brush.paint = !unit.control;
+            base_style.brush.paint = !unit.kind.is_control();
             let structural_parent = unit.ancestors.last().copied().unwrap_or(self.root_style);
             if !parley.requires_character_font_resolution(&base_style) {
-                let sample = (!unit.control)
+                let sample = (!unit.kind.is_control())
                     .then(|| self.text[unit.output_range.clone()].chars().next())
                     .flatten();
                 parley.resolve_font_families(&mut base_style, None);
@@ -1941,7 +2040,7 @@ impl InlineBuildInput {
                     &mut style_samples,
                     style,
                     structural_parent,
-                    (!unit.control).then_some(character),
+                    (!unit.kind.is_control()).then_some(character),
                 );
                 append_resolved_inline_run(&mut resolved_runs, start..end, style_slot);
             }
@@ -2001,6 +2100,13 @@ impl InlineBuildInput {
                     .includes_used_font_metrics(),
             });
         }
+        let resolved_style_runs = resolved_runs
+            .into_iter()
+            .map(|(output_range, style_index)| InlineResolvedStyleRun {
+                output_range,
+                style_index,
+            })
+            .collect();
         let objects = self
             .objects
             .drain(..)
@@ -2023,6 +2129,7 @@ impl InlineBuildInput {
                 .style
                 .includes_used_font_metrics(),
             style_parents,
+            resolved_style_runs,
             structural_boxes,
             line_placements: Vec::new(),
             fragments: InlineFragments::default(),
@@ -2398,7 +2505,13 @@ impl InlineNormalizer {
             }
             InlineWhiteSpaceCollapse::PreserveBreaks if is_segment_break => {
                 self.pending = None;
-                self.append_unit(style_box, '\n', ancestors, sources, false);
+                self.append_unit(
+                    style_box,
+                    '\n',
+                    ancestors,
+                    sources,
+                    InlineTextUnitKind::Text,
+                );
                 self.line_has_content = false;
             }
             InlineWhiteSpaceCollapse::PreserveBreaks if collapsible => {
@@ -2411,21 +2524,39 @@ impl InlineNormalizer {
                 } else {
                     character
                 };
-                self.append_unit(style_box, character, ancestors, sources, false);
+                self.append_unit(
+                    style_box,
+                    character,
+                    ancestors,
+                    sources,
+                    InlineTextUnitKind::Text,
+                );
                 if mode == InlineWhiteSpaceCollapse::BreakSpaces && character == ' ' {
                     // Parley 0.10 has no CSS `break-spaces` mode. U+200B adds
                     // the required opportunity after every preserved space;
                     // its control brush keeps it out of paint and source
                     // fragments while the actual space remains measurable.
                     let unit_index = self.units.len();
-                    self.append_unit(style_box, '\u{200B}', ancestors, Vec::new(), true);
+                    self.append_unit(
+                        style_box,
+                        '\u{200B}',
+                        ancestors,
+                        Vec::new(),
+                        InlineTextUnitKind::Control,
+                    );
                     self.units[unit_index].break_spaces_opportunity = true;
                 }
                 self.line_has_content = character != '\n';
             }
             InlineWhiteSpaceCollapse::Collapse | InlineWhiteSpaceCollapse::PreserveBreaks => {
                 self.flush_pending();
-                self.append_unit(style_box, character, ancestors, sources, false);
+                self.append_unit(
+                    style_box,
+                    character,
+                    ancestors,
+                    sources,
+                    InlineTextUnitKind::Text,
+                );
                 self.line_has_content = true;
             }
         }
@@ -2479,7 +2610,7 @@ impl InlineNormalizer {
                 style_box: pending.style_box,
                 ancestors: pending.ancestors,
                 sources: pending.sources,
-                control: false,
+                kind: InlineTextUnitKind::Text,
                 break_spaces_opportunity: false,
             },
         );
@@ -2488,7 +2619,17 @@ impl InlineNormalizer {
     fn hard_break(&mut self, box_id: LayoutBoxId, ancestors: &[LayoutBoxId]) {
         self.flush_pending_carriage_return();
         self.pending = None;
-        self.append_unit(box_id, '\n', ancestors, Vec::new(), false);
+        // Blink's forced-break item belongs to LayoutBR for geometry, but its
+        // text height comes from the current InlineBoxState. A style authored
+        // directly on `<br>` therefore does not replace the enclosing strut.
+        let style_box = ancestors.last().copied().unwrap_or(self.root_style);
+        self.append_unit(
+            style_box,
+            '\n',
+            ancestors,
+            Vec::new(),
+            InlineTextUnitKind::ElementLineBreak { box_id },
+        );
         self.line_has_content = false;
         self.capitalize_word_start = true;
     }
@@ -2505,7 +2646,13 @@ impl InlineNormalizer {
         // inline box boundary. Keep the opaque item order aligned with
         // Blink's InlineItemsBuilder: enter bidi context, then open the tag.
         for control in bidi_open(bidi, direction) {
-            self.append_unit(box_id, control, ancestors, Vec::new(), true);
+            self.append_unit(
+                box_id,
+                control,
+                ancestors,
+                Vec::new(),
+                InlineTextUnitKind::Control,
+            );
         }
         self.push_object(
             box_id,
@@ -2532,7 +2679,13 @@ impl InlineNormalizer {
             vertical_align,
         );
         for control in bidi_close(bidi) {
-            self.append_unit(box_id, control, ancestors, Vec::new(), true);
+            self.append_unit(
+                box_id,
+                control,
+                ancestors,
+                Vec::new(),
+                InlineTextUnitKind::Control,
+            );
         }
     }
 
@@ -2570,7 +2723,7 @@ impl InlineNormalizer {
         character: char,
         ancestors: &[LayoutBoxId],
         sources: Vec<SourceOrigin>,
-        control: bool,
+        kind: InlineTextUnitKind,
     ) {
         let start = self.text.len();
         self.text.push(character);
@@ -2579,7 +2732,7 @@ impl InlineNormalizer {
             style_box,
             ancestors: ancestors.to_vec(),
             sources,
-            control,
+            kind,
             break_spaces_opportunity: false,
         });
     }
@@ -2911,6 +3064,25 @@ mod tests {
     }
 
     #[test]
+    fn element_line_break_keeps_geometry_owner_separate_from_inline_style_parent() {
+        let root = LayoutBoxId::from_index(0);
+        let inline = LayoutBoxId::from_index(1);
+        let line_break = LayoutBoxId::from_index(2);
+        let mut normalizer = InlineNormalizer::new(root);
+        normalizer.hard_break(line_break, &[inline]);
+        let input = normalizer.finish();
+
+        assert_eq!(input.text, "\n");
+        assert_eq!(input.units.len(), 1);
+        assert_eq!(input.units[0].style_box, inline);
+        assert_eq!(
+            input.units[0].kind.element_line_break_box(),
+            Some(line_break)
+        );
+        assert!(input.source_map.is_empty());
+    }
+
+    #[test]
     fn parley_forced_break_and_optional_editor_tail_map_to_css_phantom_lines() {
         let text = "\n";
         let mut font_context = parley::FontContext::new();
@@ -3026,7 +3198,14 @@ mod tests {
         );
 
         assert_eq!(input.text, "A \u{200B} \u{200B}B");
-        assert_eq!(input.units.iter().filter(|unit| unit.control).count(), 2);
+        assert_eq!(
+            input
+                .units
+                .iter()
+                .filter(|unit| unit.kind == InlineTextUnitKind::Control)
+                .count(),
+            2
+        );
         assert_eq!(
             input
                 .units

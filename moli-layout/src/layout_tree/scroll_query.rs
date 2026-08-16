@@ -76,6 +76,7 @@ where
         match self.fragment(fragment)?.kind {
             LayoutFragmentKind::Box { box_id }
             | LayoutFragmentKind::InlineBox { box_id, .. }
+            | LayoutFragmentKind::LineBreak { box_id, .. }
             | LayoutFragmentKind::Text { box_id, .. } => Some(box_id),
             LayoutFragmentKind::Line { .. } => None,
         }
@@ -94,6 +95,10 @@ where
                     box_id: fragment_box,
                 }
                 | LayoutFragmentKind::InlineBox {
+                    box_id: fragment_box,
+                    ..
+                }
+                | LayoutFragmentKind::LineBreak {
                     box_id: fragment_box,
                     ..
                 }
