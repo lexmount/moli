@@ -16,7 +16,10 @@ use super::{
     geometry::{BoxAreas, inset_radii},
     text::TextClipMaskScope,
 };
-use crate::{LayoutBox, LayoutRect, LayoutWorld, PaintEdgeSizes, PaintFragment, PaintSnapshot};
+use crate::{
+    LayoutBox, LayoutWorld, PaintEdgeSizes, PaintFragment, PaintSnapshot,
+    inline::inline_fragment_box_geometry,
+};
 
 pub(super) fn project_inline_box_fragments<N>(
     world: &LayoutWorld<N>,
@@ -34,12 +37,25 @@ pub(super) fn project_inline_box_fragments<N>(
     let owner_layout = owner.final_layout;
     let origin_x = owner_layout.border.left + owner_layout.padding.left;
     let origin_y = owner_layout.border.top + owner_layout.padding.top;
-    let containing_width = (owner_layout.size.width
-        - owner_layout.border.left
-        - owner_layout.border.right
-        - owner_layout.padding.left
-        - owner_layout.padding.right)
-        .max(0.0);
+    let content_box_size = taffy::Size {
+        width: (owner_layout.size.width
+            - owner_layout.border.left
+            - owner_layout.border.right
+            - owner_layout.padding.left
+            - owner_layout.padding.right)
+            .max(0.0),
+        height: (owner_layout.size.height
+            - owner_layout.border.top
+            - owner_layout.border.bottom
+            - owner_layout.padding.top
+            - owner_layout.padding.bottom)
+            .max(0.0),
+    };
+    let containing_inline_size = owner
+        .style
+        .writing_mode()
+        .to_logical(content_box_size)
+        .inline_size;
 
     for fragment in &context.fragments.boxes {
         let Some(inline_box) = world.box_by_id(fragment.box_id) else {
@@ -50,73 +66,46 @@ pub(super) fn project_inline_box_fragments<N>(
         }
         let style = inline_box.style();
         let padding = style.taffy.padding.resolve_or_zero(
-            Some(containing_width),
+            Some(containing_inline_size),
             crate::style::resolve_stylo_calc_value,
         );
         let border = style.taffy.border.resolve_or_zero(
-            Some(containing_width),
+            Some(containing_inline_size),
             crate::style::resolve_stylo_calc_value,
         );
         let margin = style.taffy.margin.resolve_or_zero(
-            Some(containing_width),
+            Some(containing_inline_size),
             crate::style::resolve_stylo_calc_value,
         );
-        let ltr = style.direction() == crate::style::InlineDirection::Ltr;
-        let has_left_edge = if ltr {
-            fragment.has_start_edge
-        } else {
-            fragment.has_end_edge
-        };
-        let has_right_edge = if ltr {
-            fragment.has_end_edge
-        } else {
-            fragment.has_start_edge
-        };
-        let left_margin = if has_left_edge {
-            margin.left.max(0.0)
-        } else {
-            0.0
-        };
-        let right_margin = if has_right_edge {
-            margin.right.max(0.0)
-        } else {
-            0.0
-        };
-        let rect = LayoutRect::new(
-            origin_x + fragment.rect.x + left_margin,
-            origin_y + fragment.rect.y - padding.top - border.top,
-            (fragment.rect.width - left_margin - right_margin).max(0.0),
-            fragment.rect.height + padding.top + padding.bottom + border.top + border.bottom,
+        let mut geometry = inline_fragment_box_geometry(
+            fragment,
+            style.writing_direction(),
+            margin,
+            padding,
+            border,
         );
+        for rect in [
+            &mut geometry.margin_rect,
+            &mut geometry.border_rect,
+            &mut geometry.padding_rect,
+            &mut geometry.content_rect,
+        ] {
+            rect.x += origin_x;
+            rect.y += origin_y;
+        }
+        let rect = geometry.border_rect;
         if rect.width <= 0.0 || rect.height <= 0.0 {
             continue;
         }
         let color = style.background_color();
         let radii = style.border_radii(rect.width, rect.height);
-        let widths = PaintEdgeSizes::new(
-            border.top,
-            if has_right_edge { border.right } else { 0.0 },
-            border.bottom,
-            if has_left_edge { border.left } else { 0.0 },
-        );
-        let padding_widths = PaintEdgeSizes::new(
-            padding.top,
-            if has_right_edge { padding.right } else { 0.0 },
-            padding.bottom,
-            if has_left_edge { padding.left } else { 0.0 },
-        );
-        let padding_rect = inset_rect(rect, widths);
-        let content_rect = inset_rect(padding_rect, padding_widths);
+        let widths = geometry.border_widths;
+        let padding_widths = geometry.padding_widths;
         let areas = BoxAreas {
-            margin_rect: LayoutRect::new(
-                rect.x - left_margin,
-                rect.y - margin.top,
-                (rect.width + left_margin + right_margin).max(0.0),
-                (rect.height + margin.top + margin.bottom).max(0.0),
-            ),
+            margin_rect: geometry.margin_rect,
             border_rect: rect,
-            padding_rect,
-            content_rect,
+            padding_rect: geometry.padding_rect,
+            content_rect: geometry.content_rect,
             border_radii: radii,
             padding_radii: inset_radii(radii, widths),
             content_radii: inset_radii(
@@ -165,17 +154,4 @@ pub(super) fn project_inline_box_fragments<N>(
             });
         }
     }
-}
-
-fn inset_rect(rect: LayoutRect, widths: PaintEdgeSizes) -> LayoutRect {
-    let top = widths.top.max(0.0);
-    let right = widths.right.max(0.0);
-    let bottom = widths.bottom.max(0.0);
-    let left = widths.left.max(0.0);
-    LayoutRect::new(
-        rect.x + left,
-        rect.y + top,
-        (rect.width - left - right).max(0.0),
-        (rect.height - top - bottom).max(0.0),
-    )
 }

@@ -1559,29 +1559,52 @@ fn paint_text_decoration(
     decoration: &PaintTextDecoration,
     scale: f64,
 ) {
-    let x = f64::from(finite_or_zero(decoration.x));
-    let y = f64::from(finite_or_zero(decoration.y));
-    let width = f64::from(finite_nonnegative(decoration.width));
+    let start_x = f64::from(finite_or_zero(decoration.start.x));
+    let start_y = f64::from(finite_or_zero(decoration.start.y));
+    let end_x = f64::from(finite_or_zero(decoration.end.x));
+    let end_y = f64::from(finite_or_zero(decoration.end.y));
+    let delta_x = end_x - start_x;
+    let delta_y = end_y - start_y;
+    let length = delta_x.hypot(delta_y);
     let thickness = f64::from(finite_nonnegative(decoration.thickness));
-    if width <= 0.0 || thickness <= 0.0 || decoration.color.alpha <= 0.0 {
+    if length <= 0.0 || thickness <= 0.0 || decoration.color.alpha <= 0.0 {
         return;
     }
+    let tangent_x = delta_x / length;
+    let tangent_y = delta_y / length;
+    let normal_x = -tangent_y;
+    let normal_y = tangent_x;
     let transform = device_transform(decoration.transform, scale);
     let color = to_backend_color(decoration.color);
+    let decoration_rect = |normal_offset: f64| {
+        let center_start_x = start_x + normal_x * normal_offset;
+        let center_start_y = start_y + normal_y * normal_offset;
+        let center_end_x = end_x + normal_x * normal_offset;
+        let center_end_y = end_y + normal_y * normal_offset;
+        let half_thickness = thickness * 0.5;
+        let edge_x = normal_x * half_thickness;
+        let edge_y = normal_y * half_thickness;
+        let mut path = BezPath::new();
+        path.move_to((center_start_x - edge_x, center_start_y - edge_y));
+        path.line_to((center_end_x - edge_x, center_end_y - edge_y));
+        path.line_to((center_end_x + edge_x, center_end_y + edge_y));
+        path.line_to((center_start_x + edge_x, center_start_y + edge_y));
+        path.close_path();
+        path
+    };
     match decoration.style {
         PaintTextDecorationStyle::Solid => {
-            let rect = Rect::new(x, y - thickness * 0.5, x + width, y + thickness * 0.5);
-            scene.fill(Fill::NonZero, transform, color, None, &rect);
+            scene.fill(Fill::NonZero, transform, color, None, &decoration_rect(0.0));
         }
         PaintTextDecorationStyle::Double => {
-            for center in [y - thickness, y + thickness] {
-                let rect = Rect::new(
-                    x,
-                    center - thickness * 0.5,
-                    x + width,
-                    center + thickness * 0.5,
+            for normal_offset in [-thickness, thickness] {
+                scene.fill(
+                    Fill::NonZero,
+                    transform,
+                    color,
+                    None,
+                    &decoration_rect(normal_offset),
                 );
-                scene.fill(Fill::NonZero, transform, color, None, &rect);
             }
         }
         PaintTextDecorationStyle::Dotted | PaintTextDecorationStyle::Dashed => {
@@ -1600,19 +1623,23 @@ fn paint_text_decoration(
                 transform,
                 color,
                 None,
-                &peniko::kurbo::Line::new((x, y), (x + width, y)),
+                &peniko::kurbo::Line::new((start_x, start_y), (end_x, end_y)),
             );
         }
         PaintTextDecorationStyle::Wavy => {
             let amplitude = (thickness * 1.5).max(1.0);
             let half_wave = (thickness * 2.0).max(2.0);
             let mut path = BezPath::new();
-            path.move_to((x, y));
-            let mut current_x = x;
+            path.move_to((start_x, start_y));
+            let mut distance = 0.0;
             let mut high = true;
-            while current_x < x + width {
-                current_x = (current_x + half_wave).min(x + width);
-                path.line_to((current_x, y + if high { -amplitude } else { amplitude }));
+            while distance < length {
+                distance = (distance + half_wave).min(length);
+                let normal_offset = if high { -amplitude } else { amplitude };
+                path.line_to((
+                    start_x + tangent_x * distance + normal_x * normal_offset,
+                    start_y + tangent_y * distance + normal_y * normal_offset,
+                ));
                 high = !high;
             }
             scene.stroke(
@@ -2468,6 +2495,28 @@ mod tests {
         assert_eq!(pixel(&image, 3, 1), [255, 0, 0, 255]);
         assert_eq!(pixel(&image, 1, 3), [255, 0, 0, 255]);
         assert_eq!(pixel(&image, 3, 3), [255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn text_decorations_follow_their_physical_centerline() {
+        let red = PaintColor::new(1.0, 0.0, 0.0, 1.0);
+        let mut snapshot = snapshot(6, 12, 1.0);
+        snapshot.push_fragment(PaintFragment::TextDecoration(
+            moli_layout::PaintTextDecoration {
+                start: moli_layout::PaintPoint::new(3.0, 1.0),
+                end: moli_layout::PaintPoint::new(3.0, 11.0),
+                thickness: 2.0,
+                color: red,
+                style: moli_layout::PaintTextDecorationStyle::Solid,
+                transform: PaintTransform2D::IDENTITY,
+            },
+        ));
+
+        let image = raster_snapshot(&snapshot).unwrap();
+        assert_eq!(pixel(&image, 2, 6), [255, 0, 0, 255]);
+        assert_eq!(pixel(&image, 3, 6), [255, 0, 0, 255]);
+        assert_eq!(pixel(&image, 1, 6), [255, 255, 255, 255]);
+        assert_eq!(pixel(&image, 4, 6), [255, 255, 255, 255]);
     }
 
     #[test]
