@@ -51,6 +51,8 @@ mod styles;
 mod toggle_event;
 mod trusted_types;
 
+pub(crate) use canvas::parse_html_non_negative_integer;
+
 pub(crate) use script_execution::{
     inline_script_source_for_execution, prepare_inline_classic_frame_script_job_for_execution,
 };

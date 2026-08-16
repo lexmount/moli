@@ -2537,7 +2537,7 @@ fn style_attribute_impact_classifies_dom_and_stylesheet_inputs() {
     assert!(!StyleAttributeImpact::for_attribute_name("style").changes_stylesheet_linkage());
 
     assert!(StyleAttributeImpact::for_attribute_name("width").affects_layout_metric());
-    assert!(!StyleAttributeImpact::for_attribute_name("width").changes_computed_style());
+    assert!(StyleAttributeImpact::for_attribute_name("width").changes_computed_style());
     assert!(!StyleAttributeImpact::for_attribute_name("width").changes_stylesheet_linkage());
 
     assert!(StyleAttributeImpact::for_attribute_name("cellpadding").affects_layout_metric());
@@ -2548,12 +2548,10 @@ fn style_attribute_impact_classifies_dom_and_stylesheet_inputs() {
     assert!(StyleAttributeImpact::for_attribute_name("href").changes_stylesheet_linkage());
 
     assert!(StyleAttributeImpact::for_attribute_name("type").affects_layout_metric());
+    assert!(StyleAttributeImpact::for_attribute_name("type").changes_computed_style());
     assert!(StyleAttributeImpact::for_attribute_name("type").changes_stylesheet_linkage());
 
-    assert_eq!(
-        StyleAttributeImpact::for_attribute_name("data-state"),
-        StyleAttributeImpact::None
-    );
+    assert!(StyleAttributeImpact::for_attribute_name("data-state").is_none());
 }
 
 #[test]

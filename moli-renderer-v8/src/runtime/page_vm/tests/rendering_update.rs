@@ -2531,6 +2531,115 @@ return [
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn screenshot_cascades_html_dimensions_before_border_box_ratio_transfer() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/border-box-ratio-floor.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0}
+.item{box-sizing:border-box;border:20px solid blue;display:block;margin:0 0 10px;padding:0}
+.horizontal{aspect-ratio:2/1}.vertical{aspect-ratio:1/2}
+canvas,input{display:block;margin:0;border:0;padding:0}
+</style>`;
+document.body.innerHTML = `
+<img id=r1 class="item horizontal" style="width:50px;height:auto" width=20 height=50>
+<img id=r2 class="item horizontal" style="width:auto;height:20px" width=20 height=50>
+<img id=r3 class="item horizontal" style="max-width:50px;height:auto" width=20 height=50>
+<img id=r4 class="item horizontal" style="width:auto;max-height:20px" width=20 height=50>
+<img id=r5 class="item vertical" style="height:50px;width:auto" width=20 height=50>
+<img id=r6 class="item vertical" style="height:auto;width:20px" width=20 height=50>
+<img id=r7 class="item vertical" style="max-height:50px;width:auto" width=20 height=50>
+<img id=r8 class="item vertical" style="height:auto;max-width:20px" width=20 height=50>
+<div id=n1 class="item horizontal" style="width:50px;height:auto"></div>
+<div id=n2 class="item horizontal" style="width:auto;height:20px"></div>
+<div id=n3 class="item horizontal" style="max-width:50px;height:auto"></div>
+<div id=n4 class="item horizontal" style="width:auto;max-height:20px"></div>
+<div id=n5 class="item vertical" style="height:50px;width:auto"></div>
+<div id=n6 class="item vertical" style="height:auto;width:20px"></div>
+<div id=n7 class="item vertical" style="max-height:50px;width:auto"></div>
+<div id=n8 class="item vertical" style="height:auto;max-width:20px"></div>
+<canvas id=canvas width="600.5" height="-1"></canvas>
+<input id=hidden-input type=hidden width=90 height=45>
+<input id=dynamic-input type=text width=90 height=45>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+
+        let viewport = moli_layout::PaintViewport::new(800, 1200, 1.0);
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(viewport)?
+            .expect("ratio fixture must retain a layout root");
+        let read_geometry = r#"[
+  'r1','r2','r3','r4','r5','r6','r7','r8',
+  'n1','n2','n3','n4','n5','n6','n7','n8'
+].map(id => {
+  const element = document.getElementById(id);
+  return `${element.offsetWidth},${element.offsetHeight}`;
+}).join('|')"#;
+        assert_eq!(
+            page_vm.vm_mut().eval(read_geometry)?,
+            "50,40|80,40|40,40|80,40|40,50|40,80|40,50|40,80|50,40|80,40|50,40|80,40|40,50|40,80|40,50|40,80",
+            "padding and border must floor the ratio source before transfer for replaced and non-replaced boxes",
+        );
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                r#"(() => {
+const r3 = getComputedStyle(document.getElementById('r3'));
+const r4 = getComputedStyle(document.getElementById('r4'));
+const hidden = getComputedStyle(document.getElementById('hidden-input'));
+const canvas = document.getElementById('canvas');
+return [r3.width,r3.height,r4.width,r4.height,hidden.width,hidden.height,canvas.offsetWidth,canvas.offsetHeight].join('|');
+})()"#,
+            )?,
+            "20px|auto|auto|50px|90px|45px|600|150",
+            "HTML dimensions must enter computed style per axis, while canvas dimensions remain intrinsic integers",
+        );
+
+        page_vm
+            .vm_mut()
+            .eval("document.getElementById('r3').setAttribute('width','60')")?;
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(viewport)?
+            .expect("mutated ratio fixture must retain a layout root");
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                "(() => { const e=document.getElementById('r3'),s=getComputedStyle(e); return `${s.width}|${e.offsetWidth},${e.offsetHeight}`; })()",
+            )?,
+            "60px|50,40",
+            "width mutation must recascade the presentation hint before applying max-width and ratio transfer",
+        );
+
+        page_vm
+            .vm_mut()
+            .eval("document.getElementById('dynamic-input').setAttribute('type','image')")?;
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(viewport)?
+            .expect("input-type mutation fixture must retain a layout root");
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                "(() => { const e=document.getElementById('dynamic-input'),s=getComputedStyle(e); return `${s.width},${s.height}|${e.offsetWidth},${e.offsetHeight}`; })()",
+            )?,
+            "90px,45px|90,45",
+            "input type mutation must recascade the dimension presentation hints",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("HTML dimension and border-box ratio fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_sizes_empty_tables_without_phantom_border_spacing() {
     run_page_vm_async_test(async move {
         let loader =
