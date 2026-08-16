@@ -317,6 +317,12 @@ where
                 .flatten()
             }));
             let semantics = layout_box.element_semantics();
+            let is_body_element = self.world.is_document_body(layout_box_id);
+            let is_document_element = self.world.is_document_element(layout_box_id);
+            let root_uses_viewport_client_metrics = is_document_element
+                && self.world.document_mode != crate::LayoutDocumentMode::Quirks;
+            let body_uses_viewport_client_metrics =
+                is_body_element && self.world.document_mode == crate::LayoutDocumentMode::Quirks;
             let (layout_x, layout_y) = self.world.global_layout_origin(layout_box_id);
             self.boxes.push(LayoutBoxGeometry {
                 id,
@@ -338,7 +344,9 @@ where
                 margin_box,
                 fragments: Vec::new(),
                 layout_origin_in_document: LayoutPoint::new(layout_x, layout_y),
-                is_body_element: semantics.is_some_and(|element| element.is_html_element("body")),
+                is_body_element,
+                uses_viewport_client_metrics: root_uses_viewport_client_metrics
+                    || body_uses_viewport_client_metrics,
                 is_table_offset_parent: semantics.is_some_and(|element| {
                     element.is_html_element("table")
                         || element.is_html_element("td")
