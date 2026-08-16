@@ -376,7 +376,7 @@ where
         clear_table_cell_inline_sizing(&mut cell.style, writing_mode);
         normalize_table_cell_block_sizing(&mut cell.style, writing_mode);
     }
-    max_columns = max_columns.max(column_tracks.len()).max(1);
+    max_columns = max_columns.max(column_tracks.len());
     column_tracks.resize(max_columns, TableColumnConstraint::auto());
     // The real tracks are materialized after all cell constraints have been
     // collected. This placeholder only keeps the virtual Grid shape explicit
@@ -428,7 +428,22 @@ impl TableContext {
             .style
             .padding
             .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
-        let spacing = self.outer_border_spacing;
+        // Border spacing surrounds real table tracks: inline spacing requires
+        // a column, and block spacing additionally requires a row. Keeping
+        // zero tracks intact makes authored border/padding/caption sizes
+        // distinguishable from spacing around a real table grid.
+        let spacing = Size {
+            width: if self.column_count == 0 {
+                0.0
+            } else {
+                self.outer_border_spacing.width
+            },
+            height: if self.column_count == 0 || self.rows.is_empty() {
+                0.0
+            } else {
+                self.outer_border_spacing.height
+            },
+        };
         let spacing_padding = if self.writing_mode.is_horizontal() {
             Rect {
                 left: spacing.width,
