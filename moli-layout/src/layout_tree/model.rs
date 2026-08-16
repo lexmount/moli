@@ -325,6 +325,10 @@ pub struct LayoutBoxGeometry {
     /// Untransformed border-box origin in document layout coordinates.
     pub layout_origin_in_document: LayoutPoint,
     pub is_body_element: bool,
+    /// CSSOM View projects the standards-mode root element and quirks body
+    /// client dimensions through the layout viewport instead of their
+    /// physical padding boxes.
+    pub uses_viewport_client_metrics: bool,
     pub is_table_offset_parent: bool,
     pub establishes_positioned_containing_block: bool,
     pub establishes_fixed_containing_block: bool,

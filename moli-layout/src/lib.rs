@@ -74,11 +74,12 @@ pub use snapshot::{
     pixel_snap_paint_rect,
 };
 pub use source::{
-    LayoutElementCategory, LayoutElementContent, LayoutElementMetadata, LayoutElementSemantics,
-    LayoutFormControlData, LayoutFormControlKind, LayoutImageFallbackContent, LayoutImageResource,
-    LayoutInputControlKind, LayoutListData, LayoutListRole, LayoutNamespace, LayoutPseudo,
-    LayoutReplacedKind, LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutTableData,
-    LayoutTableRole, LayoutTextSelection, ReplacedMetrics, ReplacedObjectSize,
+    LayoutDocumentMode, LayoutElementCategory, LayoutElementContent, LayoutElementMetadata,
+    LayoutElementSemantics, LayoutFormControlData, LayoutFormControlKind,
+    LayoutImageFallbackContent, LayoutImageResource, LayoutInputControlKind, LayoutListData,
+    LayoutListRole, LayoutNamespace, LayoutPseudo, LayoutReplacedKind, LayoutSource,
+    LayoutSourceKind, LayoutStyleResolver, LayoutTableData, LayoutTableRole, LayoutTextSelection,
+    ReplacedMetrics, ReplacedObjectSize,
 };
 pub use style::{
     LayoutDisplay, LayoutInlineAlignment, LayoutListMarkerPosition, LayoutListMarkerType,

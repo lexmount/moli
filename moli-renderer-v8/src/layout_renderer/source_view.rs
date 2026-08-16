@@ -1,11 +1,11 @@
 use std::collections::{HashMap, HashSet};
 
 use moli_layout::{
-    LayoutElementCategory, LayoutElementContent, LayoutElementMetadata, LayoutElementSemantics,
-    LayoutFormControlData, LayoutFormControlKind, LayoutImageFallbackContent, LayoutImageResource,
-    LayoutInputControlKind, LayoutListData, LayoutListRole, LayoutNamespace, LayoutReplacedKind,
-    LayoutSource, LayoutSourceKind, LayoutTableData, LayoutTableRole, LayoutTextSelection,
-    ReplacedMetrics, ReplacedObjectSize,
+    LayoutDocumentMode, LayoutElementCategory, LayoutElementContent, LayoutElementMetadata,
+    LayoutElementSemantics, LayoutFormControlData, LayoutFormControlKind,
+    LayoutImageFallbackContent, LayoutImageResource, LayoutInputControlKind, LayoutListData,
+    LayoutListRole, LayoutNamespace, LayoutReplacedKind, LayoutSource, LayoutSourceKind,
+    LayoutTableData, LayoutTableRole, LayoutTextSelection, ReplacedMetrics, ReplacedObjectSize,
 };
 
 use crate::{
@@ -97,6 +97,19 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
 
     fn root(&self) -> Self::NodeId {
         self.root
+    }
+
+    fn document_mode(&self) -> LayoutDocumentMode {
+        match self
+            .document
+            .and_then(|document| self.host().document_quirks_mode_for_handle(document))
+        {
+            Some(selectors::matching::QuirksMode::Quirks) => LayoutDocumentMode::Quirks,
+            Some(selectors::matching::QuirksMode::LimitedQuirks) => {
+                LayoutDocumentMode::LimitedQuirks
+            }
+            Some(selectors::matching::QuirksMode::NoQuirks) | None => LayoutDocumentMode::NoQuirks,
+        }
     }
 
     fn flat_parent(&self, node: Self::NodeId) -> Option<Self::NodeId> {

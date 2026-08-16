@@ -3831,6 +3831,70 @@ fn child_parser_quirks_mode_does_not_mutate_the_top_document() {
 }
 
 #[test]
+fn quirks_body_layout_and_client_metrics_use_the_viewport_fill_model() {
+    let mut quirks = new_parsed_test_vm(
+        "https://quirks-body-viewport-fill.test/",
+        r#"<style>body { width: 100px; aspect-ratio: 1 / 1; }</style><body></body>"#,
+    );
+    let quirks_result = quirks
+        .eval(
+            r#"[
+  document.compatMode,
+  document.documentElement.clientHeight,
+  document.documentElement.getBoundingClientRect().top,
+  document.documentElement.getBoundingClientRect().height,
+  document.body.clientHeight,
+  document.body.offsetHeight,
+  document.body.getBoundingClientRect().height
+].join('|')"#,
+        )
+        .expect("quirks body viewport-fill geometry should evaluate");
+    assert_eq!(quirks_result, "BackCompat|1080|0|1080|1080|1064|1064");
+
+    let mut standards = new_parsed_test_vm(
+        "https://standards-body-ratio-size.test/",
+        r#"<!doctype html><style>body { width: 100px; aspect-ratio: 1 / 1; }</style><body></body>"#,
+    );
+    let standards_result = standards
+        .eval(
+            r#"[
+  document.compatMode,
+  document.documentElement.clientHeight,
+  document.documentElement.getBoundingClientRect().top,
+  document.documentElement.getBoundingClientRect().height,
+  document.body.clientHeight,
+  document.body.offsetHeight,
+  document.body.getBoundingClientRect().height
+].join('|')"#,
+        )
+        .expect("standards body ratio geometry should evaluate");
+    assert_eq!(standards_result, "CSS1Compat|1080|0|116|100|100|100");
+}
+
+#[test]
+fn quirks_body_client_and_scroll_metrics_follow_distinct_cssom_view_rules() {
+    let mut vm = new_parsed_test_vm(
+        "https://quirks-body-client-scroll.test/",
+        r#"<style>
+html { height: 200px; overflow: hidden; }
+body { width: 100px; height: 120px; overflow: hidden; }
+</style><body></body>"#,
+    );
+    let result = vm
+        .eval(
+            r#"[
+  document.compatMode,
+  document.documentElement.clientHeight,
+  document.body.clientHeight,
+  document.body.scrollHeight,
+  document.body.offsetHeight
+].join('|')"#,
+        )
+        .expect("quirks body client and scroll geometry should evaluate");
+    assert_eq!(result, "BackCompat|200|1080|120|120");
+}
+
+#[test]
 fn inspector_runtime_evaluate_uses_child_context_window_surface() {
     let mut vm = new_storage_test_vm("https://inspector-child-window-viewport.test/");
     vm.eval(
