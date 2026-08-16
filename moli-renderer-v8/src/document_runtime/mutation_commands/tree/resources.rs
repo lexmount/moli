@@ -16,6 +16,10 @@ fn preorder_stack(roots: &[DomHandle]) -> Vec<DomHandle> {
     roots.iter().rev().copied().collect()
 }
 
+fn element_owns_image_resource(element: &crate::dom::native::Element) -> bool {
+    crate::native_bridge::element::ImageResourceElementKind::for_element(element).is_some()
+}
+
 #[derive(Default)]
 pub(super) struct ImageRelevantMutationPlan {
     pub(super) pictures: Vec<DomHandle>,
@@ -87,8 +91,11 @@ impl DocumentRuntime {
         if let [root] = roots
             && self.dom_host.first_child(*root).is_none()
         {
-            if self.dom_host.is_html_element_named(*root, "img")
-                || self.dom_host.is_html_element_named(*root, "object")
+            if self
+                .dom_host
+                .node(*root)
+                .and_then(Node::as_element)
+                .is_some_and(element_owns_image_resource)
             {
                 crate::native_bridge::element::queue_image_load_event_if_needed_with_initiator(
                     scope,
@@ -106,9 +113,7 @@ impl DocumentRuntime {
                 .dom_host
                 .node(handle)
                 .and_then(Node::as_element)
-                .is_some_and(|element| {
-                    element.is_html_element("img") || element.is_html_element("object")
-                })
+                .is_some_and(element_owns_image_resource)
             {
                 image_elements.push(handle);
             }
@@ -136,7 +141,7 @@ impl DocumentRuntime {
                         plan.may_have_image_resources = true;
                         plan.may_have_image_relevant_picture_source = true;
                     }
-                    "object" => {
+                    "embed" | "object" => {
                         plan.may_have_image_resources = true;
                     }
                     "source" => {
@@ -300,8 +305,11 @@ impl DocumentRuntime {
         let mut handles = Vec::new();
         self.collect_subtree_handles_preorder(removal_plan.root, &mut handles);
         for handle in handles {
-            if self.dom_host.is_html_element_named(handle, "img")
-                || self.dom_host.is_html_element_named(handle, "object")
+            if self
+                .dom_host
+                .node(handle)
+                .and_then(Node::as_element)
+                .is_some_and(element_owns_image_resource)
             {
                 crate::native_bridge::element::queue_image_load_event_if_needed(
                     scope, host_ptr, handle,

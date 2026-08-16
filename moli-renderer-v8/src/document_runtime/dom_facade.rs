@@ -800,8 +800,12 @@ impl DocumentRuntime {
         let mut stack = vec![root];
         let mut image_elements = Vec::new();
         while let Some(handle) = stack.pop() {
-            if self.dom_host.is_html_element_named(handle, "img")
-                || self.dom_host.is_html_element_named(handle, "object")
+            if self
+                .dom_host
+                .node(handle)
+                .and_then(Node::as_element)
+                .and_then(crate::native_bridge::element::ImageResourceElementKind::for_element)
+                .is_some()
             {
                 image_elements.push(handle);
             }
