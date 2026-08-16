@@ -213,7 +213,8 @@ pub(crate) fn start_image_element_resource_fetch(
                 FetchPriorityHint::from_attribute(element.attribute("fetchpriority")),
             )
         }
-        crate::native_bridge::element::ImageResourceElementKind::Object => {
+        crate::native_bridge::element::ImageResourceElementKind::Embed
+        | crate::native_bridge::element::ImageResourceElementKind::Object => {
             (RequestMode::NoCors, RequestCredentialsMode::Include, None)
         }
     };
