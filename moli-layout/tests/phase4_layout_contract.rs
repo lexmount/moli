@@ -1091,6 +1091,68 @@ fn html_list_metadata_and_marker_style_produce_inside_and_outside_glyph_geometry
 }
 
 #[test]
+fn outside_list_marker_uses_logical_axes_in_vertical_flow() {
+    let source = Source(vec![
+        Node::element(
+            "list",
+            "ol",
+            LayoutElementCategory::List(LayoutListRole::Container),
+            None,
+            vec![1],
+        ),
+        Node::element(
+            "item",
+            "li",
+            LayoutElementCategory::List(LayoutListRole::Item),
+            None,
+            vec![2],
+        ),
+        Node::text("item-text", "A"),
+    ]);
+    let mut styles = Styles::default();
+    styles.primary.insert(
+        0,
+        sized(LayoutDisplay::Block, 100.0, 120.0, PaintColor::TRANSPARENT)
+            .with_writing_mode(taffy::WritingMode::VerticalRl),
+    );
+    styles.primary.insert(
+        1,
+        sized(LayoutDisplay::BlockListItem, 40.0, 100.0, RED)
+            .with_list_marker(
+                LayoutListMarkerType::None,
+                LayoutListMarkerPosition::Outside,
+            )
+            .with_writing_mode(taffy::WritingMode::VerticalRl),
+    );
+    styles.pseudo.insert(
+        (1, LayoutPseudo::Marker),
+        style(LayoutDisplay::Inline, PaintColor::TRANSPARENT)
+            .with_generated_text("X ")
+            .with_writing_mode(taffy::WritingMode::VerticalRl),
+    );
+
+    let snapshot = render(&source, &mut styles, 100, 120);
+    let item = rect(&snapshot, RED);
+    let glyphs = snapshot
+        .fragments
+        .iter()
+        .filter_map(|fragment| match fragment {
+            PaintFragment::GlyphRun(run) => Some(run.glyphs_in_surface()),
+            _ => None,
+        })
+        .flatten()
+        .collect::<Vec<_>>();
+    assert!(
+        glyphs.iter().any(|glyph| glyph.y < item.y),
+        "vertical outside marker must precede the item's logical inline-start: {glyphs:?}"
+    );
+    assert!(
+        glyphs.iter().any(|glyph| glyph.y >= item.y),
+        "list content must remain inside the item: {glyphs:?}"
+    );
+}
+
+#[test]
 fn degenerate_css_ratio_falls_back_to_the_replaced_intrinsic_ratio() {
     let source = Source(vec![
         Node::element("root", "div", LayoutElementCategory::Generic, None, vec![1]),

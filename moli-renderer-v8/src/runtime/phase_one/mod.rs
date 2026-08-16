@@ -154,15 +154,15 @@ mod tests {
     }
 
     fn assert_paint_rect(actual: moli_layout::PaintRect, expected: moli_layout::PaintRect) {
-        for (name, actual, expected) in [
+        for (name, actual_value, expected_value) in [
             ("x", actual.x, expected.x),
             ("y", actual.y, expected.y),
             ("width", actual.width, expected.width),
             ("height", actual.height, expected.height),
         ] {
             assert!(
-                (actual - expected).abs() <= 0.01,
-                "{name}: expected {expected}, got {actual}; rect={actual:?}"
+                (actual_value - expected_value).abs() <= 0.01,
+                "{name}: expected {expected_value}, got {actual_value}; actual={actual:?}, expected={expected:?}"
             );
         }
     }
@@ -1120,6 +1120,238 @@ html,body{margin:0;padding:0}
                     moli_layout::PaintRect::new(expected.0, 0.0, expected.1, expected.2),
                 );
             }
+        }));
+    }
+
+    #[test]
+    fn layout_renderer_uses_orthogonal_max_content_for_auto_flex_basis() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+#flex{display:flex;flex-direction:column;width:150px;height:400px}
+.item{flex:1 1 auto;line-height:0}
+#vertical{writing-mode:vertical-rl;background:rgb(74,14,174)}
+#horizontal{background:rgb(75,15,175)}
+.vertical-word{display:inline-block;width:10px;height:20px}
+.horizontal-word{display:inline-block;width:20px;height:10px}
+</style></head><body>
+<div id=flex>
+  <div id=vertical class=item><i class=vertical-word style="background:rgb(84,24,184)"></i><i class=vertical-word style="background:rgb(94,34,194)"></i><i class=vertical-word style="background:rgb(104,44,204)"></i></div>
+  <div id=horizontal class=item><i class=horizontal-word style="background:rgb(85,25,185)"></i><i class=horizontal-word style="background:rgb(95,35,195)"></i><i class=horizontal-word style="background:rgb(105,45,205)"></i></div>
+</div>
+</body></html>"#,
+            )
+            .await;
+
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(74, 14, 174)),
+                moli_layout::PaintRect::new(0.0, 0.0, 150.0, 225.0),
+            );
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(75, 15, 175)),
+                moli_layout::PaintRect::new(0.0, 225.0, 150.0, 175.0),
+            );
+            for (color, expected) in [
+                (rgb(84, 24, 184), (140.0, 0.0)),
+                (rgb(94, 34, 194), (140.0, 20.0)),
+                (rgb(104, 44, 204), (140.0, 40.0)),
+            ] {
+                assert_paint_rect(
+                    solid_paint_rect(&snapshot, color),
+                    moli_layout::PaintRect::new(expected.0, expected.1, 10.0, 20.0),
+                );
+            }
+            for (color, expected_x) in [
+                (rgb(85, 25, 185), 0.0),
+                (rgb(95, 35, 195), 20.0),
+                (rgb(105, 45, 205), 40.0),
+            ] {
+                assert_paint_rect(
+                    solid_paint_rect(&snapshot, color),
+                    moli_layout::PaintRect::new(expected_x, 225.0, 20.0, 10.0),
+                );
+            }
+        }));
+    }
+
+    #[test]
+    fn layout_renderer_projects_vertical_inline_fragments_in_physical_space() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+#host{writing-mode:vertical-rl;direction:ltr;width:100px;height:200px;font-size:0;line-height:0;background:rgb(1,2,3)}
+#inline{margin:3px 2px 4px 1px;padding:7px 6px 8px 5px;border-style:solid;border-width:11px 10px 12px 9px;background:rgb(4,5,6)}
+#atomic{display:inline-block;width:20px;height:30px;background:rgb(7,8,9)}
+</style></head><body>
+<div id=host><span id=inline><i id=atomic></i></span></div>
+</body></html>"#,
+            )
+            .await;
+
+            // Chromium: the structural inline's zero block-size strut is
+            // expanded by its physical left/right padding and border, while
+            // the atomic descendant independently establishes the line's
+            // 20px block-axis extent. Its inline-axis edge contributions are
+            // part of the Parley advance and cross into physical space once.
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(1, 2, 3)),
+                moli_layout::PaintRect::new(0.0, 0.0, 100.0, 200.0),
+            );
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(4, 5, 6)),
+                moli_layout::PaintRect::new(76.0, 3.0, 30.0, 68.0),
+            );
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(7, 8, 9)),
+                moli_layout::PaintRect::new(80.0, 21.0, 20.0, 30.0),
+            );
+        }));
+    }
+
+    #[test]
+    fn layout_renderer_projects_vertical_text_origins_and_decorations() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let color = rgb(31, 32, 33);
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+#host{writing-mode:vertical-lr;direction:ltr;width:100px;height:200px;font-size:20px;line-height:20px;color:rgb(31,32,33);text-decoration:underline}
+</style></head><body><div id=host>AB</div></body></html>"#,
+            )
+            .await;
+
+            // This locks the logical-to-physical origin mapping only. Glyph
+            // orientation and vertical OpenType shaping remain a separate
+            // text-engine capability.
+            let mut glyphs = snapshot
+                .fragments
+                .iter()
+                .filter_map(|fragment| match fragment {
+                    moli_layout::PaintFragment::GlyphRun(run) if run.color == color => {
+                        Some(run.glyphs_in_surface())
+                    }
+                    _ => None,
+                })
+                .flatten()
+                .collect::<Vec<_>>();
+            glyphs.sort_by(|left, right| left.y.total_cmp(&right.y));
+            assert_eq!(glyphs.len(), 2, "the fixture must shape two glyphs");
+            assert!(
+                (glyphs[0].x - glyphs[1].x).abs() <= 0.01,
+                "vertical glyph origins must share the physical baseline axis: {glyphs:?}"
+            );
+            assert!(
+                glyphs[1].y > glyphs[0].y,
+                "visual inline advance must map onto physical y: {glyphs:?}"
+            );
+
+            let decoration = snapshot
+                .fragments
+                .iter()
+                .find_map(|fragment| match fragment {
+                    moli_layout::PaintFragment::TextDecoration(decoration)
+                        if decoration.color == color =>
+                    {
+                        Some(decoration)
+                    }
+                    _ => None,
+                })
+                .expect("vertical underline should be projected");
+            let start = decoration.transform.map_point(decoration.start);
+            let end = decoration.transform.map_point(decoration.end);
+            assert!(
+                (start.x - end.x).abs() <= 0.01 && end.y > start.y,
+                "decoration centerline must follow the physical inline axis: {start:?}..{end:?}"
+            );
+        }));
+    }
+
+    #[test]
+    fn layout_renderer_uses_line_over_inside_vertical_lr_lines() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+#host{writing-mode:vertical-lr;direction:ltr;width:100px;height:200px;font-size:20px;line-height:20px;background:rgb(11,12,13)}
+#atomic{display:inline-block;vertical-align:top;width:10px;height:30px;background:rgb(14,15,16)}
+</style></head><body><div id=host><i id=atomic></i></div></body></html>"#,
+            )
+            .await;
+
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(11, 12, 13)),
+                moli_layout::PaintRect::new(0.0, 0.0, 100.0, 200.0),
+            );
+            // Chromium places the first 20px line at physical x=0, but its
+            // line-over side is on the right in vertical-lr. The 10px
+            // top-aligned atomic therefore occupies x=10..20, not x=0..10.
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(14, 15, 16)),
+                moli_layout::PaintRect::new(10.0, 0.0, 10.0, 30.0),
+            );
+        }));
+    }
+
+    #[test]
+    fn layout_renderer_synthesizes_baselines_for_orthogonal_atomic_inlines() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+#host{writing-mode:vertical-lr;direction:ltr;width:100px;height:200px;font-size:0;line-height:0}
+.atomic{display:inline-block;width:40px;height:30px}
+#same{background:rgb(21,22,23)}
+#orthogonal{writing-mode:vertical-rl;background:rgb(24,25,26)}
+#inner{display:inline-block;width:10px;height:10px;background:rgb(27,28,29)}
+</style></head><body>
+<div id=host><i id=same class=atomic></i><i id=orthogonal class=atomic><b id=inner></b></i></div>
+</body></html>"#,
+            )
+            .await;
+
+            // Chromium does not propagate a child's baseline across an
+            // orthogonal writing-mode boundary. Both 40px atomic boxes use
+            // the vertical central synthesized baseline and therefore share
+            // the same physical x coordinate.
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(21, 22, 23)),
+                moli_layout::PaintRect::new(0.0, 0.0, 40.0, 30.0),
+            );
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(24, 25, 26)),
+                moli_layout::PaintRect::new(0.0, 30.0, 40.0, 30.0),
+            );
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(27, 28, 29)),
+                moli_layout::PaintRect::new(30.0, 30.0, 10.0, 10.0),
+            );
         }));
     }
 
