@@ -459,7 +459,7 @@ where
         }
         let base_is_positioned = geometry.position != LayoutPosition::Static;
         let mut in_fixed_position_chain = geometry.position == LayoutPosition::Fixed;
-        let mut candidate = geometry.parent;
+        let mut candidate = geometry.structural_parent;
         while let Some(id) = candidate {
             let parent = self.box_geometry(id)?;
             let source = self
@@ -467,7 +467,7 @@ where
                 .get(id.index())
                 .and_then(|layout_box| layout_box.geometry_source);
             let Some(source) = source else {
-                candidate = parent.parent;
+                candidate = parent.structural_parent;
                 continue;
             };
 
@@ -477,7 +477,7 @@ where
                 } else if parent.position == LayoutPosition::Fixed {
                     in_fixed_position_chain = true;
                 }
-                candidate = parent.parent;
+                candidate = parent.structural_parent;
                 continue;
             }
 
@@ -492,7 +492,7 @@ where
                 return Some(id);
             }
             in_fixed_position_chain |= parent.position == LayoutPosition::Fixed;
-            candidate = parent.parent;
+            candidate = parent.structural_parent;
         }
         None
     }

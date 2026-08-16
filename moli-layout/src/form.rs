@@ -6,11 +6,11 @@ use taffy::Size;
 
 use crate::{
     LayoutAnonymousReason, LayoutBoxId, LayoutBoxKind, LayoutDisplay, LayoutElementCategory,
-    LayoutElementSemantics, LayoutFormControlKind, LayoutInputControlKind, LayoutWorld,
-    ResolvedLayoutStyle, replaced::ReplacedContext,
+    LayoutElementSemantics, LayoutError, LayoutFormControlKind, LayoutInputControlKind,
+    LayoutWorld, ResolvedLayoutStyle, replaced::ReplacedContext,
 };
 
-pub(crate) fn prepare_form_controls<N>(world: &mut LayoutWorld<N>)
+pub(crate) fn prepare_form_controls<N>(world: &mut LayoutWorld<N>) -> Result<(), LayoutError>
 where
     N: Copy + Debug + Eq + Hash,
 {
@@ -59,11 +59,10 @@ where
             Some(Arc::from(text)),
             None,
         ));
-        world.boxes[text_id.index()].parent = Some(wrapper_id);
-        world.boxes[wrapper_id.index()].children.push(text_id);
-        world.boxes[wrapper_id.index()].parent = Some(control);
-        world.boxes[control.index()].children.push(wrapper_id);
+        world.append_synthesized_child(wrapper_id, text_id)?;
+        world.append_synthesized_child(control, wrapper_id)?;
     }
+    Ok(())
 }
 
 fn form_control_text(semantics: &Option<LayoutElementSemantics>) -> Option<String> {

@@ -7,12 +7,12 @@
 use std::{fmt::Debug, hash::Hash, sync::Arc};
 
 use crate::{
-    LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic, LayoutElementCategory,
+    LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic, LayoutElementCategory, LayoutError,
     LayoutListMarkerPosition, LayoutListMarkerType, LayoutListRole, LayoutPseudo, LayoutWorld,
     ResolvedLayoutStyle,
 };
 
-pub(crate) fn prepare_list_markers<N>(world: &mut LayoutWorld<N>)
+pub(crate) fn prepare_list_markers<N>(world: &mut LayoutWorld<N>) -> Result<(), LayoutError>
 where
     N: Copy + Debug + Eq + Hash,
 {
@@ -53,7 +53,7 @@ where
                 .and_then(|semantics| semantics.metadata.list)
                 .and_then(|item| item.value)
                 .unwrap_or(counter);
-            prepare_item_marker(world, item, value);
+            prepare_item_marker(world, item, value)?;
             handled[item.index()] = true;
             counter = value.saturating_add(step);
         }
@@ -67,8 +67,9 @@ where
         .filter(|id| !handled[id.index()] && world.boxes[id.index()].style.display().is_list_item())
         .collect::<Vec<_>>();
     for item in standalone {
-        prepare_item_marker(world, item, 1);
+        prepare_item_marker(world, item, 1)?;
     }
+    Ok(())
 }
 
 fn collect_container_items<N>(
@@ -99,13 +100,17 @@ fn collect_container_items<N>(
     }
 }
 
-fn prepare_item_marker<N>(world: &mut LayoutWorld<N>, item: LayoutBoxId, counter: i32)
+fn prepare_item_marker<N>(
+    world: &mut LayoutWorld<N>,
+    item: LayoutBoxId,
+    counter: i32,
+) -> Result<(), LayoutError>
 where
     N: Copy + Debug + Eq + Hash,
 {
     let marker_type = world.boxes[item.index()].style.list_marker_type().clone();
     let Some(marker) = find_marker(world, item) else {
-        return;
+        return Ok(());
     };
     world.boxes[marker.index()].outside_list_marker =
         world.boxes[item.index()].style.list_marker_position() == LayoutListMarkerPosition::Outside;
@@ -117,10 +122,10 @@ where
         );
     }
     if !world.boxes[marker.index()].children.is_empty() {
-        return;
+        return Ok(());
     }
     let Some(text) = marker_text(&marker_type, counter) else {
-        return;
+        return Ok(());
     };
 
     let owner = world.boxes[marker.index()].owner;
@@ -141,9 +146,9 @@ where
         None,
     );
     let text_id = world.allocate(text_box);
-    world.boxes[text_id.index()].parent = Some(marker);
-    world.boxes[marker.index()].children.push(text_id);
+    world.append_synthesized_child(marker, text_id)?;
     world.boxes[marker.index()].inline_formatting_context = true;
+    Ok(())
 }
 
 fn find_marker<N>(world: &LayoutWorld<N>, item: LayoutBoxId) -> Option<LayoutBoxId>

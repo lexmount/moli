@@ -921,7 +921,8 @@ fn inline_with_block_descendant_is_split_into_owned_continuations() {
     assert_eq!(before_wrapper.kind(), LayoutBoxKind::AnonymousBlock);
     assert_eq!(block.kind(), LayoutBoxKind::PrincipalBlock);
     assert_eq!(after_wrapper.kind(), LayoutBoxKind::AnonymousBlock);
-    let first_fragment = world.box_by_id(before_wrapper.children()[0]).unwrap();
+    let first_fragment_id = before_wrapper.children()[0];
+    let first_fragment = world.box_by_id(first_fragment_id).unwrap();
     let continuation = world.box_by_id(after_wrapper.children()[0]).unwrap();
     assert_eq!(first_fragment.kind(), LayoutBoxKind::PrincipalInline);
     assert_eq!(first_fragment.source(), Some(1));
@@ -932,6 +933,12 @@ fn inline_with_block_descendant_is_split_into_owned_continuations() {
         continuation.anonymous_reason(),
         Some(LayoutAnonymousReason::InlineSplitContinuation)
     );
+    assert_eq!(
+        block.structural_parent(),
+        Some(first_fragment_id),
+        "formatting promotion must not erase the block's LayoutObject parent"
+    );
+    assert_eq!(continuation.structural_parent(), Some(world.root()));
     assert_eq!(world.source_box(1), Some(before_wrapper.children()[0]));
 }
 
