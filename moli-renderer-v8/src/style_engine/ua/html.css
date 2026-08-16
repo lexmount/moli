@@ -111,6 +111,13 @@ td, th {
   display: table-cell;
 }
 
+/* Normal table cells receive their padding from the nearest table's legacy
+   shared cell style. Keep Blink's UA fallback for orphan cells. */
+td:not(table td),
+th:not(table th) {
+  padding: 1px;
+}
+
 caption {
   display: table-caption;
 }
