@@ -3,9 +3,10 @@ use std::collections::HashMap;
 use moli_layout::{
     DocumentLayoutServices, LayoutDisplay, LayoutElementCategory, LayoutElementSemantics,
     LayoutError, LayoutFlushReason, LayoutFragmentKind, LayoutNamespace, LayoutPassRequest,
-    LayoutPassResult, LayoutPhysicalAxis, LayoutPoint, LayoutQuery, LayoutQueryAnswer,
-    LayoutQueryBatch, LayoutRect, LayoutSource, LayoutSourceKind, LayoutStyleResolver,
-    LayoutTransform2D, LayoutViewport, PaintColor, ResolvedLayoutStyle, build_layout_pass,
+    LayoutPassResult, LayoutPhysicalAxis, LayoutPoint, LayoutPosition, LayoutQuery,
+    LayoutQueryAnswer, LayoutQueryBatch, LayoutRect, LayoutSource, LayoutSourceKind,
+    LayoutStyleResolver, LayoutTransform2D, LayoutViewport, PaintColor, ResolvedLayoutStyle,
+    build_layout_pass,
 };
 use style::Atom;
 use taffy::{
@@ -894,6 +895,32 @@ fn split_inline_continuations_remain_mapped_to_the_originating_element() {
         .border
         .bounding_rect();
     assert!(union.height >= second.bottom() - first.y);
+}
+
+#[test]
+fn block_in_inline_offset_parent_uses_the_structural_inline_ancestor() {
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("positioned-inline", vec![2]),
+        Node::element("promoted-block", Vec::new()),
+    ]);
+    let mut styles = Styles::default();
+    styles
+        .0
+        .insert(0, fixed_size(LayoutDisplay::Block, 200.0, 120.0));
+    styles.0.insert(
+        1,
+        resolved(LayoutDisplay::Inline, Style::default()).with_position(LayoutPosition::Relative),
+    );
+    styles
+        .0
+        .insert(2, fixed_size(LayoutDisplay::Block, 50.0, 20.0));
+
+    let output = build(&source, &mut styles);
+    let metrics = output
+        .element_metrics_for_source(2)
+        .expect("promoted block metrics");
+    assert_eq!(metrics.offset_parent, Some(1));
 }
 
 #[test]

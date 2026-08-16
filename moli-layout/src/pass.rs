@@ -165,9 +165,10 @@ where
 {
     let started = Instant::now();
     let mut world = build_layout_world(source, styles)?;
-    prepare_list_markers(&mut world);
-    prepare_form_controls(&mut world);
+    prepare_list_markers(&mut world)?;
+    prepare_form_controls(&mut world)?;
     prepare_inline_contexts(&mut world, services);
+    world.validate_invariants()?;
     compute_world_layout(&mut world, request.viewport);
     let mut embedded_frames = HashMap::new();
     if request.requests_paint() {
