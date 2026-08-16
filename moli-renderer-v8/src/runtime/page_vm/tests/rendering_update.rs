@@ -3113,6 +3113,102 @@ document.body.innerHTML = `
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn range_client_rects_snap_surrogate_interior_offsets_to_shaped_source_spans() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        loader.set_optional_resource_fetch_mask(
+            crate::protocol_types::OptionalResourceFetchMask::FONT,
+        );
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/range-surrogate-indexing.html")?,
+        );
+        let encoded_font = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../moli-layout/tests/fixtures/moli-hebrew-emoji.ttf"
+        ));
+        let encoded = base64::engine::general_purpose::STANDARD.encode(encoded_font);
+        page_vm.vm_mut().eval(&format!(
+            r#"
+document.head.innerHTML = `<style>
+@font-face {{ font-family:MoliEmoji; src:url(data:font/ttf;base64,{encoded}) format('truetype') }}
+html,body {{ margin:0 }}
+body {{ font:20px/20px MoliEmoji }}
+</style>`;
+document.body.innerHTML = `<div id=one>🌠a🌠</div><span id=left>🌠a</span><span id=right>🌠</span>`;
+'installed'
+"#
+        ))?;
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(240, 100, 1.0))?
+            .ok_or_else(|| anyhow::anyhow!("surrogate fixture lost its layout root"))?;
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify((()=>{const widths=(startNode,start,endNode,end)=>{const range=document.createRange();range.setStart(startNode,start);range.setEnd(endNode,end);return [...range.getClientRects()].map(rect=>rect.width)};const one=document.getElementById('one').firstChild;const left=document.getElementById('left').firstChild;const right=document.getElementById('right').firstChild;return {one:[[0,5],[1,5],[0,4],[1,4],[0,2],[1,2],[1,1],[2,2],[3,3],[3,5],[3,4],[4,4]].map(([start,end])=>widths(one,start,one,end)),cross:[[0,2],[1,2],[0,1],[1,1]].map(([start,end])=>widths(left,start,right,end))}})())"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        let one = geometry["one"]
+            .as_array()
+            .unwrap_or_else(|| panic!("missing single-node Range geometry: {geometry}"));
+        let width = |case: usize| {
+            one[case][0]
+                .as_f64()
+                .unwrap_or_else(|| panic!("missing width for single-node case {case}: {geometry}"))
+        };
+        for case in 1..=3 {
+            assert!(
+                (width(case) - width(0)).abs() <= 0.001,
+                "an interior surrogate endpoint must retain the complete Range width: case={case}; geometry={geometry}"
+            );
+        }
+        for case in [5, 6] {
+            assert!(
+                (width(case) - width(4)).abs() <= 0.001,
+                "the first supplementary scalar remains one shaped source span: case={case}; geometry={geometry}"
+            );
+        }
+        for case in [10, 11] {
+            assert!(
+                (width(case) - width(9)).abs() <= 0.001,
+                "the second supplementary scalar remains one shaped source span: case={case}; geometry={geometry}"
+            );
+        }
+        assert!(
+            width(7).abs() <= 0.001 && width(8).abs() <= 0.001,
+            "valid scalar boundaries remain collapsed carets: {geometry}"
+        );
+
+        let cross = geometry["cross"]
+            .as_array()
+            .unwrap_or_else(|| panic!("missing cross-node Range geometry: {geometry}"));
+        let cross_width = |case: usize, rect: usize| {
+            cross[case][rect].as_f64().unwrap_or_else(|| {
+                panic!("missing width for cross-node case {case}/{rect}: {geometry}")
+            })
+        };
+        for (case, widths) in cross.iter().enumerate().skip(1) {
+            assert_eq!(
+                widths.as_array().map(Vec::len),
+                Some(2),
+                "each text container keeps its own CSSOM rect: case={case}; geometry={geometry}"
+            );
+            for rect in 0..2 {
+                assert!(
+                    (cross_width(case, rect) - cross_width(0, rect)).abs() <= 0.001,
+                    "cross-node surrogate endpoints must preserve both shaped spans: case={case}/{rect}; geometry={geometry}"
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("surrogate Range fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn stylesheet_lifecycle_registers_only_the_current_documents_data_web_fonts() {
     run_page_vm_async_test(async move {
         let loader =
