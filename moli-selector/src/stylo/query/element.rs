@@ -401,11 +401,7 @@ impl<'a> TElement for QueryElement<'a> {
     ) where
         V: selectors::sink::Push<style::applicable_declarations::ApplicableDeclarationBlock>,
     {
-        super::super::presentation::synthesize_svg_presentational_hints(
-            self.element(),
-            self.shared_lock,
-            hints,
-        );
+        super::super::presentation::synthesize_presentational_hints(*self, self.shared_lock, hints);
     }
 
     fn local_name(&self) -> &<SelectorImpl as selectors::parser::SelectorImpl>::BorrowedLocalName {
@@ -428,6 +424,12 @@ impl<'a> TElement for QueryElement<'a> {
 
     fn relative_selector_search_direction(&self) -> ElementSelectorFlags {
         ElementSelectorFlags::empty()
+    }
+}
+
+impl super::super::presentation::PresentationalHintElement for QueryElement<'_> {
+    fn native_element(&self) -> &Element {
+        (*self).element()
     }
 }
 
