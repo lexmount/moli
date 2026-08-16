@@ -636,6 +636,11 @@ fn document_fonts_for_receiver<'s>(
     let _ = holder.set(scope, slot.into(), fonts.into());
     if !is_detached {
         let _ = sync_document_fonts(scope, holder, runtime, handle);
+        if let Some(cycle) = runtime.active_document_web_font_load_cycle() {
+            super::font_faces::begin_document_font_face_set_load_cycle_for_document(
+                scope, handle, cycle,
+            );
+        }
     }
     rv.set(fonts.into());
 }

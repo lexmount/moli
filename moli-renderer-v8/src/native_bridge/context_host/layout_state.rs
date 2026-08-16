@@ -6,7 +6,9 @@ use super::layout_snapshot::LatestLayoutTreeCache;
 use crate::{
     css_resource_urls::{CompletedStylesheetWebFont, StylesheetLoadBlockingResource},
     document_runtime::DomHandle,
-    script_vm::web_fonts::{DocumentWebFontCompletion, DocumentWebFontState},
+    script_vm::web_fonts::{
+        DocumentWebFontCompletion, DocumentWebFontLoadCycleId, DocumentWebFontState,
+    },
 };
 
 /// Layout-facing state whose lifetime is bounded by exactly one main Document.
@@ -120,6 +122,32 @@ impl DocumentLayoutState {
         resource: StylesheetLoadBlockingResource,
     ) -> Option<StylesheetLoadBlockingResource> {
         self.web_fonts.admit(resource, &mut self.services)
+    }
+
+    pub(super) fn reserve_web_font_ready_cycle<'a>(
+        &mut self,
+        resources: impl IntoIterator<Item = &'a StylesheetLoadBlockingResource>,
+    ) -> Option<DocumentWebFontLoadCycleId> {
+        self.web_fonts.reserve_for_ready(resources)
+    }
+
+    pub(super) fn active_web_font_load_cycle(&self) -> Option<DocumentWebFontLoadCycleId> {
+        self.web_fonts.active_load_cycle()
+    }
+
+    pub(super) fn web_font_ready_layout_task_needed(&self) -> Option<DocumentWebFontLoadCycleId> {
+        self.web_fonts.ready_layout_task_needed()
+    }
+
+    pub(super) fn web_font_cycle_ready_for_layout(&self) -> Option<DocumentWebFontLoadCycleId> {
+        self.web_fonts.load_cycle_ready_for_layout()
+    }
+
+    pub(super) fn complete_web_font_cycle_after_layout(
+        &mut self,
+        cycle: DocumentWebFontLoadCycleId,
+    ) -> bool {
+        self.web_fonts.complete_after_layout(cycle)
     }
 
     pub(super) fn complete(

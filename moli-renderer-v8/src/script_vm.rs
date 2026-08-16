@@ -2433,8 +2433,25 @@ impl ScriptVm {
                 context_host.with_fresh_layout_pass_for_document(document, request, consume);
             (document, result)
         };
+        let completed_font_cycle = matches!(&result, Ok(Some(_)))
+            .then(|| {
+                self._context_host
+                    .borrow()
+                    .document_web_font_cycle_ready_for_layout()
+            })
+            .flatten()
+            .filter(|cycle| {
+                self._context_host
+                    .borrow()
+                    .complete_document_web_font_cycle_after_layout(*cycle)
+            });
         if matches!(&result, Ok(Some(_)))
             && let Err(error) = self.with_default_context_scope(|scope, runtime_ptr| {
+                if let Some(cycle) = completed_font_cycle {
+                    crate::native_bridge::document::settle_document_font_face_set_load_cycle_for_document(
+                        scope, document, cycle,
+                    );
+                }
                 crate::native_bridge::element::queue_revealed_lazy_image_loads(
                     scope,
                     runtime_ptr,
@@ -2658,7 +2675,7 @@ impl ScriptVm {
     ) {
         match self
             ._context_host
-            .borrow()
+            .borrow_mut()
             .complete_document_web_font(terminal)
         {
             web_fonts::DocumentWebFontCompletion::Registered(outcome) => tracing::debug!(
