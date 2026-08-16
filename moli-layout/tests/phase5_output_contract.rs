@@ -416,9 +416,7 @@ fn inline_output_preserves_line_text_and_utf16_source_fragments() {
         .iter()
         .filter_map(|id| output.fragment(*id))
         .filter_map(|fragment| match &fragment.kind {
-            LayoutFragmentKind::Text {
-                source_utf16_range, ..
-            } => Some(source_utf16_range.clone()),
+            LayoutFragmentKind::Text { source_span, .. } => Some(source_span.utf16_range().clone()),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -436,6 +434,30 @@ fn inline_output_preserves_line_text_and_utf16_source_fragments() {
             .iter()
             .all(|quad| quad.bounding_rect().width > 0.0)
     );
+    let emoji_rect = range_rects[0].bounding_rect();
+    for range in [2..3, 3..4, 3..3] {
+        let rects = output.text_range_rects(2, range.clone());
+        assert_eq!(
+            rects.len(),
+            1,
+            "a UTF-16 offset inside a surrogate pair stays attached to its shaped source span: {range:?}"
+        );
+        assert_rect(rects[0].bounding_rect(), emoji_rect);
+    }
+    for range in [2..2, 4..4] {
+        let rects = output.text_range_rects(2, range.clone());
+        assert_eq!(rects.len(), 1, "valid scalar boundary: {range:?}");
+        let rect = rects[0].bounding_rect();
+        assert_close(rect.width, 0.0);
+        assert_close(
+            rect.x,
+            if range.start == 2 {
+                emoji_rect.x
+            } else {
+                emoji_rect.right()
+            },
+        );
+    }
     assert_eq!(
         output.text_range_rects(2, 0..6).len(),
         1,
@@ -595,9 +617,9 @@ fn caret_query_uses_parley_cluster_sides_and_inline_direction() {
                 matches!(
                     fragment.kind,
                     LayoutFragmentKind::Text {
-                        source_utf16_range: ref range,
+                        source_span: ref span,
                         ..
-                    } if *range == (0..1)
+                    } if span.utf16_range() == &(0..1)
                 )
             })
             .expect("one UTF-16 code-unit text fragment");
@@ -668,9 +690,9 @@ fn caret_and_range_queries_follow_the_physical_inline_axis() {
             matches!(
                 fragment.kind,
                 LayoutFragmentKind::Text {
-                    source_utf16_range: ref range,
+                    source_span: ref span,
                     ..
-                } if *range == (0..1)
+                } if span.utf16_range() == &(0..1)
             )
         })
         .expect("first vertical text fragment");

@@ -310,7 +310,7 @@ where
                 let LayoutFragmentKind::Text {
                     box_id,
                     line_index,
-                    source_utf16_range,
+                    source_span,
                     is_forced_line_break,
                     inline_axis,
                     rtl,
@@ -319,56 +319,29 @@ where
                 else {
                     return None;
                 };
-                let source_len = source_utf16_range
-                    .end
-                    .saturating_sub(source_utf16_range.start);
-                let (selected_start, selected_end) = if utf16_range.is_empty() {
-                    // Blink's LayoutText::AbsoluteQuadsForRange skips a
-                    // forced-break FragmentItem for collapsed ranges. The
-                    // adjacent text fragment then supplies the upstream or
-                    // downstream caret quad; retaining the break itself
-                    // would incorrectly return geometry on both lines.
-                    if *is_forced_line_break {
-                        return None;
-                    }
-                    if utf16_range.start < source_utf16_range.start
-                        || utf16_range.start > source_utf16_range.end
-                    {
-                        return None;
-                    }
-                    let point = utf16_range
-                        .start
-                        .saturating_sub(source_utf16_range.start)
-                        .min(source_len);
-                    (point, point)
-                } else {
-                    let start = source_utf16_range.start.max(utf16_range.start);
-                    let end = source_utf16_range.end.min(utf16_range.end);
-                    if start >= end {
-                        return None;
-                    }
-                    (
-                        start.saturating_sub(source_utf16_range.start),
-                        end.saturating_sub(source_utf16_range.start),
-                    )
-                };
-                let denominator = source_len.max(1) as f32;
-                let start_ratio = selected_start as f32 / denominator;
-                let end_ratio = selected_end as f32 / denominator;
-                let visual_start_ratio = if *rtl { 1.0 - end_ratio } else { start_ratio };
-                let selected_ratio = end_ratio - start_ratio;
+                // Blink skips a forced-break FragmentItem for collapsed
+                // ranges. Adjacent text then supplies the upstream or
+                // downstream caret quad instead of exposing both lines.
+                if utf16_range.is_empty() && *is_forced_line_break {
+                    return None;
+                }
+                let (selected_start, selected_end) = source_span.selected_edges(&utf16_range)?;
+                let start_fraction = selected_start.visual_fraction(*rtl);
+                let end_fraction = selected_end.visual_fraction(*rtl);
+                let visual_start_fraction = start_fraction.min(end_fraction);
+                let selected_fraction = (end_fraction - start_fraction).abs();
                 let rect = match inline_axis {
                     LayoutPhysicalAxis::Horizontal => LayoutRect::new(
-                        fragment.rect.x + fragment.rect.width * visual_start_ratio,
+                        fragment.rect.x + fragment.rect.width * visual_start_fraction,
                         fragment.rect.y,
-                        fragment.rect.width * selected_ratio,
+                        fragment.rect.width * selected_fraction,
                         fragment.rect.height,
                     ),
                     LayoutPhysicalAxis::Vertical => LayoutRect::new(
                         fragment.rect.x,
-                        fragment.rect.y + fragment.rect.height * visual_start_ratio,
+                        fragment.rect.y + fragment.rect.height * visual_start_fraction,
                         fragment.rect.width,
-                        fragment.rect.height * selected_ratio,
+                        fragment.rect.height * selected_fraction,
                     ),
                 };
                 Some(SelectedTextRect {
@@ -382,10 +355,12 @@ where
             })
             .collect::<Vec<_>>();
 
-        // Parley exposes cluster-level source fragments, while CSSOM View
-        // exposes one Range rect per contiguous directional run on a line.
-        // Keep opposite bidi runs separate, but merge adjacent clusters from
-        // the same source box before mapping through transforms.
+        // Parley exposes cluster-level source fragments, including separate
+        // font-fallback clusters, while Blink exposes one FragmentItem rect
+        // per contiguous directional text fragment on a line. Group in
+        // physical inline order and union the cross-axis font bounds. Requiring
+        // equal ascent/descent here would leak fallback-run boundaries as
+        // extra DOMRects and make a Range over one Text node non-contiguous.
         selected.sort_by(|left, right| {
             left.coordinate_space
                 .index()
@@ -396,14 +371,14 @@ where
                 .then_with(|| match left.inline_axis {
                     LayoutPhysicalAxis::Horizontal => left
                         .rect
-                        .y
-                        .total_cmp(&right.rect.y)
-                        .then_with(|| left.rect.x.total_cmp(&right.rect.x)),
-                    LayoutPhysicalAxis::Vertical => left
-                        .rect
                         .x
                         .total_cmp(&right.rect.x)
                         .then_with(|| left.rect.y.total_cmp(&right.rect.y)),
+                    LayoutPhysicalAxis::Vertical => left
+                        .rect
+                        .y
+                        .total_cmp(&right.rect.y)
+                        .then_with(|| left.rect.x.total_cmp(&right.rect.x)),
                 })
         });
         let mut merged: Vec<SelectedTextRect> = Vec::with_capacity(selected.len());
@@ -426,14 +401,10 @@ where
                     && previous.coordinate_space == fragment.coordinate_space
                     && (match fragment.inline_axis {
                         LayoutPhysicalAxis::Horizontal => {
-                            (previous.rect.y - fragment.rect.y).abs() <= tolerance
-                                && (previous.rect.height - fragment.rect.height).abs() <= tolerance
-                                && fragment.rect.x <= previous.rect.right() + tolerance
+                            fragment.rect.x <= previous.rect.right() + tolerance
                         }
                         LayoutPhysicalAxis::Vertical => {
-                            (previous.rect.x - fragment.rect.x).abs() <= tolerance
-                                && (previous.rect.width - fragment.rect.width).abs() <= tolerance
-                                && fragment.rect.y <= previous.rect.bottom() + tolerance
+                            fragment.rect.y <= previous.rect.bottom() + tolerance
                         }
                     })
             });
