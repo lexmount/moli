@@ -112,6 +112,29 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
         }
     }
 
+    fn document_body(&self) -> Option<Self::NodeId> {
+        self.document
+            .and_then(|document| self.host().document_body_handle_for_document(document))
+    }
+
+    fn viewport_scroll_offset(&self) -> moli_layout::LayoutPoint {
+        self.document
+            .and_then(|document| {
+                self.host()
+                    .dom()
+                    .document_element_handle_for_document(document)
+            })
+            .and_then(|root| self.host().node(root))
+            .and_then(Node::as_element)
+            .map(|element| {
+                moli_layout::LayoutPoint::new(
+                    element.scroll_left() as f32,
+                    element.scroll_top() as f32,
+                )
+            })
+            .unwrap_or(moli_layout::LayoutPoint::ZERO)
+    }
+
     fn flat_parent(&self, node: Self::NodeId) -> Option<Self::NodeId> {
         native_flat_parent(self.host(), self.root, node)
     }
@@ -166,6 +189,14 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
     }
 
     fn scroll_offset(&self, node: Self::NodeId) -> moli_layout::LayoutPoint {
+        if self.document.is_some_and(|document| {
+            self.host()
+                .dom()
+                .document_element_handle_for_document(document)
+                == Some(node)
+        }) {
+            return moli_layout::LayoutPoint::ZERO;
+        }
         self.host().node(node).and_then(Node::as_element).map_or(
             moli_layout::LayoutPoint::ZERO,
             |element| {

@@ -7,8 +7,8 @@ use crate::LayoutError;
 use super::{
     hit_test::{LayoutCaretPosition, LayoutHit},
     model::{
-        LayoutBoxModel, LayoutFragmentId, LayoutOutputBoxId, LayoutPoint, LayoutQuad, LayoutSize,
-        LayoutViewport,
+        LayoutBoxModel, LayoutFragmentId, LayoutOutputBoxId, LayoutPoint, LayoutQuad,
+        LayoutScrollExtent, LayoutSize, LayoutViewport,
     },
     pass_result::{LayoutFlushReason, LayoutPassMetrics},
     tree::FrozenLayoutTree,
@@ -31,6 +31,15 @@ pub struct LayoutDocumentMetrics {
     pub viewport: LayoutViewport,
     pub viewport_scroll: LayoutPoint,
     pub content_size: LayoutSize,
+}
+
+/// Document-level viewport scrolling state and its CSSOM element projection.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LayoutDocumentScrollMetrics<N> {
+    /// The element whose scroll APIs proxy the layout viewport. This can be
+    /// `None` for a quirks document whose body owns a physical scroll box.
+    pub scrolling_element: Option<N>,
+    pub viewport_extent: LayoutScrollExtent,
 }
 
 /// CSSOM View and observer metrics for one source element.
@@ -58,9 +67,17 @@ pub struct LayoutElementMetrics<N> {
 }
 
 /// One scroll container on a target's layout ancestor chain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayoutScrollContainerKind {
+    Element,
+    Viewport,
+}
+
+/// One scroll container on a target's layout ancestor chain.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutScrollContainerMetrics<N> {
     pub source: N,
+    pub kind: LayoutScrollContainerKind,
     pub metrics: LayoutElementMetrics<N>,
 }
 
@@ -89,6 +106,7 @@ pub struct LayoutIntersectionGeometry {
 #[derive(Clone, Debug, PartialEq)]
 pub enum LayoutQuery<N> {
     DocumentMetrics,
+    DocumentScrollMetrics,
     BoxModel {
         source: N,
     },
@@ -149,6 +167,7 @@ impl<N> LayoutQueryBatch<N> {
 #[derive(Clone, Debug, PartialEq)]
 pub enum LayoutQueryAnswer<N> {
     DocumentMetrics(LayoutDocumentMetrics),
+    DocumentScrollMetrics(LayoutDocumentScrollMetrics<N>),
     BoxModel(Option<LayoutBoxModel>),
     ClientRects(Vec<LayoutQuad>),
     ContentQuads(Vec<LayoutQuad>),
@@ -204,6 +223,12 @@ where
                         viewport: self.viewport,
                         viewport_scroll: self.viewport_scroll,
                         content_size: self.content_size,
+                    })
+                }
+                LayoutQuery::DocumentScrollMetrics => {
+                    LayoutQueryAnswer::DocumentScrollMetrics(LayoutDocumentScrollMetrics {
+                        scrolling_element: self.document_scrolling_element,
+                        viewport_extent: self.viewport_scroll_extent.clone(),
                     })
                 }
                 LayoutQuery::BoxModel { source } => {

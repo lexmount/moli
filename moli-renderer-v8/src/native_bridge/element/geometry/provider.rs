@@ -2,9 +2,10 @@ use std::{collections::HashSet, time::Duration};
 
 use moli_layout::{
     LayoutAnswers, LayoutBoxModel, LayoutCaretPosition, LayoutDocumentMetrics,
-    LayoutElementMetrics, LayoutError, LayoutFlushReason, LayoutHit, LayoutIntersectionGeometry,
-    LayoutPassMetrics, LayoutPoint, LayoutQuad, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch,
-    LayoutScrollContainerMetrics, LayoutScrollIntoViewGeometry, LayoutSize,
+    LayoutDocumentScrollMetrics, LayoutElementMetrics, LayoutError, LayoutFlushReason, LayoutHit,
+    LayoutIntersectionGeometry, LayoutPassMetrics, LayoutPoint, LayoutQuad, LayoutQuery,
+    LayoutQueryAnswer, LayoutQueryBatch, LayoutScrollContainerKind, LayoutScrollContainerMetrics,
+    LayoutScrollIntoViewGeometry, LayoutSize,
 };
 
 use super::layout::{
@@ -212,6 +213,23 @@ pub(crate) fn observable_element_metrics(
     match answers.answers.into_iter().next() {
         Some(LayoutQueryAnswer::ElementMetrics(metrics)) => Ok(metrics),
         _ => Err(provider_contract_error("element metrics")),
+    }
+}
+
+pub(crate) fn observable_document_scroll_metrics(
+    runtime: &JsContextHost,
+    document: DomHandle,
+    reason: LayoutFlushReason,
+) -> Result<LayoutDocumentScrollMetrics<DomHandle>, LayoutError> {
+    let answers = observable_geometry_batch(
+        runtime,
+        document,
+        reason,
+        &LayoutQueryBatch::new(vec![LayoutQuery::DocumentScrollMetrics]),
+    )?;
+    match answers.answers.into_iter().next() {
+        Some(LayoutQueryAnswer::DocumentScrollMetrics(metrics)) => Ok(metrics),
+        _ => Err(provider_contract_error("document scroll metrics")),
     }
 }
 
@@ -499,6 +517,48 @@ fn answer_mock_queries(
                     ),
                 })
             }
+            LayoutQuery::DocumentScrollMetrics => {
+                let root = runtime
+                    .dom_host()
+                    .dom()
+                    .document_element_handle_for_document(document);
+                let scrolling_element =
+                    if runtime.dom_host().document_quirks_mode_for_handle(document)
+                        == Some(selectors::matching::QuirksMode::Quirks)
+                    {
+                        runtime
+                            .dom_host()
+                            .document_body_handle_for_document(document)
+                    } else {
+                        root
+                    };
+                let viewport_scroll = root
+                    .and_then(|root| runtime.dom_host().node(root))
+                    .and_then(Node::as_element)
+                    .map(|element| {
+                        LayoutPoint::new(element.scroll_left() as f32, element.scroll_top() as f32)
+                    })
+                    .unwrap_or(LayoutPoint::ZERO);
+                let scrollport = moli_layout::LayoutRect::new(
+                    0.0,
+                    0.0,
+                    viewport.css_width as f32,
+                    viewport.css_height as f32,
+                );
+                LayoutQueryAnswer::DocumentScrollMetrics(LayoutDocumentScrollMetrics {
+                    scrolling_element,
+                    viewport_extent: moli_layout::LayoutScrollExtent {
+                        scrollport,
+                        scrollable_overflow: scrollport,
+                        scroll_size: LayoutSize::new(scrollport.width, scrollport.height),
+                        applied_offset: viewport_scroll,
+                        minimum_offset: LayoutPoint::ZERO,
+                        maximum_offset: LayoutPoint::ZERO,
+                        is_scroll_container: true,
+                        clips_overflow: true,
+                    },
+                })
+            }
             LayoutQuery::BoxModel { source } => {
                 LayoutQueryAnswer::BoxModel(mock_box_model(runtime, *source))
             }
@@ -659,6 +719,7 @@ fn mock_scroll_into_view_geometry(
         .and_then(|root| {
             mock_element_metrics(runtime, root).map(|metrics| LayoutScrollContainerMetrics {
                 source: root,
+                kind: LayoutScrollContainerKind::Viewport,
                 metrics,
             })
         })

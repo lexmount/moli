@@ -99,12 +99,6 @@ impl<N> LayoutBox<N> {
             self.is_eligible_for_paint_or_layout_containment(),
         )
     }
-
-    pub(crate) fn clips_descendant_paint(&self) -> bool {
-        self.style.clips_overflow()
-            || (self.is_eligible_for_paint_or_layout_containment()
-                && self.style.applies_paint_containment())
-    }
 }
 
 impl<N> LayoutWorld<N>

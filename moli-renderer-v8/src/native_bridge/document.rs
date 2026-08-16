@@ -1131,10 +1131,25 @@ fn document_scrolling_element_getter_function<'s>(
     };
     let runtime = unsafe { &*runtime_ptr };
     let dom = runtime.dom_host().dom();
-    let element = dom
-        .node(handle)
-        .and_then(Node::as_document)
-        .and_then(|document| document.document_element_handle(dom, handle));
+    let document = dom.node(handle).and_then(Node::as_document);
+    let fallback = document.and_then(|document| {
+        if document.quirks_mode() == selectors::matching::QuirksMode::Quirks {
+            document.body_handle(dom, handle)
+        } else {
+            document.document_element_handle(dom, handle)
+        }
+    });
+    let element = if document.is_some() {
+        crate::native_bridge::element::observable_document_scroll_metrics(
+            runtime,
+            handle,
+            moli_layout::LayoutFlushReason::SynchronousGeometry,
+        )
+        .map(|metrics| metrics.scrolling_element)
+        .unwrap_or(fallback)
+    } else {
+        None
+    };
     set_document_node_return_value_for_receiver(scope, &mut rv, runtime_ptr, receiver, element);
 }
 
