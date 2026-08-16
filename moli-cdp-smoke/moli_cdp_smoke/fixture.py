@@ -474,6 +474,23 @@ class FixtureServer:
                     self.send_response(HTTPStatus.NO_CONTENT)
                     self.end_headers()
                     return
+                if route == "/inspector-routing-witness/reset":
+                    outer.reset_request_count("/inspector-routing-witness/entered")
+                    self._send_json({"enteredCount": 0})
+                    return
+                if route == "/inspector-routing-witness/status":
+                    self._send_json(
+                        {
+                            "enteredCount": outer.request_count(
+                                "/inspector-routing-witness/entered"
+                            )
+                        }
+                    )
+                    return
+                if route == "/inspector-routing-witness/entered":
+                    count = outer._increment_request_count(route)
+                    self._send_text(f"entered-{count}")
+                    return
                 if route == "/chromium-network-redirect-before-reset":
                     outer._increment_request_count(route)
                     self.send_response(HTTPStatus.FOUND)

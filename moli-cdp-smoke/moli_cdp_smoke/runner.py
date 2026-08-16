@@ -34,6 +34,7 @@ from .groups.document_content import run_document_content_group
 from .groups.emulation_storage import run_emulation_storage_group
 from .groups.error_document import run_error_document_group
 from .groups.fetch_runtime_teardown import run_fetch_runtime_teardown_group
+from .groups.inspector_routing import run_inspector_routing_group
 from .groups.layout_screenshot import run_layout_screenshot_group
 from .groups.multi_client import run_multi_client_group
 from .groups.multi_context import run_multi_context_group
@@ -77,6 +78,13 @@ class SmokeGroup:
 
 
 RAW_GROUPS: tuple[SmokeGroup, ...] = (
+    SmokeGroup(
+        "inspector-routing",
+        "Chromium-calibrated active-JS IO interrupt, nested Main receiver, per-session FIFO, and non-V8 IO boundaries.",
+        "raw",
+        run_inspector_routing_group,
+        default=False,
+    ),
     SmokeGroup(
         "url-policy",
         "Hosted file URL rejection across raw Page.navigate and Runtime fetch/XHR without lifecycle, interception, or transport leakage.",

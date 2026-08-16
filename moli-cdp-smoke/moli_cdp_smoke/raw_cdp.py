@@ -111,7 +111,13 @@ class RawCdpClient:
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
                 raise RawCdpError(f"timed out waiting for CDP response id={message_id}; seen={seen[-20:]}")
-            message = await asyncio.wait_for(self.recv(), timeout=remaining)
+            try:
+                message = await asyncio.wait_for(self.recv(), timeout=remaining)
+            except TimeoutError as error:
+                raise RawCdpError(
+                    f"timed out waiting for CDP response id={message_id}; "
+                    f"seen={seen[-20:]}"
+                ) from error
             seen.append(message)
             if message.get("id") == message_id:
                 if "error" in message:
