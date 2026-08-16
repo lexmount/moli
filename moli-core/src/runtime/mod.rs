@@ -50,8 +50,6 @@ pub use navigation_engine::{
 
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
-use self::lifecycle_fetch::FollowTimeout;
-
 fn wait_until_outer_timeout(wait_until: RenderedDomWaitUntil, timeout: Duration) -> Duration {
     match wait_until {
         RenderedDomWaitUntil::NetworkIdle | RenderedDomWaitUntil::DomStable => {
@@ -418,7 +416,6 @@ impl Browser {
             timeout,
             RendererReplyBoundary::Stage,
             None,
-            None,
         )
         .await
     }
@@ -430,7 +427,6 @@ impl Browser {
         timeout: Duration,
         reply_boundary: RendererReplyBoundary,
         lifecycle_decider: Option<RendererLifecycleDecider>,
-        follow_timeout: Option<FollowTimeout>,
     ) -> Result<FetchedDocument> {
         let stage = match wait_until {
             RenderedDomWaitUntil::DomContentLoaded => PageVmInitStage::DomContentLoaded,
@@ -449,17 +445,23 @@ impl Browser {
             "starting fetch_document_allow_http_error_with_wait_until deadline"
         );
         let outer_timeout = wait_until_outer_timeout(wait_until, timeout);
-        let timeout_started = Instant::now();
+        let deadline = tokio::time::Instant::now()
+            .checked_add(outer_timeout)
+            .with_context(|| {
+                anyhow!(
+                    "fetch wait_until {wait_until:?} timeout of {} ms exceeds the supported range",
+                    timeout.as_millis()
+                )
+            })?;
         let requested_url = request.url.clone();
         if is_about_blank_url(&requested_url) {
             return self
-                .materialize_with_follow_timeout(
+                .fetch_document_wait_timeout(
                     &raw_url,
                     wait_until,
                     timeout,
                     stage,
-                    outer_timeout,
-                    follow_timeout,
+                    deadline,
                     self.materialize_static_html_page(
                         &raw_url,
                         requested_url,
@@ -484,7 +486,7 @@ impl Browser {
                 wait_until,
                 timeout,
                 stage,
-                outer_timeout,
+                deadline,
                 self.fetch_service_worker_main_resource_for_navigation(
                     &request,
                     &navigation_loader,
@@ -506,17 +508,13 @@ impl Browser {
                     raw_response,
                 ))));
             }
-            let remaining_timeout = outer_timeout
-                .checked_sub(timeout_started.elapsed())
-                .unwrap_or_default();
             return self
-                .materialize_with_follow_timeout(
+                .fetch_document_wait_timeout(
                     &raw_url,
                     wait_until,
                     timeout,
                     stage,
-                    remaining_timeout,
-                    follow_timeout,
+                    deadline,
                     self.materialize_streaming_raw_response_page(
                         &raw_url,
                         requested_url,
@@ -538,9 +536,7 @@ impl Browser {
                 wait_until,
                 timeout,
                 stage,
-                outer_timeout
-                    .checked_sub(timeout_started.elapsed())
-                    .unwrap_or_default(),
+                deadline,
                 navigation_loader.fetch_raw_stream(request),
             )
             .await?;
@@ -555,17 +551,13 @@ impl Browser {
                 .map(|raw| FetchedDocument::Raw(Box::new(raw)));
         }
 
-        let remaining_timeout = outer_timeout
-            .checked_sub(timeout_started.elapsed())
-            .unwrap_or_default();
         let document_fetch_context_seed = navigation_loader.commit(response.final_url.clone())?;
-        self.materialize_with_follow_timeout(
+        self.fetch_document_wait_timeout(
             &raw_url,
             wait_until,
             timeout,
             stage,
-            remaining_timeout,
-            follow_timeout,
+            deadline,
             self.materialize_streaming_raw_response_page(
                 &raw_url,
                 requested_url,
@@ -939,13 +931,13 @@ impl Browser {
         wait_until: RenderedDomWaitUntil,
         timeout: Duration,
         stage: PageVmInitStage,
-        outer_timeout: Duration,
+        deadline: tokio::time::Instant,
         future: F,
     ) -> Result<T>
     where
         F: std::future::Future<Output = Result<T>>,
     {
-        match tokio::time::timeout(outer_timeout, future).await {
+        match tokio::time::timeout_at(deadline, future).await {
             Ok(result) => result,
             Err(_) => {
                 Err(self.fetch_document_wait_timeout_error(raw_url, wait_until, timeout, stage))

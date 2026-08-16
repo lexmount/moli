@@ -2126,7 +2126,7 @@ fn cli_load_follows_five_same_url_replacements_after_403() -> Result<()> {
 }
 
 #[test]
-fn cli_load_keeps_the_successor_stage_timeout_after_403_navigation() -> Result<()> {
+fn cli_load_uses_one_timeout_across_403_replacement_navigation() -> Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-http-error-navigation");
@@ -2138,9 +2138,7 @@ fn cli_load_keeps_the_successor_stage_timeout_after_403_navigation() -> Result<(
     let stderr = clean_output(&output.stderr);
     assert!(stdout.is_empty(), "stdout={stdout}");
     assert!(
-        stderr.contains("successor navigation")
-            && stderr.contains("Load")
-            && stderr.contains("timed out"),
+        stderr.contains("allow-http-error wait_until Load timed out after 250 ms"),
         "stderr={stderr}"
     );
     Ok(())

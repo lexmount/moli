@@ -34,15 +34,14 @@ async fn follow_http_error_navigation(
     url: &str,
     wait_until: RenderedDomWaitUntil,
     navigation_grace_ms: u64,
-    successor_timeout: Duration,
+    timeout: Duration,
 ) -> Result<Page> {
     executable_page(
         browser
             .fetch_document_with_lifecycle_decider(
                 Request::get(url)?,
                 wait_until,
-                Duration::from_secs(5),
-                successor_timeout,
+                timeout,
                 move |target| {
                     ensure!(
                         (400..=599).contains(&target.status),
@@ -72,7 +71,6 @@ async fn lifecycle_decider_finishes_without_extra_owner_command() -> Result<()> 
                 Request::get(&url)?,
                 RenderedDomWaitUntil::DomContentLoaded,
                 Duration::from_secs(5),
-                Duration::ZERO,
                 move |target| {
                     observed_targets_for_decider.lock().push(target);
                     Ok(RendererLifecycleDecision::Finish)
@@ -119,7 +117,6 @@ async fn lifecycle_decider_supports_static_about_blank() -> Result<()> {
                 Request::get("about:blank")?,
                 RenderedDomWaitUntil::Done,
                 Duration::from_secs(1),
-                Duration::ZERO,
                 move |target| {
                     *observed_target_for_decider.lock() = Some(target);
                     Ok(RendererLifecycleDecision::Finish)
@@ -139,7 +136,7 @@ async fn lifecycle_decider_supports_static_about_blank() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn follow_budget_does_not_extend_initial_stage_timeout() -> Result<()> {
+async fn lifecycle_decider_does_not_extend_initial_stage_timeout() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
     let decider_was_called = Arc::new(Mutex::new(false));
@@ -150,14 +147,13 @@ async fn follow_budget_does_not_extend_initial_stage_timeout() -> Result<()> {
             Request::get(&server.url("/wait-until-domcontentloaded-runtime-script-very-slow"))?,
             RenderedDomWaitUntil::Load,
             Duration::from_millis(100),
-            Duration::from_secs(5),
             move |_| {
                 *decider_was_called_in_hook.lock() = true;
                 Ok(RendererLifecycleDecision::Finish)
             },
         )
         .await
-        .expect_err("a follow budget must not relax the initial Load deadline");
+        .expect_err("a lifecycle decider must not relax the initial Load deadline");
 
     assert!(
         format!("{error:#}").contains("timed out after 100 ms"),
@@ -165,6 +161,42 @@ async fn follow_budget_does_not_extend_initial_stage_timeout() -> Result<()> {
     );
     assert!(!*decider_was_called.lock());
     server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn follow_navigation_grace_cannot_extend_fetch_timeout() -> Result<()> {
+    let browser = Browser::new(AppConfig::default())?;
+
+    let result = tokio::time::timeout(
+        Duration::from_secs(1),
+        browser.fetch_document_with_lifecycle_decider(
+            Request::get("about:blank")?,
+            RenderedDomWaitUntil::Done,
+            Duration::from_millis(100),
+            |_| {
+                Ok(RendererLifecycleDecision::FollowNextDocument {
+                    navigation_grace_ms: 10_000,
+                })
+            },
+        ),
+    )
+    .await
+    .context("successor grace escaped the fetch deadline")?;
+    let error = result.expect_err("the original fetch timeout must interrupt successor grace");
+
+    assert!(
+        format!("{error:#}").contains("timed out after 100 ms"),
+        "error={error:#}"
+    );
+
+    let page = tokio::time::timeout(
+        Duration::from_secs(1),
+        browser.fetch_request_document_allow_http_error(Request::get("about:blank")?),
+    )
+    .await
+    .context("timed-out lifecycle follow left the renderer owner blocked")??;
+    assert_eq!(executable_page(page)?.status(), 200);
     Ok(())
 }
 
@@ -177,7 +209,6 @@ async fn lifecycle_decider_error_and_panic_retire_only_pending_page() -> Result<
             Request::get("about:blank")?,
             RenderedDomWaitUntil::Done,
             Duration::from_secs(1),
-            Duration::ZERO,
             |_| Err(anyhow!("policy rejected target")),
         )
         .await
@@ -192,7 +223,6 @@ async fn lifecycle_decider_error_and_panic_retire_only_pending_page() -> Result<
             Request::get("about:blank")?,
             RenderedDomWaitUntil::Done,
             Duration::from_secs(1),
-            Duration::ZERO,
             |_| -> Result<RendererLifecycleDecision> { panic!("policy panic sentinel") },
         )
         .await
@@ -227,7 +257,6 @@ async fn http_error_navigation_wait_follows_same_url_reload_to_domcontentloaded(
                 Request::get(&url)?,
                 RenderedDomWaitUntil::DomContentLoaded,
                 Duration::from_secs(5),
-                Duration::from_secs(6),
                 move |target| {
                     *observed_target_for_decider.lock() = Some(target);
                     Ok(RendererLifecycleDecision::FollowNextDocument {
@@ -356,7 +385,6 @@ async fn http_error_navigation_wait_follows_same_url_reload_to_load() -> Result<
                 Request::get(&url)?,
                 RenderedDomWaitUntil::Load,
                 Duration::from_secs(5),
-                Duration::from_secs(6),
                 move |target| {
                     *observed_target_for_decider.lock() = Some(target);
                     Ok(RendererLifecycleDecision::FollowNextDocument {
@@ -403,7 +431,6 @@ async fn http_error_navigation_wait_reports_no_navigation_without_refetching() -
             Request::get(&url)?,
             RenderedDomWaitUntil::Load,
             Duration::from_secs(5),
-            Duration::from_millis(1_100),
             |target| {
                 assert_eq!(target.status, 404);
                 Ok(RendererLifecycleDecision::FollowNextDocument {
@@ -432,7 +459,6 @@ async fn same_document_navigation_does_not_satisfy_http_error_replacement_wait()
             Request::get(&url)?,
             RenderedDomWaitUntil::Load,
             Duration::from_secs(5),
-            Duration::from_secs(1),
             |target| {
                 ensure!(target.status == 403, "expected 403, got {}", target.status);
                 Ok(RendererLifecycleDecision::FollowNextDocument {
@@ -460,7 +486,6 @@ async fn dropping_http_error_navigation_wait_keeps_renderer_owner_usable() -> Re
     let mut waiting_fetch = Box::pin(browser.fetch_document_with_lifecycle_decider(
         Request::get(&url)?,
         RenderedDomWaitUntil::Load,
-        Duration::from_secs(5),
         Duration::from_secs(11),
         move |target| {
             ensure!(target.status == 404, "expected 404, got {}", target.status);
@@ -503,7 +528,6 @@ async fn parked_http_error_navigation_wait_does_not_block_another_page() -> Resu
     let mut waiting_fetch = Box::pin(browser.fetch_document_with_lifecycle_decider(
         Request::get(&url)?,
         RenderedDomWaitUntil::Load,
-        Duration::from_secs(5),
         Duration::from_secs(11),
         move |target| {
             ensure!(target.status == 404, "expected 404, got {}", target.status);
@@ -546,7 +570,6 @@ async fn http_error_replacement_wait_keeps_chained_navigation_limit() -> Result<
         .fetch_document_with_lifecycle_decider(
             Request::get(&url)?,
             RenderedDomWaitUntil::Load,
-            Duration::from_secs(5),
             Duration::from_secs(20),
             |target| {
                 ensure!(target.status == 403, "expected 403, got {}", target.status);
