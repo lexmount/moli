@@ -1156,13 +1156,6 @@ fn apply_structural_layout<N>(
     let column_starts = track_starts(origin.x, &detailed.columns.sizes, &detailed.columns.gutters);
     let content_width = track_extent(&detailed.columns.sizes, &detailed.columns.gutters);
     let content_height = track_extent(&detailed.rows.sizes, &detailed.rows.gutters);
-    let structural_percentage_basis = context
-        .writing_mode
-        .to_logical(Size {
-            width: content_width,
-            height: content_height,
-        })
-        .inline_size;
     if context.collapsed_borders {
         let mut row_lines = row_starts.clone();
         row_lines.push(origin.y + content_height);
@@ -1174,15 +1167,7 @@ fn apply_structural_layout<N>(
     for row in &context.rows {
         let y = row_starts.get(row.index).copied().unwrap_or(origin.y);
         let height = detailed.rows.sizes.get(row.index).copied().unwrap_or(0.0);
-        set_structural_rect(
-            world,
-            row.id,
-            origin.x,
-            y,
-            content_width,
-            height,
-            structural_percentage_basis,
-        );
+        set_structural_rect(world, row.id, origin.x, y, content_width, height);
     }
     let mut groups = context
         .rows
@@ -1203,15 +1188,7 @@ fn apply_structural_layout<N>(
             let y = row_starts.get(start).copied().unwrap_or(origin.y);
             let height =
                 track_range_extent(&detailed.rows.sizes, &detailed.rows.gutters, start, end);
-            set_structural_rect(
-                world,
-                group,
-                origin.x,
-                y,
-                content_width,
-                height,
-                structural_percentage_basis,
-            );
+            set_structural_rect(world, group, origin.x, y, content_width, height);
         }
     }
     for column in &context.columns {
@@ -1222,15 +1199,7 @@ fn apply_structural_layout<N>(
             column.start,
             column.start.saturating_add(column.span),
         );
-        set_structural_rect(
-            world,
-            column.id,
-            x,
-            origin.y,
-            width,
-            content_height,
-            structural_percentage_basis,
-        );
+        set_structural_rect(world, column.id, x, origin.y, width, content_height);
     }
     let mut column_groups = context
         .columns
@@ -1258,15 +1227,7 @@ fn apply_structural_layout<N>(
                 start,
                 end,
             );
-            set_structural_rect(
-                world,
-                group,
-                x,
-                origin.y,
-                width,
-                content_height,
-                structural_percentage_basis,
-            );
+            set_structural_rect(world, group, x, origin.y, width, content_height);
         }
     }
 
@@ -1308,25 +1269,17 @@ fn set_structural_rect<N>(
     y: f32,
     width: f32,
     height: f32,
-    percentage_basis: f32,
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    let style = &world.boxes[id.index()].style.taffy;
-    let padding = style
-        .padding
-        .resolve_or_zero(Some(percentage_basis), resolve_stylo_calc_value);
-    let border = style
-        .border
-        .resolve_or_zero(Some(percentage_basis), resolve_stylo_calc_value);
     world.boxes[id.index()].unrounded_layout = Layout {
         order: 0,
         location: Point { x, y },
         size: Size { width, height },
         content_size: Size { width, height },
         scrollbar_size: Size::ZERO,
-        border,
-        padding,
+        border: Rect::ZERO,
+        padding: Rect::ZERO,
         margin: Rect::ZERO,
     };
 }

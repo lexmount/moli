@@ -2276,6 +2276,46 @@ td{width:10px;height:10px;padding:0;border:0;font-size:0}
     }
 
     #[test]
+    fn layout_renderer_ignores_separated_table_part_border_padding_and_margin() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+table{border-spacing:0;background:rgb(81,41,141)}
+tbody{border:20px solid rgb(201,11,21);padding:12px;margin:9px;background:rgb(82,42,142)}
+tr{border:20px solid rgb(202,12,22);padding:12px;margin:9px;background:rgb(83,43,143)}
+td{box-sizing:border-box;width:50px;height:20px;padding:0;background:rgb(84,44,144)}
+</style></head><body><table><tbody><tr><td></td></tr></tbody></table></body></html>"#,
+            )
+            .await;
+
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(84, 44, 144)),
+                moli_layout::PaintRect::new(0.0, 0.0, 50.0, 20.0),
+            );
+            for ignored in [rgb(201, 11, 21), rgb(202, 12, 22)] {
+                assert!(
+                    snapshot.fragments.iter().all(|fragment| !matches!(
+                        fragment,
+                        moli_layout::PaintFragment::Border { colors, .. }
+                            if colors.top == ignored
+                                || colors.right == ignored
+                                || colors.bottom == ignored
+                                || colors.left == ignored
+                    )),
+                    "separated table-part border reached paint: {ignored:?}; fragments={:?}",
+                    snapshot.fragments
+                );
+            }
+        }));
+    }
+
+    #[test]
     fn layout_renderer_applies_caption_constraints_at_the_table_wrapper_boundary() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()

@@ -466,7 +466,6 @@ where
         .chain(context.columns.iter().map(|column| column.id))
         .chain(context.columns.iter().filter_map(|column| column.group))
     {
-        set_layout_border(world, part, PaintEdgeSizes::default());
         world.boxes[part.index()].collapsed_table_border_part = true;
     }
     world.boxes[root.index()].collapsed_table_borders = Some(borders);
