@@ -1829,7 +1829,7 @@ table{table-layout:fixed;border-spacing:0}td{border:0;padding:0;height:10px}
     }
 
     #[test]
-    fn table_layout_mode_uses_all_rows_only_for_automatic_layout() {
+    fn table_width_algorithm_respects_layout_mode_and_anonymous_wrappers() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -1844,12 +1844,15 @@ table{border-spacing:0}td{border:0;padding:0;height:10px}
 #auto-auto{table-layout:auto;width:auto}
 #fixed-definite{table-layout:fixed;width:300px}
 #fixed-min{table-layout:fixed;width:min-content}
+#anonymous-cell{display:table-cell;background:rgb(21,31,41)}
+#anonymous-cell>div{width:10px;height:10px}
 </style></head><body>
 <table id=fixed-auto><tr><td style="width:50px"></td><td style="width:100px"></td></tr><tr><td style="width:200px;background:rgb(11,21,31)"></td><td style="width:200px;background:rgb(12,22,32)"></td></tr></table>
 <table id=auto-auto><tr><td style="width:50px"></td><td style="width:100px"></td></tr><tr><td style="width:200px;background:rgb(13,23,33)"></td><td style="width:200px;background:rgb(14,24,34)"></td></tr></table>
 <table id=fixed-definite><tr><td style="width:50px"></td><td style="width:100px"></td></tr><tr><td style="width:200px;background:rgb(15,25,35)"></td><td style="width:200px;background:rgb(16,26,36)"></td></tr></table>
 <table id=fixed-min><tr><td style="width:50px"></td><td style="width:100px"></td></tr><tr><td style="width:200px;background:rgb(17,27,37)"></td><td style="width:200px;background:rgb(18,28,38)"></td></tr></table>
 <table id=auto-content><tr><td></td><td></td></tr><tr><td style="background:rgb(19,29,39)"><div style="width:180px;height:0"></div></td><td style="background:rgb(20,30,40)"><div style="width:120px;height:0"></div></td></tr></table>
+<div id=anonymous-cell><div></div></div>
 </body></html>"#,
             )
             .await;
@@ -1869,6 +1872,10 @@ table{border-spacing:0}td{border:0;padding:0;height:10px}
                 (rgb(18, 28, 38), (50.0, 70.0, 100.0)),
                 (rgb(19, 29, 39), (0.0, 90.0, 180.0)),
                 (rgb(20, 30, 40), (180.0, 90.0, 120.0)),
+                // A stray table-cell receives the CSS anonymous table chain.
+                // Its table wrapper still uses GRID_MIN/GRID_MAX rather than
+                // stretching like an ordinary block-level box.
+                (rgb(21, 31, 41), (0.0, 100.0, 10.0)),
             ] {
                 assert_paint_rect(
                     solid_paint_rect(&snapshot, color),
