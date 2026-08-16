@@ -355,6 +355,13 @@ pub enum LayoutFragmentKind {
         has_start_edge: bool,
         has_end_edge: bool,
     },
+    /// A non-painting forced-line-break fragment owned by a DOM `<br>`.
+    /// Its inline-axis extent is zero while its block-axis extent follows the
+    /// text strut that participated in line layout.
+    LineBreak {
+        box_id: LayoutOutputBoxId,
+        line_index: usize,
+    },
     Text {
         box_id: LayoutOutputBoxId,
         line_index: usize,

@@ -1520,8 +1520,20 @@ impl ResolvedLayoutStyle {
         self.text_transform
     }
 
-    pub(crate) fn text_align(&self) -> parley::Alignment {
-        self.text_align
+    /// Resolves CSS flow-relative alignment before crossing into Parley.
+    ///
+    /// Parley 0.10 derives `start` and `end` from the first strong character
+    /// in the text. CSS derives them from the containing block's `direction`,
+    /// including for empty, numeric, and neutral-only lines. Physical
+    /// alignment is therefore part of this browser-owned style seam.
+    pub(crate) fn resolved_text_align(&self) -> parley::Alignment {
+        match (self.text_align, self.direction) {
+            (parley::Alignment::Start, InlineDirection::Ltr)
+            | (parley::Alignment::End, InlineDirection::Rtl) => parley::Alignment::Left,
+            (parley::Alignment::Start, InlineDirection::Rtl)
+            | (parley::Alignment::End, InlineDirection::Ltr) => parley::Alignment::Right,
+            (alignment, _) => alignment,
+        }
     }
 
     pub(crate) fn direction(&self) -> InlineDirection {
@@ -2344,6 +2356,33 @@ mod aspect_ratio_tests {
 #[cfg(test)]
 mod alignment_tests {
     use super::*;
+
+    #[test]
+    fn flow_relative_text_alignment_resolves_from_css_direction() {
+        let style_for = |direction| {
+            ResolvedLayoutStyle::synthetic(
+                LayoutDisplay::Block,
+                Style {
+                    direction,
+                    ..Style::default()
+                },
+                PaintColor::TRANSPARENT,
+            )
+        };
+
+        let mut ltr = style_for(taffy::Direction::Ltr);
+        let mut rtl = style_for(taffy::Direction::Rtl);
+        assert_eq!(ltr.resolved_text_align(), parley::Alignment::Left);
+        assert_eq!(rtl.resolved_text_align(), parley::Alignment::Right);
+
+        ltr.text_align = parley::Alignment::End;
+        rtl.text_align = parley::Alignment::End;
+        assert_eq!(ltr.resolved_text_align(), parley::Alignment::Right);
+        assert_eq!(rtl.resolved_text_align(), parley::Alignment::Left);
+
+        rtl.text_align = parley::Alignment::Center;
+        assert_eq!(rtl.resolved_text_align(), parley::Alignment::Center);
+    }
 
     #[test]
     fn stylo_item_alignment_preserves_layout_protocol_values() {

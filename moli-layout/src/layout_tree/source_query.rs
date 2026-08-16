@@ -245,7 +245,9 @@ where
             .filter(|fragment| {
                 matches!(
                     fragment.kind,
-                    LayoutFragmentKind::Box { .. } | LayoutFragmentKind::InlineBox { .. }
+                    LayoutFragmentKind::Box { .. }
+                        | LayoutFragmentKind::InlineBox { .. }
+                        | LayoutFragmentKind::LineBreak { .. }
                 )
             })
             .filter_map(|fragment| {
@@ -268,6 +270,7 @@ where
                     fragment.kind,
                     LayoutFragmentKind::Box { .. }
                         | LayoutFragmentKind::InlineBox { .. }
+                        | LayoutFragmentKind::LineBreak { .. }
                         | LayoutFragmentKind::Text { .. }
                 )
             })

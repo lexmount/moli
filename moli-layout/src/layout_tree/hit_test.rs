@@ -148,7 +148,9 @@ where
                     LayoutFragmentKind::Box { box_id }
                     | LayoutFragmentKind::InlineBox { box_id, .. } => (box_id, false),
                     LayoutFragmentKind::Text { box_id, .. } => (box_id, true),
-                    LayoutFragmentKind::Line { .. } => return None,
+                    LayoutFragmentKind::Line { .. } | LayoutFragmentKind::LineBreak { .. } => {
+                        return None;
+                    }
                 };
                 let layout_box = self.boxes.get(box_id.index())?;
                 if !layout_box.visible {
@@ -239,6 +241,7 @@ where
         match self.fragment(fragment)?.kind {
             LayoutFragmentKind::Box { box_id }
             | LayoutFragmentKind::InlineBox { box_id, .. }
+            | LayoutFragmentKind::LineBreak { box_id, .. }
             | LayoutFragmentKind::Text { box_id, .. } => Some(box_id),
             LayoutFragmentKind::Line { owner, .. } => Some(owner),
         }

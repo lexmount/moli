@@ -557,6 +557,22 @@ where
                 self.owner_paint_fragments[index].push(fragment);
                 self.register_box_fragment(target, fragment);
             }
+            for line_break in &context.fragments.line_breaks {
+                let target = line_break.box_id.index();
+                let fragment = self.push_fragment(LayoutFragment {
+                    id: LayoutFragmentId::from_index(0),
+                    kind: LayoutFragmentKind::LineBreak {
+                        box_id: LayoutOutputBoxId::from_index(target),
+                        line_index: line_break.line_index,
+                    },
+                    rect: offset_rect(line_break.rect, content_origin),
+                    box_model: None,
+                    coordinate_space,
+                    clip_chain: None,
+                    paint_order: None,
+                });
+                self.register_box_fragment(target, fragment);
+            }
             for text in &context.fragments.text {
                 let target = text.box_id.index();
                 let fragment = self.push_fragment(LayoutFragment {
@@ -685,7 +701,7 @@ where
             LayoutFragmentKind::Box { .. }
             | LayoutFragmentKind::InlineBox { .. }
             | LayoutFragmentKind::Text { .. } => {}
-            LayoutFragmentKind::Line { .. } => return,
+            LayoutFragmentKind::Line { .. } | LayoutFragmentKind::LineBreak { .. } => return,
         }
         let fragment = &mut self.fragments[fragment_id.index()];
         fragment.clip_chain = clip_chain;
