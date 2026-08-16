@@ -4252,7 +4252,7 @@ impl CdpConnection {
         )
     }
 
-    pub(crate) fn start_runtime_interrupt_protocol_message_for_session_owner(
+    pub(crate) fn start_runtime_io_protocol_message_for_session_owner(
         &mut self,
         session_id: Option<&str>,
         raw_json: String,
@@ -4317,7 +4317,7 @@ impl CdpConnection {
         )
     }
 
-    pub(crate) fn start_runtime_interrupt_protocol_message_for_session_owner_with_deferred_response(
+    pub(crate) fn start_runtime_io_protocol_message_for_session_owner_with_deferred_response(
         &mut self,
         session_id: Option<&str>,
         descriptor: RendererCommandDescriptor,

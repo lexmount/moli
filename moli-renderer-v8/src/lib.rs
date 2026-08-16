@@ -280,7 +280,7 @@ pub use runtime::{
     RendererResourceTextSearchOutcome, RendererRuntimeCommandCausalIdentity,
     RendererRuntimeCommandOutput, RendererRuntimeEvaluationResult, RendererRuntimeHeapSpaceUsage,
     RendererRuntimeHeapUsage, RendererRuntimeInspectorAsyncCompletion,
-    RendererRuntimeInspectorCommandClaim, RendererRuntimeInspectorCommandRoute,
+    RendererRuntimeInspectorIoCommandClaim, RendererRuntimeInspectorIoCommandRoute,
     RendererRuntimeInspectorMainCommandCompletion, RendererRuntimeInspectorMainCommandRoute,
     RendererRuntimeInspectorMessage, RendererRuntimeInspectorMessageBatch,
     RendererRuntimeInspectorProtocolMessage, RendererRuntimeInspectorProtocolMessageValueMut,

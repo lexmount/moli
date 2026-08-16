@@ -17,15 +17,12 @@ use super::navigation::{
     PageCreationNavigationFailurePublisher, PageCreationResolution, PageCreationRetirement,
     PageNavigationOwnerFailure, page_creation_navigation_failure_scope,
 };
-use super::owner::{
-    PageCommandFirstDispatchLane, RenderRuntimePendingTurn, RendererCreateStreamingRawPageRequest,
-};
+use super::owner::RendererCreateStreamingRawPageRequest;
 use super::owner_deadline_index::OwnerDeadlineIndex;
 use super::owner_local::RendererAttachedPage;
 use super::owner_maintenance::{
     RendererOwnerMaintenanceTask, RendererPageOwnerMaintenanceResidence,
 };
-use super::page_command_residence::PageCommandFirstDispatchResidence;
 use super::page_entry_residence::{RendererPageEntryCheckout, RendererPageEntryRestore};
 use super::page_turn_scheduler::{
     DocumentLifecycleClassReadiness, PageTurnAdmission, PageTurnClass, PageTurnScheduler,
@@ -656,8 +653,6 @@ impl RendererPageScriptEnvironmentPin {
 struct RendererOwnerLocalPageSlot {
     owner_slot: RendererPageSlotHandle,
     turn_scheduler: PageTurnScheduler<RendererPageLocalEntry>,
-    page_command_first_dispatch:
-        PageCommandFirstDispatchResidence<PageCommandFirstDispatchLane, RenderRuntimePendingTurn>,
     owner_maintenance: RendererPageOwnerMaintenanceResidence,
     task_sources: RendererPageOwnedTaskSources,
     lifecycle_gate: Option<LifecycleGate>,
@@ -677,7 +672,6 @@ impl RendererOwnerLocalPageSlot {
         Self {
             owner_slot,
             turn_scheduler: PageTurnScheduler::new(entry),
-            page_command_first_dispatch: PageCommandFirstDispatchResidence::default(),
             owner_maintenance: RendererPageOwnerMaintenanceResidence::new(std::time::Instant::now()),
             task_sources,
             lifecycle_gate: lifecycle_gate.map(LifecycleGate::new),
@@ -738,9 +732,6 @@ impl Drop for RendererOwnerLocalPageSlot {
         // This is the stable Page lifetime boundary. A replacement PageVm
         // drops only Document-owned queues; retiring the slot also discards
         // V8 foreground work and typed Page source payloads.
-        for waiting in self.page_command_first_dispatch.drain_waiting() {
-            waiting.reject_page_command_admission(self.owner_slot.page_id());
-        }
         self.task_sources.clear();
         self.script_environment_pin
             .environment
@@ -1557,29 +1548,6 @@ pub(super) fn take_entry_for_command_on_bound_owner_local_store(
 ) -> Result<RendererPageLocalEntry> {
     with_bound_render_runtime_owner_local_store_session(|mut session| {
         session.take_entry_for_command(token)
-    })
-}
-
-pub(super) fn admit_page_command_first_dispatch_on_bound_owner_local_store(
-    token: RendererPageToken,
-    lane: PageCommandFirstDispatchLane,
-    turn: RenderRuntimePendingTurn,
-) -> Option<RenderRuntimePendingTurn> {
-    with_bound_render_runtime_owner_local_store_session(|session| {
-        session
-            .store
-            .admit_page_command_first_dispatch(token, lane, turn)
-    })
-}
-
-pub(super) fn complete_page_command_first_dispatch_on_bound_owner_local_store(
-    token: RendererPageToken,
-    lane: &PageCommandFirstDispatchLane,
-) -> Option<RenderRuntimePendingTurn> {
-    with_bound_render_runtime_owner_local_store_session(|session| {
-        session
-            .store
-            .complete_page_command_first_dispatch(token, lane)
     })
 }
 
@@ -2905,35 +2873,6 @@ impl RendererOwnerLocalStore {
             .and_then(|host| host.pages.get(&token.page_id))
             .and_then(RendererOwnerLocalPageSlot::resident_entry)
             .and_then(RendererPageLocalEntry::uncommitted_page_vm_creation_id)
-    }
-
-    fn admit_page_command_first_dispatch(
-        &mut self,
-        token: RendererPageToken,
-        lane: PageCommandFirstDispatchLane,
-        turn: RenderRuntimePendingTurn,
-    ) -> Option<RenderRuntimePendingTurn> {
-        let Some(page_slot) = self
-            .page_hosts
-            .get_mut(&token.local_host_id)
-            .and_then(|host| host.pages.get_mut(&token.page_id))
-        else {
-            // Let the command run once so the ordinary stale-Page error path
-            // remains responsible for its protocol reply.
-            return Some(turn);
-        };
-        page_slot.page_command_first_dispatch.admit(lane, turn)
-    }
-
-    fn complete_page_command_first_dispatch(
-        &mut self,
-        token: RendererPageToken,
-        lane: &PageCommandFirstDispatchLane,
-    ) -> Option<RenderRuntimePendingTurn> {
-        self.page_hosts
-            .get_mut(&token.local_host_id)
-            .and_then(|host| host.pages.get_mut(&token.page_id))
-            .and_then(|slot| slot.page_command_first_dispatch.complete(lane))
     }
 
     fn checkout_entry_for_owner_turn(

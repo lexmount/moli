@@ -113,7 +113,7 @@ pub use moli_renderer_v8::{
     RendererPendingWindowOpenEvent, RendererPerformanceMetricSnapshot,
     RendererPointerEventProperties, RendererPopupActivationSource,
     RendererResourceTextSearchOutcome, RendererRuntimeCommandOutput, RendererRuntimeHeapUsage,
-    RendererRuntimeInspectorCommandClaim, RendererRuntimeInspectorCommandRoute,
+    RendererRuntimeInspectorIoCommandClaim, RendererRuntimeInspectorIoCommandRoute,
     RendererRuntimeInspectorMainCommandCompletion, RendererRuntimeInspectorMainCommandRoute,
     RendererRuntimeInspectorMessage, RendererRuntimeInspectorMessageBatch,
     RendererRuntimeInspectorProtocolMessage, RendererRuntimeInspectorProtocolMessageValueMut,

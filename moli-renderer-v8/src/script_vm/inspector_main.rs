@@ -14,8 +14,8 @@ use crate::{
     render_runtime::RenderRuntimeHandle,
     runtime::{
         RendererCommandTurnOutput, RendererInspectorCommandEnvelope, RendererInspectorCommandRoute,
-        RendererInspectorIngressTicket, RendererOwnerReply, RendererPageStateCapturePolicy,
-        RendererPageToken, RendererRuntimeInspectorResponseSender,
+        RendererInspectorIngressTicket, RendererInspectorPauseCommandEffect, RendererOwnerReply,
+        RendererPageStateCapturePolicy, RendererPageToken, RendererRuntimeInspectorResponseSender,
     },
     script_vm::{
         inspector_pause::RendererInspectorPauseLoopWake,
@@ -47,7 +47,6 @@ pub(crate) struct RendererInspectorMainCommand {
     page_token: RendererPageToken,
     pub(crate) agent_token: RendererDevToolsAgentToken,
     capture_policy: RendererPageStateCapturePolicy,
-    pause_dispatch_allowed: bool,
     envelope: RendererInspectorCommandEnvelope,
     claim_tx: Option<tokio::sync::oneshot::Sender<RendererInspectorMainCommandClaim>>,
     owner_reply_tx: Option<tokio::sync::oneshot::Sender<anyhow::Result<RendererOwnerReply>>>,
@@ -69,12 +68,17 @@ impl RendererInspectorMainCommand {
         self.envelope.first_dispatch_lifecycle()
     }
 
+    #[cfg(test)]
     pub(crate) fn raw_json(&self) -> &str {
         self.envelope.main_protocol_raw_json()
     }
 
     pub(crate) fn response(&self) -> &RendererRuntimeInspectorResponseSender {
         self.envelope.main_protocol_response()
+    }
+
+    pub(crate) fn pause_effect(&self) -> RendererInspectorPauseCommandEffect {
+        self.envelope.pause_effect()
     }
 
     pub(crate) fn into_protocol_parts(
@@ -191,7 +195,6 @@ struct RendererInspectorMainSessionLane {
 }
 
 struct RendererInspectorMainState {
-    next_command_id: u64,
     sessions: BTreeMap<RendererInspectorMainSessionLaneKey, RendererInspectorMainSessionLane>,
     ready_sessions: VecDeque<RendererInspectorMainSessionLaneKey>,
     owner_runtime: Option<RenderRuntimeHandle>,
@@ -276,7 +279,6 @@ impl RendererInspectorMainIngress {
         Self {
             shared: Arc::new(RendererInspectorMainShared {
                 state: Mutex::new(RendererInspectorMainState {
-                    next_command_id: 1,
                     sessions: BTreeMap::new(),
                     ready_sessions: VecDeque::new(),
                     owner_runtime: None,
@@ -311,7 +313,6 @@ impl RendererInspectorMainIngress {
             agent_token,
             envelope,
             RendererPageStateCapturePolicy::ProtocolTurn,
-            true,
         )
     }
 
@@ -322,7 +323,7 @@ impl RendererInspectorMainIngress {
         envelope: RendererInspectorCommandEnvelope,
         capture_policy: RendererPageStateCapturePolicy,
     ) -> RendererRuntimeInspectorMainCommandRoute {
-        self.enqueue_with_policy(page_token, agent_token, envelope, capture_policy, false)
+        self.enqueue_with_policy(page_token, agent_token, envelope, capture_policy)
     }
 
     fn enqueue_with_policy(
@@ -331,26 +332,17 @@ impl RendererInspectorMainIngress {
         agent_token: RendererDevToolsAgentToken,
         envelope: RendererInspectorCommandEnvelope,
         capture_policy: RendererPageStateCapturePolicy,
-        pause_dispatch_allowed: bool,
     ) -> RendererRuntimeInspectorMainCommandRoute {
         assert_eq!(
             envelope.ticket().route(),
             RendererInspectorCommandRoute::MainThread,
             "only MainThread Inspector commands may enter RendererInspectorMainIngress"
         );
-        assert!(
-            !pause_dispatch_allowed || envelope.is_main_protocol_command_with_deferred_response(),
-            "only deferred frontend protocol commands may use nested Main dispatch"
-        );
         let ticket = envelope.ticket().clone();
         let (claim_tx, claim_rx) = tokio::sync::oneshot::channel();
         let (owner_reply_tx, owner_reply_rx) = tokio::sync::oneshot::channel();
         let mut state = self.shared.state.lock();
-        let command_id = state.next_command_id;
-        state.next_command_id = state
-            .next_command_id
-            .checked_add(1)
-            .expect("runtime inspector Main command ID overflow");
+        let command_id = ticket.sequence();
         let lane_key = RendererInspectorMainSessionLaneKey {
             agent_token,
             session: ticket.session().clone(),
@@ -360,7 +352,6 @@ impl RendererInspectorMainIngress {
             page_token,
             agent_token,
             capture_policy,
-            pause_dispatch_allowed,
             envelope,
             claim_tx: Some(claim_tx),
             owner_reply_tx: Some(owner_reply_tx),
@@ -437,7 +428,11 @@ impl RendererInspectorMainIngress {
                     .sessions
                     .get(&lane_key)
                     .and_then(|lane| lane.queued.front())
-                    .is_some_and(|command| !command.pause_dispatch_allowed);
+                    .is_some_and(|command| {
+                        !command
+                            .envelope
+                            .can_dispatch_at_nested_inspector_session_boundary()
+                    });
             if pause_dispatch_blocked {
                 state.ready_sessions.push_back(lane_key);
                 continue;
@@ -748,6 +743,16 @@ mod tests {
         session: Option<&str>,
         raw_json: &str,
     ) -> RendererRuntimeInspectorMainCommandRoute {
+        enqueue_with_action(ingress, agent_token, session, None, raw_json)
+    }
+
+    fn enqueue_with_action(
+        ingress: &RendererInspectorMainIngress,
+        agent_token: RendererDevToolsAgentToken,
+        session: Option<&str>,
+        action: Option<&str>,
+        raw_json: &str,
+    ) -> RendererRuntimeInspectorMainCommandRoute {
         let (response_tx, _response_rx) =
             tokio::sync::oneshot::channel::<RendererRuntimeInspectorAsyncCompletion>();
         ingress.enqueue_command(
@@ -759,7 +764,7 @@ mod tests {
                     session.map(str::to_owned),
                     RendererInspectorCommandRoute::MainThread,
                 ),
-                None,
+                action.map(str::to_owned),
                 raw_json.to_owned(),
                 RendererRuntimeInspectorResponseSender::new(1, response_tx),
             ),
@@ -770,7 +775,12 @@ mod tests {
     fn owner_and_pause_can_claim_one_main_command_only_once() {
         let ingress = ingress();
         let agent = RendererDevToolsAgentToken::allocate();
-        let _route = enqueue(&ingress, agent, Some("session-a"), "first");
+        let _route = enqueue(
+            &ingress,
+            agent,
+            Some("session-a"),
+            r#"{"id":1,"method":"Runtime.getProperties","params":{"objectId":"first"}}"#,
+        );
 
         let pause = ingress.claim_for_pause();
         let owner = ingress.claim_for_owner();
@@ -788,21 +798,69 @@ mod tests {
     fn main_ingress_is_fifo_per_session_and_independent_across_sessions() {
         let ingress = ingress();
         let agent = RendererDevToolsAgentToken::allocate();
-        let _a1 = enqueue(&ingress, agent, Some("session-a"), "a1");
-        let _a2 = enqueue(&ingress, agent, Some("session-a"), "a2");
-        let _b1 = enqueue(&ingress, agent, Some("session-b"), "b1");
+        let _a1 = enqueue(
+            &ingress,
+            agent,
+            Some("session-a"),
+            r#"{"id":1,"method":"Runtime.getProperties","params":{"objectId":"a1"}}"#,
+        );
+        let _a2 = enqueue(
+            &ingress,
+            agent,
+            Some("session-a"),
+            r#"{"id":2,"method":"Runtime.getProperties","params":{"objectId":"a2"}}"#,
+        );
+        let _b1 = enqueue(
+            &ingress,
+            agent,
+            Some("session-b"),
+            r#"{"id":3,"method":"Runtime.getProperties","params":{"objectId":"b1"}}"#,
+        );
 
         let first = ingress.claim_for_owner().expect("first ready Main session");
-        assert_eq!(first.raw_json(), "a1");
+        assert!(first.raw_json().contains(r#""a1""#));
         let second = ingress
             .claim_for_pause()
             .expect("the other Main session remains independently ready");
-        assert_eq!(second.raw_json(), "b1");
+        assert!(second.raw_json().contains(r#""b1""#));
         assert!(ingress.claim_for_owner().is_none());
 
         ingress.first_dispatch_guard(&first).release();
         let third = ingress.claim_for_pause().expect("a2 after a1 dispatch");
-        assert_eq!(third.raw_json(), "a2");
+        assert!(third.raw_json().contains(r#""a2""#));
+    }
+
+    #[test]
+    fn nested_main_accepts_runtime_evaluation_but_not_page_owner_context_rewrite() {
+        let ingress = ingress();
+        let agent = RendererDevToolsAgentToken::allocate();
+        let _default_evaluate = enqueue_with_action(
+            &ingress,
+            agent,
+            Some("session-default"),
+            Some("evaluate"),
+            r#"{"id":1,"method":"Runtime.evaluate","params":{"expression":"1 + 1"}}"#,
+        );
+        let nested = ingress
+            .claim_for_pause()
+            .expect("default-world Runtime.evaluate should be pumpable by nested Main");
+        assert_eq!(
+            nested.claimed_by(),
+            Some(RendererInspectorMainCommandConsumer::Pause)
+        );
+
+        let _context_evaluate = enqueue_with_action(
+            &ingress,
+            agent,
+            Some("session-context"),
+            Some("evaluate"),
+            r#"{"id":2,"method":"Runtime.evaluate","params":{"contextId":41,"expression":"2 + 2"}}"#,
+        );
+        assert!(
+            ingress.claim_for_pause().is_none(),
+            "context-id rewriting belongs to Page owner dispatch"
+        );
+        assert!(ingress.claim_for_owner().is_some());
     }
 
     #[test]

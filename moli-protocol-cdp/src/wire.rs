@@ -157,7 +157,7 @@ impl CdpRequest {
 
 /// Renderer access required by one parsed CDP command.
 ///
-/// Chromium physically separates renderer main-thread and interruptible IO
+/// Chromium physically separates renderer main-thread and IO
 /// DevTools routes. Moli keeps one protocol actor, so the parsed command
 /// carries the equivalent scheduling fact explicitly instead of asking later
 /// layers to reinterpret the wire method string.
@@ -170,7 +170,7 @@ pub enum CdpRendererCommandAccess {
     MainThread,
     /// The command may address the suspended renderer in order to inspect,
     /// interrupt, or release it while navigation is in flight.
-    Interruptible,
+    Io,
 }
 
 /// Fate of an in-flight renderer command when navigation replaces its
@@ -547,21 +547,21 @@ impl CdpRendererCommandPolicy {
         let renderer_access = match domain {
             CdpMethodDomain::Runtime => {
                 if runtime_action == Some(RuntimeWireAction::TerminateExecution) {
-                    CdpRendererCommandAccess::Interruptible
+                    CdpRendererCommandAccess::Io
                 } else {
                     CdpRendererCommandAccess::MainThread
                 }
             }
             CdpMethodDomain::Debugger => {
                 if debugger_action.is_some_and(DebuggerWireAction::is_interruptible) {
-                    CdpRendererCommandAccess::Interruptible
+                    CdpRendererCommandAccess::Io
                 } else {
                     CdpRendererCommandAccess::MainThread
                 }
             }
             CdpMethodDomain::Performance => {
                 if PerformanceWireAction::parse(action) == PerformanceWireAction::GetMetrics {
-                    CdpRendererCommandAccess::Interruptible
+                    CdpRendererCommandAccess::Io
                 } else {
                     CdpRendererCommandAccess::MainThread
                 }
@@ -570,14 +570,14 @@ impl CdpRendererCommandPolicy {
                 if EmulationWireAction::parse(action)
                     == EmulationWireAction::SetScriptExecutionDisabled
                 {
-                    CdpRendererCommandAccess::Interruptible
+                    CdpRendererCommandAccess::Io
                 } else {
                     CdpRendererCommandAccess::OwnerIndependent
                 }
             }
             CdpMethodDomain::Page => match PageWireAction::parse(action) {
                 PageWireAction::MainThread => CdpRendererCommandAccess::MainThread,
-                PageWireAction::Crash => CdpRendererCommandAccess::Interruptible,
+                PageWireAction::Crash => CdpRendererCommandAccess::Io,
                 PageWireAction::Other => CdpRendererCommandAccess::OwnerIndependent,
             },
             CdpMethodDomain::Accessibility
@@ -690,7 +690,7 @@ mod tests {
         ] {
             let command = parse(format!(r#"{{"id":12,"method":"{method}"}}"#));
             assert!(
-                command.renderer_access() == CdpRendererCommandAccess::Interruptible,
+                command.renderer_access() == CdpRendererCommandAccess::Io,
                 "{method} must remain dispatchable while the renderer attachment is suspended"
             );
         }
@@ -849,10 +849,7 @@ mod tests {
 
         assert_eq!(command.request().id(), 14);
         assert_eq!(command.session_id(), Some("s2"));
-        assert_eq!(
-            command.renderer_access(),
-            CdpRendererCommandAccess::Interruptible
-        );
+        assert_eq!(command.renderer_access(), CdpRendererCommandAccess::Io);
         assert!(!command.runtime_command_executes_page_javascript());
     }
 

@@ -15,37 +15,24 @@ pub(super) enum RuntimeInspectorPayloadPreparation {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum RuntimeInspectorDispatchRoute {
-    Direct,
-    Interruptible,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct MainRuntimeInspectorCommand {
     action: RuntimeAction,
-    route: RuntimeInspectorDispatchRoute,
     payload_preparation: RuntimeInspectorPayloadPreparation,
 }
 
 impl MainRuntimeInspectorCommand {
     const fn new(
         action: RuntimeAction,
-        route: RuntimeInspectorDispatchRoute,
         payload_preparation: RuntimeInspectorPayloadPreparation,
     ) -> Self {
         Self {
             action,
-            route,
             payload_preparation,
         }
     }
 
     pub(super) const fn action(self) -> RuntimeAction {
         self.action
-    }
-
-    pub(super) const fn route(self) -> RuntimeInspectorDispatchRoute {
-        self.route
     }
 
     pub(super) const fn payload_preparation(self) -> RuntimeInspectorPayloadPreparation {
@@ -101,7 +88,6 @@ pub(super) enum MainRuntimeCommand {
 
 impl MainRuntimeCommand {
     pub(super) const fn classify(action: RuntimeAction) -> Self {
-        use RuntimeInspectorDispatchRoute::{Direct, Interruptible};
         use RuntimeInspectorPayloadPreparation::{
             Passthrough, ValidateObjectOwner, ValidatePrototypeOwner,
         };
@@ -117,22 +103,18 @@ impl MainRuntimeCommand {
             RuntimeAction::CallFunctionOn => {
                 Self::DevToolsScript(RuntimeDevToolsScriptCommand::CallFunctionOn)
             }
-            RuntimeAction::TerminateExecution => Self::Inspector(MainRuntimeInspectorCommand::new(
-                action,
-                Interruptible,
-                Passthrough,
-            )),
+            RuntimeAction::TerminateExecution => {
+                Self::Inspector(MainRuntimeInspectorCommand::new(action, Passthrough))
+            }
             RuntimeAction::GetProperties
             | RuntimeAction::AwaitPromise
             | RuntimeAction::GetExceptionDetails
             | RuntimeAction::ReleaseObject => Self::Inspector(MainRuntimeInspectorCommand::new(
                 action,
-                Direct,
                 ValidateObjectOwner,
             )),
             RuntimeAction::QueryObjects => Self::Inspector(MainRuntimeInspectorCommand::new(
                 action,
-                Direct,
                 ValidatePrototypeOwner,
             )),
             RuntimeAction::CompileScript
@@ -143,9 +125,9 @@ impl MainRuntimeCommand {
             | RuntimeAction::ReleaseObjectGroup
             | RuntimeAction::SetAsyncCallStackDepth
             | RuntimeAction::SetCustomObjectFormatterEnabled
-            | RuntimeAction::SetMaxCallStackSizeToCapture => Self::Inspector(
-                MainRuntimeInspectorCommand::new(action, Direct, Passthrough),
-            ),
+            | RuntimeAction::SetMaxCallStackSizeToCapture => {
+                Self::Inspector(MainRuntimeInspectorCommand::new(action, Passthrough))
+            }
         }
     }
 
@@ -262,16 +244,13 @@ mod tests {
     }
 
     #[test]
-    fn main_interruptible_and_owned_object_commands_have_explicit_preparation() {
+    fn main_owned_object_commands_have_explicit_preparation() {
         let MainRuntimeCommand::Inspector(terminate) =
             MainRuntimeCommand::classify(RuntimeAction::TerminateExecution)
         else {
             panic!("terminateExecution must be an Inspector command");
         };
-        assert_eq!(
-            terminate.route(),
-            RuntimeInspectorDispatchRoute::Interruptible
-        );
+        assert_eq!(terminate.action(), RuntimeAction::TerminateExecution);
 
         let MainRuntimeCommand::Inspector(get_properties) =
             MainRuntimeCommand::classify(RuntimeAction::GetProperties)

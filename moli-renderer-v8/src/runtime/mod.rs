@@ -54,7 +54,6 @@ mod owner_local;
 mod owner_local_store;
 mod owner_maintenance;
 mod page;
-mod page_command_residence;
 mod page_commands;
 mod page_context_cancel;
 mod page_css;
@@ -363,8 +362,9 @@ pub use self::page_surface::{
     RendererTouchPoint, RendererWindowDocumentSource, RuntimeConsoleMessageSnapshot,
 };
 pub(crate) use self::page_surface::{
-    RendererCommandTurnOutputRecorder, RendererRuntimeCommandOutputRecorder,
-    RendererRuntimeInspectorResponsePublication, RendererRuntimeObservableSourceQueue,
+    RendererCommandTurnOutputRecorder, RendererInspectorPauseCommandEffect,
+    RendererRuntimeCommandOutputRecorder, RendererRuntimeInspectorResponsePublication,
+    RendererRuntimeObservableSourceQueue,
 };
 pub(crate) use self::page_vm::PageVm;
 use self::page_vm::PageVmDropTracker;
@@ -404,7 +404,7 @@ pub use self::protocol_output::{
 pub use self::service_worker_run::RendererServiceWorkerRunIdentity;
 pub(crate) use crate::renderer::PageVmInitStage;
 pub use crate::script_vm::inspector_io::{
-    RendererRuntimeInspectorCommandClaim, RendererRuntimeInspectorCommandRoute,
+    RendererRuntimeInspectorIoCommandClaim, RendererRuntimeInspectorIoCommandRoute,
 };
 pub use crate::script_vm::inspector_main::{
     RendererRuntimeInspectorMainCommandCompletion, RendererRuntimeInspectorMainCommandRoute,

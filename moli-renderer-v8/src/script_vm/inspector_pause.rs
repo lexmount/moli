@@ -13,9 +13,10 @@ use serde_json::json;
 use crate::runtime::RendererRuntimeInspectorResponseSender;
 use crate::runtime::{
     PageId, PendingRendererOutputRecord, RendererInspectorIngressTicket,
-    RendererOutputResidenceIdentity, RendererProtocolObservation,
-    RendererRuntimeCommandCausalIdentity, RendererRuntimeInspectorMessage,
-    RendererRuntimeInspectorMessageBatch, RendererTurnOutputJournal,
+    RendererInspectorPauseCommandEffect, RendererOutputResidenceIdentity,
+    RendererProtocolObservation, RendererRuntimeCommandCausalIdentity,
+    RendererRuntimeInspectorMessage, RendererRuntimeInspectorMessageBatch,
+    RendererTurnOutputJournal,
 };
 use crate::script_vm::inspector_io::RendererInspectorIoIngress;
 use crate::script_vm::inspector_main::RendererInspectorMainIngress;
@@ -58,32 +59,6 @@ struct RendererInspectorPauseBridgeState {
     active_command_dispatch: Option<RendererInspectorPauseCommandDispatch>,
     pending_command_transition: Option<RendererInspectorPauseCommandTransition>,
     route: Option<RendererInspectorPauseRoute>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum RendererInspectorPauseCommandEffect {
-    None,
-    Resume,
-    Step,
-}
-
-impl RendererInspectorPauseCommandEffect {
-    fn from_raw_json(raw_json: &str) -> Self {
-        let Ok(message) = serde_json::from_str::<Value>(raw_json) else {
-            return Self::None;
-        };
-        match message.get("method").and_then(Value::as_str) {
-            Some("Debugger.resume") => Self::Resume,
-            Some(
-                "Debugger.continueToLocation"
-                | "Debugger.restartFrame"
-                | "Debugger.stepInto"
-                | "Debugger.stepOut"
-                | "Debugger.stepOver",
-            ) => Self::Step,
-            _ => Self::None,
-        }
-    }
 }
 
 struct RendererInspectorPauseCommandDispatch {
@@ -184,7 +159,7 @@ impl Drop for RendererInspectorPausePrefaceGuard {
     }
 }
 #[derive(Clone)]
-pub(super) struct RendererInspectorPauseOutboundRoute {
+pub(super) struct RendererInspectorSessionOutboundRoute {
     bridge: RendererInspectorPauseBridge,
     main_ingress: RendererInspectorMainIngress,
     io_ingress: RendererInspectorIoIngress,
@@ -258,8 +233,8 @@ impl RendererInspectorPauseBridge {
         io_ingress: RendererInspectorIoIngress,
         agent_token: RendererDevToolsAgentToken,
         session: DevToolsSessionKey,
-    ) -> RendererInspectorPauseOutboundRoute {
-        RendererInspectorPauseOutboundRoute {
+    ) -> RendererInspectorSessionOutboundRoute {
+        RendererInspectorSessionOutboundRoute {
             bridge: self.clone(),
             main_ingress,
             io_ingress,
@@ -284,10 +259,9 @@ impl RendererInspectorPauseBridge {
         &self,
         command_id: u64,
         ticket: &RendererInspectorIngressTicket,
-        raw_json: &str,
+        effect: RendererInspectorPauseCommandEffect,
         response_call_id: Option<i32>,
     ) -> RendererInspectorPauseCommandDispatchGuard {
-        let effect = RendererInspectorPauseCommandEffect::from_raw_json(raw_json);
         if effect == RendererInspectorPauseCommandEffect::None {
             return RendererInspectorPauseCommandDispatchGuard {
                 bridge: self.clone(),
@@ -653,7 +627,7 @@ pub(super) enum RendererInspectorPauseNotificationRoute {
     Drop,
 }
 
-impl RendererInspectorPauseOutboundRoute {
+impl RendererInspectorSessionOutboundRoute {
     pub(super) fn route_notification(
         &self,
         message: &Value,
@@ -732,14 +706,14 @@ mod tests {
 
     fn outbound_route(
         bridge: &RendererInspectorPauseBridge,
-    ) -> RendererInspectorPauseOutboundRoute {
+    ) -> RendererInspectorSessionOutboundRoute {
         outbound_route_with_io(bridge, io_ingress(bridge))
     }
 
     fn outbound_route_with_io(
         bridge: &RendererInspectorPauseBridge,
         io_ingress: crate::script_vm::inspector_io::RendererInspectorIoIngress,
-    ) -> RendererInspectorPauseOutboundRoute {
+    ) -> RendererInspectorSessionOutboundRoute {
         bridge.outbound_route(
             main_ingress(bridge),
             io_ingress,
@@ -754,7 +728,7 @@ mod tests {
         inspector_session_id: Option<String>,
         raw_json: String,
         response: RendererRuntimeInspectorResponseSender,
-    ) -> crate::script_vm::inspector_io::RendererRuntimeInspectorCommandRoute {
+    ) -> crate::script_vm::inspector_io::RendererRuntimeInspectorIoCommandRoute {
         ingress.enqueue_command(
             agent_token,
             crate::runtime::RendererInspectorCommandEnvelope::new_io(
@@ -843,7 +817,7 @@ mod tests {
         let dispatch = bridge.begin_command_dispatch(
             command.command_id(),
             command.ticket(),
-            command.raw_json(),
+            command.pause_effect(),
             command.response().map(|response| response.call_id()),
         );
         outbound.mark_command_response(41, true);
@@ -906,7 +880,7 @@ mod tests {
         let dispatch = bridge.begin_command_dispatch(
             command.command_id(),
             command.ticket(),
-            command.raw_json(),
+            command.pause_effect(),
             command.response().map(|response| response.call_id()),
         );
         outbound.mark_command_response(43, true);
@@ -962,7 +936,7 @@ mod tests {
         let dispatch = bridge.begin_command_dispatch(
             command.command_id(),
             command.ticket(),
-            command.raw_json(),
+            command.pause_effect(),
             command.response().map(|response| response.call_id()),
         );
         outbound.mark_command_response(42, false);

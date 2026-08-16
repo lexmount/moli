@@ -5,8 +5,8 @@ use crate::runtime::{
     RendererTurnOutputJournal,
 };
 use crate::script_vm::inspector_pause::{
-    RendererInspectorPauseNotificationRoute, RendererInspectorPauseOutboundRoute,
-    RendererInspectorPausePrefaceGuard,
+    RendererInspectorPauseNotificationRoute, RendererInspectorPausePrefaceGuard,
+    RendererInspectorSessionOutboundRoute,
 };
 use anyhow::Result;
 use moli_page_types::{DevToolsSessionKey, RendererDevToolsAgentToken};
@@ -64,7 +64,7 @@ pub(in crate::script_vm) struct InspectorOutbound {
     output_journal: Option<RendererTurnOutputJournal>,
     messages: SharedInspectorOutboundMessageState,
     response_routing: SharedInspectorResponseRoutingState,
-    pause_route: Rc<RefCell<Option<RendererInspectorPauseOutboundRoute>>>,
+    session_route: Rc<RefCell<Option<RendererInspectorSessionOutboundRoute>>>,
 }
 
 impl Default for InspectorOutbound {
@@ -81,20 +81,20 @@ impl InspectorOutbound {
             output_journal: None,
             messages: Rc::new(RefCell::new(InspectorOutboundMessageState::default())),
             response_routing: Rc::new(RefCell::new(InspectorResponseRoutingState::default())),
-            pause_route: Rc::new(RefCell::new(None)),
+            session_route: Rc::new(RefCell::new(None)),
         }
     }
 
     pub(super) fn for_frontend(
         agent_token: RendererDevToolsAgentToken,
         session: DevToolsSessionKey,
-        pause_route: RendererInspectorPauseOutboundRoute,
+        session_route: RendererInspectorSessionOutboundRoute,
         output_journal: Option<RendererTurnOutputJournal>,
     ) -> Self {
         let mut outbound = Self::for_agent(agent_token);
         outbound.session = Some(session);
         outbound.output_journal = output_journal;
-        *outbound.pause_route.borrow_mut() = Some(pause_route);
+        *outbound.session_route.borrow_mut() = Some(session_route);
         outbound
     }
 
@@ -142,7 +142,7 @@ impl InspectorOutbound {
         }
         let mut messages = self.messages.borrow_mut();
         messages.messages.clear();
-        if let Some(route) = self.pause_route.borrow_mut().take() {
+        if let Some(route) = self.session_route.borrow_mut().take() {
             route.detach_session();
         }
     }
@@ -188,8 +188,8 @@ impl InspectorOutbound {
     }
 
     pub(super) fn push_value(&self, value: Value) {
-        if let Some(pause_route) = self.pause_route.borrow().clone() {
-            match pause_route.route_notification(&value) {
+        if let Some(session_route) = self.session_route.borrow().clone() {
+            match session_route.route_notification(&value) {
                 RendererInspectorPauseNotificationRoute::OrdinaryTurn => {
                     return self.push_local_value(value);
                 }
@@ -273,7 +273,7 @@ impl InspectorOutbound {
         &self,
         messages: Vec<RendererRuntimeInspectorMessage>,
     ) -> Option<RendererInspectorPausePrefaceGuard> {
-        self.pause_route
+        self.session_route
             .borrow()
             .as_ref()
             .and_then(|route| route.stage_pause_preface(messages))
@@ -336,8 +336,8 @@ impl InspectorOutbound {
     }
 
     pub(super) fn push_response_value(&self, call_id: i32, value: Value) {
-        if let Some(pause_route) = self.pause_route.borrow().as_ref() {
-            pause_route.mark_command_response(call_id, value.get("error").is_none());
+        if let Some(session_route) = self.session_route.borrow().as_ref() {
+            session_route.mark_command_response(call_id, value.get("error").is_none());
         }
         let mut guard = self.response_routing.borrow_mut();
         if guard

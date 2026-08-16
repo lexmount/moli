@@ -13,7 +13,6 @@ use super::owner_local_store::{
     RendererPageCreationResolution, RendererPageLocalEntry, RendererPageLocalEntryCheckoutError,
     RendererPageScheduledTurn, RendererPageToken, RendererPageTurnAdmission,
     RendererPageTurnCheckoutError, RendererPendingPageCreation, RendererPreparedDocumentResidence,
-    admit_page_command_first_dispatch_on_bound_owner_local_store,
     advance_document_lifecycle_one_page_turn_via_local_task,
     advance_dom_stable_wait_turn_on_entry_via_local_task,
     advance_network_idle_wait_turn_on_entry_via_local_task,
@@ -30,7 +29,6 @@ use super::owner_local_store::{
     claim_due_owner_maintenance_task_on_bound_owner_local_store,
     commit_page_state_on_entry_via_local_task,
     commit_page_state_on_entry_via_local_task_with_policy,
-    complete_page_command_first_dispatch_on_bound_owner_local_store,
     dispatch_async_command_on_entry_via_local_task,
     finalize_pending_page_creation_on_bound_owner_local_store,
     follow_pending_location_navigation_one_turn_on_entry_via_local_task,
@@ -380,17 +378,6 @@ pub(super) struct RenderRuntimePendingTurn {
     command_admission_output_predecessor: Option<RendererOutputFence>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct PageCommandFirstDispatchIdentity {
-    token: RendererPageToken,
-    lane: PageCommandFirstDispatchLane,
-}
-
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub(super) struct PageCommandFirstDispatchLane {
-    inspector_session: DevToolsSessionKey,
-}
-
 impl RenderRuntimePendingTurn {
     const fn is_page_owner_turn(&self) -> bool {
         matches!(&self.turn, RenderRuntimeTurn::RunPageTurn { .. })
@@ -405,15 +392,6 @@ impl RenderRuntimePendingTurn {
 
     const fn is_owner_maintenance_turn(&self) -> bool {
         matches!(&self.turn, RenderRuntimeTurn::RunOwnerMaintenance { .. })
-    }
-
-    pub(super) fn reject_page_command_admission(self, page_id: PageId) {
-        if let Some(reply_tx) = self.reply_tx {
-            let _ = reply_tx.send(Err(anyhow!(
-                "renderer page {} was retired while a command waited for first dispatch",
-                page_id.as_u64()
-            )));
-        }
     }
 }
 
@@ -685,36 +663,6 @@ impl RenderRuntimeTurn {
         )
     }
 
-    fn live_page_command_first_dispatch_identity(
-        &self,
-    ) -> Option<PageCommandFirstDispatchIdentity> {
-        match self {
-            Self::RunLivePageCommand { token, command, .. } => {
-                if command.uses_main_inspector_ingress_admission() {
-                    return None;
-                }
-                command.inspector_ticket().map(|ticket| {
-                    debug_assert_eq!(
-                        ticket.route(),
-                        RendererInspectorCommandRoute::MainThread,
-                        "IO Inspector commands must bypass owner admission",
-                    );
-                    debug_assert_eq!(
-                        command.inspector_first_dispatch_lifecycle(),
-                        Some(RendererInspectorFirstDispatchLifecycle::OrderedUntilFirstDispatch,),
-                    );
-                    PageCommandFirstDispatchIdentity {
-                        token: *token,
-                        lane: PageCommandFirstDispatchLane {
-                            inspector_session: ticket.session().clone(),
-                        },
-                    }
-                })
-            }
-            _ => None,
-        }
-    }
-
     /// Return the Page whose committed view this host-facing command needs.
     ///
     /// A same-Page cross-document navigation installs its replacement PageVm
@@ -870,26 +818,6 @@ fn owner_command_timing_label(command: &RendererOwnerCommand) -> Option<&'static
             renderer_page_command_timing_label(command)
         }
         _ => None,
-    }
-}
-
-impl RenderRuntimeDispatchOutcome {
-    fn deferred_live_page_command_first_dispatch_identity(
-        &self,
-    ) -> Option<PageCommandFirstDispatchIdentity> {
-        match self {
-            Self::ContinueNextTurn(turn)
-            | Self::ContinueAfterPageWakeOrDeadline { turn, .. }
-            | Self::ContinueAfterPageWake { turn, .. }
-            | Self::ContinueCommittedDocumentParserAfterPageWake { turn, .. } => {
-                turn.live_page_command_first_dispatch_identity()
-            }
-            Self::Reply(_)
-            | Self::InspectorMainCommandClaimed { .. }
-            | Self::PageCreatedAndContinueNavigation { .. }
-            | Self::BackgroundComplete(_)
-            | Self::PageCreationNavigationFailurePublished { .. } => None,
-        }
     }
 }
 
@@ -2497,40 +2425,6 @@ impl RendererOwnerHandle {
         }
     }
 
-    /// The stable Page slot owns each MainThread Inspector session's arrival
-    /// order. IO commands use their physically separate ingress and never
-    /// enter this owner admission structure. Only the command that owns the
-    /// session lane enters the owner-wide runnable queue; other sessions and
-    /// non-Inspector Page commands remain independent.
-    fn admit_page_command_first_dispatch(
-        turn: RenderRuntimePendingTurn,
-        pending_turns: &mut RenderRuntimePendingTurnQueue,
-    ) {
-        let Some(identity) = turn.turn.live_page_command_first_dispatch_identity() else {
-            pending_turns.push_back(turn);
-            return;
-        };
-        if let Some(admitted) = admit_page_command_first_dispatch_on_bound_owner_local_store(
-            identity.token,
-            identity.lane,
-            turn,
-        ) {
-            pending_turns.push_back(admitted);
-        }
-    }
-
-    fn complete_page_command_first_dispatch(
-        identity: &PageCommandFirstDispatchIdentity,
-        pending_turns: &mut RenderRuntimePendingTurnQueue,
-    ) {
-        if let Some(next) = complete_page_command_first_dispatch_on_bound_owner_local_store(
-            identity.token,
-            &identity.lane,
-        ) {
-            pending_turns.push_back(next);
-        }
-    }
-
     fn enqueue_inspector_main_receiver_wake(
         wake: RendererInspectorMainOwnerWake,
         pending_turns: &mut RenderRuntimePendingTurnQueue,
@@ -2655,19 +2549,10 @@ impl RendererOwnerHandle {
                         .as_ref()
                         .is_some_and(|tx| tx.is_closed())
                     {
-                        let first_dispatch_identity = pending_turn
-                            .turn
-                            .live_page_command_first_dispatch_identity();
                         self.detach_navigation_or_cancel_pending_turn(
                             pending_turn.turn,
                             &mut pending_turns,
                         );
-                        if let Some(identity) = first_dispatch_identity.as_ref() {
-                            Self::complete_page_command_first_dispatch(
-                                identity,
-                                &mut pending_turns,
-                            );
-                        }
                         continue;
                     }
                     if let Some(token) = pending_turn.turn.committed_page_view_command_token()
@@ -2728,14 +2613,9 @@ impl RendererOwnerHandle {
                         continue;
                     }
                     let completed_page_turn_token = pending_turn.page_owner_token();
-                    let first_dispatch_identity = pending_turn
-                        .turn
-                        .live_page_command_first_dispatch_identity();
                     let outcome = self
                         .run_pending_turn_on_owner_local_store(pending_turn.turn)
                         .await;
-                    let deferred_first_dispatch_identity =
-                        outcome.deferred_live_page_command_first_dispatch_identity();
                     match outcome {
                         RenderRuntimeDispatchOutcome::Reply(result) => {
                             let result = merge_command_admission_output_predecessor(
@@ -2932,11 +2812,6 @@ impl RendererOwnerHandle {
                             &mut parked_turns,
                             &mut pending_turns,
                         );
-                    }
-                    if let Some(identity) = first_dispatch_identity.as_ref()
-                        && deferred_first_dispatch_identity.as_ref() != Some(identity)
-                    {
-                        Self::complete_page_command_first_dispatch(identity, &mut pending_turns);
                     }
                     continue;
                 }
@@ -3156,21 +3031,18 @@ impl RendererOwnerHandle {
                 if reply_tx.is_closed() {
                     self.detach_navigation_or_cancel_pending_turn(*turn, pending_turns);
                 } else {
-                    Self::admit_page_command_first_dispatch(
-                        RenderRuntimePendingTurn {
-                            reply_tx: Some(reply_tx),
-                            turn: *turn,
-                            // This is the command's first owner turn, not a
-                            // continuation returning to the queue. Run it before
-                            // admitting another envelope so a Page wake produced
-                            // by the command cannot inherit an already-pending
-                            // command and then yield to a second one.
-                            allow_command_overtake: false,
-                            command_admission_output_predecessor:
-                                command_admission_output_predecessor.take(),
-                        },
-                        pending_turns,
-                    );
+                    pending_turns.push_back(RenderRuntimePendingTurn {
+                        reply_tx: Some(reply_tx),
+                        turn: *turn,
+                        // This is the command's first owner turn, not a
+                        // continuation returning to the queue. Run it before
+                        // admitting another envelope so a Page wake produced
+                        // by the command cannot inherit an already-pending
+                        // command and then yield to a second one.
+                        allow_command_overtake: false,
+                        command_admission_output_predecessor: command_admission_output_predecessor
+                            .take(),
+                    });
                 }
             }
             RenderRuntimeDispatchOutcome::ContinueAfterPageWakeOrDeadline {
@@ -3425,11 +3297,7 @@ impl RendererOwnerHandle {
         pending_turns: &mut RenderRuntimePendingTurnQueue,
     ) {
         if reply_tx.as_ref().is_some_and(|tx| tx.is_closed()) {
-            let first_dispatch_identity = turn.live_page_command_first_dispatch_identity();
             self.detach_navigation_or_cancel_pending_turn(turn, pending_turns);
-            if let Some(identity) = first_dispatch_identity.as_ref() {
-                Self::complete_page_command_first_dispatch(identity, pending_turns);
-            }
             return;
         }
         parked_turns.push_back(RenderRuntimeParkedTurn {
@@ -3854,12 +3722,7 @@ impl RendererOwnerHandle {
             .as_ref()
             .is_some_and(|tx| tx.is_closed())
         {
-            let first_dispatch_identity =
-                parked_turn.turn.live_page_command_first_dispatch_identity();
             self.detach_navigation_or_cancel_pending_turn(parked_turn.turn, pending_turns);
-            if let Some(identity) = first_dispatch_identity.as_ref() {
-                Self::complete_page_command_first_dispatch(identity, pending_turns);
-            }
             None
         } else {
             let allow_command_overtake = parked_turn.condition.allows_command_overtake();
@@ -7193,84 +7056,6 @@ mod tests {
             turn.page_turn_should_yield_to_ready_command(),
             "ordinary detached page activity should still let ready commands run between turns"
         );
-    }
-
-    #[test]
-    fn first_dispatch_identity_uses_the_exact_main_thread_inspector_session() {
-        let token = RendererPageToken::new_for_testing(PageId::new_for_testing(8));
-        let attached = RenderRuntimeTurn::RunLivePageCommand {
-            token,
-            command: RendererPageCommand::dispatch_runtime_protocol_message(
-                Some("SID-aux".to_owned()),
-                RendererInspectorCommandRoute::MainThread,
-                r#"{"id":1,"method":"Runtime.evaluate","params":{"expression":"1"}}"#.to_owned(),
-            ),
-            capture_policy: RendererPageStateCapturePolicy::ProtocolTurn,
-        };
-        assert_eq!(
-            attached.live_page_command_first_dispatch_identity(),
-            Some(PageCommandFirstDispatchIdentity {
-                token,
-                lane: PageCommandFirstDispatchLane {
-                    inspector_session: DevToolsSessionKey::Attached("SID-aux".to_owned()),
-                },
-            })
-        );
-
-        let primary = RenderRuntimeTurn::RunLivePageCommand {
-            token,
-            command: RendererPageCommand::dispatch_runtime_protocol_message(
-                None,
-                RendererInspectorCommandRoute::MainThread,
-                r#"{"id":2,"method":"Runtime.evaluate","params":{"expression":"2"}}"#.to_owned(),
-            ),
-            capture_policy: RendererPageStateCapturePolicy::ProtocolTurn,
-        };
-        assert_eq!(
-            primary.live_page_command_first_dispatch_identity(),
-            Some(PageCommandFirstDispatchIdentity {
-                token,
-                lane: PageCommandFirstDispatchLane {
-                    inspector_session: DevToolsSessionKey::Primary,
-                },
-            })
-        );
-
-        let ordinary_page_command = RenderRuntimeTurn::RunLivePageCommand {
-            token,
-            command: RendererPageCommand::PageDiagnosticsSnapshot,
-            capture_policy: RendererPageStateCapturePolicy::ProtocolTurn,
-        };
-        assert_eq!(
-            ordinary_page_command.live_page_command_first_dispatch_identity(),
-            None,
-            "non-Inspector Page commands must not join an unrelated session lane"
-        );
-    }
-
-    #[test]
-    fn special_inspector_commands_join_raw_commands_at_the_structural_boundary() {
-        let token = RendererPageToken::new_for_testing(PageId::new_for_testing(9));
-        let turn_for = |command| RenderRuntimeTurn::RunLivePageCommand {
-            token,
-            command,
-            capture_policy: RendererPageStateCapturePolicy::ProtocolTurn,
-        };
-        let enable = turn_for(RendererPageCommand::runtime_enable_events(Some(
-            "SID-shared-lane".to_owned(),
-        )));
-        let raw_main = turn_for(RendererPageCommand::dispatch_runtime_protocol_message(
-            Some("SID-shared-lane".to_owned()),
-            RendererInspectorCommandRoute::MainThread,
-            r#"{"id":1,"method":"Runtime.disable"}"#.to_owned(),
-        ));
-        let enable_identity = enable
-            .live_page_command_first_dispatch_identity()
-            .expect("Runtime.enable must enter the Inspector boundary");
-        let main_identity = raw_main
-            .live_page_command_first_dispatch_identity()
-            .expect("raw main-thread dispatch must enter the Inspector boundary");
-        assert_eq!(enable_identity, main_identity);
     }
 
     #[test]

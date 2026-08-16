@@ -1,14 +1,13 @@
 use super::{
     ExternalRawDocumentBodyStream, JsLocalExecutor, JsRuntime, JsRuntimeOwner, PageVmInitStage,
     PreparedRendererDocument, RendererCaptureScreenshotReply, RendererDragData,
-    RendererDraggedDirectory, RendererDraggedFile, RendererInspectorCommandRoute,
-    RendererInspectorProtocolConfiguration, RendererInspectorSessionRestoreSnapshot,
-    RendererOutputItem, RendererOutputPublication, RendererOutputResidenceIdentity,
-    RendererOutputTransportMessage, RendererOutputTransportReceiver, RendererOutputTransportSender,
-    RendererOwnerAction, RendererPageCommand, RendererPageHandle, RendererPageReply,
-    RendererPageTestingHandle, RendererPendingPopupActivation,
-    RendererPreparedDocumentCommitConfiguration, RendererProtocolObservation,
-    RendererRuntimeCommandOutput, RendererRuntimeInspectorMessage,
+    RendererDraggedDirectory, RendererDraggedFile, RendererInspectorProtocolConfiguration,
+    RendererInspectorSessionRestoreSnapshot, RendererOutputItem, RendererOutputPublication,
+    RendererOutputResidenceIdentity, RendererOutputTransportMessage,
+    RendererOutputTransportReceiver, RendererOutputTransportSender, RendererOwnerAction,
+    RendererPageCommand, RendererPageHandle, RendererPageReply, RendererPageTestingHandle,
+    RendererPendingPopupActivation, RendererPreparedDocumentCommitConfiguration,
+    RendererProtocolObservation, RendererRuntimeCommandOutput, RendererRuntimeInspectorMessage,
     RendererRuntimeInspectorResponseSender,
 };
 use crate::local_executor::{is_on_script_execution_lane_for, scope_on_scaffold_js_local_executor};
@@ -3756,7 +3755,6 @@ async fn replacement_navigation_releases_old_inspector_deferred_response_callbac
             .run_async_command(
                 RendererPageCommand::dispatch_runtime_protocol_message_with_deferred_response(
                     inspector_session_id,
-                    RendererInspectorCommandRoute::MainThread,
                     serde_json::json!({
                         "id": call_id,
                         "method": "Runtime.evaluate",
@@ -3820,7 +3818,6 @@ async fn replacement_navigation_releases_old_inspector_deferred_response_callbac
         .enqueue_async_command(
             RendererPageCommand::dispatch_runtime_protocol_message_with_deferred_response(
                 Some("session-a".to_owned()),
-                RendererInspectorCommandRoute::MainThread,
                 serde_json::json!({
                     "id": reused_call_id,
                     "method": "Runtime.evaluate",
@@ -3885,7 +3882,6 @@ async fn runtime_binding_replay_cannot_consume_same_id_frontend_deferred_respons
         .run_async_command(
             RendererPageCommand::dispatch_runtime_protocol_message_with_deferred_response(
                 None,
-                RendererInspectorCommandRoute::MainThread,
                 serde_json::json!({
                     "id": colliding_call_id,
                     "method": "Runtime.evaluate",
@@ -16183,7 +16179,6 @@ async fn command_turn_output_scope_is_removed_after_command_error() {
         .enqueue_async_command(
             RendererPageCommand::dispatch_runtime_protocol_message_with_context_resolution_and_deferred_response(
                 None,
-                RendererInspectorCommandRoute::MainThread,
                 "evaluate".to_owned(),
                 "{".to_owned(),
                 RendererRuntimeInspectorResponseSender::new(
@@ -16206,7 +16201,6 @@ async fn command_turn_output_scope_is_removed_after_command_error() {
         .enqueue_async_command(
             RendererPageCommand::dispatch_runtime_protocol_message_with_deferred_response(
                 None,
-                RendererInspectorCommandRoute::MainThread,
                 serde_json::json!({
                     "id": call_id,
                     "method": "Runtime.evaluate",
@@ -16265,7 +16259,6 @@ async fn runtime_document_close_completion_parks_lifecycle_until_capability_rele
         .enqueue_async_command(
             RendererPageCommand::dispatch_runtime_protocol_message_with_deferred_response(
                 None,
-                RendererInspectorCommandRoute::MainThread,
                 serde_json::json!({
                     "id": call_id,
                     "method": "Runtime.evaluate",
@@ -17201,9 +17194,7 @@ async fn dispatch_runtime_protocol_with_output_for_test(
     let raw_json = serde_json::to_string(&request)?;
     let output = page
         .enqueue_async_command(RendererPageCommand::dispatch_runtime_protocol_message(
-            None,
-            RendererInspectorCommandRoute::MainThread,
-            raw_json,
+            None, raw_json,
         ))
         .expect("runtime protocol command should enqueue")
         .wait()
@@ -17231,7 +17222,6 @@ async fn dispatch_runtime_protocol_with_context_resolution_for_test(
         .run_async_command(
             RendererPageCommand::dispatch_runtime_protocol_message_with_context_resolution(
                 None,
-                RendererInspectorCommandRoute::MainThread,
                 action.to_owned(),
                 raw_json,
             ),

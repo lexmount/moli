@@ -292,7 +292,7 @@ impl RendererInspectorSessionExecutorLocal {
         let _command_dispatch = self.bridge.begin_command_dispatch(
             command.command_id(),
             command.ticket(),
-            command.raw_json(),
+            command.pause_effect(),
             Some(command.response().call_id()),
         );
         let (_, raw_json, response) = command.into_protocol_parts();
@@ -329,7 +329,7 @@ impl RendererInspectorSessionExecutorLocal {
         let _command_dispatch = self.bridge.begin_command_dispatch(
             command.command_id(),
             command.ticket(),
-            command.raw_json(),
+            command.pause_effect(),
             command.response().map(|response| response.call_id()),
         );
         if let Some(response) = command.take_response() {

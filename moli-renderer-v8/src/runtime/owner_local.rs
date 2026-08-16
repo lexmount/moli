@@ -178,7 +178,7 @@ impl RendererPageHandle {
     pub fn enqueue_runtime_inspector_io_command(
         &self,
         envelope: RendererInspectorCommandEnvelope,
-    ) -> RendererRuntimeInspectorCommandRoute {
+    ) -> RendererRuntimeInspectorIoCommandRoute {
         self.inspector_io_ingress
             .enqueue_command(self.devtools_agent_token, envelope)
     }

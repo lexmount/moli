@@ -81,8 +81,8 @@ use super::{
     },
     command_classification::{
         MainRuntimeCommand, MainRuntimeInspectorCommand, RuntimeBindingCommand,
-        RuntimeDevToolsScriptCommand, RuntimeInspectorDispatchRoute,
-        RuntimeInspectorPayloadPreparation, WorkerRuntimeCommand, WorkerRuntimeCommandKind,
+        RuntimeDevToolsScriptCommand, RuntimeInspectorPayloadPreparation, WorkerRuntimeCommand,
+        WorkerRuntimeCommandKind,
     },
     evaluate::can_dispatch,
 };
@@ -1030,12 +1030,8 @@ fn start_main_runtime_inspector_command(
             ));
         }
     };
-    let pending = match start_pending_runtime_inspector_dispatch_with_route(
-        conn,
-        cmd,
-        command.route(),
-        inspector_json,
-    ) {
+    let pending = match start_pending_runtime_routable_inspector_dispatch(conn, cmd, inspector_json)
+    {
         Ok(pending) => pending,
         Err(message) => {
             forget_pre_registered_runtime_await(conn, pre_registered_await, cmd.session_id);
@@ -1225,8 +1221,8 @@ pub(crate) fn start_debugger_inspector_command_dispatch(
         CdpRendererCommandAccess::MainThread => {
             start_pending_runtime_inspector_dispatch(conn, cmd, inspector_json)
         }
-        CdpRendererCommandAccess::Interruptible => {
-            start_pending_runtime_interrupt_inspector_dispatch(conn, cmd, inspector_json)
+        CdpRendererCommandAccess::Io => {
+            start_pending_runtime_io_inspector_dispatch(conn, cmd, inspector_json)
         }
         CdpRendererCommandAccess::OwnerIndependent => Err(
             "an owner-independent command cannot enter the Debugger Inspector dispatcher"
@@ -1850,23 +1846,25 @@ fn try_start_pending_runtime_binding_command(
     )))
 }
 
-fn start_pending_runtime_inspector_dispatch_with_route(
+fn start_pending_runtime_routable_inspector_dispatch(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
-    route: RuntimeInspectorDispatchRoute,
     inspector_json: String,
 ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
-    match route {
-        RuntimeInspectorDispatchRoute::Interruptible => {
-            start_pending_runtime_interrupt_inspector_dispatch(conn, cmd, inspector_json)
-        }
-        RuntimeInspectorDispatchRoute::Direct => {
+    match cmd.renderer_policy().access() {
+        CdpRendererCommandAccess::MainThread => {
             start_pending_runtime_inspector_dispatch(conn, cmd, inspector_json)
         }
+        CdpRendererCommandAccess::Io => {
+            start_pending_runtime_io_inspector_dispatch(conn, cmd, inspector_json)
+        }
+        CdpRendererCommandAccess::OwnerIndependent => Err(
+            "an owner-independent command cannot enter the Runtime Inspector dispatcher".to_owned(),
+        ),
     }
 }
 
-fn start_pending_runtime_interrupt_inspector_dispatch(
+fn start_pending_runtime_io_inspector_dispatch(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
     inspector_json: String,
@@ -1874,16 +1872,13 @@ fn start_pending_runtime_interrupt_inspector_dispatch(
     if let Some(command_id) = cmd.id {
         let descriptor =
             RendererCommandDescriptor::from_policy(inspector_json, cmd.renderer_policy());
-        conn.start_runtime_interrupt_protocol_message_for_session_owner_with_deferred_response(
+        conn.start_runtime_io_protocol_message_for_session_owner_with_deferred_response(
             cmd.session_id,
             descriptor,
             command_id,
         )
     } else {
-        conn.start_runtime_interrupt_protocol_message_for_session_owner(
-            cmd.session_id,
-            inspector_json,
-        )
+        conn.start_runtime_io_protocol_message_for_session_owner(cmd.session_id, inspector_json)
     }
 }
 

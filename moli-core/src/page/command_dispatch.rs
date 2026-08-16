@@ -1,7 +1,7 @@
 use super::{
     Page, RendererAgentAttachmentId, RendererCommandTurnOutput, RendererPageCommand,
-    RendererPageCommandPending, RendererPageReply, RendererRuntimeInspectorCommandClaim,
-    RendererRuntimeInspectorCommandRoute, RendererRuntimeInspectorMainCommandCompletion,
+    RendererPageCommandPending, RendererPageReply, RendererRuntimeInspectorIoCommandClaim,
+    RendererRuntimeInspectorIoCommandRoute, RendererRuntimeInspectorMainCommandCompletion,
     RendererRuntimeInspectorMainCommandRoute, RendererRuntimeInspectorMessage,
 };
 use crate::RendererOutputFence;
@@ -18,7 +18,7 @@ pub struct PendingRuntimeInspectorCommandDispatch {
 
 enum PendingRuntimeInspectorCommandDispatchKind {
     MainIngress(Box<RendererRuntimeInspectorMainCommandRoute>),
-    Io(RendererRuntimeInspectorCommandRoute),
+    Io(RendererRuntimeInspectorIoCommandRoute),
 }
 
 /// Identifies which execution owner consumed one routable Inspector command.
@@ -129,7 +129,7 @@ impl Page {
     }
 
     pub(crate) fn pending_io_runtime_inspector_command_dispatch(
-        route: RendererRuntimeInspectorCommandRoute,
+        route: RendererRuntimeInspectorIoCommandRoute,
     ) -> PendingRuntimeInspectorCommandDispatch {
         Self::pending_runtime_inspector_command_dispatch(
             PendingRuntimeInspectorCommandDispatchKind::Io(route),
@@ -390,10 +390,10 @@ impl PendingRuntimeInspectorCommandDispatch {
             }
             PendingRuntimeInspectorCommandDispatchKind::Io(route) => {
                 match route.wait_for_claim().await.map_err(anyhow::Error::msg)? {
-                    RendererRuntimeInspectorCommandClaim::Inspector => {
+                    RendererRuntimeInspectorIoCommandClaim::Inspector => {
                         Ok(CompletedRuntimeInspectorCommandDispatch::Inspector)
                     }
-                    RendererRuntimeInspectorCommandClaim::Canceled => {
+                    RendererRuntimeInspectorIoCommandClaim::Canceled => {
                         Ok(CompletedRuntimeInspectorCommandDispatch::Canceled)
                     }
                 }

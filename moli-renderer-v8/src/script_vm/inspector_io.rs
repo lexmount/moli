@@ -14,7 +14,8 @@ use serde_json::json;
 use crate::{
     runtime::{
         RendererInspectorCommandEnvelope, RendererInspectorCommandRoute,
-        RendererInspectorIngressTicket, RendererRuntimeInspectorResponseSender,
+        RendererInspectorIngressTicket, RendererInspectorPauseCommandEffect,
+        RendererRuntimeInspectorResponseSender,
     },
     script_vm::{
         inspector_pause::RendererInspectorPauseLoopWake,
@@ -46,7 +47,7 @@ pub(crate) struct RendererInspectorIoCommand {
     command_id: u64,
     pub(crate) agent_token: RendererDevToolsAgentToken,
     envelope: RendererInspectorCommandEnvelope,
-    claim_tx: Option<tokio::sync::oneshot::Sender<RendererRuntimeInspectorCommandClaim>>,
+    claim_tx: Option<tokio::sync::oneshot::Sender<RendererRuntimeInspectorIoCommandClaim>>,
     claimed_by: Option<RendererInspectorIoCommandConsumer>,
 }
 
@@ -73,6 +74,10 @@ impl RendererInspectorIoCommand {
         self.envelope.io_response()
     }
 
+    pub(crate) fn pause_effect(&self) -> RendererInspectorPauseCommandEffect {
+        self.envelope.pause_effect()
+    }
+
     pub(crate) fn take_response(&mut self) -> Option<RendererRuntimeInspectorResponseSender> {
         self.envelope.take_io_response()
     }
@@ -84,19 +89,19 @@ impl RendererInspectorIoCommand {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RendererRuntimeInspectorCommandClaim {
+pub enum RendererRuntimeInspectorIoCommandClaim {
     Inspector,
     Canceled,
 }
 
-pub struct RendererRuntimeInspectorCommandRoute {
+pub struct RendererRuntimeInspectorIoCommandRoute {
     command_id: u64,
     ticket: RendererInspectorIngressTicket,
-    claim_rx: Option<tokio::sync::oneshot::Receiver<RendererRuntimeInspectorCommandClaim>>,
+    claim_rx: Option<tokio::sync::oneshot::Receiver<RendererRuntimeInspectorIoCommandClaim>>,
     ingress: RendererInspectorIoIngress,
 }
 
-impl RendererRuntimeInspectorCommandRoute {
+impl RendererRuntimeInspectorIoCommandRoute {
     pub fn command_id(&self) -> u64 {
         self.command_id
     }
@@ -107,7 +112,7 @@ impl RendererRuntimeInspectorCommandRoute {
 
     pub async fn wait_for_claim(
         mut self,
-    ) -> Result<RendererRuntimeInspectorCommandClaim, &'static str> {
+    ) -> Result<RendererRuntimeInspectorIoCommandClaim, &'static str> {
         self.claim_rx
             .take()
             .expect("runtime inspector IO command claim receiver should only be awaited once")
@@ -116,7 +121,7 @@ impl RendererRuntimeInspectorCommandRoute {
     }
 }
 
-impl Drop for RendererRuntimeInspectorCommandRoute {
+impl Drop for RendererRuntimeInspectorIoCommandRoute {
     fn drop(&mut self) {
         self.ingress.cancel_queued_command(
             self.command_id,
@@ -133,6 +138,7 @@ pub(crate) struct RendererInspectorIoIngress {
 struct RendererInspectorIoShared {
     state: Mutex<RendererInspectorIoState>,
     interrupt_armed: AtomicBool,
+    owner_wake_armed: AtomicBool,
     interrupt_route: Option<RendererInspectorInterruptRoute>,
     pause_wake: RendererInspectorPauseLoopWake,
 }
@@ -169,7 +175,6 @@ struct RendererInspectorIoSessionLane {
 }
 
 struct RendererInspectorIoState {
-    next_command_id: u64,
     sessions: BTreeMap<RendererInspectorIoSessionLaneKey, RendererInspectorIoSessionLane>,
     ready_sessions: VecDeque<RendererInspectorIoSessionLaneKey>,
     owner_wake_tx: Option<tokio::sync::mpsc::UnboundedSender<RendererInspectorIoOwnerWake>>,
@@ -245,13 +250,13 @@ impl RendererInspectorIoIngress {
         Self {
             shared: Arc::new(RendererInspectorIoShared {
                 state: Mutex::new(RendererInspectorIoState {
-                    next_command_id: 1,
                     sessions: BTreeMap::new(),
                     ready_sessions: VecDeque::new(),
                     owner_wake_tx: None,
                     closed: false,
                 }),
                 interrupt_armed: AtomicBool::new(false),
+                owner_wake_armed: AtomicBool::new(false),
                 interrupt_route: interrupt_route.map(|(isolate, callback, route_id)| {
                     RendererInspectorInterruptRoute {
                         isolate,
@@ -289,7 +294,7 @@ impl RendererInspectorIoIngress {
         &self,
         agent_token: RendererDevToolsAgentToken,
         envelope: RendererInspectorCommandEnvelope,
-    ) -> RendererRuntimeInspectorCommandRoute {
+    ) -> RendererRuntimeInspectorIoCommandRoute {
         assert_eq!(
             envelope.ticket().route(),
             RendererInspectorCommandRoute::Io,
@@ -298,11 +303,7 @@ impl RendererInspectorIoIngress {
         let ticket = envelope.ticket().clone();
         let (claim_tx, claim_rx) = tokio::sync::oneshot::channel();
         let mut state = self.shared.state.lock();
-        let command_id = state.next_command_id;
-        state.next_command_id = state
-            .next_command_id
-            .checked_add(1)
-            .expect("runtime inspector IO command ID overflow");
+        let command_id = ticket.sequence();
         let lane_key = RendererInspectorIoSessionLaneKey {
             agent_token,
             session: ticket.session().clone(),
@@ -317,7 +318,7 @@ impl RendererInspectorIoIngress {
         if state.closed {
             drop(state);
             fail_io_command(command, "Inspector IO target is closed");
-            return RendererRuntimeInspectorCommandRoute {
+            return RendererRuntimeInspectorIoCommandRoute {
                 command_id,
                 ticket,
                 claim_rx: Some(claim_rx),
@@ -328,7 +329,7 @@ impl RendererInspectorIoIngress {
         if lane.detached {
             drop(state);
             fail_io_command(command, "Inspector IO session was detached");
-            return RendererRuntimeInspectorCommandRoute {
+            return RendererRuntimeInspectorIoCommandRoute {
                 command_id,
                 ticket,
                 claim_rx: Some(claim_rx),
@@ -342,7 +343,7 @@ impl RendererInspectorIoIngress {
         }
         drop(state);
         self.notify_execution_opportunities();
-        RendererRuntimeInspectorCommandRoute {
+        RendererRuntimeInspectorIoCommandRoute {
             command_id,
             ticket,
             claim_rx: Some(claim_rx),
@@ -351,7 +352,12 @@ impl RendererInspectorIoIngress {
     }
 
     pub(crate) fn claim_for_owner(&self) -> Option<RendererInspectorIoCommand> {
-        self.claim_next(RendererInspectorIoCommandConsumer::Owner)
+        self.shared.owner_wake_armed.store(false, Ordering::Release);
+        let command = self.claim_next(RendererInspectorIoCommandConsumer::Owner);
+        if command.is_none() && !self.shared.state.lock().ready_sessions.is_empty() {
+            self.notify_execution_opportunities();
+        }
+        command
     }
 
     pub(crate) fn claim_for_interrupt(&self) -> Option<RendererInspectorIoCommand> {
@@ -400,7 +406,7 @@ impl RendererInspectorIoIngress {
             lane.active_command_id = Some(command.command_id);
             command.claimed_by = Some(consumer);
             if let Some(claim_tx) = command.claim_tx.take() {
-                let _ = claim_tx.send(RendererRuntimeInspectorCommandClaim::Inspector);
+                let _ = claim_tx.send(RendererRuntimeInspectorIoCommandClaim::Inspector);
             }
             return Some(command);
         }
@@ -566,8 +572,17 @@ impl RendererInspectorIoIngress {
             let state = self.shared.state.lock();
             state.owner_wake_tx.clone().zip(self.route_id())
         };
-        if let Some((owner_wake_tx, route_id)) = owner_wake {
-            let _ = owner_wake_tx.send(RendererInspectorIoOwnerWake { route_id });
+        if let Some((owner_wake_tx, route_id)) = owner_wake
+            && self
+                .shared
+                .owner_wake_armed
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            && owner_wake_tx
+                .send(RendererInspectorIoOwnerWake { route_id })
+                .is_err()
+        {
+            self.shared.owner_wake_armed.store(false, Ordering::Release);
         }
         self.request_interrupt();
         self.shared.pause_wake.notify_one();
@@ -636,7 +651,7 @@ impl std::fmt::Debug for RendererInspectorIoIngress {
 
 fn fail_io_command(mut command: RendererInspectorIoCommand, message: &str) {
     if let Some(claim_tx) = command.claim_tx.take() {
-        let _ = claim_tx.send(RendererRuntimeInspectorCommandClaim::Canceled);
+        let _ = claim_tx.send(RendererRuntimeInspectorIoCommandClaim::Canceled);
     }
     let Some(response) = command.take_response() else {
         return;
@@ -669,7 +684,7 @@ mod tests {
         agent_token: RendererDevToolsAgentToken,
         session: Option<&str>,
         raw_json: &str,
-    ) -> RendererRuntimeInspectorCommandRoute {
+    ) -> RendererRuntimeInspectorIoCommandRoute {
         ingress.enqueue_command(
             agent_token,
             RendererInspectorCommandEnvelope::new_io(
@@ -739,13 +754,13 @@ mod tests {
         let mut first_dispatch = ingress.first_dispatch_guard(&first);
         assert_eq!(
             first_route.wait_for_claim().await,
-            Ok(RendererRuntimeInspectorCommandClaim::Inspector)
+            Ok(RendererRuntimeInspectorIoCommandClaim::Inspector)
         );
 
         ingress.detach_session(agent, &DevToolsSessionKey::Attached("session-a".to_owned()));
         assert_eq!(
             second_route.wait_for_claim().await,
-            Ok(RendererRuntimeInspectorCommandClaim::Canceled),
+            Ok(RendererRuntimeInspectorIoCommandClaim::Canceled),
             "detach must cancel commands that have not been claimed"
         );
 
@@ -762,7 +777,6 @@ mod tests {
         let ingress = ingress();
         let page_command = crate::runtime::RendererPageCommand::dispatch_runtime_protocol_message(
             Some("session-a".to_owned()),
-            RendererInspectorCommandRoute::MainThread,
             "main".to_owned(),
         );
         let crate::runtime::RendererPageCommand::Inspector(envelope) = page_command else {

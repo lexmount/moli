@@ -78,7 +78,7 @@ fn loaded_page_mut_for_renderer_access<'a>(
         CdpRendererCommandAccess::MainThread => {
             conn.loaded_page_mut_for_protocol_access(session_id)
         }
-        CdpRendererCommandAccess::Interruptible => {
+        CdpRendererCommandAccess::Io => {
             conn.loaded_page_mut_for_interruptible_protocol_access(session_id)
         }
         CdpRendererCommandAccess::OwnerIndependent => {

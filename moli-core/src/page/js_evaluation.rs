@@ -477,7 +477,6 @@ impl Page {
     ) -> Result<PendingPageCommand> {
         self.start_page_command(RendererPageCommand::dispatch_runtime_protocol_message(
             inspector_session_id,
-            RendererInspectorCommandRoute::MainThread,
             raw_json,
         ))
     }
@@ -503,7 +502,6 @@ impl Page {
         self.start_page_command(
             RendererPageCommand::dispatch_runtime_protocol_message_with_deferred_response(
                 inspector_session_id,
-                RendererInspectorCommandRoute::MainThread,
                 raw_json,
                 deferred_response,
             ),
@@ -598,7 +596,6 @@ impl Page {
         self.start_page_command(
             RendererPageCommand::dispatch_runtime_protocol_message_with_context_resolution(
                 inspector_session_id,
-                RendererInspectorCommandRoute::MainThread,
                 action,
                 raw_json,
             ),
@@ -629,7 +626,6 @@ impl Page {
         self.start_page_command(
             RendererPageCommand::dispatch_runtime_protocol_message_with_context_resolution_and_deferred_response(
                 inspector_session_id,
-                RendererInspectorCommandRoute::MainThread,
                 action,
                 raw_json,
                 deferred_response,

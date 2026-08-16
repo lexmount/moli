@@ -6,7 +6,9 @@ use tokio::runtime::LocalOptions;
 use tokio::sync::{mpsc, oneshot};
 
 use super::page_task_queue::RendererOwnerWake;
-use super::runtime::{RendererOwnerCommand, RendererOwnerHandle, RendererOwnerReply};
+use super::runtime::{
+    RendererOwnerCommand, RendererOwnerHandle, RendererOwnerReply, RendererPageCommand,
+};
 use super::script_vm::inspector_io::RendererInspectorIoOwnerWake;
 use super::script_vm::inspector_main::RendererInspectorMainOwnerWake;
 use super::service_worker_runtime::ServiceWorkerRuntimeOwnerWake;
@@ -153,6 +155,23 @@ impl RenderRuntimeHandle {
         command: RendererOwnerCommand,
     ) -> std::result::Result<oneshot::Receiver<Result<RendererOwnerReply>>, RenderRuntimeEnqueueError>
     {
+        if matches!(
+            &command,
+            RendererOwnerCommand::RunAsyncPageCommand {
+                command: RendererPageCommand::Inspector(_),
+                ..
+            } | RendererOwnerCommand::RunProtocolPageCommand {
+                command: RendererPageCommand::Inspector(_),
+                ..
+            }
+        ) {
+            return Err(RenderRuntimeEnqueueError {
+                command: Box::new(command),
+                error: anyhow!(
+                    "Inspector Page commands must enter through RendererPageHandle ingress"
+                ),
+            });
+        }
         if moli_trace::cdp_nav_timing_enabled() {
             let page_command = match &command {
                 RendererOwnerCommand::RunAsyncPageCommand { command, .. }
@@ -282,6 +301,28 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn raw_owner_admission_rejects_inspector_page_commands() {
+        let handle = RenderRuntimeHandle::disconnected();
+        let result = handle.enqueue(RendererOwnerCommand::RunProtocolPageCommand {
+            token: crate::runtime::RendererPageToken::new_for_testing(
+                crate::runtime::PageId::new_for_testing(1),
+            ),
+            command: RendererPageCommand::dispatch_runtime_protocol_message(
+                None,
+                r#"{"id":1,"method":"Runtime.getProperties","params":{"objectId":"1"}}"#.to_owned(),
+            ),
+        });
+        let error = match result {
+            Ok(_) => panic!("raw owner Inspector admission must be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error.to_string(),
+            "Inspector Page commands must enter through RendererPageHandle ingress"
+        );
+    }
 
     #[test]
     fn dropping_render_runtime_owner_closes_and_joins_render_thread() {

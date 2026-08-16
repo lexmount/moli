@@ -3548,6 +3548,41 @@ pub enum RendererInspectorFirstDispatchLifecycle {
     OrderedUntilFirstDispatch,
 }
 
+/// Pause-loop transition owned by an Inspector command. This is derived once
+/// when the ingress envelope is created so executors do not need to reparse
+/// protocol JSON to decide how resumed/paused notifications are attributed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RendererInspectorPauseCommandEffect {
+    None,
+    Resume,
+    Step,
+}
+
+impl RendererInspectorPauseCommandEffect {
+    fn from_message(message: Option<&Value>) -> Self {
+        match message
+            .and_then(|message| message.get("method"))
+            .and_then(Value::as_str)
+        {
+            Some("Debugger.resume") => Self::Resume,
+            Some(
+                "Debugger.continueToLocation"
+                | "Debugger.restartFrame"
+                | "Debugger.stepInto"
+                | "Debugger.stepOut"
+                | "Debugger.stepOver",
+            ) => Self::Step,
+            _ => Self::None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RendererInspectorMainDispatchBoundary {
+    InspectorSession,
+    PageOwner,
+}
+
 static NEXT_RENDERER_INSPECTOR_INGRESS_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -3615,6 +3650,8 @@ impl RendererInspectorIngressTicket {
 pub struct RendererInspectorCommandEnvelope {
     ticket: RendererInspectorIngressTicket,
     first_dispatch: RendererInspectorFirstDispatchLifecycle,
+    pause_effect: RendererInspectorPauseCommandEffect,
+    main_dispatch_boundary: RendererInspectorMainDispatchBoundary,
     payload: RendererInspectorCommandPayload,
     main_ingress_first_dispatch:
         Option<crate::script_vm::inspector_main::RendererInspectorMainFirstDispatchGuard>,
@@ -3629,19 +3666,16 @@ enum RendererInspectorCommandPayload {
 }
 
 impl RendererInspectorCommandEnvelope {
-    fn new(
-        inspector_session_id: Option<String>,
-        route: RendererInspectorCommandRoute,
-        command: RendererInspectorPageCommand,
-    ) -> Self {
-        assert_eq!(
-            route,
-            RendererInspectorCommandRoute::MainThread,
-            "a Page-owned Inspector payload must use the MainThread route"
-        );
+    fn new(inspector_session_id: Option<String>, command: RendererInspectorPageCommand) -> Self {
         Self {
-            ticket: RendererInspectorIngressTicket::new(None, inspector_session_id, route),
+            ticket: RendererInspectorIngressTicket::new(
+                None,
+                inspector_session_id,
+                RendererInspectorCommandRoute::MainThread,
+            ),
             first_dispatch: RendererInspectorFirstDispatchLifecycle::OrderedUntilFirstDispatch,
+            pause_effect: RendererInspectorPauseCommandEffect::None,
+            main_dispatch_boundary: RendererInspectorMainDispatchBoundary::PageOwner,
             payload: RendererInspectorCommandPayload::MainThread(command),
             main_ingress_first_dispatch: None,
         }
@@ -3659,6 +3693,15 @@ impl RendererInspectorCommandEnvelope {
             RendererInspectorCommandRoute::MainThread,
             "a Main Inspector protocol payload must use the MainThread route"
         );
+        let message = serde_json::from_str::<Value>(&raw_json).ok();
+        let main_dispatch_boundary = if main_protocol_can_dispatch_at_inspector_session_boundary(
+            owner_context_resolution_action.as_deref(),
+            message.as_ref(),
+        ) {
+            RendererInspectorMainDispatchBoundary::InspectorSession
+        } else {
+            RendererInspectorMainDispatchBoundary::PageOwner
+        };
         let command = match owner_context_resolution_action {
             Some(action) => RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithContextResolutionAndDeferredResponse {
                 action,
@@ -3673,6 +3716,8 @@ impl RendererInspectorCommandEnvelope {
         Self {
             ticket,
             first_dispatch: RendererInspectorFirstDispatchLifecycle::OrderedUntilFirstDispatch,
+            pause_effect: RendererInspectorPauseCommandEffect::from_message(message.as_ref()),
+            main_dispatch_boundary,
             payload: RendererInspectorCommandPayload::MainThread(command),
             main_ingress_first_dispatch: None,
         }
@@ -3689,9 +3734,12 @@ impl RendererInspectorCommandEnvelope {
             RendererInspectorCommandRoute::Io,
             "an Inspector IO payload must use the IO route"
         );
+        let message = serde_json::from_str::<Value>(&raw_json).ok();
         Self {
             ticket,
             first_dispatch: RendererInspectorFirstDispatchLifecycle::OrderedUntilFirstDispatch,
+            pause_effect: RendererInspectorPauseCommandEffect::from_message(message.as_ref()),
+            main_dispatch_boundary: RendererInspectorMainDispatchBoundary::InspectorSession,
             payload: RendererInspectorCommandPayload::Io { raw_json, response },
             main_ingress_first_dispatch: None,
         }
@@ -3703,6 +3751,14 @@ impl RendererInspectorCommandEnvelope {
 
     pub fn first_dispatch_lifecycle(&self) -> RendererInspectorFirstDispatchLifecycle {
         self.first_dispatch
+    }
+
+    pub(crate) fn pause_effect(&self) -> RendererInspectorPauseCommandEffect {
+        self.pause_effect
+    }
+
+    pub(crate) fn can_dispatch_at_nested_inspector_session_boundary(&self) -> bool {
+        self.main_dispatch_boundary == RendererInspectorMainDispatchBoundary::InspectorSession
     }
 
     fn bind_attachment(&mut self, attachment: RendererAgentAttachmentId) {
@@ -3732,10 +3788,6 @@ impl RendererInspectorCommandEnvelope {
         self.main_ingress_first_dispatch = Some(first_dispatch);
     }
 
-    pub(crate) fn uses_main_ingress_admission(&self) -> bool {
-        self.main_ingress_first_dispatch.is_some()
-    }
-
     fn main_thread_payload(&self) -> &RendererInspectorPageCommand {
         let RendererInspectorCommandPayload::MainThread(command) = &self.payload else {
             panic!("an Inspector IO envelope cannot enter Page owner dispatch");
@@ -3754,6 +3806,7 @@ impl RendererInspectorCommandEnvelope {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn main_protocol_raw_json(&self) -> &str {
         match self.main_thread_payload() {
             RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithDeferredResponse {
@@ -3792,6 +3845,11 @@ impl RendererInspectorCommandEnvelope {
         assert!(
             self.main_ingress_first_dispatch.is_none(),
             "a direct nested Main dispatch must keep its first-dispatch guard outside the envelope"
+        );
+        assert_eq!(
+            self.main_dispatch_boundary,
+            RendererInspectorMainDispatchBoundary::InspectorSession,
+            "a Page-owner-dependent Main command cannot enter direct nested Inspector dispatch"
         );
         match self.payload {
             RendererInspectorCommandPayload::MainThread(
@@ -3894,6 +3952,61 @@ impl RendererInspectorCommandEnvelope {
                 | RendererInspectorPageCommand::DomDebuggerGetEventListeners { .. }
                 | RendererInspectorPageCommand::FocusDocumentNodeForObjectId { .. }
         )
+    }
+}
+
+fn main_protocol_can_dispatch_at_inspector_session_boundary(
+    owner_context_resolution_action: Option<&str>,
+    message: Option<&Value>,
+) -> bool {
+    let Some(message) = message else {
+        return false;
+    };
+    let method = message.get("method").and_then(Value::as_str);
+    let params = message.get("params").and_then(Value::as_object);
+
+    // These transitions have renderer-owned restore state and must therefore
+    // pass through PageVm even though their final sink is V8InspectorSession.
+    if matches!(
+        method,
+        Some("Runtime.enable" | "Runtime.disable" | "Console.enable" | "Console.disable")
+    ) {
+        return false;
+    }
+
+    let has_owner_scoped_runtime_semantics = params.is_some_and(|params| {
+        params.get("userGesture").and_then(Value::as_bool) == Some(true)
+            || params.contains_key(crate::script_vm::WEBDRIVER_BIDI_FILE_PROMPT_HANDLER_PARAM)
+    });
+    if has_owner_scoped_runtime_semantics {
+        return false;
+    }
+
+    if matches!(method, Some("Runtime.compileScript"))
+        && params.is_some_and(|params| {
+            params.contains_key("contextId") || params.contains_key("executionContextId")
+        })
+        || matches!(method, Some("Runtime.runScript"))
+            && params.is_some_and(|params| params.contains_key("executionContextId"))
+    {
+        return false;
+    }
+
+    match owner_context_resolution_action {
+        // A default-world evaluate needs no renderer context-id rewrite. It is
+        // the useful Chromium-style nested Main case while JavaScript is
+        // paused. Explicit context targeting remains an owner operation.
+        Some("evaluate") => !params.is_some_and(|params| {
+            params.contains_key("contextId") || params.contains_key("executionContextId")
+        }),
+        // An object/unique-context target is already complete. A missing or
+        // numeric executionContextId requires PageVm to choose/rewrite it.
+        Some("callFunctionOn") => params.is_some_and(|params| {
+            !params.contains_key("executionContextId")
+                && (params.contains_key("objectId") || params.contains_key("uniqueContextId"))
+        }),
+        Some(_) => false,
+        None => true,
     }
 }
 
@@ -4520,42 +4633,31 @@ impl RendererPageCommand {
 
     fn inspector_command(
         inspector_session_id: Option<String>,
-        route: RendererInspectorCommandRoute,
         command: RendererInspectorPageCommand,
     ) -> Self {
-        assert_eq!(
-            route,
-            RendererInspectorCommandRoute::MainThread,
-            "IO Inspector commands must enter RendererInspectorIoIngress"
-        );
         Self::Inspector(RendererInspectorCommandEnvelope::new(
             inspector_session_id,
-            route,
             command,
         ))
     }
 
     pub fn dispatch_runtime_protocol_message(
         inspector_session_id: Option<String>,
-        route: RendererInspectorCommandRoute,
         raw_json: String,
     ) -> Self {
         Self::inspector_command(
             inspector_session_id,
-            route,
             RendererInspectorPageCommand::DispatchRuntimeProtocolMessage { raw_json },
         )
     }
 
     pub fn dispatch_runtime_protocol_message_with_deferred_response(
         inspector_session_id: Option<String>,
-        route: RendererInspectorCommandRoute,
         raw_json: String,
         deferred_response: RendererRuntimeInspectorResponseSender,
     ) -> Self {
         Self::inspector_command(
             inspector_session_id,
-            route,
             RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithDeferredResponse {
                 raw_json,
                 deferred_response,
@@ -4565,13 +4667,11 @@ impl RendererPageCommand {
 
     pub fn dispatch_runtime_protocol_message_with_context_resolution(
         inspector_session_id: Option<String>,
-        route: RendererInspectorCommandRoute,
         action: String,
         raw_json: String,
     ) -> Self {
         Self::inspector_command(
             inspector_session_id,
-            route,
             RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithContextResolution {
                 action,
                 raw_json,
@@ -4581,14 +4681,12 @@ impl RendererPageCommand {
 
     pub fn dispatch_runtime_protocol_message_with_context_resolution_and_deferred_response(
         inspector_session_id: Option<String>,
-        route: RendererInspectorCommandRoute,
         action: String,
         raw_json: String,
         deferred_response: RendererRuntimeInspectorResponseSender,
     ) -> Self {
         Self::inspector_command(
             inspector_session_id,
-            route,
             RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithContextResolutionAndDeferredResponse {
                 action,
                 raw_json,
@@ -4600,7 +4698,6 @@ impl RendererPageCommand {
     pub fn runtime_enable_events(inspector_session_id: Option<String>) -> Self {
         Self::inspector_command(
             inspector_session_id,
-            RendererInspectorCommandRoute::MainThread,
             RendererInspectorPageCommand::RuntimeEnableEvents,
         )
     }
@@ -4614,7 +4711,6 @@ impl RendererPageCommand {
     ) -> Self {
         Self::inspector_command(
             inspector_session_id,
-            RendererInspectorCommandRoute::MainThread,
             RendererInspectorPageCommand::ApplyRuntimeProtocolState {
                 session_restore_snapshots,
                 isolated_worlds,
@@ -4630,7 +4726,6 @@ impl RendererPageCommand {
     ) -> Self {
         Self::inspector_command(
             inspector_session_id,
-            RendererInspectorCommandRoute::MainThread,
             RendererInspectorPageCommand::DetachRuntimeInspectorSession { pause_guard },
         )
     }
@@ -4643,7 +4738,6 @@ impl RendererPageCommand {
     ) -> Self {
         Self::inspector_command(
             inspector_session_id,
-            RendererInspectorCommandRoute::MainThread,
             RendererInspectorPageCommand::AddRuntimeBinding {
                 name,
                 execution_context_name,
@@ -4660,7 +4754,6 @@ impl RendererPageCommand {
     ) -> Self {
         Self::inspector_command(
             inspector_session_id,
-            RendererInspectorCommandRoute::MainThread,
             RendererInspectorPageCommand::DomDebuggerGetEventListeners {
                 object_id,
                 depth,
@@ -4675,7 +4768,6 @@ impl RendererPageCommand {
     ) -> Self {
         Self::inspector_command(
             inspector_session_id,
-            RendererInspectorCommandRoute::MainThread,
             RendererInspectorPageCommand::ComputedStylePropertiesForObjectId { object_id },
         )
     }
@@ -4687,7 +4779,6 @@ impl RendererPageCommand {
     ) -> Self {
         Self::inspector_command(
             inspector_session_id,
-            RendererInspectorCommandRoute::MainThread,
             RendererInspectorPageCommand::ScrollObjectNodeIntoViewIfNeeded { object_id, rect },
         )
     }
@@ -4698,7 +4789,6 @@ impl RendererPageCommand {
     ) -> Self {
         Self::inspector_command(
             inspector_session_id,
-            RendererInspectorCommandRoute::MainThread,
             RendererInspectorPageCommand::ClientRectForObjectId { object_id },
         )
     }
@@ -4709,7 +4799,6 @@ impl RendererPageCommand {
     ) -> Self {
         Self::inspector_command(
             inspector_session_id,
-            RendererInspectorCommandRoute::MainThread,
             RendererInspectorPageCommand::DocumentGeometryForObjectId { object_id },
         )
     }
@@ -4720,7 +4809,6 @@ impl RendererPageCommand {
     ) -> Self {
         Self::inspector_command(
             inspector_session_id,
-            RendererInspectorCommandRoute::MainThread,
             RendererInspectorPageCommand::NodeHasGeometryForObjectId { object_id },
         )
     }
@@ -4731,7 +4819,6 @@ impl RendererPageCommand {
     ) -> Self {
         Self::inspector_command(
             inspector_session_id,
-            RendererInspectorCommandRoute::MainThread,
             RendererInspectorPageCommand::FocusDocumentNodeForObjectId { object_id },
         )
     }
@@ -4744,7 +4831,6 @@ impl RendererPageCommand {
     ) -> Self {
         Self::inspector_command(
             inspector_session_id,
-            RendererInspectorCommandRoute::MainThread,
             RendererInspectorPageCommand::SetFileInputFilesForObjectId {
                 object_id,
                 files,
@@ -4762,7 +4848,6 @@ impl RendererPageCommand {
     ) -> Self {
         Self::inspector_command(
             inspector_session_id,
-            RendererInspectorCommandRoute::MainThread,
             RendererInspectorPageCommand::DocumentNodeSnapshotForObjectId {
                 include_whitespace,
                 object_id,
@@ -4778,7 +4863,6 @@ impl RendererPageCommand {
     ) -> Self {
         Self::inspector_command(
             inspector_session_id,
-            RendererInspectorCommandRoute::MainThread,
             RendererInspectorPageCommand::AccessibilityTreePayloadsForObjectId { object_id },
         )
     }
@@ -4789,7 +4873,6 @@ impl RendererPageCommand {
     ) -> Self {
         Self::inspector_command(
             inspector_session_id,
-            RendererInspectorCommandRoute::MainThread,
             RendererInspectorPageCommand::AccessibilityNodeAndAncestorPayloadsForObjectId {
                 object_id,
             },
@@ -4803,7 +4886,6 @@ impl RendererPageCommand {
     ) -> Self {
         Self::inspector_command(
             inspector_session_id,
-            RendererInspectorCommandRoute::MainThread,
             RendererInspectorPageCommand::AccessibilityPartialTreePayloadsForObjectId {
                 object_id,
                 fetch_relatives,
@@ -4818,7 +4900,6 @@ impl RendererPageCommand {
     ) -> Self {
         Self::inspector_command(
             inspector_session_id,
-            RendererInspectorCommandRoute::MainThread,
             RendererInspectorPageCommand::OuterHtmlForObjectId {
                 object_id,
                 include_shadow_dom,
@@ -4834,7 +4915,6 @@ impl RendererPageCommand {
     ) -> Self {
         Self::inspector_command(
             inspector_session_id,
-            RendererInspectorCommandRoute::MainThread,
             RendererInspectorPageCommand::ResolveRuntimeObjectForBackendNodeId {
                 backend_node_id,
                 execution_context_id,
@@ -4846,31 +4926,28 @@ impl RendererPageCommand {
     pub fn resolve_blob_object(inspector_session_id: Option<String>, object_id: String) -> Self {
         Self::inspector_command(
             inspector_session_id,
-            RendererInspectorCommandRoute::MainThread,
             RendererInspectorPageCommand::ResolveBlobObject { object_id },
         )
     }
 
     /// Metadata is structurally present for every command that can access a
     /// frontend V8 Inspector session; no command-variant allowlist is involved.
-    pub fn inspector_ticket(&self) -> Option<&RendererInspectorIngressTicket> {
+    #[cfg(test)]
+    pub(crate) fn inspector_ticket(&self) -> Option<&RendererInspectorIngressTicket> {
         match self {
             Self::Inspector(envelope) => Some(envelope.ticket()),
             _ => None,
         }
     }
 
-    pub fn inspector_first_dispatch_lifecycle(
+    #[cfg(test)]
+    pub(crate) fn inspector_first_dispatch_lifecycle(
         &self,
     ) -> Option<RendererInspectorFirstDispatchLifecycle> {
         match self {
             Self::Inspector(envelope) => Some(envelope.first_dispatch_lifecycle()),
             _ => None,
         }
-    }
-
-    pub(crate) fn uses_main_inspector_ingress_admission(&self) -> bool {
-        matches!(self, Self::Inspector(envelope) if envelope.uses_main_ingress_admission())
     }
 
     pub fn bind_inspector_attachment(&mut self, attachment: RendererAgentAttachmentId) {
@@ -5084,16 +5161,6 @@ mod renderer_inspector_command_envelope_tests {
                 .inspector_ticket()
                 .is_none(),
             "ordinary Page commands must remain outside Inspector lanes"
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "IO Inspector commands must enter RendererInspectorIoIngress")]
-    fn io_command_cannot_use_the_main_thread_page_envelope() {
-        let _ = RendererPageCommand::dispatch_runtime_protocol_message(
-            None,
-            RendererInspectorCommandRoute::Io,
-            r#"{"id":1,"method":"Runtime.terminateExecution"}"#.to_owned(),
         );
     }
 
