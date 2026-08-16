@@ -1,4 +1,6 @@
-use crate::{LayoutError, LayoutPoint, LayoutRect, LayoutSize, LayoutTransform2D, LayoutViewport};
+use crate::{
+    LayoutError, LayoutPoint, LayoutRect, LayoutSize, LayoutTransform2D, LayoutViewport, PaintColor,
+};
 
 /// Which CSS-pixel region one paint-enabled layout demand should capture.
 ///
@@ -20,6 +22,12 @@ pub struct PaintCaptureRequest {
     pub region: PaintCaptureRegion,
     /// Whether CSS background colors and images are included in paint.
     pub include_backgrounds: bool,
+    /// Color behind the document canvas before CSS canvas propagation.
+    ///
+    /// Main-frame captures use an opaque white browser surface. Embedded
+    /// browsing contexts use transparent black so their owner element remains
+    /// visible unless the child document supplies its own canvas background.
+    pub base_background_color: PaintColor,
     /// Maximum encoded image width in device pixels.
     pub max_width: Option<u32>,
     /// Maximum encoded image height in device pixels.
@@ -32,6 +40,7 @@ impl PaintCaptureRequest {
         Self {
             region: PaintCaptureRegion::Viewport,
             include_backgrounds: true,
+            base_background_color: PaintColor::WHITE,
             max_width: None,
             max_height: None,
         }
@@ -42,6 +51,7 @@ impl PaintCaptureRequest {
         Self {
             region: PaintCaptureRegion::Viewport,
             include_backgrounds: true,
+            base_background_color: PaintColor::WHITE,
             max_width,
             max_height,
         }
@@ -52,6 +62,7 @@ impl PaintCaptureRequest {
         Self {
             region: PaintCaptureRegion::FullDocument,
             include_backgrounds: true,
+            base_background_color: PaintColor::WHITE,
             max_width: None,
             max_height: None,
         }
@@ -62,6 +73,7 @@ impl PaintCaptureRequest {
         Self {
             region: PaintCaptureRegion::PageClip { rect, scale },
             include_backgrounds: true,
+            base_background_color: PaintColor::WHITE,
             max_width: None,
             max_height: None,
         }
@@ -106,6 +118,7 @@ pub(crate) struct ResolvedPaintCapture {
     pub(crate) viewport_to_surface: LayoutTransform2D,
     pub(crate) surface: PaintCaptureSurface,
     pub(crate) include_backgrounds: bool,
+    pub(crate) base_background_color: PaintColor,
 }
 
 impl PaintCaptureRequest {
@@ -180,6 +193,7 @@ impl PaintCaptureRequest {
                 device_scale,
             ),
             include_backgrounds: self.include_backgrounds,
+            base_background_color: self.base_background_color,
         })
     }
 }
@@ -254,6 +268,22 @@ mod tests {
                 .map_point(LayoutPoint::new(-10.0, -25.0)),
             LayoutPoint::ZERO
         );
+        assert_eq!(capture.base_background_color, PaintColor::WHITE);
+    }
+
+    #[test]
+    fn embedded_capture_can_select_a_transparent_base_background() {
+        let mut request = PaintCaptureRequest::viewport();
+        request.base_background_color = PaintColor::TRANSPARENT;
+        let capture = request
+            .resolve(
+                LayoutViewport::new(100, 80, 1.0),
+                LayoutPoint::ZERO,
+                LayoutSize::new(100.0, 80.0),
+            )
+            .expect("embedded viewport capture");
+
+        assert_eq!(capture.base_background_color, PaintColor::TRANSPARENT);
     }
 
     #[test]
@@ -264,6 +294,7 @@ mod tests {
                 scale: 1.5,
             },
             include_backgrounds: true,
+            base_background_color: PaintColor::WHITE,
             max_width: Some(500),
             max_height: Some(200),
         }
