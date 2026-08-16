@@ -1625,6 +1625,285 @@ async fn websocket_cdp_io_terminate_interrupts_busy_main_thread_and_skips_main_f
 }
 
 #[tokio::test]
+async fn websocket_cdp_active_js_interrupt_preserves_main_and_io_lanes_across_sessions() {
+    let entered_busy_loop = Arc::new(tokio::sync::Notify::new());
+    let entered_busy_loop_route = Arc::clone(&entered_busy_loop);
+    let fixture_app = Router::new()
+        .route(
+            "/",
+            get(|| async {
+                (
+                    [(header::CONTENT_TYPE.as_str(), "text/html")],
+                    "<!doctype html><html><body>active JavaScript interrupt</body></html>",
+                )
+            }),
+        )
+        .route(
+            "/entered",
+            get(move || {
+                let entered_busy_loop = Arc::clone(&entered_busy_loop_route);
+                async move {
+                    entered_busy_loop.notify_one();
+                    "entered"
+                }
+            }),
+        );
+    let (fixture_addr, _fixture_server) =
+        spawn_dedicated_fixture_server(fixture_app, "active-js-interrupt");
+
+    let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
+    let (mut socket, _) = connect_async(format!(
+        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
+    ))
+    .await
+    .expect("connect to cdp websocket");
+    let browser_context_id = cdp_create_browser_context(&mut socket, 1).await;
+    let primary = cdp_create_attached_target(&mut socket, 2, &browser_context_id).await;
+    let _ = send_cdp_command(
+        &mut socket,
+        4,
+        "Runtime.enable",
+        Some(&primary.session_id),
+        json!({}),
+    )
+    .await;
+    let _ = cdp_navigate_and_wait_for_load(
+        &mut socket,
+        5,
+        &primary.session_id,
+        &format!("http://{fixture_addr}/"),
+    )
+    .await;
+
+    let auxiliary_attach = send_cdp_command(
+        &mut socket,
+        6,
+        "Target.attachToTarget",
+        None,
+        json!({ "targetId": primary.target_id, "flatten": true }),
+    )
+    .await;
+    let auxiliary_session_id = auxiliary_attach
+        .iter()
+        .find(|message| message["id"] == json!(6_u64))
+        .and_then(|message| message["result"]["sessionId"].as_str())
+        .expect("auxiliary session id")
+        .to_owned();
+    for (id, method, session_id) in [
+        (7, "Debugger.enable", primary.session_id.as_str()),
+        (8, "Runtime.enable", auxiliary_session_id.as_str()),
+        (9, "Debugger.enable", auxiliary_session_id.as_str()),
+    ] {
+        let enabled = send_cdp_command(&mut socket, id, method, Some(session_id), json!({})).await;
+        assert!(
+            enabled
+                .iter()
+                .any(|message| message["id"] == json!(id) && message.get("error").is_none()),
+            "{method} should succeed before the active-JS matrix: {enabled:#?}"
+        );
+    }
+
+    let busy_source = r#"const xhr = new XMLHttpRequest();
+xhr.open('GET', '/entered', false);
+xhr.send();
+console.log('moli-active-js-loop-entered');
+for (;;) {}"#;
+    let compiled = send_cdp_command(
+        &mut socket,
+        10,
+        "Runtime.compileScript",
+        Some(&primary.session_id),
+        json!({
+            "expression": busy_source,
+            "sourceURL": "moli-active-js-interrupt.js",
+            "persistScript": true,
+        }),
+    )
+    .await;
+    let script_id = compiled
+        .iter()
+        .find(|message| message["id"] == json!(10_u64))
+        .and_then(|message| message["result"]["scriptId"].as_str())
+        .unwrap_or_else(|| panic!("Runtime.compileScript should return scriptId: {compiled:#?}"))
+        .to_owned();
+
+    send_cdp_command_without_wait(
+        &mut socket,
+        11,
+        "Runtime.runScript",
+        Some(&primary.session_id),
+        json!({ "scriptId": script_id }),
+    )
+    .await;
+    timeout(Duration::from_secs(5), entered_busy_loop.notified())
+        .await
+        .expect("compiled JavaScript should complete its synchronous external witness");
+
+    // These Main commands are queued on a different DevTools session while
+    // the primary session owns the renderer in non-yielding JavaScript.
+    send_cdp_command_without_wait(
+        &mut socket,
+        12,
+        "Runtime.evaluate",
+        Some(&auxiliary_session_id),
+        json!({
+            "expression": "(globalThis.__moliMainLane ??= []).push('m1')",
+            "returnByValue": true,
+        }),
+    )
+    .await;
+    send_cdp_command_without_wait(
+        &mut socket,
+        13,
+        "Runtime.evaluate",
+        Some(&auxiliary_session_id),
+        json!({
+            "expression": "globalThis.__moliMainLane.push('m2')",
+            "returnByValue": true,
+        }),
+    )
+    .await;
+    let mut observed = recv_cdp_messages_for(&mut socket, Duration::from_millis(250)).await;
+    assert!(
+        observed
+            .iter()
+            .all(|message| !matches!(message["id"].as_u64(), Some(11..=13))),
+        "the active script and its Main followers must remain blocked before IO arrives: \
+         {observed:#?}"
+    );
+
+    // All three commands use the auxiliary session's IO lane. The two source
+    // lookups prove FIFO before terminateExecution releases the Main owner.
+    for (id, method, params) in [
+        (
+            14,
+            "Debugger.getScriptSource",
+            json!({ "scriptId": script_id }),
+        ),
+        (
+            15,
+            "Debugger.getScriptSource",
+            json!({ "scriptId": script_id }),
+        ),
+        (16, "Runtime.terminateExecution", json!({})),
+    ] {
+        send_cdp_command_without_wait(&mut socket, id, method, Some(&auxiliary_session_id), params)
+            .await;
+    }
+
+    let expected_ids = [11_u64, 12, 13, 14, 15, 16];
+    let mut response_ids = observed
+        .iter()
+        .filter_map(|message| message["id"].as_u64())
+        .collect::<std::collections::BTreeSet<_>>();
+    observed.extend(
+        recv_until_match(&mut socket, |message| {
+            if let Some(id) = message["id"].as_u64() {
+                response_ids.insert(id);
+            }
+            expected_ids
+                .iter()
+                .all(|expected_id| response_ids.contains(expected_id))
+        })
+        .await,
+    );
+
+    for id in expected_ids {
+        assert_eq!(
+            observed
+                .iter()
+                .filter(|message| message["id"] == json!(id))
+                .count(),
+            1,
+            "each command must produce exactly one response (id {id}): {observed:#?}"
+        );
+    }
+    for id in [14_u64, 15] {
+        let response = observed
+            .iter()
+            .find(|message| message["id"] == json!(id))
+            .expect("getScriptSource response");
+        assert_eq!(
+            response["result"]["scriptSource"],
+            json!(busy_source),
+            "IO source lookup {id} must reach the live auxiliary Inspector session: \
+             {observed:#?}"
+        );
+    }
+    let position = |id| {
+        observed
+            .iter()
+            .position(|message| message["id"] == json!(id))
+            .unwrap_or_else(|| panic!("missing response position for id {id}: {observed:#?}"))
+    };
+    assert!(
+        position(14) < position(15) && position(15) < position(16),
+        "same-session IO commands must first-dispatch FIFO: {observed:#?}"
+    );
+    assert!(
+        position(16) < position(12) && position(12) < position(13),
+        "IO may overtake Main, but the auxiliary Main lane must remain FIFO: {observed:#?}"
+    );
+    assert_eq!(
+        observed
+            .iter()
+            .find(|message| message["id"] == json!(16_u64))
+            .expect("terminateExecution response")["result"],
+        json!({}),
+        "terminateExecution must complete through a true V8 interrupt: {observed:#?}"
+    );
+    let busy_response = observed
+        .iter()
+        .find(|message| message["id"] == json!(11_u64))
+        .expect("terminated runScript response");
+    assert!(
+        busy_response.get("error").is_some()
+            || busy_response["result"]["exceptionDetails"].is_object(),
+        "the active Runtime.runScript must report termination: {busy_response:#?}"
+    );
+    assert!(
+        observed.iter().any(|message| {
+            message["sessionId"].as_str() == Some(primary.session_id.as_str())
+                && message["method"] == json!("Runtime.consoleAPICalled")
+                && message["params"]["args"][0]["value"] == json!("moli-active-js-loop-entered")
+        }),
+        "the buffered console witness must prove JavaScript passed XHR and entered the loop: \
+         {observed:#?}"
+    );
+    for (id, value) in [(12_u64, 1_u64), (13, 2)] {
+        assert_eq!(
+            observed
+                .iter()
+                .find(|message| message["id"] == json!(id))
+                .expect("Main follower response")["result"]["result"]["value"],
+            json!(value),
+            "Main follower {id} must execute once and in order: {observed:#?}"
+        );
+    }
+
+    let recovered = send_cdp_command(
+        &mut socket,
+        17,
+        "Runtime.evaluate",
+        Some(&primary.session_id),
+        json!({
+            "expression": "globalThis.__moliMainLane.join(',')",
+            "returnByValue": true,
+        }),
+    )
+    .await;
+    assert!(
+        recovered.iter().any(|message| {
+            message["id"] == json!(17_u64) && message["result"]["result"]["value"] == json!("m1,m2")
+        }),
+        "the isolate and owner must recover with exactly-once Main state: {recovered:#?}"
+    );
+
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(protocol_server).await;
+}
+
+#[tokio::test]
 async fn websocket_cdp_raw_client_runtime_evaluate_immediately_after_page_navigate_succeeds() {
     // Regression test for the raw-CDP race: a raw client can pipeline
     // `Runtime.evaluate` directly behind `Page.navigate` without waiting for a
@@ -5219,6 +5498,24 @@ async fn websocket_cdp_debugger_pause_allows_auxiliary_main_thread_commands() {
             .any(|message| message["id"] == json!(50_u64) && message.get("error").is_none()),
         "auxiliary Debugger.enable should create its V8 inspector session: {auxiliary_enabled:#?}"
     );
+    let isolated_world = send_cdp_command(
+        &mut socket,
+        49,
+        "Page.createIsolatedWorld",
+        Some(&auxiliary_session_id),
+        json!({
+            "frameId": session.target_id,
+            "worldName": "nested-main-owner-boundary",
+        }),
+    )
+    .await;
+    let isolated_context_id = isolated_world
+        .iter()
+        .find(|message| message["id"] == json!(49_u64))
+        .and_then(|message| message["result"]["executionContextId"].as_i64())
+        .unwrap_or_else(|| {
+            panic!("Page.createIsolatedWorld should return executionContextId: {isolated_world:#?}")
+        });
 
     socket
         .send(WsMessage::Text(
@@ -5245,6 +5542,27 @@ async fn websocket_cdp_debugger_pause_allows_auxiliary_main_thread_commands() {
         !observed.iter().any(|message| message["id"] == json!(6_u64)),
         "Runtime.evaluate must remain pending while the renderer owner is paused: {observed:#?}"
     );
+    if observed.iter().all(|message| {
+        message["sessionId"].as_str() != Some(auxiliary_session_id.as_str())
+            || message["method"] != json!("Debugger.paused")
+    }) {
+        observed.extend(
+            recv_until_match(&mut socket, |message| {
+                message["sessionId"].as_str() == Some(auxiliary_session_id.as_str())
+                    && message["method"] == json!("Debugger.paused")
+            })
+            .await,
+        );
+    }
+    let auxiliary_call_frame_id = observed
+        .iter()
+        .find(|message| {
+            message["sessionId"].as_str() == Some(auxiliary_session_id.as_str())
+                && message["method"] == json!("Debugger.paused")
+        })
+        .and_then(|message| message["params"]["callFrames"][0]["callFrameId"].as_str())
+        .expect("auxiliary Debugger.paused callFrameId")
+        .to_owned();
     // Chromium's normal debugger loop pumps its main-thread DevTools receiver.
     // This command must therefore reach the auxiliary V8 session even though
     // the ordinary Page owner turn that entered the pause has not returned.
@@ -5292,6 +5610,86 @@ async fn websocket_cdp_debugger_pause_allows_auxiliary_main_thread_commands() {
         }),
         "pause-loop object response must remain owner-independent: {auxiliary_object:#?}"
     );
+    let auxiliary_object_id = auxiliary_object
+        .iter()
+        .find(|message| message["id"] == json!(51_u64))
+        .and_then(|message| message["result"]["result"]["objectId"].as_str())
+        .expect("auxiliary Runtime.evaluate objectId")
+        .to_owned();
+
+    let properties = timeout(
+        Duration::from_secs(5),
+        send_cdp_command(
+            &mut socket,
+            53,
+            "Runtime.getProperties",
+            Some(&auxiliary_session_id),
+            json!({ "objectId": auxiliary_object_id, "ownProperties": true }),
+        ),
+    )
+    .await
+    .expect("Runtime.getProperties must complete in the nested Main loop");
+    assert!(
+        properties.iter().any(|message| {
+            message["id"] == json!(53_u64)
+                && message["result"]["result"]
+                    .as_array()
+                    .is_some_and(|properties| {
+                        properties.iter().any(|property| {
+                            property["name"] == json!("answer")
+                                && property["value"]["value"] == json!(42)
+                        })
+                    })
+        }),
+        "nested Main must expose paused object properties: {properties:#?}"
+    );
+
+    let called = timeout(
+        Duration::from_secs(5),
+        send_cdp_command(
+            &mut socket,
+            54,
+            "Runtime.callFunctionOn",
+            Some(&auxiliary_session_id),
+            json!({
+                "objectId": auxiliary_object_id,
+                "functionDeclaration": "function () { return this.answer + 1; }",
+                "returnByValue": true,
+            }),
+        ),
+    )
+    .await
+    .expect("object-targeted Runtime.callFunctionOn must complete in the nested Main loop");
+    assert!(
+        called.iter().any(|message| {
+            message["id"] == json!(54_u64) && message["result"]["result"]["value"] == json!(43)
+        }),
+        "nested Main must call a function on the paused object: {called:#?}"
+    );
+
+    let call_frame_evaluate = timeout(
+        Duration::from_secs(5),
+        send_cdp_command(
+            &mut socket,
+            55,
+            "Debugger.evaluateOnCallFrame",
+            Some(&auxiliary_session_id),
+            json!({
+                "callFrameId": auxiliary_call_frame_id,
+                "expression": "40 + 2",
+                "returnByValue": true,
+            }),
+        ),
+    )
+    .await
+    .expect("Debugger.evaluateOnCallFrame must complete in the nested Main loop");
+    assert!(
+        call_frame_evaluate.iter().any(|message| {
+            message["id"] == json!(55_u64) && message["result"]["result"]["value"] == json!(42)
+        }),
+        "nested Main must evaluate against the auxiliary paused call frame: \
+         {call_frame_evaluate:#?}"
+    );
 
     socket
         .send(WsMessage::Text(
@@ -5311,12 +5709,38 @@ async fn websocket_cdp_debugger_pause_allows_auxiliary_main_thread_commands() {
         .await
         .expect("send pause-loop awaitPromise Runtime.evaluate");
 
+    let explicit_context_evaluate = timeout(
+        Duration::from_secs(5),
+        send_cdp_command(
+            &mut socket,
+            56,
+            "Runtime.evaluate",
+            Some(&auxiliary_session_id),
+            json!({
+                "contextId": isolated_context_id,
+                "expression": "globalThis.__nestedInspectorContext = 44",
+                "returnByValue": true,
+            }),
+        ),
+    )
+    .await
+    .expect("explicit-context Runtime.evaluate must complete in the nested Main loop");
+    assert!(
+        explicit_context_evaluate.iter().any(|message| {
+            message["id"] == json!(56_u64)
+                && message["sessionId"] == json!(auxiliary_session_id)
+                && message["result"]["result"]["value"] == json!(44)
+        }),
+        "nested Main must dispatch an explicit native Inspector context without Page owner: \
+         {explicit_context_evaluate:#?}"
+    );
+
     observed.extend(
         send_cdp_command(
             &mut socket,
             8,
             "Debugger.resume",
-            Some(&session_id),
+            Some(&auxiliary_session_id),
             json!({}),
         )
         .await,
@@ -5352,7 +5776,7 @@ async fn websocket_cdp_debugger_pause_allows_auxiliary_main_thread_commands() {
     );
 
     let _ = socket.close(None).await;
-    protocol_server.abort();
+    abort_test_cdp_server(protocol_server).await;
 }
 
 #[tokio::test]

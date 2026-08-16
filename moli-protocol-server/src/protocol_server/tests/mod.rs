@@ -855,7 +855,21 @@ async fn recv_until_match(
     }
 }
 
-async fn send_cdp_command(
+async fn recv_cdp_messages_for(
+    socket: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    duration: std::time::Duration,
+) -> Vec<serde_json::Value> {
+    let mut messages = Vec::new();
+    let deadline = tokio::time::Instant::now() + duration;
+    while let Ok(message) = tokio::time::timeout_at(deadline, recv_ws_json(socket)).await {
+        messages.push(message);
+    }
+    messages
+}
+
+async fn send_cdp_command_without_wait(
     socket: &mut tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >,
@@ -863,7 +877,7 @@ async fn send_cdp_command(
     method: &str,
     session_id: Option<&str>,
     params: serde_json::Value,
-) -> Vec<serde_json::Value> {
+) {
     let mut command = json!({
         "id": id,
         "method": method,
@@ -876,6 +890,18 @@ async fn send_cdp_command(
         .send(WsMessage::Text(command.to_string().into()))
         .await
         .unwrap_or_else(|error| panic!("send {method}: {error}"));
+}
+
+async fn send_cdp_command(
+    socket: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    id: u64,
+    method: &str,
+    session_id: Option<&str>,
+    params: serde_json::Value,
+) -> Vec<serde_json::Value> {
+    send_cdp_command_without_wait(socket, id, method, session_id, params).await;
     recv_until_id(socket, id).await
 }
 
