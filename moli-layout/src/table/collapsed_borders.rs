@@ -7,9 +7,12 @@
 
 use std::{fmt::Debug, hash::Hash};
 
-use taffy::{Rect, ResolveOrZero, style_helpers};
+use taffy::{
+    LogicalBoxStrut, LogicalOffset, LogicalSize, Rect, ResolveOrZero, WritingDirection,
+    style_helpers,
+};
 
-use super::{TableCell, TableColumn, TableRow};
+use super::{TableCell, TableColumn, TableGridCoordinateSpace, TableRow};
 use crate::{
     LayoutBoxId, LayoutBoxKind, LayoutRect, LayoutWorld, PaintBorderStyle, PaintColor,
     PaintEdgeSizes, ResolvedLayoutStyle, style::resolve_stylo_calc_value,
@@ -73,18 +76,20 @@ pub(crate) struct CollapsedTableBorderSegment {
 pub(crate) struct CollapsedTableBorders {
     row_count: usize,
     column_count: usize,
-    horizontal: Vec<EdgeSlot>,
-    vertical: Vec<EdgeSlot>,
+    writing_direction: WritingDirection,
+    row_edges: Vec<EdgeSlot>,
+    column_edges: Vec<EdgeSlot>,
     segments: Vec<CollapsedTableBorderSegment>,
 }
 
 impl CollapsedTableBorders {
-    fn new(row_count: usize, column_count: usize) -> Self {
+    fn new(row_count: usize, column_count: usize, writing_direction: WritingDirection) -> Self {
         Self {
             row_count,
             column_count,
-            horizontal: vec![EdgeSlot::Empty; (row_count + 1).saturating_mul(column_count)],
-            vertical: vec![EdgeSlot::Empty; row_count.saturating_mul(column_count + 1)],
+            writing_direction,
+            row_edges: vec![EdgeSlot::Empty; (row_count + 1).saturating_mul(column_count)],
+            column_edges: vec![EdgeSlot::Empty; row_count.saturating_mul(column_count + 1)],
             segments: Vec::new(),
         }
     }
@@ -93,32 +98,32 @@ impl CollapsedTableBorders {
         &self.segments
     }
 
-    fn horizontal_index(&self, row: usize, column: usize) -> Option<usize> {
+    fn row_edge_index(&self, row: usize, column: usize) -> Option<usize> {
         (row <= self.row_count && column < self.column_count)
             .then_some(row.saturating_mul(self.column_count).saturating_add(column))
     }
 
-    fn vertical_index(&self, row: usize, column: usize) -> Option<usize> {
+    fn column_edge_index(&self, row: usize, column: usize) -> Option<usize> {
         (row < self.row_count && column <= self.column_count).then_some(
             row.saturating_mul(self.column_count + 1)
                 .saturating_add(column),
         )
     }
 
-    fn horizontal_edge(&self, row: isize, column: isize) -> Option<WinningEdge> {
+    fn row_edge(&self, row: isize, column: isize) -> Option<WinningEdge> {
         let (Ok(row), Ok(column)) = (usize::try_from(row), usize::try_from(column)) else {
             return None;
         };
-        self.horizontal_index(row, column)
-            .and_then(|index| self.horizontal[index].winner())
+        self.row_edge_index(row, column)
+            .and_then(|index| self.row_edges[index].winner())
     }
 
-    fn vertical_edge(&self, row: isize, column: isize) -> Option<WinningEdge> {
+    fn column_edge(&self, row: isize, column: isize) -> Option<WinningEdge> {
         let (Ok(row), Ok(column)) = (usize::try_from(row), usize::try_from(column)) else {
             return None;
         };
-        self.vertical_index(row, column)
-            .and_then(|index| self.vertical[index].winner())
+        self.column_edge_index(row, column)
+            .and_then(|index| self.column_edges[index].winner())
     }
 
     fn merge_box(
@@ -139,31 +144,41 @@ impl CollapsedTableBorders {
             return;
         }
 
-        if let Some(edge) = border_edge(style, PhysicalSide::Top, box_order) {
+        // Blink keeps the conflict grid in logical table coordinates. Resolve
+        // each source box's physical CSS borders onto those logical edges
+        // before comparing candidates; geometry crosses back to physical
+        // coordinates only after all conflicts and joints are known.
+        let sides = self.writing_direction.to_logical_box_strut(Rect {
+            top: PhysicalSide::Top,
+            right: PhysicalSide::Right,
+            bottom: PhysicalSide::Bottom,
+            left: PhysicalSide::Left,
+        });
+        if let Some(edge) = border_edge(style, sides.block_start, box_order) {
             for current in column..column_end {
-                if let Some(index) = self.horizontal_index(row, current) {
-                    merge_edge(&mut self.horizontal[index], edge);
+                if let Some(index) = self.row_edge_index(row, current) {
+                    merge_edge(&mut self.row_edges[index], edge);
                 }
             }
         }
-        if let Some(edge) = border_edge(style, PhysicalSide::Bottom, box_order) {
+        if let Some(edge) = border_edge(style, sides.block_end, box_order) {
             for current in column..column_end {
-                if let Some(index) = self.horizontal_index(row_end, current) {
-                    merge_edge(&mut self.horizontal[index], edge);
+                if let Some(index) = self.row_edge_index(row_end, current) {
+                    merge_edge(&mut self.row_edges[index], edge);
                 }
             }
         }
-        if let Some(edge) = border_edge(style, PhysicalSide::Left, box_order) {
+        if let Some(edge) = border_edge(style, sides.inline_start, box_order) {
             for current in row..row_end {
-                if let Some(index) = self.vertical_index(current, column) {
-                    merge_edge(&mut self.vertical[index], edge);
+                if let Some(index) = self.column_edge_index(current, column) {
+                    merge_edge(&mut self.column_edges[index], edge);
                 }
             }
         }
-        if let Some(edge) = border_edge(style, PhysicalSide::Right, box_order) {
+        if let Some(edge) = border_edge(style, sides.inline_end, box_order) {
             for current in row..row_end {
-                if let Some(index) = self.vertical_index(current, column_end) {
-                    merge_edge(&mut self.vertical[index], edge);
+                if let Some(index) = self.column_edge_index(current, column_end) {
+                    merge_edge(&mut self.column_edges[index], edge);
                 }
             }
         }
@@ -177,19 +192,19 @@ impl CollapsedTableBorders {
             .min(self.column_count);
         for row in cell.row..row_end {
             for column in cell.column.saturating_add(1)..column_end {
-                if let Some(index) = self.vertical_index(row, column)
-                    && matches!(self.vertical[index], EdgeSlot::Empty)
+                if let Some(index) = self.column_edge_index(row, column)
+                    && matches!(self.column_edges[index], EdgeSlot::Empty)
                 {
-                    self.vertical[index] = EdgeSlot::DoNotFill;
+                    self.column_edges[index] = EdgeSlot::DoNotFill;
                 }
             }
         }
         for row in cell.row.saturating_add(1)..row_end {
             for column in cell.column..column_end {
-                if let Some(index) = self.horizontal_index(row, column)
-                    && matches!(self.horizontal[index], EdgeSlot::Empty)
+                if let Some(index) = self.row_edge_index(row, column)
+                    && matches!(self.row_edges[index], EdgeSlot::Empty)
                 {
-                    self.horizontal[index] = EdgeSlot::DoNotFill;
+                    self.row_edges[index] = EdgeSlot::DoNotFill;
                 }
             }
         }
@@ -208,28 +223,31 @@ impl CollapsedTableBorders {
     ) -> PaintEdgeSizes {
         let row_end = row.saturating_add(row_span).min(self.row_count);
         let column_end = column.saturating_add(column_span).min(self.column_count);
-        let mut widths = PaintEdgeSizes::default();
+        let mut widths = LogicalBoxStrut::<f32>::default();
         for current_row in row..row_end {
-            widths.left = widths.left.max(paintable_width(
-                self.vertical_index(current_row, column)
-                    .and_then(|index| self.vertical[index].winner()),
+            widths.inline_start = widths.inline_start.max(paintable_width(
+                self.column_edge_index(current_row, column)
+                    .and_then(|index| self.column_edges[index].winner()),
             ));
-            widths.right = widths.right.max(paintable_width(
-                self.vertical_index(current_row, column_end)
-                    .and_then(|index| self.vertical[index].winner()),
+            widths.inline_end = widths.inline_end.max(paintable_width(
+                self.column_edge_index(current_row, column_end)
+                    .and_then(|index| self.column_edges[index].winner()),
             ));
         }
         for current_column in column..column_end {
-            widths.top = widths.top.max(paintable_width(
-                self.horizontal_index(row, current_column)
-                    .and_then(|index| self.horizontal[index].winner()),
+            widths.block_start = widths.block_start.max(paintable_width(
+                self.row_edge_index(row, current_column)
+                    .and_then(|index| self.row_edges[index].winner()),
             ));
-            widths.bottom = widths.bottom.max(paintable_width(
-                self.horizontal_index(row_end, current_column)
-                    .and_then(|index| self.horizontal[index].winner()),
+            widths.block_end = widths.block_end.max(paintable_width(
+                self.row_edge_index(row_end, current_column)
+                    .and_then(|index| self.row_edges[index].winner()),
             ));
         }
-        half(widths)
+        let physical = self
+            .writing_direction
+            .to_physical_box_strut(widths.map(|width| width / 2.0));
+        PaintEdgeSizes::new(physical.top, physical.right, physical.bottom, physical.left)
     }
 
     fn table_strut(&self) -> PaintEdgeSizes {
@@ -239,23 +257,30 @@ impl CollapsedTableBorders {
         self.range_strut(0, 0, self.row_count, self.column_count)
     }
 
-    pub(crate) fn set_geometry(&mut self, columns: &[f32], rows: &[f32]) {
+    fn set_geometry(
+        &mut self,
+        columns: &[f32],
+        rows: &[f32],
+        coordinate_space: TableGridCoordinateSpace,
+    ) {
         self.segments.clear();
         if columns.len() != self.column_count + 1 || rows.len() != self.row_count + 1 {
             return;
         }
+        debug_assert_eq!(self.writing_direction, coordinate_space.writing_direction);
 
-        // Blink stores vertical then horizontal edges at each grid
+        // Blink stores column-axis then row-axis edges at each logical grid
         // intersection. Keep that order so equal-precedence transparent joints
-        // compose identically.
+        // compose identically, then project the completed logical rectangle
+        // through the table's writing direction exactly once.
         for row in 0..=self.row_count {
             for column in 0..=self.column_count {
                 if row < self.row_count
-                    && let Some(edge) = self.vertical_edge(row as isize, column as isize)
+                    && let Some(edge) = self.column_edge(row as isize, column as isize)
                     && edge.can_paint()
                 {
-                    let (start_width, start_wins) = self.vertical_joint(row, column, true);
-                    let (end_width, end_wins) = self.vertical_joint(row, column, false);
+                    let (start_width, start_wins) = self.column_edge_joint(row, column, true);
+                    let (end_width, end_wins) = self.column_edge_joint(row, column, false);
                     let mut start = rows[row];
                     let mut end = rows[row + 1];
                     if start_wins {
@@ -269,25 +294,27 @@ impl CollapsedTableBorders {
                         end -= end_width / 2.0;
                     }
                     if end > start {
-                        self.segments.push(CollapsedTableBorderSegment {
-                            rect: LayoutRect::new(
-                                columns[column] - edge.width / 2.0,
-                                start,
-                                edge.width,
-                                end - start,
-                            ),
-                            color: edge.color,
-                            style: edge.style,
-                            horizontal: false,
-                        });
+                        self.push_logical_segment(
+                            LogicalOffset {
+                                inline_offset: columns[column] - edge.width / 2.0,
+                                block_offset: start,
+                            },
+                            LogicalSize {
+                                inline_size: edge.width,
+                                block_size: end - start,
+                            },
+                            coordinate_space,
+                            edge,
+                            false,
+                        );
                     }
                 }
                 if column < self.column_count
-                    && let Some(edge) = self.horizontal_edge(row as isize, column as isize)
+                    && let Some(edge) = self.row_edge(row as isize, column as isize)
                     && edge.can_paint()
                 {
-                    let (start_width, start_wins) = self.horizontal_joint(row, column, true);
-                    let (end_width, end_wins) = self.horizontal_joint(row, column, false);
+                    let (start_width, start_wins) = self.row_edge_joint(row, column, true);
+                    let (end_width, end_wins) = self.row_edge_joint(row, column, false);
                     let mut start = columns[column];
                     let mut end = columns[column + 1];
                     if start_wins {
@@ -301,30 +328,48 @@ impl CollapsedTableBorders {
                         end -= end_width / 2.0;
                     }
                     if end > start {
-                        self.segments.push(CollapsedTableBorderSegment {
-                            rect: LayoutRect::new(
-                                start,
-                                rows[row] - edge.width / 2.0,
-                                end - start,
-                                edge.width,
-                            ),
-                            color: edge.color,
-                            style: edge.style,
-                            horizontal: true,
-                        });
+                        self.push_logical_segment(
+                            LogicalOffset {
+                                inline_offset: start,
+                                block_offset: rows[row] - edge.width / 2.0,
+                            },
+                            LogicalSize {
+                                inline_size: end - start,
+                                block_size: edge.width,
+                            },
+                            coordinate_space,
+                            edge,
+                            true,
+                        );
                     }
                 }
             }
         }
     }
 
-    fn horizontal_joint(&self, row: usize, column: usize, start: bool) -> (f32, bool) {
+    fn push_logical_segment(
+        &mut self,
+        logical_offset: LogicalOffset<f32>,
+        logical_size: LogicalSize<f32>,
+        coordinate_space: TableGridCoordinateSpace,
+        edge: WinningEdge,
+        runs_inline: bool,
+    ) {
+        self.segments.push(CollapsedTableBorderSegment {
+            rect: coordinate_space.physical_rect(logical_offset, logical_size),
+            color: edge.color,
+            style: edge.style,
+            horizontal: runs_inline == coordinate_space.writing_direction.mode.is_horizontal(),
+        });
+    }
+
+    fn row_edge_joint(&self, row: usize, column: usize, start: bool) -> (f32, bool) {
         let row = row as isize;
         let intersection = if start { column } else { column + 1 } as isize;
-        let before = self.horizontal_edge(row, intersection - 1);
-        let after = self.horizontal_edge(row, intersection);
-        let over = self.vertical_edge(row - 1, intersection);
-        let under = self.vertical_edge(row, intersection);
+        let before = self.row_edge(row, intersection - 1);
+        let after = self.row_edge(row, intersection);
+        let over = self.column_edge(row - 1, intersection);
+        let under = self.column_edge(row, intersection);
         let inline_compare = compare_for_paint(before, after);
         let block_compare = compare_for_paint(over, under);
         let inline = if inline_compare == 1 { before } else { after };
@@ -338,13 +383,13 @@ impl CollapsedTableBorders {
         (block.map_or(0.0, |edge| edge.width), current_wins)
     }
 
-    fn vertical_joint(&self, row: usize, column: usize, start: bool) -> (f32, bool) {
+    fn column_edge_joint(&self, row: usize, column: usize, start: bool) -> (f32, bool) {
         let intersection_row = if start { row } else { row + 1 } as isize;
         let column = column as isize;
-        let before = self.horizontal_edge(intersection_row, column - 1);
-        let after = self.horizontal_edge(intersection_row, column);
-        let over = self.vertical_edge(intersection_row - 1, column);
-        let under = self.vertical_edge(intersection_row, column);
+        let before = self.row_edge(intersection_row, column - 1);
+        let after = self.row_edge(intersection_row, column);
+        let over = self.column_edge(intersection_row - 1, column);
+        let under = self.column_edge(intersection_row, column);
         let inline_compare = compare_for_paint(before, after);
         let block_compare = compare_for_paint(over, under);
         let inline = if inline_compare == 1 { before } else { after };
@@ -368,7 +413,9 @@ where
         return;
     }
 
-    let mut borders = CollapsedTableBorders::new(context.rows.len(), context.column_count);
+    let writing_direction = world.boxes[root.index()].style.writing_direction();
+    let mut borders =
+        CollapsedTableBorders::new(context.rows.len(), context.column_count, writing_direction);
     let mut box_order = 0usize;
 
     // CSS Tables conflict precedence is established by merge order. Equal
@@ -476,11 +523,12 @@ pub(super) fn set_collapsed_border_geometry<N>(
     root: LayoutBoxId,
     columns: &[f32],
     rows: &[f32],
+    coordinate_space: TableGridCoordinateSpace,
 ) where
     N: Copy + Debug + Eq + Hash,
 {
     if let Some(borders) = world.boxes[root.index()].collapsed_table_borders.as_mut() {
-        borders.set_geometry(columns, rows);
+        borders.set_geometry(columns, rows, coordinate_space);
     }
 }
 
@@ -604,15 +652,6 @@ fn paintable_width(edge: Option<WinningEdge>) -> f32 {
         .map_or(0.0, |edge| edge.width)
 }
 
-fn half(widths: PaintEdgeSizes) -> PaintEdgeSizes {
-    PaintEdgeSizes::new(
-        widths.top / 2.0,
-        widths.right / 2.0,
-        widths.bottom / 2.0,
-        widths.left / 2.0,
-    )
-}
-
 fn row_groups(rows: &[TableRow]) -> Vec<(LayoutBoxId, usize, usize)> {
     let mut groups = Vec::new();
     for row in rows {
@@ -678,6 +717,21 @@ mod tests {
         }
     }
 
+    fn vertical_rtl_direction() -> WritingDirection {
+        WritingDirection::new(taffy::WritingMode::VerticalRl, taffy::Direction::Rtl)
+    }
+
+    fn vertical_rtl_coordinate_space() -> TableGridCoordinateSpace {
+        TableGridCoordinateSpace::new(
+            vertical_rtl_direction(),
+            taffy::Size {
+                width: 100.0,
+                height: 80.0,
+            },
+            taffy::Point { x: 7.0, y: 11.0 },
+        )
+    }
+
     #[test]
     fn conflict_resolution_uses_hidden_width_style_then_first_source() {
         let mut slot = EdgeSlot::Empty;
@@ -702,10 +756,25 @@ mod tests {
 
     #[test]
     fn joint_geometry_extends_the_wider_winning_edge_without_gaps() {
-        let mut borders = CollapsedTableBorders::new(1, 1);
-        borders.horizontal[0] = EdgeSlot::Winner(edge(4.0, PaintBorderStyle::Solid, RED, 1));
-        borders.vertical[0] = EdgeSlot::Winner(edge(8.0, PaintBorderStyle::Solid, BLUE, 2));
-        borders.set_geometry(&[10.0, 50.0], &[10.0, 30.0]);
+        let mut borders = CollapsedTableBorders::new(
+            1,
+            1,
+            WritingDirection::new(taffy::WritingMode::HorizontalTb, taffy::Direction::Ltr),
+        );
+        borders.row_edges[0] = EdgeSlot::Winner(edge(4.0, PaintBorderStyle::Solid, RED, 1));
+        borders.column_edges[0] = EdgeSlot::Winner(edge(8.0, PaintBorderStyle::Solid, BLUE, 2));
+        borders.set_geometry(
+            &[10.0, 50.0],
+            &[10.0, 30.0],
+            TableGridCoordinateSpace::new(
+                WritingDirection::new(taffy::WritingMode::HorizontalTb, taffy::Direction::Ltr),
+                taffy::Size {
+                    width: 60.0,
+                    height: 40.0,
+                },
+                taffy::Point::ZERO,
+            ),
+        );
 
         let horizontal = borders
             .segments()
@@ -719,5 +788,58 @@ mod tests {
             .expect("vertical edge");
         assert_eq!(horizontal.rect, LayoutRect::new(14.0, 8.0, 36.0, 4.0));
         assert_eq!(vertical.rect, LayoutRect::new(6.0, 8.0, 8.0, 22.0));
+    }
+
+    #[test]
+    fn vertical_rtl_conflicts_map_physical_borders_to_logical_table_edges() {
+        let mut style = ResolvedLayoutStyle::synthetic(
+            crate::LayoutDisplay::TableCell,
+            taffy::Style::default(),
+            PaintColor::TRANSPARENT,
+        );
+        style.taffy.border = Rect {
+            top: style_helpers::length(1.0),
+            right: style_helpers::length(2.0),
+            bottom: style_helpers::length(3.0),
+            left: style_helpers::length(4.0),
+        };
+        let mut borders = CollapsedTableBorders::new(1, 1, vertical_rtl_direction());
+        borders.merge_box(0, 0, 1, 1, &style, 1);
+
+        // vertical-rl + RTL maps logical block-start/end to physical
+        // right/left and inline-start/end to physical bottom/top.
+        assert_eq!(borders.row_edges[0].winner().unwrap().width, 2.0);
+        assert_eq!(borders.row_edges[1].winner().unwrap().width, 4.0);
+        assert_eq!(borders.column_edges[0].winner().unwrap().width, 3.0);
+        assert_eq!(borders.column_edges[1].winner().unwrap().width, 1.0);
+        assert_eq!(
+            borders.range_strut(0, 0, 1, 1),
+            PaintEdgeSizes::new(0.5, 1.0, 1.5, 2.0)
+        );
+    }
+
+    #[test]
+    fn vertical_rtl_segments_cross_the_logical_to_physical_boundary_once() {
+        let coordinate_space = vertical_rtl_coordinate_space();
+
+        let mut row_edge = CollapsedTableBorders::new(1, 1, vertical_rtl_direction());
+        row_edge.row_edges[0] = EdgeSlot::Winner(edge(4.0, PaintBorderStyle::Solid, RED, 1));
+        row_edge.set_geometry(&[10.0, 50.0], &[20.0, 60.0], coordinate_space);
+        assert_eq!(row_edge.segments.len(), 1);
+        assert_eq!(
+            row_edge.segments[0].rect,
+            LayoutRect::new(85.0, 41.0, 4.0, 40.0)
+        );
+        assert!(!row_edge.segments[0].horizontal);
+
+        let mut column_edge = CollapsedTableBorders::new(1, 1, vertical_rtl_direction());
+        column_edge.column_edges[0] = EdgeSlot::Winner(edge(6.0, PaintBorderStyle::Solid, BLUE, 1));
+        column_edge.set_geometry(&[10.0, 50.0], &[20.0, 60.0], coordinate_space);
+        assert_eq!(column_edge.segments.len(), 1);
+        assert_eq!(
+            column_edge.segments[0].rect,
+            LayoutRect::new(47.0, 78.0, 40.0, 6.0)
+        );
+        assert!(column_edge.segments[0].horizontal);
     }
 }
