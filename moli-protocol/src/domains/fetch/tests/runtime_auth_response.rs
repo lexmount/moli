@@ -498,14 +498,17 @@ async fn runtime_child_frame_fetch_subresource_interception_uses_child_frame_att
     .await;
     ctx.expect_result(36_402, json!({}), Some("SID-1"));
     enable_runtime_async(&mut ctx, "SID-1", 36_403).await;
-    wait_until_message(
+    evaluate_until_value_async(
         &mut ctx,
         "SID-1",
-        "child frame navigated before child fetch",
-        |message| {
-            message["method"] == json!("Page.frameNavigated")
-                && message["params"]["frame"]["id"] == json!(child_frame_id)
-        },
+        36_420,
+        r#"(() => {
+  const frame = document.querySelector("iframe");
+  const childDocument = frame && frame.contentDocument;
+  return childDocument ? `${childDocument.URL}|${childDocument.readyState}` : "";
+})()"#,
+        &json!(format!("{child_url}|complete")),
+        "child frame document readiness before child fetch",
     )
     .await;
 
@@ -611,15 +614,15 @@ async fn runtime_child_frame_fetch_subresource_interception_uses_child_frame_att
     assert_eq!(response["params"]["frameId"], json!(child_frame_id));
     assert_eq!(response["params"]["response"]["url"], json!(api_url));
 
-    ctx.process_async(json!({
-        "id": 36_406,
-        "method": "Runtime.evaluate",
-        "sessionId": "SID-1",
-        "params": { "expression": "globalThis.__lm_child_fetch_result" }
-    }))
+    evaluate_until_value_async(
+        &mut ctx,
+        "SID-1",
+        36_406,
+        "globalThis.__lm_child_fetch_result",
+        &json!("child-fetch"),
+        "child frame fetch result",
+    )
     .await;
-    let result = take_response_by_id(&mut ctx, 36_406);
-    assert_eq!(result["result"]["result"]["value"], json!("child-fetch"));
 
     server.abort();
 }
