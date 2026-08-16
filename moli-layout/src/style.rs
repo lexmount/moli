@@ -493,6 +493,7 @@ pub struct ResolvedLayoutStyle {
     opacity: f32,
     blend_mode: PaintBlendMode,
     has_filter_effect: bool,
+    has_filter_containing_block_trigger: bool,
     has_clip_path: bool,
     has_mask: bool,
     isolation: bool,
@@ -551,6 +552,10 @@ impl std::fmt::Debug for ResolvedLayoutStyle {
             .field("opacity", &self.opacity)
             .field("blend_mode", &self.blend_mode)
             .field("has_filter_effect", &self.has_filter_effect)
+            .field(
+                "has_filter_containing_block_trigger",
+                &self.has_filter_containing_block_trigger,
+            )
             .field("has_clip_path", &self.has_clip_path)
             .field("has_mask", &self.has_mask)
             .field("isolation", &self.isolation)
@@ -718,6 +723,12 @@ impl ResolvedLayoutStyle {
         let will_change = computed.clone_will_change().bits;
         let will_change_containment = will_change.contains(WillChangeBits::CONTAIN);
         let will_change_position = will_change.contains(WillChangeBits::POSITION);
+        // Stylo folds `will-change: filter/backdrop-filter` into the same
+        // non-SVG fixed-position containing-block hint used by Gecko. Blink's
+        // `HasNonInitialFilter*()` exposes the equivalent union of an actual
+        // effect and that hint.
+        let has_filter_containing_block_trigger =
+            has_filter_effect || will_change.contains(WillChangeBits::FIXPOS_CB_NON_SVG);
         let will_change_stacking_context = will_change.intersects(
             WillChangeBits::STACKING_CONTEXT_UNCONDITIONAL
                 | WillChangeBits::TRANSFORM
@@ -869,6 +880,7 @@ impl ResolvedLayoutStyle {
             opacity,
             blend_mode,
             has_filter_effect,
+            has_filter_containing_block_trigger,
             has_clip_path,
             has_mask,
             isolation,
@@ -939,6 +951,7 @@ impl ResolvedLayoutStyle {
             opacity: 1.0,
             blend_mode: PaintBlendMode::Normal,
             has_filter_effect: false,
+            has_filter_containing_block_trigger: false,
             has_clip_path: false,
             has_mask: false,
             isolation: false,
@@ -1299,20 +1312,29 @@ impl ResolvedLayoutStyle {
 
     pub(crate) fn establishes_positioned_containing_block(
         &self,
+        is_document_element: bool,
         is_css_box: bool,
         containment_eligible: bool,
     ) -> bool {
         self.position.is_positioned()
             || self.will_change_position
-            || self.establishes_fixed_containing_block(is_css_box, containment_eligible)
+            || self.establishes_fixed_containing_block(
+                is_document_element,
+                is_css_box,
+                containment_eligible,
+            )
     }
 
     pub(crate) fn establishes_fixed_containing_block(
         &self,
+        is_document_element: bool,
         is_css_box: bool,
         containment_eligible: bool,
     ) -> bool {
-        (is_css_box && self.establishes_transform_containing_block)
+        // Filter effects apply to inline LayoutObjects too, unlike transforms,
+        // but Filter Effects explicitly excludes the document element.
+        (!is_document_element && self.has_filter_containing_block_trigger)
+            || (is_css_box && self.establishes_transform_containing_block)
             || (containment_eligible
                 && (self.layout_containment
                     || self.paint_containment
@@ -1646,6 +1668,7 @@ impl ResolvedLayoutStyle {
             opacity: 1.0,
             blend_mode: PaintBlendMode::Normal,
             has_filter_effect: false,
+            has_filter_containing_block_trigger: false,
             has_clip_path: false,
             has_mask: false,
             isolation: false,
@@ -1707,6 +1730,7 @@ impl ResolvedLayoutStyle {
             opacity: 1.0,
             blend_mode: PaintBlendMode::Normal,
             has_filter_effect: false,
+            has_filter_containing_block_trigger: false,
             has_clip_path: false,
             has_mask: false,
             isolation: false,

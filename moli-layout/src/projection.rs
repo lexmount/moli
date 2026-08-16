@@ -235,6 +235,7 @@ where
                 ));
             }
             let id = LayoutOutputBoxId::from_index(index);
+            let layout_box_id = LayoutBoxId::from_index(index);
             let layout = layout_box.final_layout;
             let border_box = LayoutRect::new(
                 0.0,
@@ -316,9 +317,7 @@ where
                 .flatten()
             }));
             let semantics = layout_box.element_semantics();
-            let (layout_x, layout_y) = self
-                .world
-                .global_layout_origin(LayoutBoxId::from_index(index));
+            let (layout_x, layout_y) = self.world.global_layout_origin(layout_box_id);
             self.boxes.push(LayoutBoxGeometry {
                 id,
                 structural_parent: layout_box
@@ -345,9 +344,12 @@ where
                         || element.is_html_element("td")
                         || element.is_html_element("th")
                 }),
-                establishes_positioned_containing_block: layout_box
-                    .establishes_positioned_containing_block(),
-                establishes_fixed_containing_block: layout_box.establishes_fixed_containing_block(),
+                establishes_positioned_containing_block: self
+                    .world
+                    .establishes_positioned_containing_block(layout_box_id),
+                establishes_fixed_containing_block: self
+                    .world
+                    .establishes_fixed_containing_block(layout_box_id),
                 visible: layout_box.style.is_visible(),
                 pointer_events: layout_box.style.accepts_pointer_events(),
             });
