@@ -1680,6 +1680,60 @@ document.body.innerHTML = `
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn screenshot_applies_the_ratio_automatic_minimum_to_intrinsic_inline_sizes() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/intrinsic-ratio-automatic-minimum.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0}
+.context{position:absolute;width:300px;height:50px}
+#block-context{left:0;top:0}
+#flex-context{left:0;top:50px;display:flex}
+#grid-context{left:0;top:100px;display:grid}
+.target{display:block;width:min-content;height:25px;min-width:auto;aspect-ratio:1/1;flex-shrink:0}
+.content{width:100px;height:0}
+#zero-minimum{position:absolute;left:150px;top:0;min-width:0}
+</style>`;
+document.body.innerHTML = `
+<div id=block-context class=context><div id=block class=target><div class=content></div></div></div>
+<div id=flex-context class=context><div id=flex class=target><div class=content></div></div></div>
+<div id=grid-context class=context><div id=grid class=target><div class=content></div></div></div>
+<div id=zero-minimum class=target><div class=content></div></div>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(300, 150, 1.0))?
+            .expect("intrinsic ratio fixture must retain a root");
+
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                r#"['block','flex','grid','zero-minimum']
+  .map(id => {
+    const rect = document.getElementById(id).getBoundingClientRect();
+    return `${rect.width},${rect.height}`;
+  })
+  .join('|')"#,
+            )?,
+            "100,25|100,25|100,25|25,25",
+            "an intrinsic ratio size must retain ratio provenance so min-width:auto can apply the real min-content floor",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("intrinsic ratio automatic-minimum fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn replaced_sizing_transfers_constraints_through_flex_and_grid() {
     run_page_vm_async_test(async move {
         let loader =
