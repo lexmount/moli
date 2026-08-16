@@ -834,7 +834,8 @@ impl Drop for RendererDocumentIsolateReservationState {
 }
 
 impl RendererPageLocalEntry {
-    fn new(slot: RendererPageSlotHandle, vm: PageVm) -> Result<Self> {
+    fn new(slot: RendererPageSlotHandle, mut vm: PageVm) -> Result<Self> {
+        vm.bind_script_execution_control(slot.script_execution_control());
         Ok(Self {
             slot,
             top_level_navigation_dispatch:
@@ -852,6 +853,9 @@ impl RendererPageLocalEntry {
         slot: RendererPageSlotHandle,
         mut pending: PageVmPendingPhaseOneNavigation,
     ) -> Result<Self> {
+        pending
+            .page_vm_mut()
+            .bind_script_execution_control(slot.script_execution_control());
         let mut entry = Self {
             slot,
             top_level_navigation_dispatch:
@@ -1006,12 +1010,16 @@ impl RendererPageLocalEntry {
     }
 
     pub(super) fn page_vm_mut(&mut self) -> &mut PageVm {
-        if let Some(pending) = self.pending_phase_one_navigation.as_mut() {
-            return pending.page_vm_mut();
-        }
-        self.vm
-            .as_mut()
-            .expect("resident renderer page entry must retain an active PageVm")
+        let control = self.slot.script_execution_control();
+        let page_vm = if let Some(pending) = self.pending_phase_one_navigation.as_mut() {
+            pending.page_vm_mut()
+        } else {
+            self.vm
+                .as_mut()
+                .expect("resident renderer page entry must retain an active PageVm")
+        };
+        page_vm.bind_script_execution_control(control);
+        page_vm
     }
 
     pub(super) fn pending_phase_one_navigation_has_ready_streaming_input(&mut self) -> bool {
@@ -1172,6 +1180,9 @@ impl RendererPageLocalEntry {
         &self,
         pending: &mut PageVmPendingPhaseOneNavigation,
     ) -> Result<RendererPageToken> {
+        pending
+            .page_vm_mut()
+            .bind_script_execution_control(self.slot.script_execution_control());
         let validation = if self.pending_phase_one_navigation.is_some() {
             Err(anyhow!(
                 "renderer page already owns a pending phase-one navigation"
@@ -1228,12 +1239,13 @@ impl RendererPageLocalEntry {
         Ok(wake_token)
     }
 
-    fn install_resumed_phase_one_page_vm(&mut self, page_vm: PageVm) {
+    fn install_resumed_phase_one_page_vm(&mut self, mut page_vm: PageVm) {
         debug_assert!(
             self.pending_phase_one_navigation.is_none(),
             "a resumed phase-one PageVm cannot coexist with its consumed residence"
         );
         self.retire_document_lifecycle_turn();
+        page_vm.bind_script_execution_control(self.slot.script_execution_control());
         self.vm = Some(page_vm);
     }
 
@@ -3422,6 +3434,7 @@ impl RendererOwnerLocalStore {
             let inspector_pause_bridge = entry.page_vm().inspector_pause_bridge();
             let inspector_main_ingress = entry.page_vm().inspector_main_ingress();
             let inspector_io_ingress = entry.page_vm().inspector_io_ingress();
+            let script_execution_control = entry.slot.script_execution_control();
             let page_state = Self::commit_current_vm_page_state_on_entry(&mut entry)?;
             let initial_runtime_realms = entry.page_vm_mut().vm_mut().runtime_realm_inventory();
             let devtools_agent_token = entry.page_vm().devtools_agent_token();
@@ -3435,6 +3448,7 @@ impl RendererOwnerLocalStore {
                 inspector_pause_bridge,
                 inspector_main_ingress,
                 inspector_io_ingress,
+                script_execution_control,
                 page_state,
                 devtools_agent_token,
                 creation_diagnostics,
@@ -3464,6 +3478,7 @@ impl RendererOwnerLocalStore {
                 inspector_pause_bridge,
                 inspector_main_ingress,
                 inspector_io_ingress,
+                script_execution_control,
                 page_state,
                 devtools_agent_token,
                 mut creation_diagnostics,
@@ -3479,6 +3494,7 @@ impl RendererOwnerLocalStore {
                         inspector_pause_bridge,
                         inspector_main_ingress,
                         inspector_io_ingress,
+                        script_execution_control,
                         page_state,
                         creation_diagnostics,
                         creation_artifacts,
@@ -3762,6 +3778,7 @@ impl RendererOwnerLocalStore {
             Arc::downgrade(&owner.owner_state),
             RendererPageEntry::active(page_id, vm.creation_id, 0, 0, page_state),
             vm.vm().page_context_cancel_sender(),
+            vm.script_execution_control(),
         )
     }
 
@@ -4537,6 +4554,7 @@ mod navigation_dispatch_tests {
             std::sync::Weak::new(),
             RendererPageEntry::removed(page_id),
             page_context_cancel_tx,
+            Default::default(),
         );
         RendererPageLocalEntry {
             slot,

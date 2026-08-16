@@ -28,7 +28,7 @@ use super::{
     RendererOwnerCommand, RendererOwnerHandle, RendererOwnerReply, RendererPageCreationArtifacts,
     RendererPageCreationDiagnostics, RendererPageHandle, RendererPageReservationToken,
     RendererPageState, RendererPendingDownloadActivation, RendererPendingDownloadResponse,
-    RendererReservedServiceWorkerClient,
+    RendererPerformanceMetricSnapshot, RendererReservedServiceWorkerClient,
     page_vm::{PageVm, PageVmEnvConfig, PageVmRuntimeHooks},
     phase_one::{
         ConcurrentParseTimeRuntime, ParseTimePageVmCreationOutcome,
@@ -44,6 +44,7 @@ pub(crate) struct PageVmStateCapture {
     pub(crate) idle_override: Option<crate::protocol_types::EmulatedIdleOverride>,
     pub(crate) service_worker_client_id: u64,
     pub(crate) dedicated_worker_running_worker_isolate_count: usize,
+    pub(crate) performance_metric_snapshot: RendererPerformanceMetricSnapshot,
 }
 
 #[derive(Debug, Clone)]
@@ -276,6 +277,7 @@ impl JsRuntime {
             Arc::downgrade(&self.inner.renderer_owner.state),
             super::RendererPageEntry::removed(page_id),
             cancel_tx,
+            Default::default(),
         );
         let result = self
             .inner

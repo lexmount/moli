@@ -76,7 +76,6 @@ enum PendingEmulationPageOperation {
     SetExtraHttpHeaders,
     SetLocaleOverride,
     SetNetworkConditions,
-    SetScriptExecutionDisabled,
     SetCpuThrottlingRate,
     SetIdleOverride,
     SetTimezoneOverride,
@@ -323,22 +322,11 @@ fn start_script_execution_disabled_command(
             "BrowserContextNotLoaded",
         ));
     }
-    let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
     let Some(page) = loaded_page_mut_for_session(conn, cmd.session_id) else {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     };
-    match page.start_set_script_execution_disabled(params.value) {
-        Ok(pending) => EmulationCommandTaskStep::Pending(single_pending_emulation_dispatch(
-            cmd.id,
-            owner_scope,
-            PendingEmulationPageOperation::SetScriptExecutionDisabled,
-            pending,
-            None,
-        )),
-        Err(error) => {
-            EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error.to_string()))
-        }
-    }
+    page.set_script_execution_disabled_from_io(params.value);
+    EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})))
 }
 
 fn start_locale_override_command(
@@ -2380,11 +2368,16 @@ pub(crate) async fn clear_emulated_media_for_detached_session_async(
     // though the resulting settings are observable by every session on the
     // target. Match that contract when detach preserves the loaded page.
     let overrides = crate::conn::EmulatedMediaOverrides::default();
+    let mut changed = false;
     if !conn.mutate_emulation_session_state_for_session_owner(Some(session_id), |state| {
         if let Some(state) = state {
+            changed = *state.emulated_media != overrides;
             *state.emulated_media = overrides.clone();
         }
     }) {
+        return Ok(());
+    }
+    if !changed {
         return Ok(());
     }
 
@@ -2770,9 +2763,6 @@ fn finish_emulation_page_operation(
             .map_err(|error| error.to_string()),
         PendingEmulationPageOperation::SetNetworkConditions => page
             .finish_set_network_offline(completion)
-            .map_err(|error| error.to_string()),
-        PendingEmulationPageOperation::SetScriptExecutionDisabled => page
-            .finish_set_script_execution_disabled(completion)
             .map_err(|error| error.to_string()),
         PendingEmulationPageOperation::SetCpuThrottlingRate => page
             .finish_set_cpu_throttling_rate(completion)

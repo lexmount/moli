@@ -235,24 +235,10 @@ impl Page {
         .await
     }
 
-    pub fn start_set_script_execution_disabled(
-        &self,
-        disabled: bool,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::SetScriptExecutionDisabled(disabled))
-    }
-
-    pub fn finish_set_script_execution_disabled(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<()> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "set script execution disabled",
-            "a unit reply",
-            RendererPageReply::Unit => Ok(()),
-        )
+    /// Applies the DevTools IO-agent setting without entering the renderer
+    /// owner's Main command queue.
+    pub fn set_script_execution_disabled_from_io(&self, disabled: bool) {
+        self.handle.set_script_execution_disabled_from_io(disabled);
     }
 
     pub async fn set_bypass_content_security_policy_async(&mut self, bypass: bool) -> Result<()> {

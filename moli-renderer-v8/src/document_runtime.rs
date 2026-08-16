@@ -678,7 +678,7 @@ pub(super) struct DocumentRuntime {
     selector_debug: SelectorDebugCounters,
     document: HostDocumentState,
     design_mode_documents: HashSet<DomHandle>,
-    script_execution_disabled: bool,
+    script_execution_control: crate::script_execution_control::RendererScriptExecutionControl,
     bypass_content_security_policy: bool,
     policy_container: DocumentPolicyContainer,
     delivered_meta_content_security_policies: RefCell<HashMap<(u64, DomHandle), Vec<String>>>,

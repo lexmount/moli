@@ -159,7 +159,6 @@ impl PageVm {
     }
 
     pub(crate) fn set_script_execution_disabled(&mut self, disabled: bool) {
-        self.script_execution_disabled = disabled;
         self.vm_mut().set_script_execution_disabled(disabled);
     }
 

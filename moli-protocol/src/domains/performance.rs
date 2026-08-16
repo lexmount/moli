@@ -197,6 +197,11 @@ pub(crate) fn try_start_performance_command_dispatch(
             return PerformanceCommandTaskStep::Complete(default_metrics_command_output_plan());
         }
     };
+    if renderer_access == CdpRendererCommandAccess::Io {
+        return PerformanceCommandTaskStep::Complete(performance_metrics_command_output_plan(
+            &page.cached_performance_metric_snapshot(),
+        ));
+    }
     let renderer_page = crate::conn::RendererPageResidenceIdentity::from_page(page);
     let pending = match page.start_performance_metric_snapshot() {
         Ok(pending) => pending,
@@ -218,9 +223,13 @@ fn empty_metrics_command_output_plan() -> CommandOutputPlan {
 }
 
 fn default_metrics_command_output_plan() -> CommandOutputPlan {
-    CommandOutputPlan::result(json!({
-        "metrics": build_performance_metrics(&RendererPerformanceMetricSnapshot::default())
-    }))
+    performance_metrics_command_output_plan(&RendererPerformanceMetricSnapshot::default())
+}
+
+fn performance_metrics_command_output_plan(
+    snapshot: &RendererPerformanceMetricSnapshot,
+) -> CommandOutputPlan {
+    CommandOutputPlan::result(json!({ "metrics": build_performance_metrics(snapshot) }))
 }
 
 pub(crate) async fn complete_pending_performance_command(
@@ -725,7 +734,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn performance_get_metrics_does_not_apply_old_page_completion_to_replacement() {
+    async fn performance_get_metrics_reads_the_snapshot_bound_at_each_replacement() {
         let mut ctx = TestContext::new();
         load_document(
             &mut ctx,
@@ -747,10 +756,15 @@ mod tests {
             "sessionId": "SID-1"
         })
         .to_string();
-        let pending = match ctx.conn.start_command_dispatch(&raw) {
-            CdpCommandTaskStep::Pending(pending) => pending,
-            CdpCommandTaskStep::Complete(_) => panic!("getMetrics should start a Page command"),
-        };
+        let old_messages =
+            complete_immediate_command_task_step_for_test(ctx.conn.start_command_dispatch(&raw));
+        let old_response = old_messages
+            .iter()
+            .find(|message| message["id"] == json!(4_011))
+            .expect("old-page getMetrics response");
+        let old_metrics = metric_map(old_response);
+        assert!(old_metrics["Documents"] >= 1.0);
+        assert!(old_metrics["Nodes"] >= 6.0);
 
         let replacement = ctx
             .conn
@@ -769,17 +783,22 @@ mod tests {
             .replace_loaded_page(Some(replacement));
         drop(previous);
 
-        let completed = pending.wait().await;
-        let step = ctx.conn.complete_pending_command_dispatch(completed).await;
-        let mut messages = complete_command_task_step_for_test(&mut ctx, step).await;
-        let response = messages
+        let replacement_raw = json!({
+            "id": 4_012,
+            "method": "Performance.getMetrics",
+            "sessionId": "SID-1"
+        })
+        .to_string();
+        let replacement_messages = complete_immediate_command_task_step_for_test(
+            ctx.conn.start_command_dispatch(&replacement_raw),
+        );
+        let replacement_response = replacement_messages
             .iter()
-            .position(|message| message["id"] == json!(4_011))
-            .map(|index| messages.remove(index))
-            .expect("stale getMetrics command should still receive a response");
-        let metrics = metric_map(&response);
-        assert_eq!(metrics["Documents"], 0.0);
-        assert_eq!(metrics["Nodes"], 0.0);
+            .find(|message| message["id"] == json!(4_012))
+            .expect("replacement getMetrics response");
+        let replacement_metrics = metric_map(replacement_response);
+        assert!(replacement_metrics["Documents"] >= 1.0);
+        assert!(replacement_metrics["Nodes"] < old_metrics["Nodes"]);
     }
 
     #[tokio::test(flavor = "multi_thread")]

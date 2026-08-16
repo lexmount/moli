@@ -8,6 +8,23 @@ impl ScriptVm {
             .set_script_execution_disabled(disabled);
     }
 
+    pub(crate) fn script_execution_disabled(&self) -> bool {
+        self.document_runtime.script_execution_disabled()
+    }
+
+    pub(crate) fn script_execution_control(
+        &self,
+    ) -> crate::script_execution_control::RendererScriptExecutionControl {
+        self.document_runtime.script_execution_control()
+    }
+
+    pub(crate) fn bind_script_execution_control(
+        &mut self,
+        control: crate::script_execution_control::RendererScriptExecutionControl,
+    ) {
+        self.document_runtime.bind_script_execution_control(control);
+    }
+
     pub(crate) fn set_document_content_for_frame(
         &mut self,
         frame_id: &str,

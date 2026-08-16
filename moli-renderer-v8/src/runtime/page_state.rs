@@ -21,6 +21,7 @@ pub struct RendererPageState {
     pub idle_override: Option<crate::protocol_types::EmulatedIdleOverride>,
     pub service_worker_client_id: u64,
     pub dedicated_worker_running_worker_isolate_count: usize,
+    pub performance_metric_snapshot: RendererPerformanceMetricSnapshot,
 }
 
 impl RendererPageState {
@@ -53,6 +54,7 @@ impl RendererPageState {
             service_worker_client_id: state_capture.service_worker_client_id,
             dedicated_worker_running_worker_isolate_count: state_capture
                 .dedicated_worker_running_worker_isolate_count,
+            performance_metric_snapshot: state_capture.performance_metric_snapshot,
         })
     }
 
@@ -160,6 +162,7 @@ pub struct RendererPageSlotHandle {
     owner: std::sync::Weak<RendererOwnerState>,
     inner: Arc<Mutex<RendererPageEntry>>,
     page_context_cancel_tx: RendererPageContextCancelSender,
+    script_execution_control: crate::script_execution_control::RendererScriptExecutionControl,
 }
 
 impl RendererPageSlotHandle {
@@ -167,11 +170,13 @@ impl RendererPageSlotHandle {
         owner: std::sync::Weak<RendererOwnerState>,
         entry: RendererPageEntry,
         page_context_cancel_tx: RendererPageContextCancelSender,
+        script_execution_control: crate::script_execution_control::RendererScriptExecutionControl,
     ) -> Self {
         Self {
             owner,
             inner: Arc::new(Mutex::new(entry)),
             page_context_cancel_tx,
+            script_execution_control,
         }
     }
 
@@ -229,6 +234,12 @@ impl RendererPageSlotHandle {
 
     pub(crate) fn page_context_cancel_sender(&self) -> RendererPageContextCancelSender {
         self.page_context_cancel_tx.clone()
+    }
+
+    pub(crate) fn script_execution_control(
+        &self,
+    ) -> crate::script_execution_control::RendererScriptExecutionControl {
+        self.script_execution_control.clone()
     }
 
     pub(crate) fn page_id(&self) -> PageId {

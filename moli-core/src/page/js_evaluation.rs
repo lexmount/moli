@@ -826,6 +826,10 @@ impl Page {
         self.start_page_command(RendererPageCommand::PerformanceMetricSnapshot)
     }
 
+    pub fn cached_performance_metric_snapshot(&self) -> RendererPerformanceMetricSnapshot {
+        self.page_state.performance_metric_snapshot().clone()
+    }
+
     pub fn finish_performance_metric_snapshot(
         &mut self,
         completion: CompletedPageCommand,

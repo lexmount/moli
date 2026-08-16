@@ -1559,7 +1559,6 @@ pub(crate) struct PageVm {
     pub(super) extra_http_headers: Vec<(String, String)>,
     pub(super) locale_override: Option<String>,
     pub(super) timezone_override: Option<String>,
-    pub(super) script_execution_disabled: bool,
     pub(super) bypass_content_security_policy: bool,
     pub(super) cpu_throttling_rate: f64,
     pub(super) emulated_media: crate::protocol_types::EmulatedMediaOverrides,
@@ -2870,7 +2869,7 @@ impl PageVm {
             document_last_modified: None,
             locale_override: self.locale_override.clone(),
             timezone_override: self.timezone_override.clone(),
-            script_execution_disabled: self.script_execution_disabled,
+            script_execution_disabled: self.script_execution_disabled(),
             bypass_content_security_policy: self.bypass_content_security_policy,
             cpu_throttling_rate: self.cpu_throttling_rate,
             emulated_media: self.emulated_media.clone(),
@@ -4466,6 +4465,10 @@ impl PageVm {
         let dedicated_worker_running_worker_isolate_count = self
             .vm()
             .dedicated_worker_running_worker_isolate_count_for_diagnostics();
+        let performance_metric_snapshot = self.vm().performance_metric_snapshot_without_script(
+            self.document_lifecycle.current_snapshot(),
+            report.subresource_network_records().len(),
+        );
 
         if let Some(started) = total_started {
             tracing::info!(
@@ -4488,6 +4491,7 @@ impl PageVm {
             idle_override: self.idle_override,
             service_worker_client_id: self.vm().service_worker_client_id().as_u64(),
             dedicated_worker_running_worker_isolate_count,
+            performance_metric_snapshot,
         })
     }
 
@@ -4826,7 +4830,6 @@ impl PageVm {
             extra_http_headers: env.extra_http_headers.clone(),
             locale_override: env.locale_override.clone(),
             timezone_override: env.timezone_override.clone(),
-            script_execution_disabled: env.script_execution_disabled,
             bypass_content_security_policy: env.bypass_content_security_policy,
             cpu_throttling_rate: env.cpu_throttling_rate,
             emulated_media: env.emulated_media.clone(),
@@ -5561,7 +5564,20 @@ impl PageVm {
     }
 
     pub(super) fn script_execution_disabled(&self) -> bool {
-        self.script_execution_disabled
+        self.vm().script_execution_disabled()
+    }
+
+    pub(crate) fn script_execution_control(
+        &self,
+    ) -> crate::script_execution_control::RendererScriptExecutionControl {
+        self.vm().script_execution_control()
+    }
+
+    pub(crate) fn bind_script_execution_control(
+        &mut self,
+        control: crate::script_execution_control::RendererScriptExecutionControl,
+    ) {
+        self.vm_mut().bind_script_execution_control(control);
     }
 
     pub(super) fn set_target_stage(&mut self, stage: PageVmInitStage) {

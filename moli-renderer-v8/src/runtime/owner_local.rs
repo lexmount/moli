@@ -25,6 +25,8 @@ pub struct RendererAttachedPage {
     pub(super) inspector_main_ingress:
         crate::script_vm::inspector_main::RendererInspectorMainIngress,
     pub(super) inspector_io_ingress: crate::script_vm::inspector_io::RendererInspectorIoIngress,
+    pub(super) script_execution_control:
+        crate::script_execution_control::RendererScriptExecutionControl,
     pub(super) page_state: Arc<RendererPageState>,
     pub(super) creation_diagnostics: RendererPageCreationDiagnostics,
     pub(super) creation_artifacts: RendererPageCreationArtifacts,
@@ -74,6 +76,7 @@ impl RendererAttachedPage {
                 inspector_pause_bridge: self.inspector_pause_bridge,
                 inspector_main_ingress: self.inspector_main_ingress,
                 inspector_io_ingress: self.inspector_io_ingress,
+                script_execution_control: self.script_execution_control,
                 committed_document_post_response_continuation: self
                     .committed_document_post_response_continuation,
                 _not_send: PhantomData,
@@ -96,6 +99,7 @@ pub struct RendererPageHandle {
     inspector_pause_bridge: crate::script_vm::inspector_pause::RendererInspectorPauseBridge,
     inspector_main_ingress: crate::script_vm::inspector_main::RendererInspectorMainIngress,
     inspector_io_ingress: crate::script_vm::inspector_io::RendererInspectorIoIngress,
+    script_execution_control: crate::script_execution_control::RendererScriptExecutionControl,
     committed_document_post_response_continuation:
         Option<RendererPageCommandPostResponseContinuation>,
     _not_send: PhantomData<Rc<()>>,
@@ -196,6 +200,12 @@ impl RendererPageHandle {
 
     pub fn runtime_inspector_pause_active(&self) -> bool {
         self.inspector_pause_bridge.is_pause_active()
+    }
+
+    /// Publishes the DevTools IO-agent script policy without borrowing the
+    /// owner-resident `PageVm` that may currently be executing JavaScript.
+    pub fn set_script_execution_disabled_from_io(&self, disabled: bool) {
+        self.script_execution_control.set_disabled(disabled);
     }
 
     pub fn arm_runtime_inspector_session_detach(

@@ -40,7 +40,7 @@ impl DocumentRuntime {
             selector_debug: SelectorDebugCounters::default(),
             document,
             design_mode_documents: HashSet::new(),
-            script_execution_disabled: false,
+            script_execution_control: Default::default(),
             bypass_content_security_policy: false,
             policy_container: DocumentPolicyContainer::default(),
             delivered_meta_content_security_policies: RefCell::new(HashMap::new()),
@@ -168,7 +168,7 @@ impl DocumentRuntime {
             selector_debug: _,
             document: _,
             design_mode_documents: _,
-            script_execution_disabled: _,
+            script_execution_control: _,
             bypass_content_security_policy: _,
             policy_container: _,
             delivered_meta_content_security_policies: _,
@@ -229,11 +229,24 @@ impl DocumentRuntime {
     }
 
     pub(crate) fn set_script_execution_disabled(&mut self, disabled: bool) {
-        self.script_execution_disabled = disabled;
+        self.script_execution_control.set_disabled(disabled);
     }
 
     pub(crate) fn script_execution_disabled(&self) -> bool {
-        self.script_execution_disabled
+        self.script_execution_control.is_disabled()
+    }
+
+    pub(crate) fn script_execution_control(
+        &self,
+    ) -> crate::script_execution_control::RendererScriptExecutionControl {
+        self.script_execution_control.clone()
+    }
+
+    pub(crate) fn bind_script_execution_control(
+        &mut self,
+        control: crate::script_execution_control::RendererScriptExecutionControl,
+    ) {
+        self.script_execution_control = control;
     }
 
     pub(crate) fn set_document_character_set(&mut self, character_set: impl Into<String>) {

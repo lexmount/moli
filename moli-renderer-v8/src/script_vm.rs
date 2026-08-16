@@ -7111,6 +7111,34 @@ impl ScriptVm {
         serde_json::from_str(&snapshot_json).context("failed to decode performance metric snapshot")
     }
 
+    pub(crate) fn performance_metric_snapshot_without_script(
+        &self,
+        lifecycle: crate::runtime::RendererDocumentLifecycleSnapshot,
+        resource_count: usize,
+    ) -> RendererPerformanceMetricSnapshot {
+        let started_micros = lifecycle.started.timestamp_micros;
+        let timestamp_ms = |timestamp_micros: u64| timestamp_micros as f64 / 1_000.0;
+        let dom = moli_dom_memory_counters(self.document_runtime.dom_host().dom());
+        RendererPerformanceMetricSnapshot {
+            time_origin_ms: Some(timestamp_ms(started_micros)),
+            now_ms: Some(
+                moli_time::monotonic_timestamp_micros().saturating_sub(started_micros) as f64
+                    / 1_000.0,
+            ),
+            navigation_start_ms: Some(timestamp_ms(started_micros)),
+            dom_content_loaded_ms: lifecycle
+                .dom_content_loaded
+                .map(|stamp| timestamp_ms(stamp.timestamp_micros)),
+            load_event_ms: lifecycle
+                .load
+                .map(|stamp| timestamp_ms(stamp.timestamp_micros)),
+            document_count: Some(1.0),
+            frame_count: Some((1 + dom.iframe_element_count) as f64),
+            node_count: Some(dom.node_count as f64),
+            resource_count: Some(resource_count as f64),
+        }
+    }
+
     pub(super) fn begin_runtime_evaluate(
         &mut self,
         execution_context_id: Option<i64>,

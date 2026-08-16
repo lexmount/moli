@@ -3,7 +3,7 @@ use std::sync::Arc;
 use url::Url;
 
 use super::protocol_support::ScriptExecutionReport;
-use crate::renderer::RendererPageState;
+use crate::renderer::{RendererPageState, RendererPerformanceMetricSnapshot};
 
 pub(super) struct PageStateCache {
     state: Arc<RendererPageState>,
@@ -60,5 +60,9 @@ impl PageStateCache {
 
     pub(super) fn lifecycle_errors(&self) -> &[String] {
         self.state().script_execution.lifecycle_errors()
+    }
+
+    pub(super) fn performance_metric_snapshot(&self) -> &RendererPerformanceMetricSnapshot {
+        &self.state().performance_metric_snapshot
     }
 }

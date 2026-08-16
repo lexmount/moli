@@ -362,7 +362,7 @@ async fn selected_disabled_document_script_does_not_flush_unrelated_runtime_work
             Url::parse("https://example.com/disabled-document-script.html")
                 .expect("document URL"),
         );
-        page_vm.script_execution_disabled = true;
+        page_vm.set_script_execution_disabled(true);
         page_vm
             .vm_mut()
             .enqueue_test_pending_runtime_source_load();
