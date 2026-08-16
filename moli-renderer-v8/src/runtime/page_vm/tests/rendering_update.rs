@@ -5768,6 +5768,67 @@ document.body.innerHTML = `
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn screenshot_distinguishes_zero_length_and_percentage_flex_bases() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/flex-zero-basis.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0}
+.flexbox{display:flex;flex-direction:column}
+.item{font:14px/1 sans-serif;min-width:0;min-height:0}
+.vertical{writing-mode:vertical-rl}
+</style>`;
+document.body.innerHTML = `
+<div id=h-half-percent class=flexbox><div class=item style="flex:0.5 1 0%">item</div></div>
+<div id=h-half-length class=flexbox><div class=item style="flex:0.5 1 0px">item</div></div>
+<div id=h-one-percent class=flexbox><div class=item style="flex:1 1 0%">item</div></div>
+<div id=h-one-length class=flexbox><div class=item style="flex:1 1 0px">item</div></div>
+<div id=v-half-percent class="flexbox vertical"><div class=item style="flex:0.5 1 0%">item</div></div>
+<div id=v-half-length class="flexbox vertical"><div class=item style="flex:0.5 1 0px">item</div></div>
+<div id=v-one-percent class="flexbox vertical"><div class=item style="flex:1 1 0%">item</div></div>
+<div id=v-one-length class="flexbox vertical"><div class=item style="flex:1 1 0px">item</div></div>`;
+"installed"
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0))?
+            .expect("zero flex-basis fixture should retain a root");
+
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                r#"[
+  ["h-half-percent", "height"],
+  ["h-half-length", "height"],
+  ["h-one-percent", "height"],
+  ["h-one-length", "height"],
+  ["v-half-percent", "width"],
+  ["v-half-length", "width"],
+  ["v-one-percent", "width"],
+  ["v-one-length", "width"],
+].flatMap(([id, axis]) => {
+  const container = document.getElementById(id);
+  return [container, container.firstElementChild]
+    .map(element => element.getBoundingClientRect()[axis]);
+}).join("|")"#,
+            )?,
+            "14|14|0|0|14|14|0|0|14|14|0|0|14|14|0|0",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("zero flex-basis fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_preserves_intrinsic_flex_basis_sizing_functions() {
     run_page_vm_async_test(async move {
         let loader =
