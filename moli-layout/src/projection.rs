@@ -321,6 +321,9 @@ where
                 .global_layout_origin(LayoutBoxId::from_index(index));
             self.boxes.push(LayoutBoxGeometry {
                 id,
+                structural_parent: layout_box
+                    .structural_parent
+                    .map(|parent| LayoutOutputBoxId::from_index(parent.index())),
                 parent: layout_box
                     .parent
                     .map(|parent| LayoutOutputBoxId::from_index(parent.index())),

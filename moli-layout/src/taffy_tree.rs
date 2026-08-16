@@ -222,10 +222,15 @@ where
         let is_flattened = world.boxes[id.index()].inline_flattened;
         let is_positioned = world.boxes[id.index()].style.is_absolute_positioned()
             || world.boxes[id.index()].style.is_fixed_positioned();
+        let structural_parent = Some(
+            world.boxes[id.index()]
+                .structural_parent
+                .expect("every non-root box has a structural parent"),
+        );
         let positioned_containing_block = if world.boxes[id.index()].style.is_fixed_positioned() {
-            nearest_fixed_containing_block(world, Some(original_parent))
+            nearest_fixed_containing_block(world, structural_parent)
         } else if world.boxes[id.index()].style.is_absolute_positioned() {
-            nearest_positioned_ancestor(world, Some(original_parent))
+            nearest_positioned_ancestor(world, structural_parent)
         } else {
             None
         };
@@ -657,7 +662,7 @@ where
         if layout_box.establishes_positioned_containing_block() {
             return Some(id);
         }
-        candidate = layout_box.parent;
+        candidate = layout_box.structural_parent;
     }
     None
 }
@@ -674,7 +679,7 @@ where
         if layout_box.establishes_fixed_containing_block() {
             return Some(id);
         }
-        candidate = layout_box.parent;
+        candidate = layout_box.structural_parent;
     }
     None
 }
