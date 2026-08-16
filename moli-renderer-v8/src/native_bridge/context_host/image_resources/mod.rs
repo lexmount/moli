@@ -14,7 +14,7 @@ use crate::{
 pub(crate) use css::{CssImageResourceAdmission, CssImageResourceRequestIdentity};
 pub(crate) use preload::{ScannedImagePreloadAdmission, SharedScannedImagePreloadLoad};
 pub(super) use state::ImageResourceStore;
-pub(crate) use state::{ImageNaturalSizing, ReadyImageForLayout};
+pub(crate) use state::{ImageNaturalSizing, ImageResourceStatus, ReadyImageForLayout};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(super) struct ImageResourceRequestIdentity {
@@ -265,6 +265,17 @@ impl super::JsContextHost {
 
     pub(crate) fn image_resource_is_ready(&self, element: DomHandle) -> bool {
         self.image_resources.is_ready(element)
+    }
+
+    pub(crate) fn image_resource_status(&self, element: DomHandle) -> Option<ImageResourceStatus> {
+        self.image_resources.status(element)
+    }
+
+    pub(crate) fn fail_image_resource_for_element(&mut self, element: DomHandle) -> bool {
+        let Some(identity) = self.image_resources.identity(element).cloned() else {
+            return false;
+        };
+        self.image_resources.fail(&identity)
     }
 
     pub(crate) fn has_ready_image_request(&self, request_key: &ImageRequestKey) -> bool {

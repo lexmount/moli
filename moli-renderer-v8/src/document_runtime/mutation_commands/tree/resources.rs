@@ -30,7 +30,7 @@ pub(super) struct MediaRelevantMutationPlan {
 #[derive(Default)]
 pub(super) struct InsertionSubtreePlan {
     pub(super) node_count: usize,
-    pub(super) may_have_images: bool,
+    pub(super) may_have_image_resources: bool,
     pub(super) may_have_image_relevant_picture_source: bool,
     pub(super) may_have_lazy_media: bool,
     pub(super) may_have_media_sources: bool,
@@ -48,8 +48,8 @@ impl DocumentRuntime {
         insertion_plan: &TreeInsertionPlan<'_>,
         request_initiator_type: crate::types::SubresourceRequestInitiatorType,
     ) {
-        if insertion_plan.subtree_plan.may_have_images {
-            self.queue_inserted_image_loads(
+        if insertion_plan.subtree_plan.may_have_image_resources {
+            self.queue_inserted_image_resource_loads(
                 scope,
                 host_ptr,
                 insertion_plan.insertion_roots,
@@ -77,7 +77,7 @@ impl DocumentRuntime {
         }
     }
 
-    fn queue_inserted_image_loads(
+    fn queue_inserted_image_resource_loads(
         &self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
@@ -87,7 +87,9 @@ impl DocumentRuntime {
         if let [root] = roots
             && self.dom_host.first_child(*root).is_none()
         {
-            if self.dom_host.is_html_element_named(*root, "img") {
+            if self.dom_host.is_html_element_named(*root, "img")
+                || self.dom_host.is_html_element_named(*root, "object")
+            {
                 crate::native_bridge::element::queue_image_load_event_if_needed_with_initiator(
                     scope,
                     host_ptr,
@@ -98,19 +100,21 @@ impl DocumentRuntime {
             return;
         }
         let mut stack = preorder_stack(roots);
-        let mut images = Vec::new();
+        let mut image_elements = Vec::new();
         while let Some(handle) = stack.pop() {
             if self
                 .dom_host
                 .node(handle)
                 .and_then(Node::as_element)
-                .is_some_and(|element| element.is_html_element("img"))
+                .is_some_and(|element| {
+                    element.is_html_element("img") || element.is_html_element("object")
+                })
             {
-                images.push(handle);
+                image_elements.push(handle);
             }
             self.push_child_handles(&mut stack, handle);
         }
-        for image in images {
+        for image in image_elements {
             crate::native_bridge::element::queue_image_load_event_if_needed_with_initiator(
                 scope,
                 host_ptr,
@@ -129,8 +133,11 @@ impl DocumentRuntime {
                 plan.details.observe_element(handle, element);
                 match element.local_name() {
                     "img" => {
-                        plan.may_have_images = true;
+                        plan.may_have_image_resources = true;
                         plan.may_have_image_relevant_picture_source = true;
+                    }
+                    "object" => {
+                        plan.may_have_image_resources = true;
                     }
                     "source" => {
                         plan.may_have_image_relevant_picture_source = true;
@@ -293,7 +300,9 @@ impl DocumentRuntime {
         let mut handles = Vec::new();
         self.collect_subtree_handles_preorder(removal_plan.root, &mut handles);
         for handle in handles {
-            if self.dom_host.is_html_element_named(handle, "img") {
+            if self.dom_host.is_html_element_named(handle, "img")
+                || self.dom_host.is_html_element_named(handle, "object")
+            {
                 crate::native_bridge::element::queue_image_load_event_if_needed(
                     scope, host_ptr, handle,
                 );
