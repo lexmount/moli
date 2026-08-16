@@ -6031,15 +6031,18 @@ async fn audio_worklet_json_static_import_uses_json_fetch_destination() {
     .await;
 }
 
-#[tokio::test]
-async fn audio_worklet_static_css_import_rejects_invalid_module_type_without_fetching_dependency() {
-    run_audio_worklet_static_invalid_module_type_import_test("css", "style.css").await;
+#[test]
+fn audio_worklet_static_css_import_rejects_invalid_module_type_without_fetching_dependency() {
+    run_page_vm_large_stack_async_test("audio-worklet-static-css-invalid-type", || async {
+        run_audio_worklet_static_invalid_module_type_import_test("css", "style.css").await;
+    });
 }
 
-#[tokio::test]
-async fn audio_worklet_static_text_import_rejects_invalid_module_type_without_fetching_dependency()
-{
-    run_audio_worklet_static_invalid_module_type_import_test("text", "text.txt").await;
+#[test]
+fn audio_worklet_static_text_import_rejects_invalid_module_type_without_fetching_dependency() {
+    run_page_vm_large_stack_async_test("audio-worklet-static-text-invalid-type", || async {
+        run_audio_worklet_static_invalid_module_type_import_test("text", "text.txt").await;
+    });
 }
 
 #[tokio::test]
@@ -6759,10 +6762,8 @@ async fn run_audio_worklet_static_invalid_module_type_import_test(
     module_type: &'static str,
     dependency_file: &'static str,
 ) {
-    run_page_vm_async_test(async move {
-        let (base_url, dependency_request_rx, server) =
-            spawn_audio_worklet_static_invalid_module_type_server(module_type, dependency_file)
-                .await;
+    let (base_url, dependency_request_rx, server) =
+        spawn_audio_worklet_static_invalid_module_type_server(module_type, dependency_file).await;
     let document_url = Url::parse(&format!("{base_url}/page.html")).expect("document url");
     let module_url = format!("{base_url}/worklet/entry.js");
     let module_url_literal =
@@ -6817,12 +6818,10 @@ async fn run_audio_worklet_static_invalid_module_type_import_test(
         )),
         "unexpected AudioWorklet invalid static module type result: {result}"
     );
-        assert_eq!(
-            dependency_request, None,
-            "AudioWorklet invalid static module type must fail before fetching dependency"
-        );
-    })
-    .await;
+    assert_eq!(
+        dependency_request, None,
+        "AudioWorklet invalid static module type must fail before fetching dependency"
+    );
 }
 
 async fn spawn_audio_worklet_static_invalid_module_type_server(

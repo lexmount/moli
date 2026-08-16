@@ -281,6 +281,7 @@ pub use runtime::{
     RendererRuntimeCommandOutput, RendererRuntimeEvaluationResult, RendererRuntimeHeapSpaceUsage,
     RendererRuntimeHeapUsage, RendererRuntimeInspectorAsyncCompletion,
     RendererRuntimeInspectorCommandClaim, RendererRuntimeInspectorCommandRoute,
+    RendererRuntimeInspectorMainCommandCompletion, RendererRuntimeInspectorMainCommandRoute,
     RendererRuntimeInspectorMessage, RendererRuntimeInspectorMessageBatch,
     RendererRuntimeInspectorProtocolMessage, RendererRuntimeInspectorProtocolMessageValueMut,
     RendererRuntimeInspectorResponseChannel, RendererRuntimeInspectorResponseSender,

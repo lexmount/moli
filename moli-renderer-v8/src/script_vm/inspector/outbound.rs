@@ -717,10 +717,14 @@ mod tests {
             pause_bridge.pause_loop_wake(),
             None,
         );
+        let main_ingress = crate::script_vm::inspector_main::RendererInspectorMainIngress::new(
+            crate::script_vm::inspector_route::RendererInspectorSessionExecutorRouteId::new(1),
+            pause_bridge.pause_loop_wake(),
+        );
         let outbound = InspectorOutbound::for_frontend(
             agent_token,
             session.clone(),
-            pause_bridge.outbound_route(io_ingress, agent_token, session.clone()),
+            pause_bridge.outbound_route(main_ingress, io_ingress, agent_token, session.clone()),
             Some(journal.clone()),
         );
         let recorder = RendererCommandTurnOutputRecorder::default();

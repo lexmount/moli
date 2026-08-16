@@ -114,6 +114,7 @@ pub use moli_renderer_v8::{
     RendererPointerEventProperties, RendererPopupActivationSource,
     RendererResourceTextSearchOutcome, RendererRuntimeCommandOutput, RendererRuntimeHeapUsage,
     RendererRuntimeInspectorCommandClaim, RendererRuntimeInspectorCommandRoute,
+    RendererRuntimeInspectorMainCommandCompletion, RendererRuntimeInspectorMainCommandRoute,
     RendererRuntimeInspectorMessage, RendererRuntimeInspectorMessageBatch,
     RendererRuntimeInspectorProtocolMessage, RendererRuntimeInspectorProtocolMessageValueMut,
     RendererRuntimeObservableSourceItem, RendererRuntimeObservableSourceSummary,

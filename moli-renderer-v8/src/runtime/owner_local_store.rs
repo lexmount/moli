@@ -550,6 +550,7 @@ pub(super) enum LivePagePendingNavigationPhaseOneAdvance {
 
 pub(super) struct RendererOwnerLocalContext {
     pub(super) owner_state: Arc<RendererOwnerState>,
+    pub(super) render_runtime: crate::render_runtime::RenderRuntimeHandle,
     pub(super) local_host_id: RendererOwnerLocalHostId,
     #[cfg(debug_assertions)]
     pub(super) local_thread_id: ThreadId,
@@ -559,6 +560,7 @@ impl Clone for RendererOwnerLocalContext {
     fn clone(&self) -> Self {
         Self {
             owner_state: self.owner_state.clone(),
+            render_runtime: self.render_runtime.clone(),
             local_host_id: self.local_host_id,
             #[cfg(debug_assertions)]
             local_thread_id: self.local_thread_id,
@@ -3479,6 +3481,7 @@ impl RendererOwnerLocalStore {
             }
             let javascript_dialog_broker = entry.page_vm().javascript_dialog_broker();
             let inspector_pause_bridge = entry.page_vm().inspector_pause_bridge();
+            let inspector_main_ingress = entry.page_vm().inspector_main_ingress();
             let inspector_io_ingress = entry.page_vm().inspector_io_ingress();
             let page_state = Self::commit_current_vm_page_state_on_entry(&mut entry)?;
             let initial_runtime_realms = entry.page_vm_mut().vm_mut().runtime_realm_inventory();
@@ -3491,6 +3494,7 @@ impl RendererOwnerLocalStore {
             Ok((
                 javascript_dialog_broker,
                 inspector_pause_bridge,
+                inspector_main_ingress,
                 inspector_io_ingress,
                 page_state,
                 devtools_agent_token,
@@ -3519,6 +3523,7 @@ impl RendererOwnerLocalStore {
             |(
                 javascript_dialog_broker,
                 inspector_pause_bridge,
+                inspector_main_ingress,
                 inspector_io_ingress,
                 page_state,
                 devtools_agent_token,
@@ -3533,6 +3538,7 @@ impl RendererOwnerLocalStore {
                         page_context_cancel_tx,
                         javascript_dialog_broker,
                         inspector_pause_bridge,
+                        inspector_main_ingress,
                         inspector_io_ingress,
                         page_state,
                         creation_diagnostics,
@@ -3975,6 +3981,10 @@ impl RendererOwnerLocalStore {
                     .expect("an attached Page must own a renderer script environment")
                     .output_journal(),
             );
+        attached_entry
+            .page_vm()
+            .inspector_main_ingress()
+            .configure_owner_wake(owner.render_runtime.clone());
         attached_entry
             .page_vm()
             .inspector_io_ingress()

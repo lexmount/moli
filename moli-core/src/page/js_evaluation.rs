@@ -520,23 +520,19 @@ impl Page {
     ) -> Result<PendingRuntimeInspectorCommandDispatch> {
         match inspector_route {
             RendererInspectorCommandRoute::MainThread => {
-                let command = match owner_context_resolution_action {
-                    Some(action) => RendererPageCommand::dispatch_runtime_protocol_message_with_context_resolution_and_deferred_response(
-                        inspector_session_id,
-                        RendererInspectorCommandRoute::MainThread,
-                        action,
+                let route = self.handle.enqueue_runtime_inspector_main_command(
+                    RendererInspectorCommandEnvelope::new_main_protocol(
+                        RendererInspectorIngressTicket::new(
+                            self.renderer_agent_attachment_id,
+                            inspector_session_id,
+                            RendererInspectorCommandRoute::MainThread,
+                        ),
+                        owner_context_resolution_action,
                         raw_json,
                         deferred_response,
                     ),
-                    None => RendererPageCommand::dispatch_runtime_protocol_message_with_deferred_response(
-                        inspector_session_id,
-                        RendererInspectorCommandRoute::MainThread,
-                        raw_json,
-                        deferred_response,
-                    ),
-                };
-                self.start_page_command(command)
-                    .map(Self::pending_main_thread_runtime_inspector_command_dispatch)
+                );
+                Ok(Self::pending_main_ingress_runtime_inspector_command_dispatch(route))
             }
             RendererInspectorCommandRoute::Io => {
                 if owner_context_resolution_action.is_some() {

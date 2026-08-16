@@ -1,7 +1,6 @@
 use std::{
     collections::{BTreeMap, VecDeque},
     ffi::c_void,
-    num::NonZeroUsize,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -17,27 +16,21 @@ use crate::{
         RendererInspectorCommandEnvelope, RendererInspectorCommandRoute,
         RendererInspectorIngressTicket, RendererRuntimeInspectorResponseSender,
     },
-    script_vm::inspector_pause::RendererInspectorPauseLoopWake,
+    script_vm::{
+        inspector_pause::RendererInspectorPauseLoopWake,
+        inspector_route::RendererInspectorSessionExecutorRouteId,
+    },
 };
 
 type RendererInspectorInterruptCallback =
     unsafe extern "C" fn(v8::UnsafeRawIsolatePtr, *mut c_void);
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub(crate) struct RendererInspectorIoRouteId(NonZeroUsize);
-
-impl RendererInspectorIoRouteId {
-    pub(crate) fn new(raw: usize) -> Self {
-        Self(NonZeroUsize::new(raw).expect("Inspector IO route ID must be non-zero"))
-    }
-}
-
 pub(crate) struct RendererInspectorInterruptTarget {
-    route_id: RendererInspectorIoRouteId,
+    route_id: RendererInspectorSessionExecutorRouteId,
 }
 
 impl RendererInspectorInterruptTarget {
-    pub(crate) fn route_id(&self) -> RendererInspectorIoRouteId {
+    pub(crate) fn route_id(&self) -> RendererInspectorSessionExecutorRouteId {
         self.route_id
     }
 }
@@ -152,11 +145,11 @@ struct RendererInspectorInterruptRoute {
 
 #[derive(Clone)]
 pub(crate) struct RendererInspectorIoOwnerWake {
-    route_id: RendererInspectorIoRouteId,
+    route_id: RendererInspectorSessionExecutorRouteId,
 }
 
 impl RendererInspectorIoOwnerWake {
-    pub(crate) fn route_id(&self) -> RendererInspectorIoRouteId {
+    pub(crate) fn route_id(&self) -> RendererInspectorSessionExecutorRouteId {
         self.route_id
     }
 }
@@ -246,7 +239,7 @@ impl RendererInspectorIoIngress {
         interrupt_route: Option<(
             v8::IsolateHandle,
             RendererInspectorInterruptCallback,
-            RendererInspectorIoRouteId,
+            RendererInspectorSessionExecutorRouteId,
         )>,
     ) -> Self {
         Self {
@@ -271,7 +264,7 @@ impl RendererInspectorIoIngress {
         }
     }
 
-    pub(crate) fn route_id(&self) -> Option<RendererInspectorIoRouteId> {
+    pub(crate) fn route_id(&self) -> Option<RendererInspectorSessionExecutorRouteId> {
         self.shared
             .interrupt_route
             .as_ref()
@@ -377,6 +370,7 @@ impl RendererInspectorIoIngress {
         self.claim_next(RendererInspectorIoCommandConsumer::Pause)
     }
 
+    #[cfg(test)]
     pub(crate) fn wait_and_claim_for_pause(
         &self,
         pause_bridge: &crate::script_vm::inspector_pause::RendererInspectorPauseBridge,

@@ -8,6 +8,7 @@ use tokio::sync::{mpsc, oneshot};
 use super::page_task_queue::RendererOwnerWake;
 use super::runtime::{RendererOwnerCommand, RendererOwnerHandle, RendererOwnerReply};
 use super::script_vm::inspector_io::RendererInspectorIoOwnerWake;
+use super::script_vm::inspector_main::RendererInspectorMainOwnerWake;
 use super::service_worker_runtime::ServiceWorkerRuntimeOwnerWake;
 use super::shared_worker_runtime::SharedWorkerRuntimeOwnerWake;
 
@@ -18,9 +19,12 @@ use super::shared_worker_runtime::SharedWorkerRuntimeOwnerWake;
 // headroom for fresh V8 entry points.
 const RENDER_RUNTIME_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
 
-pub(crate) struct RenderRuntimeEnvelope {
-    pub(crate) command: RendererOwnerCommand,
-    pub(crate) reply_tx: oneshot::Sender<Result<RendererOwnerReply>>,
+pub(crate) enum RenderRuntimeEnvelope {
+    Command {
+        command: Box<RendererOwnerCommand>,
+        reply_tx: oneshot::Sender<Result<RendererOwnerReply>>,
+    },
+    InspectorMainReceiverWake(RendererInspectorMainOwnerWake),
 }
 
 #[derive(Clone)]
@@ -179,16 +183,36 @@ impl RenderRuntimeHandle {
                 error: anyhow!("render runtime command admission has shut down"),
             });
         }
-        if let Err(error) = admission
-            .tx
-            .send(RenderRuntimeEnvelope { command, reply_tx })
-        {
+        if let Err(error) = admission.tx.send(RenderRuntimeEnvelope::Command {
+            command: Box::new(command),
+            reply_tx,
+        }) {
+            let RenderRuntimeEnvelope::Command { command, .. } = error.0 else {
+                unreachable!("command admission must recover the command envelope it sent")
+            };
             return Err(RenderRuntimeEnqueueError {
-                command: Box::new(error.0.command),
+                command,
                 error: anyhow!("render runtime thread has shut down"),
             });
         }
         Ok(reply_rx)
+    }
+
+    pub(crate) fn enqueue_inspector_main_receiver_wake(
+        &self,
+        wake: RendererInspectorMainOwnerWake,
+    ) -> Result<()> {
+        let Some(state) = self.state.upgrade() else {
+            return Err(anyhow!("render runtime thread has shut down"));
+        };
+        let admission = state.admission.lock();
+        if admission.terminal {
+            return Err(anyhow!("render runtime command admission has shut down"));
+        }
+        admission
+            .tx
+            .send(RenderRuntimeEnvelope::InspectorMainReceiverWake(wake))
+            .map_err(|_| anyhow!("render runtime thread has shut down"))
     }
 
     pub(crate) fn enqueue_owned(

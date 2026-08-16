@@ -81,7 +81,8 @@ use crate::referrer_policy::response_referrer_policy_from_headers;
 use crate::render_runtime::{RenderRuntimeEnvelope, RenderRuntimeHandle, RenderRuntimeOwner};
 use crate::script_vm::{
     PendingRuntimeEvaluateCall, RendererDocumentIsolateBootstrap, dispatch_inspector_io_owner_wake,
-    inspector_io::RendererInspectorIoOwnerWake,
+    dispatch_inspector_main_owner_wake, inspector_io::RendererInspectorIoOwnerWake,
+    inspector_main::RendererInspectorMainOwnerWake,
 };
 use crate::service_worker_runtime::{
     ServiceWorkerRuntimeOwnerWake, service_worker_owner_wake_channel,
@@ -293,6 +294,11 @@ pub enum RendererOwnerReply {
 
 enum RenderRuntimeDispatchOutcome {
     Reply(Box<Result<RendererOwnerReply>>),
+    InspectorMainCommandClaimed {
+        reply_tx: oneshot::Sender<Result<RendererOwnerReply>>,
+        turn: Box<RenderRuntimeTurn>,
+        command_admission_output_predecessor: Option<RendererOutputFence>,
+    },
     PageCreatedAndContinueNavigation {
         page: Box<RendererAttachedPage>,
         continuation: RenderRuntimePageCreationContinuation,
@@ -575,6 +581,12 @@ enum RenderRuntimeTurn {
     RunOwnerMaintenance {
         task: RendererOwnerMaintenanceTask,
     },
+    /// One task posted by the Main DevTools receiver. The command remains
+    /// unclaimed until this turn actually runs, so a nested debugger loop can
+    /// pump the same receiver while an earlier Page turn is paused in V8.
+    RunInspectorMainReceiver {
+        wake: RendererInspectorMainOwnerWake,
+    },
     RunLivePageCommand {
         token: RendererPageToken,
         command: RendererPageCommand,
@@ -678,6 +690,9 @@ impl RenderRuntimeTurn {
     ) -> Option<PageCommandFirstDispatchIdentity> {
         match self {
             Self::RunLivePageCommand { token, command, .. } => {
+                if command.uses_main_inspector_ingress_admission() {
+                    return None;
+                }
                 command.inspector_ticket().map(|ticket| {
                     debug_assert_eq!(
                         ticket.route(),
@@ -870,6 +885,7 @@ impl RenderRuntimeDispatchOutcome {
                 turn.live_page_command_first_dispatch_identity()
             }
             Self::Reply(_)
+            | Self::InspectorMainCommandClaimed { .. }
             | Self::PageCreatedAndContinueNavigation { .. }
             | Self::BackgroundComplete(_)
             | Self::PageCreationNavigationFailurePublished { .. } => None,
@@ -913,6 +929,7 @@ pub(super) struct RendererOwnerState {
     pub(super) local_executor: JsLocalExecutor,
     pub(super) next_page_id: Arc<AtomicU64>,
     pub(super) page_wake_tx: mpsc::UnboundedSender<RendererOwnerWake>,
+    pub(super) render_runtime_admission: std::sync::OnceLock<RenderRuntimeHandle>,
     pub(super) inspector_io_wake_tx: mpsc::UnboundedSender<RendererInspectorIoOwnerWake>,
     pub(super) browser_context_runtime: RendererBrowserContextRuntime,
     pub(super) owner_local_host_id: RendererOwnerLocalHostId,
@@ -1714,6 +1731,7 @@ impl RendererOwnerHandle {
             local_executor,
             next_page_id,
             page_wake_tx,
+            render_runtime_admission: std::sync::OnceLock::new(),
             inspector_io_wake_tx,
             browser_context_runtime,
             owner_local_host_id,
@@ -1736,6 +1754,11 @@ impl RendererOwnerHandle {
             service_worker_wake_rx,
         );
         let render_runtime = render_runtime_owner.handle();
+        provisional
+            .state
+            .render_runtime_admission
+            .set(render_runtime.clone())
+            .expect("render runtime admission must be initialized exactly once");
         (
             Self {
                 render_runtime,
@@ -1765,8 +1788,15 @@ impl RendererOwnerHandle {
     }
 
     pub(super) fn owner_local_context(&self) -> Result<RendererOwnerLocalContext> {
+        let render_runtime = self
+            .state
+            .render_runtime_admission
+            .get()
+            .cloned()
+            .ok_or_else(|| anyhow!("render runtime admission is not initialized"))?;
         Ok(RendererOwnerLocalContext {
             owner_state: self.state.clone(),
+            render_runtime,
             local_host_id: self.state.owner_local_host_id,
             #[cfg(debug_assertions)]
             local_thread_id: self.bind_or_check_local_runtime_thread()?,
@@ -2501,6 +2531,18 @@ impl RendererOwnerHandle {
         }
     }
 
+    fn enqueue_inspector_main_receiver_wake(
+        wake: RendererInspectorMainOwnerWake,
+        pending_turns: &mut RenderRuntimePendingTurnQueue,
+    ) {
+        pending_turns.push_back(RenderRuntimePendingTurn {
+            reply_tx: None,
+            turn: RenderRuntimeTurn::RunInspectorMainReceiver { wake },
+            allow_command_overtake: false,
+            command_admission_output_predecessor: None,
+        });
+    }
+
     pub(crate) async fn run_render_runtime_loop(
         &self,
         mut rx: mpsc::UnboundedReceiver<RenderRuntimeEnvelope>,
@@ -2540,10 +2582,12 @@ impl RendererOwnerHandle {
                         }
                     }
                     while let Ok(envelope) = rx.try_recv() {
-                        self.release_rejected_command_output_reservation(&envelope.command);
-                        let _ = envelope.reply_tx.send(Err(anyhow!(
-                            "renderer browser context was dropped before command dispatch"
-                        )));
+                        if let RenderRuntimeEnvelope::Command { command, reply_tx } = envelope {
+                            self.release_rejected_command_output_reservation(&command);
+                            let _ = reply_tx.send(Err(anyhow!(
+                                "renderer browser context was dropped before command dispatch"
+                            )));
+                        }
                     }
                     break;
                 }
@@ -2705,6 +2749,19 @@ impl RendererOwnerHandle {
                                     "background pending turn finished with error: {error}"
                                 );
                             }
+                        }
+                        RenderRuntimeDispatchOutcome::InspectorMainCommandClaimed {
+                            reply_tx,
+                            turn,
+                            command_admission_output_predecessor,
+                        } => {
+                            debug_assert!(pending_turn.reply_tx.is_none());
+                            pending_turns.push_front(RenderRuntimePendingTurn {
+                                reply_tx: Some(reply_tx),
+                                turn: *turn,
+                                allow_command_overtake: false,
+                                command_admission_output_predecessor,
+                            });
                         }
                         RenderRuntimeDispatchOutcome::PageCreatedAndContinueNavigation {
                             mut page,
@@ -2990,18 +3047,25 @@ impl RendererOwnerHandle {
         pending_turns: &mut RenderRuntimePendingTurnQueue,
         parked_turns: &mut VecDeque<RenderRuntimeParkedTurn>,
     ) {
+        let (command, reply_tx) = match envelope {
+            RenderRuntimeEnvelope::Command { command, reply_tx } => (*command, reply_tx),
+            RenderRuntimeEnvelope::InspectorMainReceiverWake(wake) => {
+                Self::enqueue_inspector_main_receiver_wake(wake, pending_turns);
+                return;
+            }
+        };
         #[cfg(test)]
         self.wait_on_command_dispatch_gate_for_testing();
         if self.context_shutdown_started() {
-            self.release_rejected_command_output_reservation(&envelope.command);
-            let _ = envelope.reply_tx.send(Err(anyhow!(
+            self.release_rejected_command_output_reservation(&command);
+            let _ = reply_tx.send(Err(anyhow!(
                 "renderer browser context was dropped before command dispatch"
             )));
             return;
         }
-        if envelope.reply_tx.is_closed()
+        if reply_tx.is_closed()
             && matches!(
-                &envelope.command,
+                &command,
                 RendererOwnerCommand::RunAsyncPageCommand { command, .. }
                     | RendererOwnerCommand::RunProtocolPageCommand { command, .. }
                     if command.interruptible_by_javascript_dialog()
@@ -3009,20 +3073,19 @@ impl RendererOwnerHandle {
         {
             return;
         }
-        let removed_page_token = match &envelope.command {
+        let removed_page_token = match &command {
             RendererOwnerCommand::RemovePage { token } => Some(*token),
             _ => None,
         };
         let mut command_admission_output_predecessor =
-            renderer_command_admission_page_token(&envelope.command)
+            renderer_command_admission_page_token(&command)
                 .and_then(renderer_output_fence_for_tail_on_bound_owner_local_store);
-        let command_future = Box::pin(
-            self.dispatch_command_inline_on_owner_local_store(envelope.command, owner_local_store),
-        );
+        let command_future =
+            Box::pin(self.dispatch_command_inline_on_owner_local_store(command, owner_local_store));
         let outcome = command_future.await;
         if self.context_shutdown_started() {
             self.cancel_dispatch_outcome_for_context_shutdown(outcome);
-            let _ = envelope.reply_tx.send(Err(anyhow!(
+            let _ = reply_tx.send(Err(anyhow!(
                 "renderer browser context was dropped during command dispatch"
             )));
             return;
@@ -3033,7 +3096,20 @@ impl RendererOwnerHandle {
                     *result,
                     command_admission_output_predecessor.take(),
                 );
-                let _ = envelope.reply_tx.send(result);
+                let _ = reply_tx.send(result);
+            }
+            RenderRuntimeDispatchOutcome::InspectorMainCommandClaimed {
+                reply_tx: main_reply_tx,
+                turn,
+                command_admission_output_predecessor: _,
+            } => {
+                self.cancel_pending_turn_on_owner_local_store(*turn);
+                let _ = main_reply_tx.send(Err(anyhow!(
+                    "Inspector Main receiver outcome escaped into owner command dispatch"
+                )));
+                let _ = reply_tx.send(Err(anyhow!(
+                    "renderer command unexpectedly entered the Inspector Main receiver"
+                )));
             }
             RenderRuntimeDispatchOutcome::PageCreatedAndContinueNavigation {
                 mut page,
@@ -3045,8 +3121,7 @@ impl RendererOwnerHandle {
                         self.state.page_wake_tx.clone(),
                     );
                 }
-                if envelope
-                    .reply_tx
+                if reply_tx
                     .send(Ok(RendererOwnerReply::PageCreated(page)))
                     .is_ok()
                 {
@@ -3068,22 +3143,22 @@ impl RendererOwnerHandle {
                         "renderer command unexpectedly completed as background work: {error}"
                     )),
                 };
-                let _ = envelope.reply_tx.send(reply);
+                let _ = reply_tx.send(reply);
             }
             RenderRuntimeDispatchOutcome::PageCreationNavigationFailurePublished {
                 token,
                 failure,
             } => {
-                let _ = envelope.reply_tx.send(Err(anyhow!(failure.to_string())));
+                let _ = reply_tx.send(Err(anyhow!(failure.to_string())));
                 self.enqueue_parked_turns_for_wake(token, parked_turns, pending_turns);
             }
             RenderRuntimeDispatchOutcome::ContinueNextTurn(turn) => {
-                if envelope.reply_tx.is_closed() {
+                if reply_tx.is_closed() {
                     self.detach_navigation_or_cancel_pending_turn(*turn, pending_turns);
                 } else {
                     Self::admit_page_command_first_dispatch(
                         RenderRuntimePendingTurn {
-                            reply_tx: Some(envelope.reply_tx),
+                            reply_tx: Some(reply_tx),
                             turn: *turn,
                             // This is the command's first owner turn, not a
                             // continuation returning to the queue. Run it before
@@ -3104,7 +3179,7 @@ impl RendererOwnerHandle {
                 ready_at,
             } => {
                 self.park_or_cancel_turn(
-                    Some(envelope.reply_tx),
+                    Some(reply_tx),
                     *turn,
                     wake_token,
                     Some(ready_at),
@@ -3116,7 +3191,7 @@ impl RendererOwnerHandle {
             }
             RenderRuntimeDispatchOutcome::ContinueAfterPageWake { turn, wake_token } => {
                 self.park_or_cancel_turn(
-                    Some(envelope.reply_tx),
+                    Some(reply_tx),
                     *turn,
                     wake_token,
                     None,
@@ -3131,7 +3206,7 @@ impl RendererOwnerHandle {
                 wake_token,
             } => {
                 self.park_or_cancel_turn(
-                    Some(envelope.reply_tx),
+                    Some(reply_tx),
                     *turn,
                     wake_token,
                     None,
@@ -3165,6 +3240,14 @@ impl RendererOwnerHandle {
                 turn,
                 ..
             } => {
+                self.cancel_pending_turn_on_owner_local_store(*turn);
+            }
+            RenderRuntimeDispatchOutcome::InspectorMainCommandClaimed {
+                reply_tx,
+                turn,
+                command_admission_output_predecessor: _,
+            } => {
+                drop(reply_tx);
                 self.cancel_pending_turn_on_owner_local_store(*turn);
             }
             RenderRuntimeDispatchOutcome::Reply(_)
@@ -4438,6 +4521,7 @@ impl RendererOwnerHandle {
             | RenderRuntimeTurn::DrainServiceWorkerServiceLane
             | RenderRuntimeTurn::RunPageTurn { .. }
             | RenderRuntimeTurn::RunOwnerMaintenance { .. }
+            | RenderRuntimeTurn::RunInspectorMainReceiver { .. }
             | RenderRuntimeTurn::RunLivePageCommand { .. }
             | RenderRuntimeTurn::ResumeLivePageDocumentLifecycleAfterReply { .. }
             | RenderRuntimeTurn::WaitLivePageNetworkIdle { .. }
@@ -6248,6 +6332,23 @@ impl RendererOwnerHandle {
             RenderRuntimeTurn::RunPageTurn { token } => self.run_one_page_turn(token).await,
             RenderRuntimeTurn::RunOwnerMaintenance { task } => {
                 self.run_one_owner_maintenance_turn(task).await
+            }
+            RenderRuntimeTurn::RunInspectorMainReceiver { wake } => {
+                let Some(dispatch) = dispatch_inspector_main_owner_wake(wake) else {
+                    return RenderRuntimeDispatchOutcome::BackgroundComplete(Ok(()));
+                };
+                let (token, capture_policy, envelope, reply_tx) = dispatch.into_parts();
+                let command_admission_output_predecessor =
+                    renderer_output_fence_for_tail_on_bound_owner_local_store(token);
+                RenderRuntimeDispatchOutcome::InspectorMainCommandClaimed {
+                    reply_tx,
+                    command_admission_output_predecessor,
+                    turn: Box::new(RenderRuntimeTurn::RunLivePageCommand {
+                        token,
+                        command: RendererPageCommand::from_inspector_envelope(envelope),
+                        capture_policy,
+                    }),
+                }
             }
             RenderRuntimeTurn::RunLivePageCommand {
                 token,

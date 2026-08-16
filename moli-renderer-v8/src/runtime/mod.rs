@@ -406,6 +406,9 @@ pub(crate) use crate::renderer::PageVmInitStage;
 pub use crate::script_vm::inspector_io::{
     RendererRuntimeInspectorCommandClaim, RendererRuntimeInspectorCommandRoute,
 };
+pub use crate::script_vm::inspector_main::{
+    RendererRuntimeInspectorMainCommandCompletion, RendererRuntimeInspectorMainCommandRoute,
+};
 pub(crate) use crate::service_worker_runtime::{
     MaterializedServiceWorkerFetchResponseHead, ServiceWorkerClientFocus,
     ServiceWorkerClientFocusError, ServiceWorkerClientFocusResult, ServiceWorkerClientId,

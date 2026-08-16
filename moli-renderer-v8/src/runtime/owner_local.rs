@@ -22,6 +22,8 @@ pub struct RendererAttachedPage {
     pub(super) javascript_dialog_broker: RendererJavaScriptDialogBroker,
     pub(super) inspector_pause_bridge:
         crate::script_vm::inspector_pause::RendererInspectorPauseBridge,
+    pub(super) inspector_main_ingress:
+        crate::script_vm::inspector_main::RendererInspectorMainIngress,
     pub(super) inspector_io_ingress: crate::script_vm::inspector_io::RendererInspectorIoIngress,
     pub(super) page_state: Arc<RendererPageState>,
     pub(super) creation_diagnostics: RendererPageCreationDiagnostics,
@@ -70,6 +72,7 @@ impl RendererAttachedPage {
                 page_context_cancel_tx: self.page_context_cancel_tx,
                 javascript_dialog_broker: self.javascript_dialog_broker,
                 inspector_pause_bridge: self.inspector_pause_bridge,
+                inspector_main_ingress: self.inspector_main_ingress,
                 inspector_io_ingress: self.inspector_io_ingress,
                 committed_document_post_response_continuation: self
                     .committed_document_post_response_continuation,
@@ -91,6 +94,7 @@ pub struct RendererPageHandle {
     page_context_cancel_tx: RendererPageContextCancelSender,
     javascript_dialog_broker: RendererJavaScriptDialogBroker,
     inspector_pause_bridge: crate::script_vm::inspector_pause::RendererInspectorPauseBridge,
+    inspector_main_ingress: crate::script_vm::inspector_main::RendererInspectorMainIngress,
     inspector_io_ingress: crate::script_vm::inspector_io::RendererInspectorIoIngress,
     committed_document_post_response_continuation:
         Option<RendererPageCommandPostResponseContinuation>,
@@ -98,8 +102,13 @@ pub struct RendererPageHandle {
 }
 
 pub struct RendererPageCommandPending {
-    reply_rx: oneshot::Receiver<anyhow::Result<RendererOwnerReply>>,
+    dispatch: RendererPageCommandPendingDispatch,
     javascript_dialog_watch: Option<RendererJavaScriptDialogWatch>,
+}
+
+enum RendererPageCommandPendingDispatch {
+    Owner(oneshot::Receiver<anyhow::Result<RendererOwnerReply>>),
+    InspectorMain(Box<RendererRuntimeInspectorMainCommandRoute>),
 }
 
 #[derive(Clone)]
@@ -174,6 +183,17 @@ impl RendererPageHandle {
             .enqueue_command(self.devtools_agent_token, envelope)
     }
 
+    pub fn enqueue_runtime_inspector_main_command(
+        &self,
+        envelope: RendererInspectorCommandEnvelope,
+    ) -> RendererRuntimeInspectorMainCommandRoute {
+        self.inspector_main_ingress.enqueue_command(
+            self.token(),
+            self.devtools_agent_token,
+            envelope,
+        )
+    }
+
     pub fn runtime_inspector_pause_active(&self) -> bool {
         self.inspector_pause_bridge.is_pause_active()
     }
@@ -229,6 +249,21 @@ impl RendererPageHandle {
                 stage = "page_handle_command_dispatch",
             );
         }
+        let command = match command {
+            RendererPageCommand::Inspector(envelope) => {
+                let route = self.inspector_main_ingress.enqueue_owner_command(
+                    self.token(),
+                    self.devtools_agent_token,
+                    envelope,
+                    capture_policy,
+                );
+                return Ok(RendererPageCommandPending {
+                    dispatch: RendererPageCommandPendingDispatch::InspectorMain(Box::new(route)),
+                    javascript_dialog_watch,
+                });
+            }
+            command => command,
+        };
         let owner_command = match capture_policy {
             RendererPageStateCapturePolicy::FullReport => {
                 RendererOwnerCommand::RunAsyncPageCommand {
@@ -245,7 +280,7 @@ impl RendererPageHandle {
         };
         let reply_rx = self.render_runtime.enqueue(owner_command)?;
         Ok(RendererPageCommandPending {
-            reply_rx,
+            dispatch: RendererPageCommandPendingDispatch::Owner(reply_rx),
             javascript_dialog_watch,
         })
     }
@@ -308,6 +343,8 @@ impl RendererPageHandle {
             return Ok(());
         };
         self.inspector_pause_bridge.close_target();
+        self.inspector_main_ingress
+            .close("Inspector target closed with its Page handle");
         self.inspector_io_ingress
             .close("Inspector target closed with its Page handle");
         self.javascript_dialog_broker.dismiss_pending();
@@ -349,15 +386,40 @@ impl RendererPageHandle {
 impl RendererPageCommandPending {
     pub async fn wait(self) -> Result<RendererCommandTurnOutput> {
         let RendererPageCommandPending {
-            reply_rx,
+            dispatch,
             javascript_dialog_watch,
         } = self;
+        let wait_for_dispatch = async move {
+            match dispatch {
+                RendererPageCommandPendingDispatch::Owner(reply_rx) => {
+                    match reply_rx
+                        .await
+                        .map_err(|_| anyhow!("render runtime reply channel closed"))??
+                    {
+                        RendererOwnerReply::AsyncPageCommandRan(result) => Ok(*result),
+                        _ => Err(anyhow!(
+                            "renderer owner returned non-async page-command reply for async page command"
+                        )),
+                    }
+                }
+                RendererPageCommandPendingDispatch::InspectorMain(route) => {
+                    match route.wait_for_completion().await? {
+                        RendererRuntimeInspectorMainCommandCompletion::Owner(output) => Ok(*output),
+                        RendererRuntimeInspectorMainCommandCompletion::Inspector => Err(anyhow!(
+                            "an owner-only Inspector Main command entered nested dispatch"
+                        )),
+                        RendererRuntimeInspectorMainCommandCompletion::Canceled => Err(anyhow!(
+                            "Inspector Main command was canceled before owner dispatch"
+                        )),
+                    }
+                }
+            }
+        };
+        tokio::pin!(wait_for_dispatch);
         let reply = if let Some(javascript_dialog_watch) = javascript_dialog_watch {
             tokio::select! {
                 biased;
-                reply = reply_rx => {
-                    reply.map_err(|_| anyhow!("render runtime reply channel closed"))??
-                }
+                reply = &mut wait_for_dispatch => reply?,
                 () = javascript_dialog_watch.wait_until_open() => {
                     return Err(anyhow!(
                         "renderer page observation interrupted by an open JavaScript dialog"
@@ -365,16 +427,9 @@ impl RendererPageCommandPending {
                 }
             }
         } else {
-            reply_rx
-                .await
-                .map_err(|_| anyhow!("render runtime reply channel closed"))??
+            wait_for_dispatch.await?
         };
-        match reply {
-            RendererOwnerReply::AsyncPageCommandRan(result) => Ok(*result),
-            _ => Err(anyhow!(
-                "renderer owner returned non-async page-command reply for async page command"
-            )),
-        }
+        Ok(reply)
     }
 }
 
@@ -384,6 +439,8 @@ impl Drop for RendererPageHandle {
             return;
         };
         if self.inspector_pause_bridge.detach_page(token.page_id) {
+            self.inspector_main_ingress
+                .cancel_all_queued("Inspector Page handle was dropped");
             self.inspector_io_ingress
                 .cancel_all_queued("Inspector Page handle was dropped");
         }

@@ -3616,6 +3616,8 @@ pub struct RendererInspectorCommandEnvelope {
     ticket: RendererInspectorIngressTicket,
     first_dispatch: RendererInspectorFirstDispatchLifecycle,
     payload: RendererInspectorCommandPayload,
+    main_ingress_first_dispatch:
+        Option<crate::script_vm::inspector_main::RendererInspectorMainFirstDispatchGuard>,
 }
 
 enum RendererInspectorCommandPayload {
@@ -3641,6 +3643,38 @@ impl RendererInspectorCommandEnvelope {
             ticket: RendererInspectorIngressTicket::new(None, inspector_session_id, route),
             first_dispatch: RendererInspectorFirstDispatchLifecycle::OrderedUntilFirstDispatch,
             payload: RendererInspectorCommandPayload::MainThread(command),
+            main_ingress_first_dispatch: None,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn new_main_protocol(
+        ticket: RendererInspectorIngressTicket,
+        owner_context_resolution_action: Option<String>,
+        raw_json: String,
+        response: RendererRuntimeInspectorResponseSender,
+    ) -> Self {
+        assert_eq!(
+            ticket.route(),
+            RendererInspectorCommandRoute::MainThread,
+            "a Main Inspector protocol payload must use the MainThread route"
+        );
+        let command = match owner_context_resolution_action {
+            Some(action) => RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithContextResolutionAndDeferredResponse {
+                action,
+                raw_json,
+                deferred_response: response,
+            },
+            None => RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithDeferredResponse {
+                raw_json,
+                deferred_response: response,
+            },
+        };
+        Self {
+            ticket,
+            first_dispatch: RendererInspectorFirstDispatchLifecycle::OrderedUntilFirstDispatch,
+            payload: RendererInspectorCommandPayload::MainThread(command),
+            main_ingress_first_dispatch: None,
         }
     }
 
@@ -3659,6 +3693,7 @@ impl RendererInspectorCommandEnvelope {
             ticket,
             first_dispatch: RendererInspectorFirstDispatchLifecycle::OrderedUntilFirstDispatch,
             payload: RendererInspectorCommandPayload::Io { raw_json, response },
+            main_ingress_first_dispatch: None,
         }
     }
 
@@ -3675,12 +3710,30 @@ impl RendererInspectorCommandEnvelope {
     }
 
     pub(crate) fn into_main_thread_parts(
-        self,
+        mut self,
     ) -> (RendererInspectorIngressTicket, RendererInspectorPageCommand) {
+        if let Some(mut first_dispatch) = self.main_ingress_first_dispatch.take() {
+            first_dispatch.release();
+        }
         let RendererInspectorCommandPayload::MainThread(command) = self.payload else {
             panic!("an Inspector IO envelope cannot enter Page owner dispatch");
         };
         (self.ticket, command)
+    }
+
+    pub(crate) fn bind_main_ingress_first_dispatch(
+        &mut self,
+        first_dispatch: crate::script_vm::inspector_main::RendererInspectorMainFirstDispatchGuard,
+    ) {
+        assert!(
+            self.main_ingress_first_dispatch.is_none(),
+            "a Main Inspector envelope can own only one ingress dispatch permit"
+        );
+        self.main_ingress_first_dispatch = Some(first_dispatch);
+    }
+
+    pub(crate) fn uses_main_ingress_admission(&self) -> bool {
+        self.main_ingress_first_dispatch.is_some()
     }
 
     fn main_thread_payload(&self) -> &RendererInspectorPageCommand {
@@ -3688,6 +3741,72 @@ impl RendererInspectorCommandEnvelope {
             panic!("an Inspector IO envelope cannot enter Page owner dispatch");
         };
         command
+    }
+
+    pub(crate) fn is_main_protocol_command_with_deferred_response(&self) -> bool {
+        matches!(
+            self.main_thread_payload(),
+            RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithDeferredResponse {
+                ..
+            } | RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithContextResolutionAndDeferredResponse {
+                ..
+            }
+        )
+    }
+
+    pub(crate) fn main_protocol_raw_json(&self) -> &str {
+        match self.main_thread_payload() {
+            RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithDeferredResponse {
+                raw_json,
+                ..
+            }
+            | RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithContextResolutionAndDeferredResponse {
+                raw_json,
+                ..
+            } => raw_json,
+            _ => panic!("only a deferred Main protocol command can enter the nested receiver"),
+        }
+    }
+
+    pub(crate) fn main_protocol_response(&self) -> &RendererRuntimeInspectorResponseSender {
+        match self.main_thread_payload() {
+            RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithDeferredResponse {
+                deferred_response,
+                ..
+            }
+            | RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithContextResolutionAndDeferredResponse {
+                deferred_response,
+                ..
+            } => deferred_response,
+            _ => panic!("only a deferred Main protocol command can enter the nested receiver"),
+        }
+    }
+
+    pub(crate) fn into_main_protocol_parts(
+        self,
+    ) -> (
+        RendererInspectorIngressTicket,
+        String,
+        RendererRuntimeInspectorResponseSender,
+    ) {
+        assert!(
+            self.main_ingress_first_dispatch.is_none(),
+            "a direct nested Main dispatch must keep its first-dispatch guard outside the envelope"
+        );
+        match self.payload {
+            RendererInspectorCommandPayload::MainThread(
+                RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithDeferredResponse {
+                    raw_json,
+                    deferred_response,
+                }
+                | RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithContextResolutionAndDeferredResponse {
+                    raw_json,
+                    deferred_response,
+                    ..
+                },
+            ) => (self.ticket, raw_json, deferred_response),
+            _ => panic!("only a deferred Main protocol command can enter the nested receiver"),
+        }
     }
 
     pub(crate) fn io_raw_json(&self) -> &str {
@@ -4395,6 +4514,10 @@ pub enum RendererRuntimeRemoteObjectResolution {
 }
 
 impl RendererPageCommand {
+    pub(crate) fn from_inspector_envelope(envelope: RendererInspectorCommandEnvelope) -> Self {
+        Self::Inspector(envelope)
+    }
+
     fn inspector_command(
         inspector_session_id: Option<String>,
         route: RendererInspectorCommandRoute,
@@ -4744,6 +4867,10 @@ impl RendererPageCommand {
             Self::Inspector(envelope) => Some(envelope.first_dispatch_lifecycle()),
             _ => None,
         }
+    }
+
+    pub(crate) fn uses_main_inspector_ingress_admission(&self) -> bool {
+        matches!(self, Self::Inspector(envelope) if envelope.uses_main_ingress_admission())
     }
 
     pub fn bind_inspector_attachment(&mut self, attachment: RendererAgentAttachmentId) {

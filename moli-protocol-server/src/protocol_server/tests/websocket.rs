@@ -5022,7 +5022,7 @@ async fn websocket_cdp_fetch_routes_pending_background_parser_script_to_exact_se
 }
 
 #[tokio::test]
-async fn websocket_cdp_debugger_step_out_main_thread_waits_for_io_resume() {
+async fn websocket_cdp_debugger_step_out_responds_before_resumed_and_caller_pause() {
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
     let (mut socket, _) = connect_async(format!(
         "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
@@ -5088,49 +5088,63 @@ async fn websocket_cdp_debugger_step_out_main_thread_waits_for_io_resume() {
         json!("inner")
     );
 
-    socket
-        .send(WsMessage::Text(
-            json!({
-                "id": 6_u64,
-                "method": "Debugger.stepOut",
-                "sessionId": session_id,
-                "params": {}
-            })
-            .to_string()
-            .into(),
-        ))
-        .await
-        .expect("queue MainThread Debugger.stepOut while paused");
-
-    // Chromium routes step controls over its main DevToolsSession, not its IO
-    // session. Moli's Page owner is still inside the Runtime.evaluate that
-    // entered this pause, so the step command must remain queued until the IO
-    // resume releases that owner call.
-    let resumed = send_cdp_command(
+    let mut stepped = send_cdp_command(
         &mut socket,
-        7,
-        "Debugger.resume",
+        6,
+        "Debugger.stepOut",
         Some(&session_id),
         json!({}),
     )
     .await;
-    assert!(
-        resumed.iter().all(|message| message["id"] != json!(6_u64)),
-        "MainThread stepOut must not dispatch from the IO-only pause loop: {resumed:#?}"
-    );
-    observed.extend(resumed);
-
-    let mut saw_evaluate_response = observed.iter().any(|message| message["id"] == json!(5_u64));
-    let mut saw_step_response = observed.iter().any(|message| message["id"] == json!(6_u64));
-    if !saw_evaluate_response || !saw_step_response {
-        observed.extend(
+    if !stepped.iter().any(|message| {
+        message["method"] == json!("Debugger.paused")
+            && message["params"]["reason"] == json!("step")
+            && message["params"]["callFrames"][0]["functionName"] == json!("outer")
+    }) {
+        stepped.extend(
             recv_until_match(&mut socket, |message| {
-                saw_evaluate_response |= message["id"] == json!(5_u64);
-                saw_step_response |= message["id"] == json!(6_u64);
-                saw_evaluate_response && saw_step_response
+                message["sessionId"].as_str() == Some(session_id.as_str())
+                    && message["method"] == json!("Debugger.paused")
+                    && message["params"]["reason"] == json!("step")
+                    && message["params"]["callFrames"][0]["functionName"] == json!("outer")
             })
             .await,
         );
+    }
+    let response_position = stepped
+        .iter()
+        .position(|message| message["id"] == json!(6_u64))
+        .expect("stepOut should respond");
+    let resumed_position = stepped
+        .iter()
+        .position(|message| message["method"] == json!("Debugger.resumed"))
+        .expect("stepOut should emit Debugger.resumed");
+    let caller_pause_position = stepped
+        .iter()
+        .position(|message| {
+            message["method"] == json!("Debugger.paused")
+                && message["params"]["reason"] == json!("step")
+                && message["params"]["callFrames"][0]["functionName"] == json!("outer")
+        })
+        .expect("stepOut should pause in the caller");
+    assert!(
+        response_position < resumed_position && resumed_position < caller_pause_position,
+        "stepOut must preserve response -> resumed -> caller pause: {stepped:#?}"
+    );
+
+    observed.extend(
+        send_cdp_command(
+            &mut socket,
+            7,
+            "Debugger.resume",
+            Some(&session_id),
+            json!({}),
+        )
+        .await,
+    );
+    if !observed.iter().any(|message| message["id"] == json!(5_u64)) {
+        observed
+            .extend(recv_until_match(&mut socket, |message| message["id"] == json!(5_u64)).await);
     }
     let evaluate = observed
         .iter()
@@ -5141,33 +5155,12 @@ async fn websocket_cdp_debugger_step_out_main_thread_waits_for_io_resume() {
         json!(42),
         "resuming the exact pause must return to the blocked Runtime command: {observed:#?}"
     );
-    let step = observed
-        .iter()
-        .find(|message| message["id"] == json!(6_u64))
-        .expect("queued stepOut response after resume");
-    assert!(
-        step.get("error").is_some(),
-        "stepOut reaches V8 only after execution is no longer paused: {observed:#?}"
-    );
-    let resume_position = observed
-        .iter()
-        .position(|message| message["id"] == json!(7_u64))
-        .expect("IO resume response position");
-    let step_position = observed
-        .iter()
-        .position(|message| message["id"] == json!(6_u64))
-        .expect("MainThread stepOut response position");
-    assert!(
-        resume_position < step_position,
-        "IO resume must overtake the queued MainThread stepOut: {observed:#?}"
-    );
-
     let _ = socket.close(None).await;
     protocol_server.abort();
 }
 
 #[tokio::test]
-async fn websocket_cdp_debugger_pause_blocks_auxiliary_main_thread_commands_until_resume() {
+async fn websocket_cdp_debugger_pause_allows_auxiliary_main_thread_commands() {
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
     let (mut socket, _) = connect_async(format!(
         "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
@@ -5252,14 +5245,63 @@ async fn websocket_cdp_debugger_pause_blocks_auxiliary_main_thread_commands_unti
         !observed.iter().any(|message| message["id"] == json!(6_u64)),
         "Runtime.evaluate must remain pending while the renderer owner is paused: {observed:#?}"
     );
+    // Chromium's normal debugger loop pumps its main-thread DevTools receiver.
+    // This command must therefore reach the auxiliary V8 session even though
+    // the ordinary Page owner turn that entered the pause has not returned.
+    let auxiliary_evaluate = tokio::time::timeout(
+        Duration::from_secs(5),
+        send_cdp_command(
+            &mut socket,
+            7,
+            "Runtime.evaluate",
+            Some(&auxiliary_session_id),
+            json!({ "expression": "21 * 2", "returnByValue": true }),
+        ),
+    )
+    .await
+    .expect("auxiliary Main Runtime.evaluate must complete in the debugger loop");
+    assert!(
+        auxiliary_evaluate.iter().any(|message| {
+            message["id"] == json!(7_u64)
+                && message["sessionId"] == json!(auxiliary_session_id)
+                && message["result"]["result"]["value"] == json!(42)
+        }),
+        "pause-loop Main Runtime.evaluate should complete before resume: {auxiliary_evaluate:#?}"
+    );
+
+    let auxiliary_object = tokio::time::timeout(
+        Duration::from_secs(5),
+        send_cdp_command(
+            &mut socket,
+            51,
+            "Runtime.evaluate",
+            Some(&auxiliary_session_id),
+            json!({ "expression": "({ answer: 42 })" }),
+        ),
+    )
+    .await
+    .expect("object-valued Main Runtime.evaluate must complete in the debugger loop");
+    assert!(
+        auxiliary_object.iter().any(|message| {
+            message["id"] == json!(51_u64)
+                && message["sessionId"] == json!(auxiliary_session_id)
+                && message["result"]["result"]["type"] == json!("object")
+                && message["result"]["result"]["objectId"]
+                    .as_str()
+                    .is_some_and(|object_id| !object_id.is_empty())
+        }),
+        "pause-loop object response must remain owner-independent: {auxiliary_object:#?}"
+    );
+
     socket
         .send(WsMessage::Text(
             json!({
-                "id": 7_u64,
+                "id": 52_u64,
                 "method": "Runtime.evaluate",
                 "sessionId": auxiliary_session_id,
                 "params": {
-                    "expression": "21 * 2",
+                    "expression": "Promise.resolve(43)",
+                    "awaitPromise": true,
                     "returnByValue": true
                 }
             })
@@ -5267,33 +5309,28 @@ async fn websocket_cdp_debugger_pause_blocks_auxiliary_main_thread_commands_unti
             .into(),
         ))
         .await
-        .expect("queue auxiliary MainThread Runtime.evaluate while paused");
+        .expect("send pause-loop awaitPromise Runtime.evaluate");
 
-    let resumed = send_cdp_command(
-        &mut socket,
-        8,
-        "Debugger.resume",
-        Some(&session_id),
-        json!({}),
-    )
-    .await;
-    assert!(
-        resumed.iter().all(|message| message["id"] != json!(7_u64)),
-        "auxiliary MainThread evaluate must not dispatch from the IO-only pause loop: {resumed:#?}"
+    observed.extend(
+        send_cdp_command(
+            &mut socket,
+            8,
+            "Debugger.resume",
+            Some(&session_id),
+            json!({}),
+        )
+        .await,
     );
-    observed.extend(resumed);
-
-    let mut saw_paused_evaluate = observed.iter().any(|message| message["id"] == json!(6_u64));
-    let mut saw_auxiliary_evaluate = observed.iter().any(|message| message["id"] == json!(7_u64));
-    if !saw_paused_evaluate || !saw_auxiliary_evaluate {
-        observed.extend(
-            recv_until_match(&mut socket, |message| {
-                saw_paused_evaluate |= message["id"] == json!(6_u64);
-                saw_auxiliary_evaluate |= message["id"] == json!(7_u64);
-                saw_paused_evaluate && saw_auxiliary_evaluate
-            })
-            .await,
-        );
+    if !observed.iter().any(|message| message["id"] == json!(6_u64)) {
+        observed
+            .extend(recv_until_match(&mut socket, |message| message["id"] == json!(6_u64)).await);
+    }
+    if !observed
+        .iter()
+        .any(|message| message["id"] == json!(52_u64))
+    {
+        observed
+            .extend(recv_until_match(&mut socket, |message| message["id"] == json!(52_u64)).await);
     }
     let evaluate = observed
         .iter()
@@ -5304,26 +5341,14 @@ async fn websocket_cdp_debugger_pause_blocks_auxiliary_main_thread_commands_unti
         json!(42),
         "resuming the exact pause must return to the blocked Runtime command: {observed:#?}"
     );
-    let auxiliary_evaluate = observed
-        .iter()
-        .find(|message| message["id"] == json!(7_u64))
-        .expect("auxiliary Runtime.evaluate should complete after Debugger.resume");
-    assert_eq!(
-        auxiliary_evaluate["result"]["result"]["value"],
-        json!(42),
-        "the queued auxiliary MainThread command must run normally after resume: {observed:#?}"
-    );
-    let resume_position = observed
-        .iter()
-        .position(|message| message["id"] == json!(8_u64))
-        .expect("IO resume response position");
-    let auxiliary_position = observed
-        .iter()
-        .position(|message| message["id"] == json!(7_u64))
-        .expect("auxiliary MainThread response position");
     assert!(
-        resume_position < auxiliary_position,
-        "IO resume must overtake the queued auxiliary MainThread command: {observed:#?}"
+        observed.iter().any(|message| {
+            message["id"] == json!(52_u64)
+                && message["sessionId"] == json!(auxiliary_session_id)
+                && message["result"]["result"]["value"] == json!(43)
+        }),
+        "awaitPromise should settle after Debugger.resume without a deferred-reply deadlock: \
+         {observed:#?}"
     );
 
     let _ = socket.close(None).await;

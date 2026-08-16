@@ -12,12 +12,13 @@ use serde_json::json;
 #[cfg(test)]
 use crate::runtime::RendererRuntimeInspectorResponseSender;
 use crate::runtime::{
-    PageId, PendingRendererOutputRecord, RendererOutputResidenceIdentity,
-    RendererProtocolObservation, RendererRuntimeCommandCausalIdentity,
-    RendererRuntimeInspectorMessage, RendererRuntimeInspectorMessageBatch,
-    RendererTurnOutputJournal,
+    PageId, PendingRendererOutputRecord, RendererInspectorIngressTicket,
+    RendererOutputResidenceIdentity, RendererProtocolObservation,
+    RendererRuntimeCommandCausalIdentity, RendererRuntimeInspectorMessage,
+    RendererRuntimeInspectorMessageBatch, RendererTurnOutputJournal,
 };
-use crate::script_vm::inspector_io::{RendererInspectorIoCommand, RendererInspectorIoIngress};
+use crate::script_vm::inspector_io::RendererInspectorIoIngress;
+use crate::script_vm::inspector_main::RendererInspectorMainIngress;
 
 #[derive(Clone)]
 pub(crate) struct RendererInspectorPauseBridge {
@@ -185,6 +186,7 @@ impl Drop for RendererInspectorPausePrefaceGuard {
 #[derive(Clone)]
 pub(super) struct RendererInspectorPauseOutboundRoute {
     bridge: RendererInspectorPauseBridge,
+    main_ingress: RendererInspectorMainIngress,
     io_ingress: RendererInspectorIoIngress,
     agent_token: RendererDevToolsAgentToken,
     session: DevToolsSessionKey,
@@ -252,12 +254,14 @@ impl RendererInspectorPauseBridge {
 
     pub(super) fn outbound_route(
         &self,
+        main_ingress: RendererInspectorMainIngress,
         io_ingress: RendererInspectorIoIngress,
         agent_token: RendererDevToolsAgentToken,
         session: DevToolsSessionKey,
     ) -> RendererInspectorPauseOutboundRoute {
         RendererInspectorPauseOutboundRoute {
             bridge: self.clone(),
+            main_ingress,
             io_ingress,
             agent_token,
             session,
@@ -278,27 +282,26 @@ impl RendererInspectorPauseBridge {
 
     pub(super) fn begin_command_dispatch(
         &self,
-        command: &RendererInspectorIoCommand,
+        command_id: u64,
+        ticket: &RendererInspectorIngressTicket,
+        raw_json: &str,
+        response_call_id: Option<i32>,
     ) -> RendererInspectorPauseCommandDispatchGuard {
-        let effect = RendererInspectorPauseCommandEffect::from_raw_json(command.raw_json());
+        let effect = RendererInspectorPauseCommandEffect::from_raw_json(raw_json);
         if effect == RendererInspectorPauseCommandEffect::None {
             return RendererInspectorPauseCommandDispatchGuard {
                 bridge: self.clone(),
                 command_id: None,
             };
         }
-        let Some(call_id) = command.response().map(|response| response.call_id()) else {
+        let Some(call_id) = response_call_id else {
             return RendererInspectorPauseCommandDispatchGuard {
                 bridge: self.clone(),
                 command_id: None,
             };
         };
         let causal_identity = RendererRuntimeCommandCausalIdentity::new(
-            command
-                .ticket()
-                .session()
-                .wire_session_id()
-                .map(str::to_owned),
+            ticket.session().wire_session_id().map(str::to_owned),
             call_id,
         );
         let mut state = self.shared.state.lock();
@@ -308,7 +311,7 @@ impl RendererInspectorPauseBridge {
             "Inspector pause commands must dispatch serially in the nested loop"
         );
         state.active_command_dispatch = Some(RendererInspectorPauseCommandDispatch {
-            command_id: command.command_id(),
+            command_id,
             transition: RendererInspectorPauseCommandTransition {
                 causal_identity,
                 effect,
@@ -319,7 +322,7 @@ impl RendererInspectorPauseBridge {
         });
         RendererInspectorPauseCommandDispatchGuard {
             bridge: self.clone(),
-            command_id: Some(command.command_id()),
+            command_id: Some(command_id),
         }
     }
 
@@ -465,8 +468,9 @@ impl RendererInspectorPauseBridge {
         let mut state = self.shared.state.lock();
         state.phase = RendererInspectorPausePhase::Running;
         state.quit_requested = false;
-        // IO commands that lost the nested-loop race stay in their dedicated
-        // ingress and retain independent owner/interrupt execution chances.
+        // Commands that lost the nested-loop race stay in their route-specific
+        // ingress. Main retains its owner task; IO retains owner and interrupt
+        // execution chances.
     }
 
     pub(crate) fn detach_page(&self, page_id: PageId) -> bool {
@@ -534,7 +538,7 @@ impl RendererInspectorPauseBridge {
             )
             .resolve()
             .unwrap_or_else(|_| {
-                panic!("Inspector IO state update must have resolved source identity")
+                panic!("Inspector state update must have resolved source identity")
             }),
         );
     }
@@ -665,6 +669,8 @@ impl RendererInspectorPauseOutboundRoute {
 
     pub(super) fn detach_session(&self) {
         self.bridge.detach_session(self.agent_token, &self.session);
+        self.main_ingress
+            .detach_session(self.agent_token, &self.session);
         self.io_ingress
             .detach_session(self.agent_token, &self.session);
     }
@@ -705,6 +711,15 @@ mod tests {
         )
     }
 
+    fn main_ingress(
+        bridge: &RendererInspectorPauseBridge,
+    ) -> crate::script_vm::inspector_main::RendererInspectorMainIngress {
+        crate::script_vm::inspector_main::RendererInspectorMainIngress::new(
+            crate::script_vm::inspector_route::RendererInspectorSessionExecutorRouteId::new(1),
+            bridge.pause_loop_wake(),
+        )
+    }
+
     fn configure_page(bridge: &RendererInspectorPauseBridge, page_id: PageId) {
         bridge.configure_page_route(RendererTurnOutputJournal::new(
             crate::runtime::RendererOutputStreamIdentity::new_page(
@@ -726,6 +741,7 @@ mod tests {
         io_ingress: crate::script_vm::inspector_io::RendererInspectorIoIngress,
     ) -> RendererInspectorPauseOutboundRoute {
         bridge.outbound_route(
+            main_ingress(bridge),
             io_ingress,
             RendererDevToolsAgentToken::allocate(),
             DevToolsSessionKey::Primary,
@@ -824,7 +840,12 @@ mod tests {
             .expect("the nested pause loop should claim stepOut");
         let first_dispatch = io_ingress.first_dispatch_guard(&command);
         assert_eq!(command.ticket(), command_route.ticket());
-        let dispatch = bridge.begin_command_dispatch(&command);
+        let dispatch = bridge.begin_command_dispatch(
+            command.command_id(),
+            command.ticket(),
+            command.raw_json(),
+            command.response().map(|response| response.call_id()),
+        );
         outbound.mark_command_response(41, true);
         drop(dispatch);
         drop(first_dispatch);
@@ -882,7 +903,12 @@ mod tests {
             .wait_and_claim_for_pause(&bridge)
             .expect("the nested pause loop should claim stepOut");
         let first_dispatch = io_ingress.first_dispatch_guard(&command);
-        let dispatch = bridge.begin_command_dispatch(&command);
+        let dispatch = bridge.begin_command_dispatch(
+            command.command_id(),
+            command.ticket(),
+            command.raw_json(),
+            command.response().map(|response| response.call_id()),
+        );
         outbound.mark_command_response(43, true);
         drop(dispatch);
         drop(first_dispatch);
@@ -933,7 +959,12 @@ mod tests {
             .wait_and_claim_for_pause(&bridge)
             .expect("the nested pause loop should claim stepOut");
         let first_dispatch = io_ingress.first_dispatch_guard(&command);
-        let dispatch = bridge.begin_command_dispatch(&command);
+        let dispatch = bridge.begin_command_dispatch(
+            command.command_id(),
+            command.ticket(),
+            command.raw_json(),
+            command.response().map(|response| response.call_id()),
+        );
         outbound.mark_command_response(42, false);
         drop(dispatch);
         drop(first_dispatch);

@@ -693,8 +693,10 @@ mod input_dispatch;
 mod input_helpers;
 mod inspector;
 pub(crate) mod inspector_io;
+pub(crate) mod inspector_main;
 pub(crate) mod inspector_pause;
-pub(crate) use inspector::dispatch_inspector_io_owner_wake;
+pub(crate) mod inspector_route;
+pub(crate) use inspector::{dispatch_inspector_io_owner_wake, dispatch_inspector_main_owner_wake};
 mod isolated_worlds;
 mod main_document_lifecycle;
 mod main_document_lifecycle_body;
@@ -1028,6 +1030,10 @@ impl ScriptVm {
 
     pub(crate) fn inspector_io_ingress(&self) -> inspector_io::RendererInspectorIoIngress {
         self.page_inspector.io_ingress()
+    }
+
+    pub(crate) fn inspector_main_ingress(&self) -> inspector_main::RendererInspectorMainIngress {
+        self.page_inspector.main_ingress()
     }
 
     pub(super) fn set_root_document_lifecycle(

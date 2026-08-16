@@ -1,7 +1,8 @@
 use super::{
     Page, RendererAgentAttachmentId, RendererCommandTurnOutput, RendererPageCommand,
     RendererPageCommandPending, RendererPageReply, RendererRuntimeInspectorCommandClaim,
-    RendererRuntimeInspectorCommandRoute, RendererRuntimeInspectorMessage,
+    RendererRuntimeInspectorCommandRoute, RendererRuntimeInspectorMainCommandCompletion,
+    RendererRuntimeInspectorMainCommandRoute, RendererRuntimeInspectorMessage,
 };
 use crate::RendererOutputFence;
 use anyhow::{Result, bail};
@@ -16,7 +17,7 @@ pub struct PendingRuntimeInspectorCommandDispatch {
 }
 
 enum PendingRuntimeInspectorCommandDispatchKind {
-    MainThread(PendingPageCommand),
+    MainIngress(Box<RendererRuntimeInspectorMainCommandRoute>),
     Io(RendererRuntimeInspectorCommandRoute),
 }
 
@@ -127,19 +128,19 @@ impl Page {
         PendingRuntimeInspectorCommandDispatch { kind }
     }
 
-    pub(crate) fn pending_main_thread_runtime_inspector_command_dispatch(
-        pending: PendingPageCommand,
-    ) -> PendingRuntimeInspectorCommandDispatch {
-        Self::pending_runtime_inspector_command_dispatch(
-            PendingRuntimeInspectorCommandDispatchKind::MainThread(pending),
-        )
-    }
-
     pub(crate) fn pending_io_runtime_inspector_command_dispatch(
         route: RendererRuntimeInspectorCommandRoute,
     ) -> PendingRuntimeInspectorCommandDispatch {
         Self::pending_runtime_inspector_command_dispatch(
             PendingRuntimeInspectorCommandDispatchKind::Io(route),
+        )
+    }
+
+    pub(crate) fn pending_main_ingress_runtime_inspector_command_dispatch(
+        route: RendererRuntimeInspectorMainCommandRoute,
+    ) -> PendingRuntimeInspectorCommandDispatch {
+        Self::pending_runtime_inspector_command_dispatch(
+            PendingRuntimeInspectorCommandDispatchKind::MainIngress(Box::new(route)),
         )
     }
 
@@ -365,11 +366,28 @@ impl PendingPageCommand {
 impl PendingRuntimeInspectorCommandDispatch {
     pub async fn wait(self) -> Result<CompletedRuntimeInspectorCommandDispatch> {
         match self.kind {
-            PendingRuntimeInspectorCommandDispatchKind::MainThread(pending) => pending
-                .wait()
-                .await
-                .map(Box::new)
-                .map(CompletedRuntimeInspectorCommandDispatch::Owner),
+            PendingRuntimeInspectorCommandDispatchKind::MainIngress(route) => {
+                let renderer_agent_attachment_id = route.ticket().attachment();
+                match route.wait_for_completion().await? {
+                    RendererRuntimeInspectorMainCommandCompletion::Owner(mut output) => {
+                        if let Some(attachment_id) = renderer_agent_attachment_id {
+                            output.bind_renderer_agent_attachment(attachment_id);
+                        }
+                        Ok(CompletedRuntimeInspectorCommandDispatch::Owner(Box::new(
+                            CompletedPageCommand {
+                                output: *output,
+                                renderer_agent_attachment_id,
+                            },
+                        )))
+                    }
+                    RendererRuntimeInspectorMainCommandCompletion::Inspector => {
+                        Ok(CompletedRuntimeInspectorCommandDispatch::Inspector)
+                    }
+                    RendererRuntimeInspectorMainCommandCompletion::Canceled => {
+                        Ok(CompletedRuntimeInspectorCommandDispatch::Canceled)
+                    }
+                }
+            }
             PendingRuntimeInspectorCommandDispatchKind::Io(route) => {
                 match route.wait_for_claim().await.map_err(anyhow::Error::msg)? {
                     RendererRuntimeInspectorCommandClaim::Inspector => {
