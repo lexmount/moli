@@ -44,6 +44,18 @@ impl<'a> NativeLayoutSourceView<'a> {
     fn host(&self) -> &DomHost {
         self.runtime.dom_host()
     }
+
+    fn resolved_element_semantics(
+        &self,
+        node: DomHandle,
+        element: &crate::dom::native::Element,
+    ) -> LayoutElementSemantics {
+        let mut semantics = layout_element_semantics_for_source(self.host(), node, element);
+        if crate::native_bridge::element::object_uses_image_layout(self.runtime, node) {
+            semantics.replaced = Some(LayoutReplacedKind::Image);
+        }
+        semantics
+    }
 }
 
 impl LayoutSource for NativeLayoutSourceView<'_> {
@@ -85,7 +97,7 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
         self.host()
             .node(node)
             .and_then(Node::as_element)
-            .map(|element| layout_element_semantics_for_source(self.host(), node, element))
+            .map(|element| self.resolved_element_semantics(node, element))
     }
 
     fn text(&self, node: Self::NodeId) -> Option<&str> {
@@ -125,7 +137,7 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
     fn replaced_metrics(&self, node: Self::NodeId) -> Option<ReplacedMetrics> {
         let native_node = self.host().node(node)?;
         let element = native_node.as_element()?;
-        let semantics = layout_element_semantics_for_source(self.host(), node, element);
+        let semantics = self.resolved_element_semantics(node, element);
         if !semantics.is_replaced() {
             return None;
         }
@@ -157,7 +169,7 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
             .host()
             .node(node)
             .and_then(Node::as_element)
-            .map(|element| layout_element_semantics_for_source(self.host(), node, element))?;
+            .map(|element| self.resolved_element_semantics(node, element))?;
         match semantics.replaced {
             Some(LayoutReplacedKind::Image) => {
                 let ready = self.runtime.ready_image_for_layout(node)?;

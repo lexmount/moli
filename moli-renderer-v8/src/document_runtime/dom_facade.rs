@@ -798,17 +798,19 @@ impl DocumentRuntime {
         root: DomHandle,
     ) {
         let mut stack = vec![root];
-        let mut images = Vec::new();
+        let mut image_elements = Vec::new();
         while let Some(handle) = stack.pop() {
-            if self.dom_host.is_html_element_named(handle, "img") {
-                images.push(handle);
+            if self.dom_host.is_html_element_named(handle, "img")
+                || self.dom_host.is_html_element_named(handle, "object")
+            {
+                image_elements.push(handle);
             }
             if let Some(shadow_root) = self.dom_host.shadow_root_handle(handle) {
                 stack.push(shadow_root);
             }
             stack.extend(self.dom_host.child_handles(handle));
         }
-        for image in images {
+        for image in image_elements {
             crate::native_bridge::element::reset_image_load_dispatch(
                 unsafe { &mut *host_ptr },
                 image,
