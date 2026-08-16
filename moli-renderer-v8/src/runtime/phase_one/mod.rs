@@ -2316,6 +2316,50 @@ td{box-sizing:border-box;width:50px;height:20px;padding:0;background:rgb(84,44,1
     }
 
     #[test]
+    fn layout_renderer_projects_vertical_rtl_table_tracks_from_logical_flow() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+table{border:2px solid;border-spacing:5px;padding:5px;writing-mode:vertical-rl;direction:rtl;background:rgb(81,41,141)}
+#first-col{height:50px;background:rgb(201,31,41)}
+#second-col{height:100px;background:rgb(31,201,41)}
+#first-row{width:100px;background:rgb(31,41,201)}
+#second-row{width:50px;background:rgb(201,181,31)}
+td{padding:0}
+</style></head><body><table><col id=first-col><col id=second-col>
+<tr id=first-row><td></td><td></td></tr>
+<tr id=second-row><td></td><td></td></tr></table></body></html>"#,
+            )
+            .await;
+
+            // Chromium exposes these same physical rectangles. The authored
+            // track order remains logical: RTL puts the first column at the
+            // physical bottom, while vertical-rl puts the first row at the
+            // physical right.
+            for (color, expected) in [
+                (rgb(81, 41, 141), (0.0, 0.0, 179.0, 179.0)),
+                (rgb(201, 31, 41), (12.0, 117.0, 155.0, 50.0)),
+                (rgb(31, 201, 41), (12.0, 12.0, 155.0, 100.0)),
+                (rgb(31, 41, 201), (67.0, 12.0, 100.0, 155.0)),
+                (rgb(201, 181, 31), (12.0, 12.0, 50.0, 155.0)),
+            ] {
+                assert_paint_rect(
+                    solid_paint_rect(&snapshot, color),
+                    moli_layout::PaintRect::new(
+                        expected.0, expected.1, expected.2, expected.3,
+                    ),
+                );
+            }
+        }));
+    }
+
+    #[test]
     fn layout_renderer_applies_caption_constraints_at_the_table_wrapper_boundary() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
