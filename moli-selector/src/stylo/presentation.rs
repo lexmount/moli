@@ -15,7 +15,7 @@ use style::{
     stylesheets::layer_rule::LayerOrder,
     values::{
         generics::NonNegative,
-        specified::{LengthPercentage, NoCalcLength, NoCalcPercentage},
+        specified::{AspectRatio, LengthPercentage, NoCalcLength, NoCalcPercentage},
     },
 };
 use style_traits::ParsingMode;
@@ -41,7 +41,151 @@ pub(super) fn synthesize_presentational_hints<E, V>(
     V: Push<ApplicableDeclarationBlock>,
 {
     synthesize_svg_root_size(element.native_element(), shared_lock, hints);
+    synthesize_html_replaced_size(element.native_element(), shared_lock, hints);
     synthesize_html_table_cell_style(element, shared_lock, hints);
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum HtmlDimension {
+    Absolute(f32),
+    Percentage(f32),
+    Relative,
+}
+
+/// Map legacy HTML dimensions into the presentation-hint cascade.
+///
+/// Images and videos expose both width/height declarations and an `auto`
+/// aspect-ratio hint. Plug-in/frame owners expose only the dimensions. Canvas
+/// dimensions define its intrinsic bitmap rather than CSS width/height, but a
+/// pair still contributes an `auto` aspect ratio. This is the same ownership
+/// split used by Blink's element-specific
+/// `CollectStyleForPresentationAttribute` implementations.
+fn synthesize_html_replaced_size<V>(element: &Element, shared_lock: &SharedRwLock, hints: &mut V)
+where
+    V: Push<ApplicableDeclarationBlock>,
+{
+    if element.namespace() != HTML_NAMESPACE {
+        return;
+    }
+
+    let name = element.local_name();
+    let input_maps_dimensions = name == "input"
+        && element.attribute("type").is_some_and(|value| {
+            value.eq_ignore_ascii_case("image") || value.eq_ignore_ascii_case("hidden")
+        });
+    let maps_dimensions =
+        matches!(name, "img" | "video" | "iframe" | "object" | "embed") || input_maps_dimensions;
+    let maps_ratio = matches!(name, "img" | "video") || input_maps_dimensions;
+
+    if name == "canvas" {
+        let ratio = element
+            .attribute("width")
+            .and_then(parse_html_non_negative_integer)
+            .zip(
+                element
+                    .attribute("height")
+                    .and_then(parse_html_non_negative_integer),
+            )
+            .map(|(width, height)| {
+                PropertyDeclaration::AspectRatio(Box::new(AspectRatio::from_mapped_ratio(
+                    width as f32,
+                    height as f32,
+                )))
+            });
+        if let Some(ratio) = ratio {
+            push_presentational_declarations(shared_lock, hints, [ratio]);
+        }
+        return;
+    }
+    if !maps_dimensions {
+        return;
+    }
+
+    let width = element.attribute("width").and_then(parse_html_dimension);
+    let height = element.attribute("height").and_then(parse_html_dimension);
+    let mut declarations = Vec::with_capacity(3);
+    if let Some(value) = width.and_then(html_dimension_length_percentage) {
+        use style::values::generics::length::Size;
+        declarations.push(PropertyDeclaration::Width(Size::LengthPercentage(
+            NonNegative(value),
+        )));
+    }
+    if let Some(value) = height.and_then(html_dimension_length_percentage) {
+        use style::values::generics::length::Size;
+        declarations.push(PropertyDeclaration::Height(Size::LengthPercentage(
+            NonNegative(value),
+        )));
+    }
+    if maps_ratio
+        && let (Some(HtmlDimension::Absolute(width)), Some(HtmlDimension::Absolute(height))) =
+            (width, height)
+    {
+        declarations.push(PropertyDeclaration::AspectRatio(Box::new(
+            AspectRatio::from_mapped_ratio(width, height),
+        )));
+    }
+    push_presentational_declarations(shared_lock, hints, declarations);
+}
+
+fn html_dimension_length_percentage(dimension: HtmlDimension) -> Option<LengthPercentage> {
+    match dimension {
+        HtmlDimension::Absolute(value) => {
+            Some(LengthPercentage::Length(NoCalcLength::from_px(value)))
+        }
+        HtmlDimension::Percentage(value) => Some(LengthPercentage::Percentage(
+            NoCalcPercentage::new(value / 100.0),
+        )),
+        HtmlDimension::Relative => None,
+    }
+}
+
+/// Blink-compatible parsing for legacy HTML dimension values. The numeric
+/// prefix is accepted with trailing garbage; a directly following `%` or `*`
+/// selects percentage or obsolete relative syntax respectively.
+fn parse_html_dimension(value: &str) -> Option<HtmlDimension> {
+    let value = value.trim_start_matches([' ', '\t', '\n', '\r', '\u{000c}']);
+    let bytes = value.as_bytes();
+    let integer_len = bytes
+        .iter()
+        .take_while(|byte| byte.is_ascii_digit())
+        .count();
+    if integer_len == 0 {
+        return None;
+    }
+    let mut number_len = integer_len;
+    if bytes.get(number_len) == Some(&b'.') {
+        number_len += 1;
+        number_len += bytes[number_len..]
+            .iter()
+            .take_while(|byte| byte.is_ascii_digit())
+            .count();
+    }
+    let number = value[..number_len].parse::<f64>().ok()?;
+    if !number.is_finite() {
+        return None;
+    }
+    let number = number.min(f64::from(f32::MAX)) as f32;
+    match bytes.get(number_len) {
+        Some(b'%') => Some(HtmlDimension::Percentage(number)),
+        Some(b'*') => Some(HtmlDimension::Relative),
+        _ => Some(HtmlDimension::Absolute(number)),
+    }
+}
+
+fn parse_html_non_negative_integer(value: &str) -> Option<u32> {
+    let value = value.trim_start_matches([' ', '\t', '\n', '\r', '\u{000c}']);
+    let (value, negative) = if let Some(value) = value.strip_prefix('+') {
+        (value, false)
+    } else if let Some(value) = value.strip_prefix('-') {
+        (value, true)
+    } else {
+        (value, false)
+    };
+    let digits = value.bytes().take_while(u8::is_ascii_digit).count();
+    let parsed = (digits != 0)
+        .then(|| &value[..digits])
+        .and_then(|value| value.parse().ok())?;
+    (!negative || parsed == 0).then_some(parsed)
 }
 
 fn synthesize_svg_root_size<V>(element: &Element, shared_lock: &SharedRwLock, hints: &mut V)
@@ -225,5 +369,43 @@ mod tests {
         assert_eq!(parse_html_table_cell_padding(Some("not-a-number")), 0);
         assert_eq!(parse_html_table_cell_padding(Some("   ")), 0);
         assert_eq!(parse_html_table_cell_padding(Some("2147483648")), 0);
+    }
+
+    #[test]
+    fn html_dimension_parser_matches_blink_numeric_prefix_rules() {
+        assert_eq!(
+            parse_html_dimension("  10"),
+            Some(HtmlDimension::Absolute(10.0))
+        );
+        assert_eq!(
+            parse_html_dimension("10.5px"),
+            Some(HtmlDimension::Absolute(10.5))
+        );
+        assert_eq!(
+            parse_html_dimension("10.%"),
+            Some(HtmlDimension::Percentage(10.0))
+        );
+        assert_eq!(
+            parse_html_dimension("10%garbage"),
+            Some(HtmlDimension::Percentage(10.0))
+        );
+        assert_eq!(parse_html_dimension("10*"), Some(HtmlDimension::Relative));
+        assert_eq!(
+            parse_html_dimension("10e10"),
+            Some(HtmlDimension::Absolute(10.0))
+        );
+        assert_eq!(parse_html_dimension("+10"), None);
+        assert_eq!(parse_html_dimension(".5"), None);
+        assert_eq!(parse_html_dimension(""), None);
+    }
+
+    #[test]
+    fn canvas_ratio_integer_parser_keeps_invalid_values_out_of_the_cascade() {
+        assert_eq!(parse_html_non_negative_integer("  +12px"), Some(12));
+        assert_eq!(parse_html_non_negative_integer("0"), Some(0));
+        assert_eq!(parse_html_non_negative_integer("-0garbage"), Some(0));
+        assert_eq!(parse_html_non_negative_integer("-1"), None);
+        assert_eq!(parse_html_non_negative_integer("not-a-number"), None);
+        assert_eq!(parse_html_non_negative_integer("4294967296"), None);
     }
 }
