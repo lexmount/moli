@@ -143,8 +143,20 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
         if semantics.replaced == Some(LayoutReplacedKind::Svg) {
             return Some(super::inline_svg::replaced_metrics(element));
         }
-        let attribute_width = numeric_dimension_attribute(self.host(), node, "width");
-        let attribute_height = numeric_dimension_attribute(self.host(), node, "height");
+        if semantics.replaced == Some(LayoutReplacedKind::Canvas) {
+            let intrinsic_width = canvas_dimension_attribute(self.host(), node, "width", 300);
+            let intrinsic_height = canvas_dimension_attribute(self.host(), node, "height", 150);
+            return Some(ReplacedMetrics {
+                intrinsic_width: Some(intrinsic_width),
+                intrinsic_height: Some(intrinsic_height),
+                default_object_size: Some(ReplacedObjectSize::new(
+                    intrinsic_width,
+                    intrinsic_height,
+                )),
+                intrinsic_ratio: (intrinsic_height > 0.0)
+                    .then_some(intrinsic_width / intrinsic_height),
+            });
+        }
         let natural = self.runtime.image_resource_natural_sizing(node);
         Some(ReplacedMetrics {
             intrinsic_width: natural.and_then(|sizing| sizing.width),
@@ -152,8 +164,6 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
             default_object_size: natural.map(|sizing| {
                 ReplacedObjectSize::new(sizing.concrete_width, sizing.concrete_height)
             }),
-            attribute_width,
-            attribute_height,
             intrinsic_ratio: natural.and_then(|sizing| sizing.ratio),
         })
     }
@@ -650,10 +660,11 @@ fn html_input_control_kind(value: Option<&str>) -> LayoutInputControlKind {
     }
 }
 
-fn numeric_dimension_attribute(host: &DomHost, node: DomHandle, name: &str) -> Option<f32> {
-    let value = host.get_attribute(node, name)?;
-    let value = value.trim().parse::<f32>().ok()?;
-    value.is_finite().then_some(value.max(0.0))
+fn canvas_dimension_attribute(host: &DomHost, node: DomHandle, name: &str, default: u32) -> f32 {
+    host.get_attribute(node, name)
+        .and_then(|value| crate::native_bridge::element::parse_html_non_negative_integer(&value))
+        .filter(|value| *value <= i32::MAX as u32)
+        .unwrap_or(default) as f32
 }
 
 #[cfg(test)]

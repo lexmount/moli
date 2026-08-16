@@ -16,7 +16,6 @@ use crate::{LayoutReplacedKind, ReplacedMetrics};
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ReplacedContext {
     natural_sizing: ReplacedNaturalSizing,
-    preferred_size_hint: Size<Option<f32>>,
     inherent_ratio: Option<f32>,
 }
 
@@ -25,8 +24,6 @@ impl ReplacedContext {
         let mut metrics = metrics.unwrap_or_default();
         metrics.intrinsic_width = valid_dimension(metrics.intrinsic_width);
         metrics.intrinsic_height = valid_dimension(metrics.intrinsic_height);
-        metrics.attribute_width = valid_dimension(metrics.attribute_width);
-        metrics.attribute_height = valid_dimension(metrics.attribute_height);
         metrics.intrinsic_ratio = metrics
             .intrinsic_ratio
             .filter(|ratio| ratio.is_finite() && *ratio > 0.0);
@@ -62,39 +59,13 @@ impl ReplacedContext {
             })
             .unwrap_or(category_default_size);
 
-        // Canvas width/height attributes define the intrinsic bitmap
-        // coordinate space independently: specifying only width does not
-        // scale the default 150px height.
-        if kind == LayoutReplacedKind::Canvas {
-            metrics.intrinsic_width = metrics.attribute_width.or(Some(default_object_size.width));
-            metrics.intrinsic_height = metrics
-                .attribute_height
-                .or(Some(default_object_size.height));
-            metrics.attribute_width = None;
-            metrics.attribute_height = None;
-        }
-        let inherent_ratio = metrics
-            .intrinsic_ratio
-            .or_else(|| {
-                metrics
-                    .intrinsic_width
-                    .zip(metrics.intrinsic_height)
-                    .filter(|(_, height)| *height > 0.0)
-                    .map(|(width, height)| width / height)
-            })
-            .or_else(|| {
-                // HTML dimension attributes provide an aspect-ratio hint for
-                // image-like replaced elements before decoded pixels exist.
-                matches!(kind, LayoutReplacedKind::Image | LayoutReplacedKind::Media)
-                    .then(|| {
-                        metrics
-                            .attribute_width
-                            .zip(metrics.attribute_height)
-                            .filter(|(_, height)| *height > 0.0)
-                            .map(|(width, height)| width / height)
-                    })
-                    .flatten()
-            });
+        let inherent_ratio = metrics.intrinsic_ratio.or_else(|| {
+            metrics
+                .intrinsic_width
+                .zip(metrics.intrinsic_height)
+                .filter(|(_, height)| *height > 0.0)
+                .map(|(width, height)| width / height)
+        });
         let natural_sizing = ReplacedNaturalSizing::new(
             Size {
                 width: metrics.intrinsic_width,
@@ -102,10 +73,6 @@ impl ReplacedContext {
             },
             default_object_size,
         );
-        let preferred_size_hint = Size {
-            width: metrics.attribute_width,
-            height: metrics.attribute_height,
-        };
         // Canvas dimensions define its intrinsic coordinate space even while
         // its pixels remain an unavailable placeholder in Phase 4.
         let inherent_ratio = inherent_ratio.or_else(|| {
@@ -114,7 +81,6 @@ impl ReplacedContext {
         });
         Self {
             natural_sizing,
-            preferred_size_hint,
             inherent_ratio,
         }
     }
@@ -122,7 +88,6 @@ impl ReplacedContext {
     pub(crate) fn form_control(size: Size<f32>) -> Self {
         Self {
             natural_sizing: ReplacedNaturalSizing::fixed(size),
-            preferred_size_hint: Size::NONE,
             inherent_ratio: None,
         }
     }
@@ -142,7 +107,6 @@ impl ReplacedContext {
             aspect_ratio,
             size_containment,
             self.natural_sizing,
-            self.preferred_size_hint,
         )
     }
 }
