@@ -23,9 +23,14 @@ enum ImageLoadQueueTrigger {
     DocumentAdoption,
 }
 
+/// HTML element families that can own an image resource.
+///
+/// This is a capability classification: `<embed>` and `<object>` can also
+/// select non-image content, which is resolved separately before layout.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ImageResourceElementKind {
     Image,
+    Embed,
     Object,
 }
 
@@ -33,6 +38,8 @@ impl ImageResourceElementKind {
     pub(crate) fn for_element(element: &crate::dom::native::Element) -> Option<Self> {
         if element.is_html_element("img") {
             Some(Self::Image)
+        } else if element.is_html_element("embed") {
+            Some(Self::Embed)
         } else if element.is_html_element("object") {
             Some(Self::Object)
         } else {
@@ -43,7 +50,16 @@ impl ImageResourceElementKind {
     pub(crate) const fn performance_initiator_type(self) -> &'static str {
         match self {
             Self::Image => "img",
+            Self::Embed => "embed",
             Self::Object => "object",
+        }
+    }
+
+    const fn embedded_source_attribute(self) -> Option<&'static str> {
+        match self {
+            Self::Image => None,
+            Self::Embed => Some("src"),
+            Self::Object => Some("data"),
         }
     }
 }
@@ -59,17 +75,33 @@ pub(crate) fn image_resource_element_kind(
         .and_then(ImageResourceElementKind::for_element)
 }
 
-/// Whether an `<object>` currently constructs an image-like replaced box.
+/// Whether an embedded-content element currently constructs an image-like
+/// replaced box.
 ///
-/// Chromium chooses `LayoutImage` from the declared content type before
-/// decoding starts, then switches to fallback children only after the image
-/// resource reaches a terminal failure. Missing pixels alone cannot make this
-/// decision because they also describe an ordinary pending request.
-pub(crate) fn object_uses_image_layout(runtime: &JsContextHost, handle: DomHandle) -> bool {
-    image_resource_element_kind(runtime, handle) == Some(ImageResourceElementKind::Object)
-        && image_selected_source_candidate(runtime, handle).is_some()
-        && runtime.image_resource_status(handle)
-            != Some(crate::native_bridge::context_host::ImageResourceStatus::Failed)
+/// Blink's common `HTMLPlugInElement` seam chooses `LayoutImage` from the
+/// declared content type before decoding starts. `<object>` alone can switch
+/// to fallback children after a terminal failure; `<embed>` has no fallback
+/// state and remains an image box, including the zero-sized failed/missing-src
+/// state. Missing decoded pixels cannot make this decision because they also
+/// describe an ordinary pending request.
+pub(crate) fn embedded_element_uses_image_layout(
+    runtime: &JsContextHost,
+    handle: DomHandle,
+) -> bool {
+    let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
+        return false;
+    };
+    match ImageResourceElementKind::for_element(element) {
+        Some(kind @ ImageResourceElementKind::Embed) => {
+            embedded_content_type_is_image(runtime, handle, element, kind)
+        }
+        Some(kind @ ImageResourceElementKind::Object) => {
+            embedded_selected_image_source(runtime, handle, element, kind).is_some()
+                && runtime.image_resource_status(handle)
+                    != Some(crate::native_bridge::context_host::ImageResourceStatus::Failed)
+        }
+        Some(ImageResourceElementKind::Image) | None => false,
+    }
 }
 
 pub(crate) fn queue_image_load_event_if_needed(
@@ -332,11 +364,11 @@ fn image_selected_source_candidate(
 ) -> Option<SelectedImageSource> {
     let node = runtime.dom_host().node(handle)?;
     let element = node.as_element()?;
-    if element.is_html_element("object") {
-        return object_selected_image_source(runtime, handle, element);
-    }
-    if !element.is_html_element("img") {
-        return None;
+    match ImageResourceElementKind::for_element(element)? {
+        kind @ (ImageResourceElementKind::Embed | ImageResourceElementKind::Object) => {
+            return embedded_selected_image_source(runtime, handle, element, kind);
+        }
+        ImageResourceElementKind::Image => {}
     }
     if let Some(source) = image_selected_picture_source(runtime, handle) {
         return Some(source);
@@ -363,40 +395,54 @@ fn image_selected_source_candidate(
         })
 }
 
-fn object_selected_image_source(
+fn embedded_selected_image_source(
     runtime: &JsContextHost,
     handle: DomHandle,
     element: &crate::dom::native::Element,
+    kind: ImageResourceElementKind,
 ) -> Option<SelectedImageSource> {
-    let data = element.attribute("data")?.trim();
-    if data.is_empty() {
+    let source_attribute = kind
+        .embedded_source_attribute()
+        .expect("only embedded-content kinds select a simple image source");
+    let source = element.attribute(source_attribute)?.trim();
+    if source.is_empty() {
         return None;
     }
-    let resolved_data = resolve_url_like_attribute(runtime, handle, "data");
-    if resolved_data.is_empty()
-        || !object_content_type_is_image(element.attribute("type"), &resolved_data)
-    {
+    if !embedded_content_type_is_image(runtime, handle, element, kind) {
         return None;
     }
     Some(SelectedImageSource {
-        url: data.to_owned(),
+        url: source.to_owned(),
         density: 1.0,
-        source_attribute: Some("data"),
+        source_attribute: Some(source_attribute),
     })
 }
 
-fn object_content_type_is_image(specified_type: Option<&str>, resolved_data: &str) -> bool {
+fn embedded_content_type_is_image(
+    runtime: &JsContextHost,
+    handle: DomHandle,
+    element: &crate::dom::native::Element,
+    kind: ImageResourceElementKind,
+) -> bool {
+    let source_attribute = kind
+        .embedded_source_attribute()
+        .expect("only embedded-content kinds resolve embedded image content");
+    let resolved_source = resolve_url_like_attribute(runtime, handle, source_attribute);
+    content_type_is_image(element.attribute("type"), &resolved_source)
+}
+
+fn content_type_is_image(specified_type: Option<&str>, resolved_source: &str) -> bool {
     if let Some(specified_type) = specified_type
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
         return moli_web_mime::is_image_mime(specified_type);
     }
-    let path = url::Url::parse(resolved_data)
+    let path = url::Url::parse(resolved_source)
         .ok()
         .map(|url| url.path().to_owned())
-        .unwrap_or_else(|| resolved_data.to_owned());
-    moli_web_mime::resource_mime_essence_for_url(resolved_data, &path)
+        .unwrap_or_else(|| resolved_source.to_owned());
+    moli_web_mime::resource_mime_essence_for_url(resolved_source, &path)
         .is_some_and(|mime| moli_web_mime::is_image_mime_essence(&mime))
 }
 
@@ -502,7 +548,9 @@ pub(crate) fn image_selected_request_key(
                 .and_then(Node::as_element)
                 .and_then(|element| element.attribute("crossorigin")),
         ),
-        ImageResourceElementKind::Object => ImageRequestCorsMode::NoCors,
+        ImageResourceElementKind::Embed | ImageResourceElementKind::Object => {
+            ImageRequestCorsMode::NoCors
+        }
     };
     Some(ImageRequestKey::with_density(
         selected.url,
@@ -525,25 +573,32 @@ pub(crate) fn plan_image_attribute_mutation(
     let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
         return ImageAttributeMutationPlan::default();
     };
-    if element.is_html_element("img") {
-        let reloads_image = name.eq_ignore_ascii_case("src")
-            || name.eq_ignore_ascii_case("srcset")
-            || name.eq_ignore_ascii_case("sizes")
-            || (name.eq_ignore_ascii_case("crossorigin")
-                && ImageRequestCorsMode::from_cross_origin_attribute(
-                    element.attribute("crossorigin"),
-                ) != ImageRequestCorsMode::from_cross_origin_attribute(next_value));
-        return ImageAttributeMutationPlan {
-            targets: reloads_image.then_some(handle).into_iter().collect(),
-        };
-    }
-    if element.is_html_element("object") {
-        return ImageAttributeMutationPlan {
-            targets: (name.eq_ignore_ascii_case("data") || name.eq_ignore_ascii_case("type"))
+    match ImageResourceElementKind::for_element(element) {
+        Some(ImageResourceElementKind::Image) => {
+            let reloads_image = name.eq_ignore_ascii_case("src")
+                || name.eq_ignore_ascii_case("srcset")
+                || name.eq_ignore_ascii_case("sizes")
+                || (name.eq_ignore_ascii_case("crossorigin")
+                    && ImageRequestCorsMode::from_cross_origin_attribute(
+                        element.attribute("crossorigin"),
+                    ) != ImageRequestCorsMode::from_cross_origin_attribute(next_value));
+            return ImageAttributeMutationPlan {
+                targets: reloads_image.then_some(handle).into_iter().collect(),
+            };
+        }
+        Some(kind @ (ImageResourceElementKind::Embed | ImageResourceElementKind::Object)) => {
+            let source_attribute = kind
+                .embedded_source_attribute()
+                .expect("embedded-content kind has a source attribute");
+            return ImageAttributeMutationPlan {
+                targets: (name.eq_ignore_ascii_case(source_attribute)
+                    || name.eq_ignore_ascii_case("type"))
                 .then_some(handle)
                 .into_iter()
                 .collect(),
-        };
+            };
+        }
+        None => {}
     }
     if !element.is_html_element("source")
         || (!name.eq_ignore_ascii_case("srcset")
@@ -1338,24 +1393,21 @@ mod tests {
     }
 
     #[test]
-    fn object_image_content_type_prefers_type_then_url_metadata() {
-        assert!(object_content_type_is_image(
+    fn embedded_image_content_type_prefers_type_then_url_metadata() {
+        assert!(content_type_is_image(
             Some(" Image/SVG+XML ; charset=utf-8 "),
             "https://example.test/not-an-image.html"
         ));
-        assert!(!object_content_type_is_image(
+        assert!(!content_type_is_image(
             Some("text/html"),
             "https://example.test/image.png"
         ));
-        assert!(object_content_type_is_image(
+        assert!(content_type_is_image(
             None,
             "https://example.test/assets/image.PNG?version=1"
         ));
-        assert!(object_content_type_is_image(
-            None,
-            "data:image/svg+xml,%3Csvg/%3E"
-        ));
-        assert!(!object_content_type_is_image(
+        assert!(content_type_is_image(None, "data:image/svg+xml,%3Csvg/%3E"));
+        assert!(!content_type_is_image(
             None,
             "https://example.test/document.html"
         ));

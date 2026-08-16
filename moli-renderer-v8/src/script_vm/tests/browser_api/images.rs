@@ -327,6 +327,166 @@ async fn failed_object_image_switches_to_fallback_content() {
 }
 
 #[tokio::test]
+async fn parser_discovered_embed_uses_the_shared_image_resource_pipeline() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    loader.set_image_fetch_enabled(true);
+    let mut vm = new_parsed_page_task_executor_test_vm(
+        "https://embed-image.test/page.html",
+        r#"<!doctype html>
+        <style>body { margin: 0 }</style>
+        <embed id="png-embed" type="image/png" src="/assets/green.png"
+               style="display:block;width:100px;aspect-ratio:1/1">"#,
+        &loader,
+    );
+    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Image));
+    vm.eval(
+        r#"
+        (() => {
+          const embed = document.getElementById("png-embed");
+          globalThis.__pngEmbedEvents = [];
+          embed.addEventListener("load", () => __pngEmbedEvents.push("load"));
+          embed.addEventListener("error", () => __pngEmbedEvents.push("error"));
+        })()
+        "#,
+    )
+    .expect("PNG embed listeners should install");
+
+    assert!(
+        vm.take_pending_subresource_fetch_infos().is_empty(),
+        "parser-discovered embed loads begin at the interactive transition"
+    );
+    let owner = vm
+        .current_main_document_task_owner()
+        .expect("main document owner");
+    let interactive = vm
+        .finish_current_main_document_parsing(owner)
+        .expect("parser EOF should prepare interactive");
+    vm.apply_main_document_interactive_lifecycle_action(interactive)
+        .expect("interactive transition should register the PNG embed");
+
+    let pending = vm.take_pending_subresource_fetch_infos();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(
+        pending[0].url.as_str(),
+        "https://embed-image.test/assets/green.png"
+    );
+    let pixels = moli_image::RgbaImage::try_new(20, 50, [0, 128, 0, 255].repeat(20 * 50))
+        .expect("valid green PNG pixels");
+    let png = moli_image::encode_png(&pixels).expect("green PNG should encode");
+    vm.fulfill_pending_subresource_fetch(
+        pending[0].internal_id,
+        200,
+        vec![("Content-Type".to_owned(), "image/png".to_owned())],
+        crate::runtime::RendererSyntheticResponseBody::from_bytes(png.bytes),
+    )
+    .expect("PNG embed response should fulfill");
+    run_next_image_event_task(&mut vm, &loader, "PNG embed load event").await;
+
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+              const entry = performance.getEntriesByName(new URL("/assets/green.png", location.href).href)[0];
+              return `${__pngEmbedEvents.join("|")}:${entry?.initiatorType}`;
+            })()"#,
+        )
+        .expect("PNG embed event should evaluate"),
+        "load:embed"
+    );
+    let snapshot = vm
+        .screenshot_layout_snapshot(moli_layout::PaintViewport::new(120, 120, 1.0))
+        .expect("PNG embed layout should succeed")
+        .expect("PNG embed fixture should retain a layout root");
+    let image = moli_paint::raster_snapshot(&snapshot).expect("PNG embed should rasterize");
+    assert_eq!(raster_pixel(&image, 50, 50), [0, 128, 0, 255]);
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+              const embed = document.getElementById("png-embed").getBoundingClientRect();
+              return `${embed.width}|${embed.height}`;
+            })()"#,
+        )
+        .expect("PNG embed geometry should evaluate"),
+        "100|100"
+    );
+}
+
+#[tokio::test]
+async fn failed_or_sourceless_image_embed_remains_a_zero_sized_image_box() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    loader.set_image_fetch_enabled(true);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://embed-failure.test/page.html",
+        &loader,
+    );
+    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Image));
+    vm.eval(
+        r#"
+        (() => {
+          document.body.style.margin = "0";
+          const broken = document.createElement("embed");
+          broken.id = "broken-embed";
+          broken.type = "image/png";
+          broken.style.display = "block";
+          const fallback = document.createElement("div");
+          fallback.id = "embed-fallback";
+          fallback.style.cssText = "width:40px;height:30px;background:blue";
+          broken.appendChild(fallback);
+          globalThis.__brokenEmbedEvents = [];
+          broken.addEventListener("load", () => __brokenEmbedEvents.push("load"));
+          broken.addEventListener("error", () => __brokenEmbedEvents.push("error"));
+          document.body.appendChild(broken);
+          broken.src = "/broken.png";
+
+          const sourceless = document.createElement("embed");
+          sourceless.id = "sourceless-embed";
+          sourceless.type = "image/png";
+          sourceless.style.display = "block";
+          document.body.appendChild(sourceless);
+        })()
+        "#,
+    )
+    .expect("failed and sourceless embeds should be created");
+
+    let pending = vm.take_pending_subresource_fetch_infos();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(
+        pending[0].url.as_str(),
+        "https://embed-failure.test/broken.png"
+    );
+    vm.fulfill_pending_subresource_fetch(
+        pending[0].internal_id,
+        404,
+        vec![("Content-Type".to_owned(), "text/plain".to_owned())],
+        crate::runtime::RendererSyntheticResponseBody::empty(),
+    )
+    .expect("failed embed response should fulfill");
+    run_next_image_event_task(&mut vm, &loader, "failed embed error event").await;
+
+    assert_eq!(
+        vm.eval("globalThis.__brokenEmbedEvents.join('|')")
+            .expect("failed embed event should evaluate"),
+        "error"
+    );
+    let _ = vm
+        .screenshot_layout_snapshot(moli_layout::PaintViewport::new(80, 60, 1.0))
+        .expect("failed embed layout should succeed")
+        .expect("failed embed fixture should retain a layout root");
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+              const rect = id => {
+                const value = document.getElementById(id).getBoundingClientRect();
+                return `${value.width}|${value.height}`;
+              };
+              return [rect("broken-embed"), rect("sourceless-embed"), rect("embed-fallback")].join(":");
+            })()"#,
+        )
+        .expect("failed embed geometry should evaluate"),
+        "0|0:0|0:0|0"
+    );
+}
+
+#[tokio::test]
 async fn render_image_decode_requires_both_real_layout_and_image_fetch() {
     let cases = [
         (moli_page_types::LayoutPolicy::OnDemand, true, true),

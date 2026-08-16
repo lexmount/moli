@@ -50,7 +50,7 @@ impl<'a> NativeLayoutSourceView<'a> {
         element: &crate::dom::native::Element,
     ) -> LayoutElementSemantics {
         let mut semantics = layout_element_semantics_for_source(self.host(), node, element);
-        if crate::native_bridge::element::object_uses_image_layout(self.runtime, node) {
+        if crate::native_bridge::element::embedded_element_uses_image_layout(self.runtime, node) {
             semantics.replaced = Some(LayoutReplacedKind::Image);
         }
         semantics
