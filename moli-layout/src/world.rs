@@ -198,6 +198,16 @@ pub struct LayoutBox<N> {
     pub(crate) anonymous_reason: Option<LayoutAnonymousReason>,
     pub(crate) capability_diagnostics: Vec<LayoutCapabilityDiagnostic>,
     pub(crate) kind: LayoutBoxKind,
+    /// Parent in the source-backed LayoutObject hierarchy, before anonymous
+    /// box normalization and block-in-inline promotion.
+    ///
+    /// Chromium keeps this ancestry on its LayoutObject tree while fragment
+    /// construction handles block-in-inline placement. Moli's normalized
+    /// `parent` tree is intentionally different, so containing-block and
+    /// CSSOM ancestry retain their own first-class relation here.
+    pub(crate) structural_parent: Option<LayoutBoxId>,
+    /// Parent in the normalized formatting tree, including anonymous wrappers
+    /// and block-in-inline promotion.
     pub(crate) parent: Option<LayoutBoxId>,
     pub(crate) children: Vec<LayoutBoxId>,
     /// Parent used by the numeric layout algorithm.
@@ -327,6 +337,11 @@ impl<N> LayoutBox<N> {
 
     pub fn children(&self) -> &[LayoutBoxId] {
         &self.children
+    }
+
+    /// Returns the parent in the source-backed LayoutObject hierarchy.
+    pub fn structural_parent(&self) -> Option<LayoutBoxId> {
+        self.structural_parent
     }
 
     pub fn style(&self) -> &ResolvedLayoutStyle {
@@ -476,7 +491,55 @@ where
                     index: child.index(),
                 });
             };
+            // Raw source ownership is recorded before normalization. Boxes
+            // synthesized by normalization have no earlier owner, so their
+            // first formatting attachment is also their structural parent.
+            child_box.structural_parent.get_or_insert(parent);
             child_box.parent = Some(parent);
+        }
+        Ok(())
+    }
+
+    /// Attaches one newly synthesized box through the same ownership seam as
+    /// construction-time children.
+    pub(crate) fn append_synthesized_child(
+        &mut self,
+        parent: LayoutBoxId,
+        child: LayoutBoxId,
+    ) -> Result<(), LayoutError> {
+        let Some(parent_box) = self.box_by_id(parent) else {
+            return Err(LayoutError::InvalidBoxReference {
+                index: parent.index(),
+            });
+        };
+        let mut children = parent_box.children.clone();
+        children.push(child);
+        self.replace_children(parent, children)
+    }
+
+    /// Records source/LayoutObject ownership before formatting normalization
+    /// is allowed to wrap or promote any child.
+    ///
+    /// The first owner deliberately wins. A split inline returns its promoted
+    /// block in an ancestor's child stream later, but that reattachment must
+    /// not erase the inline LayoutObject that originally owned the block.
+    pub(crate) fn record_structural_children(
+        &mut self,
+        parent: LayoutBoxId,
+        children: &[LayoutBoxId],
+    ) -> Result<(), LayoutError> {
+        if self.box_by_id(parent).is_none() {
+            return Err(LayoutError::InvalidBoxReference {
+                index: parent.index(),
+            });
+        }
+        for child in children {
+            let Some(child_box) = self.box_by_id_mut(*child) else {
+                return Err(LayoutError::InvalidBoxReference {
+                    index: child.index(),
+                });
+            };
+            child_box.structural_parent.get_or_insert(parent);
         }
         Ok(())
     }
@@ -505,6 +568,9 @@ where
             if !reachable[index] {
                 continue;
             }
+            layout_box.structural_parent = layout_box
+                .structural_parent
+                .and_then(|parent| remap[parent.index()]);
             layout_box.parent = layout_box.parent.and_then(|parent| remap[parent.index()]);
             layout_box.children = layout_box
                 .children
@@ -571,6 +637,20 @@ where
         id: LayoutBoxId,
         layout_box: &LayoutBox<N>,
     ) -> Result<(), LayoutError> {
+        if id == self.root {
+            if layout_box.structural_parent.is_some() {
+                return Err(LayoutError::InvalidBoxReference { index: id.index() });
+            }
+        } else if layout_box.structural_parent.is_none() {
+            return Err(LayoutError::InvalidBoxReference { index: id.index() });
+        }
+        if let Some(parent) = layout_box.structural_parent
+            && (parent == id || self.box_by_id(parent).is_none())
+        {
+            return Err(LayoutError::InvalidBoxReference {
+                index: parent.index(),
+            });
+        }
         if let Some(source) = layout_box.source {
             if layout_box.owner.is_some()
                 || layout_box.pseudo.is_some()
@@ -705,6 +785,7 @@ where
             anonymous_reason,
             capability_diagnostics,
             kind,
+            structural_parent: None,
             parent: None,
             children: Vec::new(),
             layout_parent: None,

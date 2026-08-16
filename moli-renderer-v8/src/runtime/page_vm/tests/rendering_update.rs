@@ -3090,6 +3090,53 @@ document.body.innerHTML = `
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn block_in_inline_retains_structural_offset_and_containing_ancestors() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/block-in-inline-ancestry.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;font-size:0}
+#parent{position:relative}
+.probe{display:inline-block;width:100px;height:1px}
+#block{height:20px}
+#absolute{position:absolute;width:100%;height:10px}
+</style>`;
+document.body.innerHTML = `<span id=parent><span class=probe></span><div id=block><div id=absolute></div></div><span class=probe></span></span>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(200, 100, 1.0))?
+            .expect("block-in-inline fixture must retain a layout root");
+
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                r#"[
+document.getElementById('block').offsetParent === document.getElementById('parent'),
+document.getElementById('absolute').offsetParent === document.getElementById('parent'),
+document.getElementById('absolute').offsetWidth,
+document.querySelector('.probe').offsetWidth
+].join('|')"#,
+            )?,
+            "true|true|100|100",
+            "formatting promotion must preserve LayoutObject ancestry for CSSOM and abspos sizing",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("block-in-inline structural ancestry fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn collapsed_ranges_skip_forced_break_fragments_but_keep_soft_wrap_affinity() {
     run_page_vm_async_test(async move {
         let loader =
