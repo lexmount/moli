@@ -15,12 +15,12 @@ use style::Atom;
 use taffy::{
     AutoSizeBehavior, AvailableSpace, CacheTree, DetailedGridInfo, Dimension, Display,
     GridAutoFlow, IntrinsicSizeResult, Layout, LayoutGridContainer, LayoutInput, LayoutOutput,
-    LayoutPartialTree, Line, LogicalSize, MaybeResolve, NodeId, Point, Rect, RequestedAxis,
-    ResolveOrZero, RunMode, Size, SizingMode, SizingPurpose, Style, TraversePartialTree,
-    TraverseTree, compute_grid_layout, style_helpers,
+    LayoutPartialTree, Line, LogicalOffset, LogicalSize, MaybeResolve, NodeId, Point, Rect,
+    RequestedAxis, ResolveOrZero, RunMode, Size, SizingMode, SizingPurpose, Style,
+    TraversePartialTree, TraverseTree, WritingDirection, compute_grid_layout, style_helpers,
 };
 
-use crate::{LayoutBoxId, LayoutBoxKind, LayoutWorld, style::resolve_stylo_calc_value};
+use crate::{LayoutBoxId, LayoutBoxKind, LayoutRect, LayoutWorld, style::resolve_stylo_calc_value};
 
 mod collapsed_borders;
 mod columns;
@@ -57,6 +57,51 @@ struct TableColumn {
     group: Option<LayoutBoxId>,
     start: usize,
     span: usize,
+}
+
+/// The single boundary where logical table-grid geometry becomes physical
+/// fragment geometry.
+///
+/// Track sizing, table-part ranges, and collapsed-border conflicts stay in
+/// logical row/column coordinates. Captions contribute a physical offset
+/// outside the grid, so it is carried here and applied during projection.
+#[derive(Clone, Copy, Debug)]
+struct TableGridCoordinateSpace {
+    writing_direction: WritingDirection,
+    outer_size: Size<f32>,
+    physical_offset: Point<f32>,
+}
+
+impl TableGridCoordinateSpace {
+    const fn new(
+        writing_direction: WritingDirection,
+        outer_size: Size<f32>,
+        physical_offset: Point<f32>,
+    ) -> Self {
+        Self {
+            writing_direction,
+            outer_size,
+            physical_offset,
+        }
+    }
+
+    fn physical_rect(
+        self,
+        logical_offset: LogicalOffset<f32>,
+        logical_size: LogicalSize<f32>,
+    ) -> LayoutRect {
+        let physical_size = self.writing_direction.mode.to_physical(logical_size);
+        let location = self
+            .writing_direction
+            .converter(self.outer_size)
+            .to_physical_point(logical_offset, physical_size);
+        LayoutRect::new(
+            self.physical_offset.x + location.x,
+            self.physical_offset.y + location.y,
+            physical_size.width,
+            physical_size.height,
+        )
+    }
 }
 
 /// Direct table children grouped by their CSS table role.
@@ -229,6 +274,7 @@ where
     };
 
     if inputs.run_mode == RunMode::PerformLayout {
+        let grid_outer_size = output.size;
         let top_captions = context
             .captions
             .iter()
@@ -251,7 +297,7 @@ where
             writing_mode,
             top_height + output.size.height,
         );
-        apply_structural_layout(world, root, &context, inputs, top_height);
+        apply_structural_layout(world, root, &context, inputs, grid_outer_size, top_height);
         if let Some(first_baseline) = &mut output.first_baselines.y {
             *first_baseline += top_height;
         }
@@ -1131,6 +1177,7 @@ fn apply_structural_layout<N>(
     root: LayoutBoxId,
     context: &TableContext,
     inputs: LayoutInput,
+    grid_outer_size: Size<f32>,
     top_offset: f32,
 ) where
     N: Copy + Debug + Eq + Hash,
@@ -1145,29 +1192,60 @@ fn apply_structural_layout<N>(
     let border = root_style
         .border
         .resolve_or_zero(root_percentage_basis, resolve_stylo_calc_value);
-    let origin = Point {
-        x: border.left + padding.left,
-        y: top_offset + border.top + padding.top,
-    };
     let Some(detailed) = context.detailed.as_ref() else {
         return;
     };
-    let row_starts = track_starts(origin.y, &detailed.rows.sizes, &detailed.rows.gutters);
-    let column_starts = track_starts(origin.x, &detailed.columns.sizes, &detailed.columns.gutters);
-    let content_width = track_extent(&detailed.columns.sizes, &detailed.columns.gutters);
-    let content_height = track_extent(&detailed.rows.sizes, &detailed.rows.gutters);
+    let writing_direction = world.boxes[root.index()].style.writing_direction();
+    let logical_padding = writing_direction.to_logical_box_strut(padding);
+    let logical_border = writing_direction.to_logical_box_strut(border);
+    let inline_origin = logical_border.inline_start + logical_padding.inline_start;
+    let block_origin = logical_border.block_start + logical_padding.block_start;
+    let (column_sizes, column_gutters) = tracks_in_logical_order(
+        &detailed.columns.sizes,
+        &detailed.columns.gutters,
+        writing_direction.is_inline_flow_reversed(),
+    );
+    let (row_sizes, row_gutters) = tracks_in_logical_order(
+        &detailed.rows.sizes,
+        &detailed.rows.gutters,
+        writing_direction.is_block_flow_reversed(),
+    );
+    let column_starts = track_starts(inline_origin, &column_sizes, &column_gutters);
+    let row_starts = track_starts(block_origin, &row_sizes, &row_gutters);
+    let content_inline_size = track_extent(&column_sizes, &column_gutters);
+    let content_block_size = track_extent(&row_sizes, &row_gutters);
+    let coordinate_space = TableGridCoordinateSpace::new(
+        writing_direction,
+        grid_outer_size,
+        Point {
+            x: 0.0,
+            y: top_offset,
+        },
+    );
     if context.collapsed_borders {
         let mut row_lines = row_starts.clone();
-        row_lines.push(origin.y + content_height);
+        row_lines.push(block_origin + content_block_size);
         let mut column_lines = column_starts.clone();
-        column_lines.push(origin.x + content_width);
-        set_collapsed_border_geometry(world, root, &column_lines, &row_lines);
+        column_lines.push(inline_origin + content_inline_size);
+        set_collapsed_border_geometry(world, root, &column_lines, &row_lines, coordinate_space);
     }
 
     for row in &context.rows {
-        let y = row_starts.get(row.index).copied().unwrap_or(origin.y);
-        let height = detailed.rows.sizes.get(row.index).copied().unwrap_or(0.0);
-        set_structural_rect(world, row.id, origin.x, y, content_width, height);
+        let block_start = row_starts.get(row.index).copied().unwrap_or(block_origin);
+        let block_size = row_sizes.get(row.index).copied().unwrap_or(0.0);
+        set_logical_structural_rect(
+            world,
+            row.id,
+            coordinate_space,
+            LogicalOffset {
+                inline_offset: inline_origin,
+                block_offset: block_start,
+            },
+            LogicalSize {
+                inline_size: content_inline_size,
+                block_size,
+            },
+        );
     }
     let mut groups = context
         .rows
@@ -1185,21 +1263,47 @@ fn apply_structural_layout<N>(
             end = end.max(row.index + 1);
         }
         if start != usize::MAX {
-            let y = row_starts.get(start).copied().unwrap_or(origin.y);
-            let height =
-                track_range_extent(&detailed.rows.sizes, &detailed.rows.gutters, start, end);
-            set_structural_rect(world, group, origin.x, y, content_width, height);
+            let block_start = row_starts.get(start).copied().unwrap_or(block_origin);
+            let block_size = track_range_extent(&row_sizes, &row_gutters, start, end);
+            set_logical_structural_rect(
+                world,
+                group,
+                coordinate_space,
+                LogicalOffset {
+                    inline_offset: inline_origin,
+                    block_offset: block_start,
+                },
+                LogicalSize {
+                    inline_size: content_inline_size,
+                    block_size,
+                },
+            );
         }
     }
     for column in &context.columns {
-        let x = column_starts.get(column.start).copied().unwrap_or(origin.x);
-        let width = track_range_extent(
-            &detailed.columns.sizes,
-            &detailed.columns.gutters,
+        let inline_start = column_starts
+            .get(column.start)
+            .copied()
+            .unwrap_or(inline_origin);
+        let inline_size = track_range_extent(
+            &column_sizes,
+            &column_gutters,
             column.start,
             column.start.saturating_add(column.span),
         );
-        set_structural_rect(world, column.id, x, origin.y, width, content_height);
+        set_logical_structural_rect(
+            world,
+            column.id,
+            coordinate_space,
+            LogicalOffset {
+                inline_offset: inline_start,
+                block_offset: block_origin,
+            },
+            LogicalSize {
+                inline_size,
+                block_size: content_block_size,
+            },
+        );
     }
     let mut column_groups = context
         .columns
@@ -1220,19 +1324,42 @@ fn apply_structural_layout<N>(
             end = end.max(column.start.saturating_add(column.span));
         }
         if start != usize::MAX {
-            let x = column_starts.get(start).copied().unwrap_or(origin.x);
-            let width = track_range_extent(
-                &detailed.columns.sizes,
-                &detailed.columns.gutters,
-                start,
-                end,
+            let inline_start = column_starts.get(start).copied().unwrap_or(inline_origin);
+            let inline_size = track_range_extent(&column_sizes, &column_gutters, start, end);
+            set_logical_structural_rect(
+                world,
+                group,
+                coordinate_space,
+                LogicalOffset {
+                    inline_offset: inline_start,
+                    block_offset: block_origin,
+                },
+                LogicalSize {
+                    inline_size,
+                    block_size: content_block_size,
+                },
             );
-            set_structural_rect(world, group, x, origin.y, width, content_height);
         }
     }
 
     // Keep the root in the numeric tree even for an empty table.
     let _ = root;
+}
+
+/// Reconstruct logical start-to-end order from Taffy's detailed tracks, which
+/// are exposed in ascending physical coordinates.
+fn tracks_in_logical_order(
+    sizes: &[f32],
+    gutters: &[f32],
+    flow_reversed: bool,
+) -> (Vec<f32>, Vec<f32>) {
+    let mut sizes = sizes.to_vec();
+    let mut gutters = gutters.to_vec();
+    if flow_reversed {
+        sizes.reverse();
+        gutters.reverse();
+    }
+    (sizes, gutters)
 }
 
 fn track_starts(origin: f32, sizes: &[f32], gutters: &[f32]) -> Vec<f32> {
@@ -1262,21 +1389,46 @@ fn track_range_extent(sizes: &[f32], gutters: &[f32], start: usize, end: usize) 
             .sum::<f32>()
 }
 
-fn set_structural_rect<N>(
+fn set_logical_structural_rect<N>(
     world: &mut LayoutWorld<N>,
     id: LayoutBoxId,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
+    coordinate_space: TableGridCoordinateSpace,
+    logical_offset: LogicalOffset<f32>,
+    logical_size: LogicalSize<f32>,
 ) where
     N: Copy + Debug + Eq + Hash,
 {
+    set_structural_rect(
+        world,
+        id,
+        coordinate_space.physical_rect(logical_offset, logical_size),
+    );
+}
+
+fn set_structural_rect<N>(world: &mut LayoutWorld<N>, id: LayoutBoxId, rect: LayoutRect)
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    // Rows, row groups, columns, and column groups expose structural geometry
+    // but do not establish ordinary CSS padding or border areas. In the
+    // separated model their borders are ignored; in the collapsed model they
+    // participate only through the table-owned conflict grid. Keep authored
+    // style intact for CSSOM and resolve their used fragment decorations to
+    // zero here, at the table formatting boundary.
     world.boxes[id.index()].unrounded_layout = Layout {
         order: 0,
-        location: Point { x, y },
-        size: Size { width, height },
-        content_size: Size { width, height },
+        location: Point {
+            x: rect.x,
+            y: rect.y,
+        },
+        size: Size {
+            width: rect.width,
+            height: rect.height,
+        },
+        content_size: Size {
+            width: rect.width,
+            height: rect.height,
+        },
         scrollbar_size: Size::ZERO,
         border: Rect::ZERO,
         padding: Rect::ZERO,
@@ -1418,6 +1570,14 @@ where
 
     fn get_core_container_style(&self, _node_id: NodeId) -> Self::CoreContainerStyle<'_> {
         &self.context.style
+    }
+
+    fn get_writing_mode(&self, _node_id: NodeId) -> taffy::WritingMode {
+        // The table grid is virtual, so its inherited writing mode cannot be
+        // recovered from a real LayoutBoxId. Keep Taffy's logical track
+        // sizing and placement in the table root's coordinate system from
+        // the start instead of repairing physical axes after layout.
+        self.context.writing_mode
     }
 
     fn get_size_containment(&self, _node_id: NodeId) -> taffy::SizeContainment {
