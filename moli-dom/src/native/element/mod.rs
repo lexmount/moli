@@ -240,6 +240,15 @@ impl Element {
         self.namespace() == "http://www.w3.org/1999/xhtml" && self.local_name() == local_name
     }
 
+    /// Whether this element implements the SVG text-content-element role.
+    ///
+    /// This inheritance fact is needed even for SVG element interfaces that
+    /// currently share the generic wrapper prototype.
+    pub fn is_svg_text_content_element(&self) -> bool {
+        self.namespace() == "http://www.w3.org/2000/svg"
+            && matches!(self.local_name(), "text" | "tspan" | "textPath")
+    }
+
     pub fn is_inline_style_element(&self) -> bool {
         self.local_name() == "style"
             && matches!(

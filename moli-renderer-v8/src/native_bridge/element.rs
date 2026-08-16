@@ -399,8 +399,8 @@ pub(super) use geometry::{
 };
 pub(crate) use geometry::{
     observable_bounding_client_rect, observable_caret_position, observable_deep_hit_test,
-    observable_event_offset, observable_geometry_batch, observable_hit_test_all,
-    observable_input_hit_test, observable_scroll_adjusted_client_rect,
+    observable_event_offset, observable_geometry_batch, observable_hit_test,
+    observable_hit_test_all, observable_input_hit_test, observable_scroll_adjusted_client_rect,
     observable_sources_with_fragments, scroll_node_into_view_at_start,
 };
 pub(super) use global_attributes::{
