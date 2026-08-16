@@ -5720,3 +5720,49 @@ scrollTo(0, 15);
     .await
     .expect("rendering-update post-checkpoint child synchronization test should run");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_clamps_a_content_sized_flex_container_before_percentage_minimums() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/flex-percentage-minimum.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0}
+#container{display:flex;flex-direction:column;max-height:0;overflow:hidden;line-height:13px}
+#percentage-minimum{min-height:100%}
+#inflexible{flex:none}
+</style>`;
+document.body.innerHTML = `
+<div id=container>
+  <div id=percentage-minimum>This is a flex item.</div>
+  <div id=inflexible>Inflexible</div>
+</div>`;
+"installed"
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(200, 100, 1.0))?
+            .expect("flex percentage-minimum fixture should retain a root");
+
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                r#"["container", "percentage-minimum", "inflexible"]
+  .map(id => document.getElementById(id).getBoundingClientRect().height)
+  .join("|")"#,
+            )?,
+            "0|0|13",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("flex percentage-minimum fixture should run");
+}
