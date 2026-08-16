@@ -13,6 +13,7 @@ pub(super) fn attribute_has_non_css_runtime_side_effect(name: &str) -> bool {
     matches!(
         StyleAttributeImpact::for_attribute_name(name),
         StyleAttributeImpact::LayoutMetric
+            | StyleAttributeImpact::DescendantComputedStyle
             | StyleAttributeImpact::StylesheetLinkage
             | StyleAttributeImpact::LayoutMetricAndStylesheetLinkage
     )

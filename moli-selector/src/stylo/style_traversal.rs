@@ -2008,8 +2008,8 @@ impl<'a> TElement for StyleElement<'a> {
     ) where
         V: selectors::sink::Push<style::applicable_declarations::ApplicableDeclarationBlock>,
     {
-        super::presentation::synthesize_svg_presentational_hints(
-            self.element(),
+        super::presentation::synthesize_presentational_hints(
+            *self,
             &self.style_state().shared_lock,
             hints,
         );
@@ -2072,6 +2072,12 @@ fn inline_container_size(host: &DomHost, handle: NodeId) -> Size2D<Option<Au>> {
         }
     }
     Size2D::new(width, height)
+}
+
+impl super::presentation::PresentationalHintElement for StyleElement<'_> {
+    fn native_element(&self) -> &Element {
+        (*self).element()
+    }
 }
 
 impl SelectorsElement for StyleElement<'_> {
