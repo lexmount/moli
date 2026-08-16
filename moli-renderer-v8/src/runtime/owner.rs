@@ -3197,7 +3197,15 @@ impl RendererOwnerHandle {
         // Freeze this owner turn before making the Page resident again. The
         // concrete publication is already source-bound, so a later lifecycle
         // turn never needs to rescan or publish output on this turn's behalf.
-        let output = entry.page_vm_mut().settle_renderer_output_publication();
+        // Cancellation of a committed phase-one navigation can intentionally
+        // retire the last PageVm before this entry is restored. In that case
+        // there is no live producer left to settle; the owner-local restore
+        // below performs the retired-entry teardown.
+        let output = entry
+            .active_page_vm()
+            .is_some()
+            .then(|| entry.page_vm_mut().settle_renderer_output_publication())
+            .flatten();
         restore_entry_after_command_on_bound_owner_local_store(token, entry);
         if let Some(output) = output {
             self.publish_renderer_output(output);

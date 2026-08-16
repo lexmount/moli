@@ -426,11 +426,15 @@ impl RendererPageHandle {
             .close("Inspector target closed with its Page handle");
         self.inspector_io_ingress
             .close("Inspector target closed with its Page handle");
+        let terminated_active_execution = self
+            .inspector_io_ingress
+            .terminate_execution_for_target_close();
         self.javascript_dialog_broker.dismiss_pending();
         self.page_context_cancel_tx
             .cancel(RendererPageContextCancelReason::PageClosed);
         tracing::debug!(
             page_id = token.page_id.as_u64(),
+            terminated_active_execution,
             "closing renderer page handle"
         );
 

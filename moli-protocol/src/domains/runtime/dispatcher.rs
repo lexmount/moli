@@ -8201,6 +8201,25 @@ async fn complete_pending_runtime_inspector_command(
     if saw_current_response {
         renderer_response_rx.take();
     }
+    // Target teardown can settle the frontend command from a different
+    // command turn before this renderer completion reaches the scheduler. In
+    // that case the renderer-call correlation has already been consumed and
+    // the deferred response sender can remain alive in the retired Page
+    // command. Waiting on its receiver here would stall the entire CDP owner
+    // after, for example, Page.crash interrupted an active Runtime.evaluate.
+    // Treat the missing correlation as the command's already-settled
+    // tombstone; any non-response Inspector output in this late completion is
+    // still projected below.
+    if !saw_current_response
+        && renderer_response_rx.is_some()
+        && completed.command_id.is_some_and(|command_id| {
+            conn.renderer_runtime_command_cause_for_frontend(completed.session_id(), command_id)
+                .is_none()
+        })
+    {
+        renderer_response_rx.take();
+        saw_current_response = true;
+    }
     if !completed.wait_for_deferred_reply
         && let Some(renderer_response_rx) = renderer_response_rx.take()
     {

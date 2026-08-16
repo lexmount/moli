@@ -1724,14 +1724,15 @@ impl CdpConnection {
         let Some(mut owner) = self.target_session_owner_mut(session_id) else {
             return Ok(None);
         };
-        let Some((pending, (subresource_enabled, subresource_resource_type))) =
+        let Some((pending, (subresource_enabled, subresource_resource_type), page_update_required)) =
             owner.reset_fetch_config_for_session_and_drain_pending_state(session_id)
         else {
             return Ok(None);
         };
-        let page_command = if let Some(page) = owner
-            .runtime_slot_mut()
-            .and_then(TargetRuntimeSlot::loaded_page_mut)
+        let page_command = if page_update_required
+            && let Some(page) = owner
+                .runtime_slot_mut()
+                .and_then(TargetRuntimeSlot::loaded_page_mut)
         {
             Some(
                 page.start_set_fetch_subresource_interception(

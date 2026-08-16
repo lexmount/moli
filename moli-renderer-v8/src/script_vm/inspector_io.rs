@@ -276,6 +276,19 @@ impl RendererInspectorIoIngress {
             .map(|route| route.target.route_id())
     }
 
+    /// Breaks an active V8 call so target teardown can reach the Page owner.
+    ///
+    /// Closing the ingress prevents queued IO work from being claimed, but
+    /// the owner may still be inside non-yielding JavaScript. Target close
+    /// owns this isolate's lifetime, so teardown can terminate that execution
+    /// directly instead of depending on another DevTools command.
+    pub(crate) fn terminate_execution_for_target_close(&self) -> bool {
+        self.shared
+            .interrupt_route
+            .as_ref()
+            .is_some_and(|route| route.isolate.terminate_execution())
+    }
+
     pub(crate) fn configure_owner_wake(
         &self,
         owner_wake_tx: tokio::sync::mpsc::UnboundedSender<RendererInspectorIoOwnerWake>,
@@ -721,6 +734,66 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_owner_interrupt_and_pause_claim_exactly_once_under_stress() {
+        let ingress = ingress();
+        let agent = RendererDevToolsAgentToken::allocate();
+
+        for round in 0..128 {
+            let route = enqueue(
+                &ingress,
+                agent,
+                Some("session-race"),
+                &format!("command-{round}"),
+            );
+            let barrier = Arc::new(std::sync::Barrier::new(4));
+            let (owner, interrupt, pause) = std::thread::scope(|scope| {
+                let owner_ingress = ingress.clone();
+                let owner_barrier = Arc::clone(&barrier);
+                let owner = scope.spawn(move || {
+                    owner_barrier.wait();
+                    owner_ingress.claim_for_owner()
+                });
+                let interrupt_ingress = ingress.clone();
+                let interrupt_barrier = Arc::clone(&barrier);
+                let interrupt = scope.spawn(move || {
+                    interrupt_barrier.wait();
+                    interrupt_ingress.claim_for_interrupt()
+                });
+                let pause_ingress = ingress.clone();
+                let pause_barrier = Arc::clone(&barrier);
+                let pause = scope.spawn(move || {
+                    pause_barrier.wait();
+                    pause_ingress.claim_for_pause()
+                });
+                barrier.wait();
+                (
+                    owner.join().expect("owner claimant thread"),
+                    interrupt.join().expect("interrupt claimant thread"),
+                    pause.join().expect("pause claimant thread"),
+                )
+            });
+            let mut claimed = [owner, interrupt, pause]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            assert_eq!(
+                claimed.len(),
+                1,
+                "round {round} must have one successful consumer"
+            );
+            let command = claimed.pop().expect("exactly one claimed command");
+            assert_eq!(command.raw_json(), format!("command-{round}"));
+            ingress.first_dispatch_guard(&command).release();
+            drop(route);
+        }
+
+        assert!(
+            ingress.shared.state.lock().sessions.is_empty(),
+            "every stressed first-dispatch lane must retire"
+        );
+    }
+
+    #[test]
     fn one_session_is_fifo_while_another_session_is_independent() {
         let ingress = ingress();
         let agent = RendererDevToolsAgentToken::allocate();
@@ -742,11 +815,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn detach_cancels_the_queue_while_an_active_first_dispatch_guard_finishes_safely() {
+    async fn detach_cancels_all_queued_commands_while_active_first_dispatch_retires_safely() {
         let ingress = ingress();
         let agent = RendererDevToolsAgentToken::allocate();
-        let first_route = enqueue(&ingress, agent, Some("session-a"), "a1");
-        let second_route = enqueue(&ingress, agent, Some("session-a"), "a2");
+        let mut routes = (0..64)
+            .map(|index| enqueue(&ingress, agent, Some("session-a"), &format!("a-{index}")))
+            .collect::<Vec<_>>();
+        let first_route = routes.remove(0);
 
         let first = ingress
             .claim_for_interrupt()
@@ -758,16 +833,66 @@ mod tests {
         );
 
         ingress.detach_session(agent, &DevToolsSessionKey::Attached("session-a".to_owned()));
-        assert_eq!(
-            second_route.wait_for_claim().await,
-            Ok(RendererRuntimeInspectorIoCommandClaim::Canceled),
-            "detach must cancel commands that have not been claimed"
-        );
+        for (index, route) in routes.into_iter().enumerate() {
+            assert_eq!(
+                route.wait_for_claim().await,
+                Ok(RendererRuntimeInspectorIoCommandClaim::Canceled),
+                "detach must cancel queued command {}",
+                index + 1
+            );
+        }
+        assert!(ingress.claim_for_owner().is_none());
+        assert!(ingress.claim_for_interrupt().is_none());
+        assert!(ingress.claim_for_pause().is_none());
 
         first_dispatch.release();
         assert!(
             ingress.shared.state.lock().sessions.is_empty(),
             "the detached lane must retire after its active first dispatch releases"
+        );
+    }
+
+    #[tokio::test]
+    async fn close_cancels_every_session_and_rejects_late_io_commands() {
+        let ingress = ingress();
+        let agent = RendererDevToolsAgentToken::allocate();
+        let a1_route = enqueue(&ingress, agent, Some("session-a"), "a1");
+        let a2_route = enqueue(&ingress, agent, Some("session-a"), "a2");
+        let b1_route = enqueue(&ingress, agent, Some("session-b"), "b1");
+        let b2_route = enqueue(&ingress, agent, Some("session-b"), "b2");
+
+        let active = ingress
+            .claim_for_owner()
+            .expect("one session head should become active");
+        let mut first_dispatch = ingress.first_dispatch_guard(&active);
+        assert_eq!(
+            a1_route.wait_for_claim().await,
+            Ok(RendererRuntimeInspectorIoCommandClaim::Inspector)
+        );
+
+        ingress.close("test target closed");
+        for route in [a2_route, b1_route, b2_route] {
+            assert_eq!(
+                route.wait_for_claim().await,
+                Ok(RendererRuntimeInspectorIoCommandClaim::Canceled),
+                "close must cancel every unclaimed session command"
+            );
+        }
+        assert!(ingress.claim_for_owner().is_none());
+        assert!(ingress.claim_for_interrupt().is_none());
+        assert!(ingress.claim_for_pause().is_none());
+
+        first_dispatch.release();
+        assert!(
+            ingress.shared.state.lock().sessions.is_empty(),
+            "the active lane must retire safely after target close"
+        );
+
+        let late = enqueue(&ingress, agent, Some("session-late"), "late");
+        assert_eq!(
+            late.wait_for_claim().await,
+            Ok(RendererRuntimeInspectorIoCommandClaim::Canceled),
+            "a closed target must reject late IO ingress"
         );
     }
 

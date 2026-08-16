@@ -64,6 +64,7 @@ pub(super) enum TargetSessionOwnerRef<'a> {
 type FetchDisableStateWithSubresourceConfig = (
     super::fetch_owner::SessionOwnerPendingFetchState,
     (bool, Option<SubresourceResourceType>),
+    bool,
 );
 
 fn empty_pending_fetch_state() -> super::fetch_owner::SessionOwnerPendingFetchState {
@@ -1259,6 +1260,10 @@ impl<'a> TargetSessionOwnerMut<'a> {
             Self::ActiveTarget {
                 browser_context, ..
             } => {
+                let previous_subresource_config = browser_context
+                    .active_target
+                    .fetch_owner
+                    .subresource_interception_config();
                 let removed = browser_context
                     .active_target
                     .fetch_owner
@@ -1275,13 +1280,19 @@ impl<'a> TargetSessionOwnerMut<'a> {
                 } else {
                     empty_pending_fetch_state()
                 };
-                Some((pending, subresource_config))
+                let page_update_required =
+                    removed && previous_subresource_config != subresource_config;
+                Some((pending, subresource_config, page_update_required))
             }
             Self::BackgroundTarget {
                 browser_context,
                 target_id,
                 ..
             } => {
+                let previous_subresource_config = browser_context
+                    .parked_page_session_state(target_id)
+                    .map(|state| state.fetch_config.subresource_interception_config())
+                    .unwrap_or((false, None));
                 let mut subresource_config = (false, None);
                 let mut removed = false;
                 browser_context.mutate_parked_page_session_state(target_id, |state| {
@@ -1297,7 +1308,9 @@ impl<'a> TargetSessionOwnerMut<'a> {
                 } else {
                     empty_pending_fetch_state()
                 };
-                Some((pending, subresource_config))
+                let page_update_required =
+                    removed && previous_subresource_config != subresource_config;
+                Some((pending, subresource_config, page_update_required))
             }
             Self::NoLoadedBrowserContext => None,
         }
@@ -3884,10 +3897,11 @@ mod tests {
                 "FETCH-active".to_owned(),
                 pending_subresource_fetch(11),
             ));
-            let (pending, subresource_config) = owner
+            let (pending, subresource_config, page_update_required) = owner
                 .reset_fetch_config_for_session_and_drain_pending_state(Some("SID-active"))
                 .expect("active pending fetch state should drain");
             assert_eq!(subresource_config, (false, None));
+            assert!(page_update_required);
             assert_eq!(pending.3.len(), 1);
         }
         assert!(
@@ -3920,10 +3934,11 @@ mod tests {
                 "FETCH-parked".to_owned(),
                 pending_subresource_fetch(22),
             ));
-            let (pending, subresource_config) = owner
+            let (pending, subresource_config, page_update_required) = owner
                 .reset_fetch_config_for_session_and_drain_pending_state(Some("SID-parked"))
                 .expect("parked pending fetch state should drain");
             assert_eq!(subresource_config, (false, None));
+            assert!(page_update_required);
             assert_eq!(pending.3.len(), 1);
         }
         assert!(
