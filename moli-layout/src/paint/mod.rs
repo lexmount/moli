@@ -77,9 +77,9 @@ where
 {
     let root = projection.world.root;
     let (canvas_color, propagated_background) = if capture.include_backgrounds {
-        canvas_background(projection.world, root)
+        canvas_background(projection.world, root, capture.base_background_color)
     } else {
-        (PaintColor::WHITE, None)
+        (capture.base_background_color, None)
     };
     let mut snapshot = PaintSnapshot::new(projection.viewport, canvas_color);
     snapshot.surface = capture.surface;
@@ -411,6 +411,7 @@ fn pop_clips(count: usize, snapshot: &mut PaintSnapshot) {
 fn canvas_background<N>(
     world: &LayoutWorld<N>,
     root: LayoutBoxId,
+    base_background_color: PaintColor,
 ) -> (PaintColor, Option<LayoutBoxId>)
 where
     N: Copy + Debug + Eq + Hash,
@@ -420,7 +421,7 @@ where
         .element_semantics()
         .is_some_and(|element| element.is_html_element("html"));
     if !is_html_root {
-        return (PaintColor::WHITE, None);
+        return (base_background_color, None);
     }
     if style_has_canvas_background(&root_box.style) {
         return (root_box.style.background_color(), Some(root));
@@ -440,7 +441,7 @@ where
         }
         stack.extend(layout_box.children.iter().rev().copied());
     }
-    (PaintColor::WHITE, None)
+    (base_background_color, None)
 }
 
 fn style_has_canvas_background(style: &crate::ResolvedLayoutStyle) -> bool {
