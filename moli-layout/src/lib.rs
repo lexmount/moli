@@ -47,9 +47,9 @@ pub use layout_tree::{
     LayoutIntersectionGeometry, LayoutNodeOutput, LayoutOutputBoxId, LayoutPassMetrics,
     LayoutPassResult, LayoutPhysicalAxis, LayoutPoint, LayoutQuad, LayoutQuery, LayoutQueryAnswer,
     LayoutQueryBatch, LayoutRect, LayoutScrollContainerMetrics, LayoutScrollExtent,
-    LayoutScrollIntoViewGeometry, LayoutSize, LayoutTransform2D, LayoutTreeRetentionMetrics,
-    LayoutViewport, MAX_RETAINED_LAYOUT_BOXES, MAX_RETAINED_LAYOUT_FRAGMENTS,
-    MAX_RETAINED_LAYOUT_TREE_BYTES,
+    LayoutScrollIntoViewGeometry, LayoutSize, LayoutTextSourceSpan, LayoutTransform2D,
+    LayoutTreeRetentionMetrics, LayoutViewport, MAX_RETAINED_LAYOUT_BOXES,
+    MAX_RETAINED_LAYOUT_FRAGMENTS, MAX_RETAINED_LAYOUT_TREE_BYTES,
 };
 pub use normalize::{NormalizedBoxNode, NormalizedBoxTree, NormalizedFormattingContext};
 pub use normalize_source::{

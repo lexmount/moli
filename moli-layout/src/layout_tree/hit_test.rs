@@ -181,7 +181,7 @@ where
         let fragment = self.fragment(entry.fragment)?;
         let LayoutFragmentKind::Text {
             box_id,
-            source_utf16_range,
+            source_span,
             inline_axis,
             rtl,
             ..
@@ -191,9 +191,6 @@ where
         };
         let space = self.coordinate_space(entry.coordinate_space)?;
         let local_point = space.local_to_viewport.inverse()?.map_point(viewport_point);
-        let source_len = source_utf16_range
-            .end
-            .saturating_sub(source_utf16_range.start);
         let on_visual_start_half = match inline_axis {
             LayoutPhysicalAxis::Horizontal => {
                 local_point.x <= fragment.rect.x + fragment.rect.width * 0.5
@@ -202,33 +199,20 @@ where
                 local_point.y <= fragment.rect.y + fragment.rect.height * 0.5
             }
         };
-        let at_source_start = if *rtl {
-            !on_visual_start_half
-        } else {
-            on_visual_start_half
-        };
-        let fragment_offset = if at_source_start { 0 } else { source_len };
+        let caret_fraction = if on_visual_start_half { 0.0 } else { 1.0 };
         let caret_rect = match inline_axis {
             LayoutPhysicalAxis::Horizontal => {
-                let x = if at_source_start == *rtl {
-                    fragment.rect.right()
-                } else {
-                    fragment.rect.x
-                };
+                let x = fragment.rect.x + fragment.rect.width * caret_fraction;
                 LayoutRect::new(x, fragment.rect.y, 0.0, fragment.rect.height)
             }
             LayoutPhysicalAxis::Vertical => {
-                let y = if at_source_start == *rtl {
-                    fragment.rect.bottom()
-                } else {
-                    fragment.rect.y
-                };
+                let y = fragment.rect.y + fragment.rect.height * caret_fraction;
                 LayoutRect::new(fragment.rect.x, y, fragment.rect.width, 0.0)
             }
         };
         Some(LayoutCaretPosition {
             source: entry.source,
-            utf16_offset: Some(source_utf16_range.start + fragment_offset),
+            utf16_offset: Some(source_span.utf16_offset_at_visual_side(*rtl, on_visual_start_half)),
             rect: space.local_to_viewport.map_rect(caret_rect),
             ancestor_boxes: self.ancestor_box_models(*box_id),
         })

@@ -10,8 +10,8 @@ use crate::{
     LayoutBoxGeometry, LayoutBoxId, LayoutClipChainId, LayoutClipNode, LayoutCoordinateSpaceId,
     LayoutError, LayoutFlushReason, LayoutFragment, LayoutFragmentBoxModel, LayoutFragmentId,
     LayoutFragmentKind, LayoutOutputBoxId, LayoutPassMetrics, LayoutPassResult, LayoutPoint,
-    LayoutRect, LayoutScrollExtent, LayoutSize, LayoutTransform2D, LayoutViewport, LayoutWorld,
-    PaintCaptureRequest, PaintDiagnostic, PaintDiagnosticSeverity,
+    LayoutRect, LayoutScrollExtent, LayoutSize, LayoutTextSourceSpan, LayoutTransform2D,
+    LayoutViewport, LayoutWorld, PaintCaptureRequest, PaintDiagnostic, PaintDiagnosticSeverity,
 };
 
 pub(crate) fn finish_layout_pass<N>(
@@ -580,7 +580,7 @@ where
                     kind: LayoutFragmentKind::Text {
                         box_id: LayoutOutputBoxId::from_index(target),
                         line_index: text.line_index,
-                        source_utf16_range: text.source_utf16_range.clone(),
+                        source_span: LayoutTextSourceSpan::new(text.source_utf16_range.clone()),
                         is_forced_line_break: text.is_forced_line_break,
                         inline_axis: text.inline_axis,
                         rtl: text.rtl,

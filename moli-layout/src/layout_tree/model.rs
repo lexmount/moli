@@ -347,6 +347,89 @@ pub enum LayoutPhysicalAxis {
     Vertical,
 }
 
+/// DOM text provenance retained for one shaped source atom.
+///
+/// Inline normalization can expand one DOM scalar into several shaped
+/// characters (for example through `text-transform`), and shaping can merge
+/// several scalars into one glyph. The frozen tree nevertheless keeps the
+/// geometry owned by each source scalar as one span. Its two UTF-16 endpoints
+/// are valid caret boundaries; an offset between the surrogate halves of a
+/// supplementary scalar is not.
+///
+/// This is the frozen-tree counterpart of Blink's text-offset range plus its
+/// shape result: Range starts inside the atom snap to the leading edge and
+/// Range ends snap to the trailing edge instead of linearly slicing a glyph.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LayoutTextSourceSpan {
+    utf16_range: Range<usize>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LayoutTextSourceEdge {
+    Start,
+    End,
+}
+
+impl LayoutTextSourceEdge {
+    pub(crate) const fn visual_fraction(self, rtl: bool) -> f32 {
+        match (self, rtl) {
+            (Self::Start, false) | (Self::End, true) => 0.0,
+            (Self::End, false) | (Self::Start, true) => 1.0,
+        }
+    }
+}
+
+impl LayoutTextSourceSpan {
+    pub(crate) fn new(utf16_range: Range<usize>) -> Self {
+        debug_assert!(
+            utf16_range.start < utf16_range.end,
+            "a shaped source atom must own at least one UTF-16 code unit"
+        );
+        Self { utf16_range }
+    }
+
+    pub fn utf16_range(&self) -> &Range<usize> {
+        &self.utf16_range
+    }
+
+    /// Resolves a DOM Range to the two shaped edges selected from this atom.
+    ///
+    /// The asymmetric interior rule matches Blink's `AdjustMidCluster` use:
+    /// the start adjusts towards the atom start while the end adjusts towards
+    /// its end. Consequently a collapsed DOM Range between surrogate halves
+    /// encloses the complete glyph, while a collapsed Range at a valid scalar
+    /// boundary remains a zero-width caret.
+    pub(crate) fn selected_edges(
+        &self,
+        requested: &Range<usize>,
+    ) -> Option<(LayoutTextSourceEdge, LayoutTextSourceEdge)> {
+        if requested.is_empty() {
+            let offset = requested.start;
+            if offset < self.utf16_range.start || offset > self.utf16_range.end {
+                return None;
+            }
+            if offset == self.utf16_range.start {
+                return Some((LayoutTextSourceEdge::Start, LayoutTextSourceEdge::Start));
+            }
+            if offset == self.utf16_range.end {
+                return Some((LayoutTextSourceEdge::End, LayoutTextSourceEdge::End));
+            }
+            return Some((LayoutTextSourceEdge::Start, LayoutTextSourceEdge::End));
+        }
+
+        (requested.start < self.utf16_range.end && self.utf16_range.start < requested.end)
+            .then_some((LayoutTextSourceEdge::Start, LayoutTextSourceEdge::End))
+    }
+
+    pub(crate) fn utf16_offset_at_visual_side(&self, rtl: bool, visual_start: bool) -> usize {
+        if visual_start != rtl {
+            self.utf16_range.start
+        } else {
+            self.utf16_range.end
+        }
+    }
+}
+
 /// A geometry fragment kind. IDs contained here are valid only in the same
 /// [`crate::FrozenLayoutTree`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -374,7 +457,7 @@ pub enum LayoutFragmentKind {
     Text {
         box_id: LayoutOutputBoxId,
         line_index: usize,
-        source_utf16_range: Range<usize>,
+        source_span: LayoutTextSourceSpan,
         /// Whether this source fragment is a preserved segment break that
         /// forced a new line. Collapsed Range geometry treats it differently
         /// from an ordinary soft-wrap boundary.
