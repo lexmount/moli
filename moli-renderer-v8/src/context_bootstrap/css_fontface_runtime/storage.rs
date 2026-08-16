@@ -1,4 +1,4 @@
-use super::events::initialize_font_face_set_event_target;
+use super::events::{dispatch_font_face_set_event, initialize_font_face_set_event_target};
 use super::*;
 use crate::util::{
     callback_data_index_value, callback_data_item, get_private_value, serialize_v8_iter_array,
@@ -85,6 +85,24 @@ fn font_face_set_attribute_getter_callback<'s>(
         return;
     };
     match attribute {
+        FontFaceSetAttribute::Ready => {
+            apply_pending_stylesheet_source_css_projections(scope);
+            crate::native_bridge::document::synchronize_font_face_set_load_state_for_attribute(
+                scope,
+                args.this(),
+                true,
+            );
+        }
+        FontFaceSetAttribute::Status => {
+            crate::native_bridge::document::synchronize_font_face_set_load_state_for_attribute(
+                scope,
+                args.this(),
+                false,
+            );
+        }
+        FontFaceSetAttribute::Size => {}
+    }
+    match attribute {
         FontFaceSetAttribute::Status => rv.set(
             font_face_set_slot_value(scope, args.this(), FONT_FACE_SET_STATUS_SLOT)
                 .unwrap_or_else(|| v8::undefined(scope).into()),
@@ -111,16 +129,113 @@ pub(super) fn initialize_font_face_set_object<'s>(
         .initialize(scope, object)
         .expect("FontFaceSet declaration should initialize object");
     initialize_font_face_set_event_target(scope, object);
-    replace_font_face_set_ready_promise(scope, object);
+    let _ = replace_font_face_set_ready_promise(scope, object);
 }
 
 pub(super) fn replace_font_face_set_ready_promise<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
-) {
+) -> bool {
+    if font_face_set_document_load_cycle(scope, object).is_some() {
+        return false;
+    }
     if let Some(ready) = resolved_promise(scope, object.into()) {
         set_font_face_set_slot_value(scope, object, FONT_FACE_SET_READY_SLOT, ready.into());
+        set_font_face_set_slot_value(
+            scope,
+            object,
+            FONT_FACE_SET_READY_RESOLVER_SLOT,
+            v8::undefined(scope).into(),
+        );
+        return true;
     }
+    false
+}
+
+/// Projects one native document-font load cycle into its JS `FontFaceSet`.
+/// The native side owns request membership and task scheduling; this object
+/// owns only the stable promise identity and observable events for that cycle.
+pub(crate) fn begin_document_font_face_set_load_cycle<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    cycle: crate::script_vm::web_fonts::DocumentWebFontLoadCycleId,
+) -> bool {
+    if font_face_set_document_load_cycle(scope, object) == Some(cycle.as_u64()) {
+        return true;
+    }
+    let Some(resolver) = v8::PromiseResolver::new(scope) else {
+        return false;
+    };
+    let promise = resolver.get_promise(scope);
+    set_font_face_set_slot_value(scope, object, FONT_FACE_SET_READY_SLOT, promise.into());
+    set_font_face_set_slot_value(
+        scope,
+        object,
+        FONT_FACE_SET_READY_RESOLVER_SLOT,
+        resolver.into(),
+    );
+    set_font_face_set_slot_value(
+        scope,
+        object,
+        FONT_FACE_SET_DOCUMENT_LOAD_CYCLE_SLOT,
+        v8::BigInt::new_from_u64(scope, cycle.as_u64()).into(),
+    );
+    set_font_face_set_status(scope, object, "loading");
+    let _ = dispatch_font_face_set_event(scope, object, "loading", None);
+    true
+}
+
+/// Settles the exact JS cycle only after native layout consumed its terminal
+/// font collection. Clearing the native-cycle slots before event dispatch
+/// allows a `loadingdone` listener to start a distinct, non-overwritten cycle;
+/// the captured old resolver is resolved afterwards like Blink's ready
+/// property.
+pub(crate) fn settle_document_font_face_set_load_cycle<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    cycle: crate::script_vm::web_fonts::DocumentWebFontLoadCycleId,
+) -> bool {
+    if font_face_set_document_load_cycle(scope, object) != Some(cycle.as_u64()) {
+        return false;
+    }
+    let resolver = get_private_value(scope, object, FONT_FACE_SET_READY_RESOLVER_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        .map(|object| unsafe { v8::Local::<v8::PromiseResolver>::cast_unchecked(object) });
+    set_font_face_set_slot_value(
+        scope,
+        object,
+        FONT_FACE_SET_READY_RESOLVER_SLOT,
+        v8::undefined(scope).into(),
+    );
+    set_font_face_set_slot_value(
+        scope,
+        object,
+        FONT_FACE_SET_DOCUMENT_LOAD_CYCLE_SLOT,
+        v8::undefined(scope).into(),
+    );
+    set_font_face_set_status(scope, object, "loaded");
+    let _ = dispatch_font_face_set_event(scope, object, "loadingdone", None);
+    if let Some(resolver) = resolver {
+        let _ = resolver.resolve(scope, object.into());
+    }
+    true
+}
+
+pub(super) fn font_face_set_has_document_load_cycle<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> bool {
+    font_face_set_document_load_cycle(scope, object).is_some()
+}
+
+fn font_face_set_document_load_cycle<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<u64> {
+    let cycle = get_private_value(scope, object, FONT_FACE_SET_DOCUMENT_LOAD_CYCLE_SLOT)
+        .and_then(|value| v8::Local::<v8::BigInt>::try_from(value).ok())?;
+    let (cycle, lossless) = cycle.u64_value();
+    lossless.then_some(cycle)
 }
 
 pub(super) fn font_face_set_faces_array<'s>(

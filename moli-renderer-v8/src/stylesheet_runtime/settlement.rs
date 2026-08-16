@@ -239,6 +239,13 @@ impl DocumentRuntime {
                 _ => admitted.push((binding, resource, None)),
             }
         }
+        if let Some(cycle) = host.active_document_web_font_load_cycle() {
+            crate::native_bridge::document::begin_document_font_face_set_load_cycle_for_document(
+                scope,
+                host.document_handle(),
+                cycle,
+            );
+        }
         for (binding, resource, css_image) in admitted {
             let request_url = resource.request_url().clone();
             let kind = resource.kind();
@@ -291,7 +298,7 @@ impl DocumentRuntime {
     }
 
     fn complete_document_web_font(
-        host: &JsContextHost,
+        host: &mut JsContextHost,
         terminal: crate::css_resource_urls::CompletedStylesheetWebFont,
     ) {
         match host.complete_document_web_font(terminal) {

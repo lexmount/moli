@@ -28,6 +28,8 @@ pub enum LayoutFlushReason {
     CdpGeometry,
     ObserverDelivery,
     HitTest,
+    /// A `FontFaceSet.ready` barrier consuming terminal web-font resources.
+    FontLoading,
     Paint,
     Test,
 }
