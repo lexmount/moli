@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 
-use super::super::element::{ClientRect, observable_caret_position, observable_hit_test_all};
+use super::super::element::{
+    ClientRect, observable_caret_position, observable_hit_test, observable_hit_test_all,
+};
 use super::super::node::{node_is_document, node_runtime_and_handle_from_args};
 use crate::document_runtime::DomHandle;
 use crate::native_bridge::JsContextHost;
@@ -461,6 +463,37 @@ fn element_for_hit_source(runtime: &JsContextHost, mut handle: DomHandle) -> Opt
     }
 }
 
+fn list_hit_accepts_non_element_source(runtime: &JsContextHost, source: DomHandle) -> bool {
+    let Some(parent) = runtime
+        .dom_host()
+        .node(source)
+        .and_then(|node| node.parent_node())
+    else {
+        return false;
+    };
+    let Some(parent) = runtime
+        .dom_host()
+        .node(parent)
+        .and_then(|node| node.as_element())
+    else {
+        return false;
+    };
+
+    // Blink's TreeScope::ElementsFromHitTestResult drops ordinary text-node
+    // hits from a penetrating list. Slot and SVG text-content children are
+    // retained because those parent elements may not contribute their own
+    // hit-test background entry.
+    parent.is_html_element("slot") || parent.is_svg_text_content_element()
+}
+
+fn element_for_list_hit_source(runtime: &JsContextHost, source: DomHandle) -> Option<DomHandle> {
+    let node = runtime.dom_host().node(source)?;
+    if !node.is_element() && !list_hit_accepts_non_element_source(runtime, source) {
+        return None;
+    }
+    element_for_hit_source(runtime, source)
+}
+
 fn retarget_element_to_tree_scope(
     runtime: &JsContextHost,
     mut element: DomHandle,
@@ -484,6 +517,31 @@ fn point_is_inside_viewport(metrics: moli_layout::LayoutDocumentMetrics, x: f64,
         && y < f64::from(metrics.viewport.css_height)
 }
 
+fn element_at_point(
+    runtime: &JsContextHost,
+    document: DomHandle,
+    tree_scope: DomHandle,
+    x: f64,
+    y: f64,
+) -> Result<Option<DomHandle>, moli_layout::LayoutError> {
+    // A single-point query intentionally keeps a foremost text hit and maps
+    // it to its web-exposed parent element. This is observably different from
+    // the penetrating-list filtering performed by `elements_at_point`.
+    let (metrics, hit) = observable_hit_test(
+        runtime,
+        document,
+        moli_layout::LayoutPoint::new(x as f32, y as f32),
+        false,
+        moli_layout::LayoutFlushReason::HitTest,
+    )?;
+    if !point_is_inside_viewport(metrics, x, y) {
+        return Ok(None);
+    }
+    Ok(hit
+        .and_then(|hit| element_for_hit_source(runtime, hit.source))
+        .and_then(|element| retarget_element_to_tree_scope(runtime, element, tree_scope)))
+}
+
 fn elements_at_point(
     runtime: &JsContextHost,
     document: DomHandle,
@@ -505,7 +563,7 @@ fn elements_at_point(
     let mut seen = HashSet::new();
     let mut elements = Vec::new();
     for hit in hits {
-        let Some(element) = element_for_hit_source(runtime, hit.source)
+        let Some(element) = element_for_list_hit_source(runtime, hit.source)
             .and_then(|element| retarget_element_to_tree_scope(runtime, element, tree_scope))
         else {
             continue;
@@ -562,12 +620,10 @@ pub(in crate::native_bridge) fn node_document_element_from_point_callback<'s>(
         return;
     };
     let runtime = unsafe { &*runtime_ptr };
-    match elements_at_point(runtime, handle, handle, parsed.x, parsed.y) {
-        Ok(elements) => {
-            if let Some(element) = elements
-                .into_iter()
-                .next()
-                .and_then(|element| node_wrapper_from_handle(scope, element))
+    match element_at_point(runtime, handle, handle, parsed.x, parsed.y) {
+        Ok(element) => {
+            if let Some(element) =
+                element.and_then(|element| node_wrapper_from_handle(scope, element))
             {
                 rv.set(element.into());
             } else {
@@ -683,12 +739,10 @@ pub(in crate::native_bridge) fn node_shadow_root_element_from_point_callback<'s>
         rv.set_null();
         return;
     };
-    match elements_at_point(runtime, document, handle, parsed.x, parsed.y) {
-        Ok(elements) => {
-            if let Some(element) = elements
-                .into_iter()
-                .next()
-                .and_then(|element| node_wrapper_from_handle(scope, element))
+    match element_at_point(runtime, document, handle, parsed.x, parsed.y) {
+        Ok(element) => {
+            if let Some(element) =
+                element.and_then(|element| node_wrapper_from_handle(scope, element))
             {
                 rv.set(element.into());
             } else {

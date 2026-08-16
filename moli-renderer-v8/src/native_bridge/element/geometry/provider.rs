@@ -238,24 +238,34 @@ pub(crate) fn observable_scroll_into_view_geometry(
     }
 }
 
-fn observable_hit_test(
+/// Resolves the foremost painted hit and the viewport sampled by the same
+/// frozen layout pass. CSSOM's single-point surface consumes this query;
+/// penetrating list queries use `observable_hit_test_all` instead.
+pub(crate) fn observable_hit_test(
     runtime: &JsContextHost,
     document: DomHandle,
     point: LayoutPoint,
     ignore_pointer_events_none: bool,
     reason: LayoutFlushReason,
-) -> Result<Option<LayoutHit<DomHandle>>, LayoutError> {
+) -> Result<(LayoutDocumentMetrics, Option<LayoutHit<DomHandle>>), LayoutError> {
     let answers = observable_geometry_batch(
         runtime,
         document,
         reason,
-        &LayoutQueryBatch::new(vec![LayoutQuery::HitTest {
-            point,
-            ignore_pointer_events_none,
-        }]),
+        &LayoutQueryBatch::new(vec![
+            LayoutQuery::DocumentMetrics,
+            LayoutQuery::HitTest {
+                point,
+                ignore_pointer_events_none,
+            },
+        ]),
     )?;
-    match answers.answers.into_iter().next() {
-        Some(LayoutQueryAnswer::HitTest(hit)) => Ok(hit),
+    let mut answers = answers.answers.into_iter();
+    match (answers.next(), answers.next()) {
+        (
+            Some(LayoutQueryAnswer::DocumentMetrics(metrics)),
+            Some(LayoutQueryAnswer::HitTest(hit)),
+        ) => Ok((metrics, hit)),
         _ => Err(provider_contract_error("hit test")),
     }
 }
@@ -315,7 +325,7 @@ fn observable_deep_hit_test_inner(
     ignore_pointer_events_none: bool,
     depth: usize,
 ) -> Result<Option<DomHandle>, LayoutError> {
-    let first_hit = observable_hit_test(
+    let (_, first_hit) = observable_hit_test(
         runtime,
         document,
         point,
