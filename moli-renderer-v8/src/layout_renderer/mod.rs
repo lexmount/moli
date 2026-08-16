@@ -196,6 +196,7 @@ impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
             .unwrap_or_default();
         let mut capture = moli_layout::PaintCaptureRequest::viewport();
         capture.include_backgrounds = self.include_backgrounds;
+        capture.base_background_color = moli_layout::PaintColor::TRANSPARENT;
         let result = build_native_layout_pass_recursive(
             self.runtime,
             root,

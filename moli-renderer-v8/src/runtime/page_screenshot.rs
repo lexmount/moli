@@ -175,6 +175,7 @@ impl RendererCaptureScreenshotRequest {
                     true
                 }
             },
+            base_background_color: moli_layout::PaintColor::WHITE,
             max_width: self.max_width,
             max_height: self.max_height,
         })
