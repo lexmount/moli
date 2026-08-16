@@ -1084,6 +1084,46 @@ html,body{margin:0;padding:0}
     }
 
     #[test]
+    fn layout_renderer_resolves_ratio_automatic_minimum_at_item_boundaries() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+.host{position:absolute;top:0;width:100px}
+#block-host{left:0}
+#flex-host{display:flex;align-items:flex-start;left:120px}
+#grid-host{display:grid;place-items:start;left:240px}
+.item{display:block;width:40px;aspect-ratio:2;font-size:10px;line-height:20px}
+#block-item{background:rgb(71,11,171)}
+#flex-item{background:rgb(72,12,172)}
+#grid-item{background:rgb(73,13,173)}
+</style></head><body>
+<div id=block-host class=host><div id=block-item class=item>x<br>x<br>x</div></div>
+<div id=flex-host class=host><div id=flex-item class=item>x<br>x<br>x</div></div>
+<div id=grid-host class=host><div id=grid-item class=item>x<br>x<br>x</div></div>
+</body></html>"#,
+            )
+            .await;
+
+            for (color, expected) in [
+                (rgb(71, 11, 171), (0.0, 40.0, 60.0)),
+                (rgb(72, 12, 172), (120.0, 40.0, 60.0)),
+                (rgb(73, 13, 173), (240.0, 40.0, 60.0)),
+            ] {
+                assert_paint_rect(
+                    solid_paint_rect(&snapshot, color),
+                    moli_layout::PaintRect::new(expected.0, 0.0, expected.1, expected.2),
+                );
+            }
+        }));
+    }
+
+    #[test]
     fn layout_renderer_resolves_ratio_block_size_before_propagating_collapsed_end_margin() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
