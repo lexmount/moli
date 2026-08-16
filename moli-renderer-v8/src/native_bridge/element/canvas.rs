@@ -123,12 +123,12 @@ fn canvas_dimension_value<'s>(
         return default;
     };
     element_attribute(unsafe { &*runtime_ptr }, handle, name)
-        .and_then(|value| parse_unsigned_long_prefix(&value))
+        .and_then(|value| parse_html_non_negative_integer(&value))
         .filter(|value| *value <= i32::MAX as u32)
         .unwrap_or(default)
 }
 
-fn parse_unsigned_long_prefix(value: &str) -> Option<u32> {
+pub(crate) fn parse_html_non_negative_integer(value: &str) -> Option<u32> {
     let value = value.trim_start_matches(|ch: char| ch.is_ascii_whitespace());
     let (value, negative) = if let Some(value) = value.strip_prefix('+') {
         (value, false)
@@ -226,11 +226,11 @@ pub(crate) fn canvas_transfer_control_to_offscreen_callback<'s>(
         return;
     };
     let width = element_attribute(unsafe { &*runtime_ptr }, handle, "width")
-        .and_then(|value| parse_unsigned_long_prefix(&value))
+        .and_then(|value| parse_html_non_negative_integer(&value))
         .filter(|value| *value <= i32::MAX as u32)
         .unwrap_or(300);
     let height = element_attribute(unsafe { &*runtime_ptr }, handle, "height")
-        .and_then(|value| parse_unsigned_long_prefix(&value))
+        .and_then(|value| parse_html_non_negative_integer(&value))
         .filter(|value| *value <= i32::MAX as u32)
         .unwrap_or(150);
     let value = build_offscreen_canvas_object(scope, width, height)
