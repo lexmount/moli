@@ -80,6 +80,28 @@ jobs:
       - name: Run full workspace tests
         run: cargo nextest run --workspace --profile ci
 
+  npm-package:
+    name: npm package
+    if: github.event_name != 'pull_request' || github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.15.0
+
+      - name: Test npm launcher
+        run: npm test --prefix npm
+
+      - name: Test release packaging scripts
+        run: python3 -m unittest discover --start-directory scripts/tests --verbose
+
   protocol-smoke:
     name: CDP and WebDriver smoke
     if: github.event_name != 'pull_request' || github.event.action != 'closed'

@@ -153,7 +153,14 @@ def strip_and_sign(binary: Path, target: str) -> tuple[int, int]:
 
 
 def binary_reported_version(binary: Path) -> str:
-    return run_checked([str(binary), "version"], capture_output=True).stdout.strip()
+    output = run_checked([str(binary), "--version"], capture_output=True).stdout.strip()
+    match = re.fullmatch(r"moli\s+(\S+)", output)
+    if match is None:
+        raise ReleaseError(
+            "packaged binary returned an unexpected `--version` response: "
+            f"{output or '<empty>'}"
+        )
+    return match.group(1)
 
 
 def copy_release_materials(package_dir: Path) -> None:

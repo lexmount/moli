@@ -17,6 +17,11 @@ on:
         required: true
         default: false
         type: boolean
+      publish_npm:
+        description: Publish @lexmount/moli after creating a non-draft release
+        required: true
+        default: false
+        type: boolean
 
 concurrency:
   group: release-${{ inputs.version }}
@@ -52,8 +57,15 @@ jobs:
         shell: bash
         env:
           INPUT_VERSION: ${{ inputs.version }}
+          INPUT_DRAFT: ${{ inputs.draft }}
+          INPUT_PUBLISH_NPM: ${{ inputs.publish_npm }}
         run: |
           set -euo pipefail
+
+          if [[ "$INPUT_DRAFT" == true && "$INPUT_PUBLISH_NPM" == true ]]; then
+            echo "npm publishing cannot be enabled for a draft release." >&2
+            exit 1
+          fi
 
           version="${INPUT_VERSION#v}"
           semver_pattern='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
@@ -215,6 +227,85 @@ jobs:
           compression-level: 0
           retention-days: 7
 
+  package-npm:
+    name: Package npm CLI
+    needs:
+      - validate
+      - build-linux
+      - build-macos
+      - build-windows
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.15.0
+
+      - name: Download native release artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Test npm launcher
+        run: npm test --prefix npm
+
+      - name: Build npm packages
+        run: >-
+          python3 scripts/package_npm.py
+          --version "${{ needs.validate.outputs.version }}"
+          --input-dir dist
+          --output-dir dist/npm
+
+      - name: Validate npm publish contents
+        run: >-
+          python3 scripts/publish_npm.py
+          dist/npm/npm-packages.json
+          --main-tag latest
+          --dry-run
+
+      - name: Smoke-test packaged Linux CLI
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          smoke_dir=$(mktemp -d "${RUNNER_TEMP}/moli-npm-smoke.XXXXXX")
+          trap 'rm -rf "$smoke_dir"' EXIT
+          manifest=dist/npm/npm-packages.json
+          main_tarball=$(jq -r '.main.filename' "$manifest")
+          linux_tarball=$(jq -r \
+            '.platforms[] | select(.target == "x86_64-unknown-linux-gnu") | .filename' \
+            "$manifest")
+          main_root="$smoke_dir/node_modules/@lexmount/moli"
+          platform_root="$smoke_dir/node_modules/@lexmount/moli-linux-x64"
+          mkdir -p "$main_root" "$platform_root"
+          tar -xzf "dist/npm/$main_tarball" -C "$main_root" --strip-components=1
+          tar -xzf "dist/npm/$linux_tarball" -C "$platform_root" --strip-components=1
+
+          reported_version=$(node "$main_root/bin/moli.js" --version)
+          if [[ "$reported_version" != "moli $RELEASE_VERSION" ]]; then
+            echo "Unexpected packaged CLI version: $reported_version" >&2
+            exit 1
+          fi
+
+      - name: Upload npm packages
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: npm-packages
+          path: dist/npm/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
   publish:
     name: Create GitHub Release
     needs:
@@ -222,6 +313,7 @@ jobs:
       - build-linux
       - build-macos
       - build-windows
+      - package-npm
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -302,3 +394,56 @@ jobs:
           printf 'Created %s\n' "$release_url"
           printf '### Release created\n\n[%s](%s)\n' \
             "$RELEASE_TAG" "$release_url" >> "$GITHUB_STEP_SUMMARY"
+
+  publish-npm:
+    name: Publish npm CLI
+    if: ${{ inputs.publish_npm && !inputs.draft }}
+    needs:
+      - validate
+      - package-npm
+      - publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.15.0
+          registry-url: https://registry.npmjs.org
+
+      - name: Download npm packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: npm-packages
+          path: dist/npm
+
+      - name: Verify trusted-publishing client versions
+        shell: bash
+        run: |
+          node --version
+          npm --version
+
+      - name: Publish platform packages, then launcher
+        shell: bash
+        env:
+          RELEASE_PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          set -euo pipefail
+
+          main_tag=latest
+          if [[ "$RELEASE_PRERELEASE" == true ]]; then
+            main_tag=next
+          fi
+          python3 scripts/publish_npm.py \
+            dist/npm/npm-packages.json \
+            --main-tag "$main_tag" \
+            --trusted-publishing

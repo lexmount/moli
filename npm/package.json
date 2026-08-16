@@ -1,0 +1,17 @@
+{
+  "name": "@lexmount/moli",
+  "version": "0.0.0-development",
+  "private": true,
+  "description": "npm launcher sources for the Moli CLI",
+  "license": "MIT OR Apache-2.0",
+  "type": "module",
+  "bin": {
+    "moli": "bin/moli.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}
