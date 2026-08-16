@@ -2540,6 +2540,10 @@ fn style_attribute_impact_classifies_dom_and_stylesheet_inputs() {
     assert!(!StyleAttributeImpact::for_attribute_name("width").changes_computed_style());
     assert!(!StyleAttributeImpact::for_attribute_name("width").changes_stylesheet_linkage());
 
+    assert!(StyleAttributeImpact::for_attribute_name("cellpadding").affects_layout_metric());
+    assert!(StyleAttributeImpact::for_attribute_name("cellpadding").changes_computed_style());
+    assert!(!StyleAttributeImpact::for_attribute_name("cellpadding").changes_stylesheet_linkage());
+
     assert!(!StyleAttributeImpact::for_attribute_name("href").affects_layout_metric());
     assert!(StyleAttributeImpact::for_attribute_name("href").changes_stylesheet_linkage());
 
