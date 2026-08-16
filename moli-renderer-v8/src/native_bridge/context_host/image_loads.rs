@@ -37,7 +37,8 @@ impl JsContextHost {
             .node(image_handle)
             .filter(|node| {
                 node.as_element()
-                    .is_some_and(|element| element.is_html_element("img"))
+                    .and_then(crate::native_bridge::element::ImageResourceElementKind::for_element)
+                    .is_some()
             })
             .and_then(Node::owner_document)?;
         let is_main_document = owner_document_handle == self.document_handle();
@@ -175,7 +176,11 @@ impl JsContextHost {
         if pending.id != id || pending.network_state != PendingImageLoadNetworkState::Unbound {
             return None;
         }
-        let _ = self.retire_image_resource_for_element(image_handle);
+        if successful {
+            let _ = self.retire_image_resource_for_element(image_handle);
+        } else {
+            let _ = self.fail_image_resource_for_element(image_handle);
+        }
         let pending = self.pending_image_load_events.get_mut(&image_handle)?;
         pending.network_state = if successful {
             PendingImageLoadNetworkState::Ready(PendingImageLoadTerminalSource::Local)
@@ -233,7 +238,11 @@ impl JsContextHost {
             );
             return None;
         }
-        let _ = self.retire_image_resource_for_element(image_handle);
+        if successful {
+            let _ = self.retire_image_resource_for_element(image_handle);
+        } else {
+            let _ = self.fail_image_resource_for_element(image_handle);
+        }
         let pending = self.pending_image_load_events.get_mut(&image_handle)?;
         pending.network_state = if successful {
             PendingImageLoadNetworkState::Ready(PendingImageLoadTerminalSource::Network)

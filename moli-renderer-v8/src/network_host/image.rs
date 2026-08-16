@@ -199,11 +199,24 @@ pub(crate) fn start_image_element_resource_fetch(
         .dom_host()
         .node(image_handle)
         .and_then(crate::dom::native::Node::as_element)
-        .filter(|element| element.is_html_element("img"))
-        .ok_or_else(|| "image element is unavailable".to_owned())?;
+        .ok_or_else(|| "image resource element is unavailable".to_owned())?;
+    let element_kind =
+        crate::native_bridge::element::ImageResourceElementKind::for_element(element)
+            .ok_or_else(|| "element cannot own an image resource".to_owned())?;
     let request_initiator_type = pending.request_initiator_type();
-    let (request_mode, credentials_mode) = image_cross_origin_request_modes(element);
-    let fetch_priority = FetchPriorityHint::from_attribute(element.attribute("fetchpriority"));
+    let (request_mode, credentials_mode, fetch_priority) = match element_kind {
+        crate::native_bridge::element::ImageResourceElementKind::Image => {
+            let (request_mode, credentials_mode) = image_cross_origin_request_modes(element);
+            (
+                request_mode,
+                credentials_mode,
+                FetchPriorityHint::from_attribute(element.attribute("fetchpriority")),
+            )
+        }
+        crate::native_bridge::element::ImageResourceElementKind::Object => {
+            (RequestMode::NoCors, RequestCredentialsMode::Include, None)
+        }
+    };
 
     if let Some(response) = local_url_response(&request_url) {
         let response: crate::protocol_types::NavigationResponse = response.into();

@@ -23,6 +23,19 @@ pub(crate) struct ReadyImageForLayout {
     pub(crate) svg: Option<Arc<moli_image::SvgImage>>,
 }
 
+/// Layout-visible state of one element-owned image resource.
+///
+/// Consumers such as `<object>` need the terminal failure state to decide
+/// whether their layout tree contains replaced content or fallback children.
+/// Keep that decision on the resource lifecycle rather than inferring it from
+/// missing decoded pixels, which also describes an ordinary pending request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ImageResourceStatus {
+    Pending,
+    Ready,
+    Failed,
+}
+
 pub(in crate::native_bridge::context_host) struct ImageResourceStore {
     slots: HashMap<DomHandle, ImageResourceSlot>,
     ready_by_request: ReadyImageResourceIndex,
@@ -274,6 +287,17 @@ impl ImageResourceStore {
         self.slots
             .get(&element)
             .is_some_and(|slot| matches!(slot.state, ImageResourceState::Ready(_)))
+    }
+
+    pub(super) fn status(&self, element: DomHandle) -> Option<ImageResourceStatus> {
+        let slot = self.slots.get(&element)?;
+        Some(match &slot.state {
+            ImageResourceState::Pending | ImageResourceState::DecodeQueued(_) => {
+                ImageResourceStatus::Pending
+            }
+            ImageResourceState::Ready(_) => ImageResourceStatus::Ready,
+            ImageResourceState::Failed => ImageResourceStatus::Failed,
+        })
     }
 
     pub(super) fn has_ready_request(&self, request_key: &ImageRequestKey) -> bool {
