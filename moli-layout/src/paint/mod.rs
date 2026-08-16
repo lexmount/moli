@@ -750,7 +750,7 @@ where
     if has_embedded_frame
         && layout_box
             .element_semantics()
-            .is_some_and(|semantics| semantics.replaced == Some(LayoutReplacedKind::Frame))
+            .is_some_and(|semantics| semantics.replaced_kind() == Some(LayoutReplacedKind::Frame))
     {
         return None;
     }
@@ -760,7 +760,7 @@ where
             LayoutInputControlKind::Image,
         )) => Some(UnavailableReplacedContentPaint::OpaquePlaceholder),
         LayoutElementCategory::FormControl(_) => None,
-        _ => match semantics.replaced {
+        _ => match semantics.replaced_kind() {
             Some(LayoutReplacedKind::Canvas) => {
                 Some(UnavailableReplacedContentPaint::TransparentCanvas)
             }

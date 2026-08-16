@@ -34,7 +34,7 @@ pub(super) fn project_replaced_image<N>(
     let layout_box = &projection.world.boxes[id.index()];
     let Some(kind) = layout_box
         .element_semantics()
-        .and_then(|semantics| semantics.replaced)
+        .and_then(|semantics| semantics.replaced_kind())
     else {
         return;
     };

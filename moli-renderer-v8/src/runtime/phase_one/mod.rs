@@ -2924,8 +2924,8 @@ img, canvas, iframe, svg { display: block; margin: 0; border: 0; padding: 0 }
                     .iter()
                     .filter(|diagnostic| diagnostic.code == "replaced-content-placeholder")
                     .count(),
-                1,
-                "the unavailable image must retain its placeholder while the live initial-empty iframe is composed"
+                0,
+                "an image with no selected source is fallback content, while the live initial-empty iframe is composed separately"
             );
             assert_eq!(
                 replaced
