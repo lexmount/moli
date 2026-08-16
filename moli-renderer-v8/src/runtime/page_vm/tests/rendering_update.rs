@@ -3008,6 +3008,111 @@ document.body.innerHTML = `
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn collapsed_ranges_skip_forced_break_fragments_but_keep_soft_wrap_affinity() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        loader.set_optional_resource_fetch_mask(
+            crate::protocol_types::OptionalResourceFetchMask::FONT,
+        );
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/collapsed-range-line-break.html")?,
+        );
+        let encoded_font = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../moli-layout/tests/fixtures/moli-ahem.woff2"
+        ));
+        let encoded = base64::engine::general_purpose::STANDARD.encode(encoded_font);
+        page_vm.vm_mut().eval(&format!(
+            r#"
+document.head.innerHTML = `<style>
+@font-face {{ font-family:MoliAhem; src:url(data:font/woff2;base64,{encoded}) format('woff2') }}
+html,body {{ margin:0 }}
+.line {{ font:10px/10px MoliAhem }}
+#soft {{ width:18px; word-break:break-all }}
+</style>`;
+document.body.innerHTML = `
+<div id=ltr class=line style="white-space:pre;width:100px">123456
+789012</div>
+<div id=rtl class=line style="white-space:pre;width:100px;direction:rtl">123456
+789012</div>
+<div id=vrl class=line style="white-space:pre;width:100px;height:100px;writing-mode:vertical-rl">123456
+789012</div>
+<div id=soft class=line>ABCDEF</div>`;
+'installed'
+"#
+        ))?;
+        page_vm
+            .vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify((()=>{const caret=(id,offset)=>{const element=document.getElementById(id);const text=element.firstChild;const range=document.createRange();range.setStart(text,offset);range.setEnd(text,offset);const rect=range.getBoundingClientRect();const parent=element.getBoundingClientRect();return [rect.x-parent.x,rect.y-parent.y,rect.width,rect.height,range.getClientRects().length]};const soft=document.getElementById('soft');const range=document.createRange();range.setStart(soft.firstChild,3);range.setEnd(soft.firstChild,3);const parent=soft.getBoundingClientRect();return {ltr:[caret('ltr',0),caret('ltr',6),caret('ltr',7)],rtl:[caret('rtl',6),caret('rtl',7)],vrl:[caret('vrl',6),caret('vrl',7)],soft:[...range.getClientRects()].map(rect=>[rect.x-parent.x,rect.y-parent.y,rect.width,rect.height])}})())"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        for (case, expected) in [
+            (
+                "ltr",
+                vec![
+                    [0.0, 0.0, 0.0, 10.0],
+                    [36.0, 0.0, 0.0, 10.0],
+                    [0.0, 10.0, 0.0, 10.0],
+                ],
+            ),
+            (
+                "rtl",
+                vec![[100.0, 0.0, 0.0, 10.0], [64.0, 10.0, 0.0, 10.0]],
+            ),
+            (
+                "vrl",
+                vec![[90.0, 36.0, 10.0, 0.0], [80.0, 0.0, 10.0, 0.0]],
+            ),
+        ] {
+            let actual = geometry[case]
+                .as_array()
+                .unwrap_or_else(|| panic!("missing {case} geometry: {geometry}"));
+            assert_eq!(actual.len(), expected.len(), "{case}: {geometry}");
+            for (offset, expected) in actual.iter().zip(expected) {
+                assert_eq!(
+                    offset[4].as_u64(),
+                    Some(1),
+                    "forced-break boundary must expose one caret quad: {case}: {geometry}"
+                );
+                for (axis, expected) in expected.into_iter().enumerate() {
+                    let actual = offset[axis].as_f64().expect("numeric caret geometry") as f32;
+                    assert!(
+                        (actual - expected).abs() <= 0.05,
+                        "{case}[{axis}]: expected Chromium geometry {expected}, got {actual}; geometry={geometry}"
+                    );
+                }
+            }
+        }
+        let soft = geometry["soft"]
+            .as_array()
+            .unwrap_or_else(|| panic!("missing soft-wrap geometry: {geometry}"));
+        assert_eq!(
+            soft.len(),
+            2,
+            "an ordinary soft-wrap boundary retains upstream and downstream caret affinity: {geometry}"
+        );
+        for (rect, expected) in soft.iter().zip([[18.0, 0.0, 0.0, 10.0], [0.0, 10.0, 0.0, 10.0]]) {
+            for (axis, expected) in expected.into_iter().enumerate() {
+                let actual = rect[axis].as_f64().expect("numeric soft-wrap geometry") as f32;
+                assert!(
+                    (actual - expected).abs() <= 0.05,
+                    "soft[{axis}]: expected Chromium geometry {expected}, got {actual}; geometry={geometry}"
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("collapsed Range line-break fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn stylesheet_lifecycle_registers_only_the_current_documents_data_web_fonts() {
     run_page_vm_async_test(async move {
         let loader =
