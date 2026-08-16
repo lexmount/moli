@@ -317,6 +317,81 @@ fn table_caption_tracks_rows_cells_and_common_spans_share_one_wrapper_geometry()
 }
 
 #[test]
+fn separated_table_parts_ignore_authored_border_padding_and_margin() {
+    use LayoutElementCategory::Table;
+    use LayoutTableRole::{BodyGroup, Cell, Row, Table as Root};
+
+    let source = Source(vec![
+        Node::element("root", "div", LayoutElementCategory::Generic, None, vec![1]),
+        Node::element("table", "table", Table(Root), None, vec![2]),
+        Node::element("body", "tbody", Table(BodyGroup), None, vec![3]),
+        Node::element("row", "tr", Table(Row), None, vec![4]),
+        Node::element("cell", "td", Table(Cell), None, Vec::new()).with_metadata(
+            LayoutElementMetadata {
+                table: Some(LayoutTableData::default()),
+                ..LayoutElementMetadata::default()
+            },
+        ),
+    ]);
+    let table = PaintColor::new(0.11, 0.12, 0.13, 1.0);
+    let group = PaintColor::new(0.21, 0.22, 0.23, 1.0);
+    let row = PaintColor::new(0.31, 0.32, 0.33, 1.0);
+    let cell = PaintColor::new(0.41, 0.42, 0.43, 1.0);
+    let structural_style = |display, color| {
+        style(display, color).tap_taffy(|taffy| {
+            taffy.border = Rect {
+                left: taffy::LengthPercentage::length(20.0),
+                right: taffy::LengthPercentage::length(20.0),
+                top: taffy::LengthPercentage::length(20.0),
+                bottom: taffy::LengthPercentage::length(20.0),
+            };
+            taffy.padding = Rect {
+                left: taffy::LengthPercentage::length(12.0),
+                right: taffy::LengthPercentage::length(12.0),
+                top: taffy::LengthPercentage::length(12.0),
+                bottom: taffy::LengthPercentage::length(12.0),
+            };
+            taffy.margin = Rect {
+                left: taffy::LengthPercentageAuto::length(9.0),
+                right: taffy::LengthPercentageAuto::length(9.0),
+                top: taffy::LengthPercentageAuto::length(9.0),
+                bottom: taffy::LengthPercentageAuto::length(9.0),
+            };
+        })
+    };
+    let mut styles = Styles::default();
+    styles.primary.insert(
+        0,
+        sized(LayoutDisplay::Block, 200.0, 100.0, PaintColor::TRANSPARENT),
+    );
+    styles
+        .primary
+        .insert(1, sized(LayoutDisplay::Table, 50.0, 20.0, table));
+    styles
+        .primary
+        .insert(2, structural_style(LayoutDisplay::TableRowGroup, group));
+    styles
+        .primary
+        .insert(3, structural_style(LayoutDisplay::TableRow, row));
+    styles
+        .primary
+        .insert(4, sized(LayoutDisplay::TableCell, 50.0, 20.0, cell));
+
+    let snapshot = render(&source, &mut styles, 200, 100);
+    for color in [table, group, row, cell] {
+        assert_eq!(rect(&snapshot, color), PaintRect::new(0.0, 0.0, 50.0, 20.0));
+    }
+    assert!(
+        snapshot
+            .fragments
+            .iter()
+            .all(|fragment| !matches!(fragment, PaintFragment::Border { .. })),
+        "table structural borders must not reach generic paint: {:?}",
+        snapshot.fragments
+    );
+}
+
+#[test]
 fn table_sections_use_visual_header_body_footer_order() {
     use LayoutElementCategory::Table;
     use LayoutTableRole::{BodyGroup, Cell, FooterGroup, HeaderGroup, Row, Table as Root};

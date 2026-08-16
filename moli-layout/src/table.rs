@@ -803,15 +803,7 @@ fn apply_structural_layout<N>(
     for row in &context.rows {
         let y = row_starts.get(row.index).copied().unwrap_or(origin.y);
         let height = detailed.rows.sizes.get(row.index).copied().unwrap_or(0.0);
-        set_structural_rect(
-            world,
-            row.id,
-            origin.x,
-            y,
-            content_width,
-            height,
-            grid_size.width,
-        );
+        set_structural_rect(world, row.id, origin.x, y, content_width, height);
     }
     let mut groups = context
         .rows
@@ -832,15 +824,7 @@ fn apply_structural_layout<N>(
             let y = row_starts.get(start).copied().unwrap_or(origin.y);
             let height =
                 track_range_extent(&detailed.rows.sizes, &detailed.rows.gutters, start, end);
-            set_structural_rect(
-                world,
-                group,
-                origin.x,
-                y,
-                content_width,
-                height,
-                grid_size.width,
-            );
+            set_structural_rect(world, group, origin.x, y, content_width, height);
         }
     }
     for column in &context.columns {
@@ -851,15 +835,7 @@ fn apply_structural_layout<N>(
             column.start,
             column.start.saturating_add(column.span),
         );
-        set_structural_rect(
-            world,
-            column.id,
-            x,
-            origin.y,
-            width,
-            content_height,
-            grid_size.width,
-        );
+        set_structural_rect(world, column.id, x, origin.y, width, content_height);
     }
     let mut column_groups = context
         .columns
@@ -887,15 +863,7 @@ fn apply_structural_layout<N>(
                 start,
                 end,
             );
-            set_structural_rect(
-                world,
-                group,
-                x,
-                origin.y,
-                width,
-                content_height,
-                grid_size.width,
-            );
+            set_structural_rect(world, group, x, origin.y, width, content_height);
         }
     }
 
@@ -937,25 +905,22 @@ fn set_structural_rect<N>(
     y: f32,
     width: f32,
     height: f32,
-    parent_width: f32,
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    let style = &world.boxes[id.index()].style.taffy;
-    let padding = style
-        .padding
-        .resolve_or_zero(Some(parent_width), resolve_stylo_calc_value);
-    let border = style
-        .border
-        .resolve_or_zero(Some(parent_width), resolve_stylo_calc_value);
+    // Internal table parts expose the grid's structural geometry, not an
+    // ordinary CSS box model. Their margin and padding are ignored. Borders
+    // are ignored in the separated model and represented by the table-owned
+    // conflict grid in the collapsed model; keep the authored style intact
+    // while publishing zero used decoration edges to generic paint.
     world.boxes[id.index()].unrounded_layout = Layout {
         order: 0,
         location: Point { x, y },
         size: Size { width, height },
         content_size: Size { width, height },
         scrollbar_size: Size::ZERO,
-        border,
-        padding,
+        border: Rect::ZERO,
+        padding: Rect::ZERO,
         margin: Rect::ZERO,
     };
 }
