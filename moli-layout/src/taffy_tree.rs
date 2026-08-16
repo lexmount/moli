@@ -1341,7 +1341,7 @@ where
         let inline_coordinates = InlineCoordinateSpace::new(writing_mode);
         let is_floated = box_is_effectively_floated(self, id);
         let percentage_basis = box_model_percentage_basis(inputs, writing_mode);
-        let alignment = self.boxes[id.index()].style.text_align();
+        let alignment = self.boxes[id.index()].style.resolved_text_align();
         // Resolving intrinsic sizing keywords may re-enter this same IFC in
         // `ContentSize` mode. Keep its mutable content in the world until
         // Taffy actually invokes the content measurer; taking it before the
@@ -2614,6 +2614,7 @@ fn empty_inline_context() -> InlineFormattingContext {
         parent_strut: None,
         root_includes_used_font_metrics: false,
         style_parents: Vec::new(),
+        resolved_style_runs: Vec::new(),
         structural_boxes: Vec::new(),
         line_placements: Vec::new(),
         fragments: InlineFragments::default(),
