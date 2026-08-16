@@ -143,7 +143,10 @@ impl JsContextHost {
                         .dom_host()
                         .node(*handle)
                         .and_then(crate::dom::native::Node::as_element)
-                        .is_some_and(|element| element.is_html_element("img"))
+                        .and_then(
+                            crate::native_bridge::element::ImageResourceElementKind::for_element,
+                        )
+                        .is_some()
             })
             .collect::<Vec<_>>();
         let host_ptr = self as *mut JsContextHost;
