@@ -73,7 +73,6 @@ where
         let geometry = self.box_geometry(box_id)?;
         let extent = self.scroll_extent(box_id)?;
         let coordinate_space = self.coordinate_space(geometry.coordinate_space)?;
-        let is_root = box_id == self.root_box;
         let offset_parent_id = self.offset_parent_box(box_id, &mut offset_parent_is_exposed);
         let offset_parent = offset_parent_id.and_then(|id| {
             self.boxes
@@ -106,7 +105,7 @@ where
             .unwrap_or_else(|| {
                 LayoutSize::new(geometry.border_box.width, geometry.border_box.height)
             });
-        let client_size = if is_root {
+        let client_size = if geometry.uses_viewport_client_metrics {
             LayoutSize::new(
                 self.viewport.css_width as f32,
                 self.viewport.css_height as f32,
@@ -114,7 +113,7 @@ where
         } else {
             LayoutSize::new(geometry.padding_box.width, geometry.padding_box.height)
         };
-        let scroll_size = if is_root {
+        let scroll_size = if box_id == self.root_box {
             LayoutSize::new(
                 extent.scroll_size.width.max(self.content_size.width),
                 extent.scroll_size.height.max(self.content_size.height),

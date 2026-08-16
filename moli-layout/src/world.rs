@@ -396,6 +396,7 @@ where
     pub(crate) source_mapping: HashMap<N, LayoutBoxId>,
     pub(crate) display_contents_mapping: HashMap<N, Vec<LayoutBoxId>>,
     pub(crate) root: LayoutBoxId,
+    pub(crate) document_mode: crate::LayoutDocumentMode,
     pub(crate) viewport_layout: ViewportLayoutState,
     /// Document/view state shared by the active layout pass.
     pub(crate) layout_environment: LayoutEnvironment,
@@ -405,15 +406,47 @@ impl<N> LayoutWorld<N>
 where
     N: Copy + Debug + Eq + Hash,
 {
-    pub(crate) fn new(root: LayoutBox<N>) -> Self {
+    pub(crate) fn new(root: LayoutBox<N>, document_mode: crate::LayoutDocumentMode) -> Self {
         Self {
             boxes: vec![root],
             source_mapping: HashMap::new(),
             display_contents_mapping: HashMap::new(),
             root: LayoutBoxId::from_index(0),
+            document_mode,
             viewport_layout: ViewportLayoutState::default(),
             layout_environment: LayoutEnvironment::NONE,
         }
+    }
+
+    pub(crate) fn is_document_element(&self, id: LayoutBoxId) -> bool {
+        id == self.root
+    }
+
+    pub(crate) fn is_document_body(&self, id: LayoutBoxId) -> bool {
+        let layout_box = &self.boxes[id.index()];
+        layout_box.structural_parent == Some(self.root)
+            && layout_box
+                .element_semantics
+                .as_ref()
+                .is_some_and(|semantics| semantics.is_html_element("body"))
+    }
+
+    /// Whether this box participates in the HTML body-fills-viewport quirk.
+    ///
+    /// The available size remains constraint-space state. This predicate only
+    /// identifies the two eligible layout objects, matching Blink's
+    /// `BlockNode::IsQuirkyAndFillsViewport` exclusions.
+    pub(crate) fn is_quirky_viewport_filler(&self, id: LayoutBoxId) -> bool {
+        let layout_box = &self.boxes[id.index()];
+        if self.document_mode != crate::LayoutDocumentMode::Quirks
+            || layout_box.style.is_absolute_positioned()
+            || layout_box.style.is_fixed_positioned()
+            || layout_box.style.is_floated()
+            || layout_box.style.display().is_inline_level()
+        {
+            return false;
+        }
+        self.is_document_element(id) || self.is_document_body(id)
     }
 
     pub fn root(&self) -> LayoutBoxId {

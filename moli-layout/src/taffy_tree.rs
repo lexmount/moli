@@ -944,6 +944,27 @@ where
         self.layout_environment
     }
 
+    fn establishes_new_formatting_context(&self, node_id: NodeId) -> bool {
+        !self.is_viewport_taffy_node(node_id) && LayoutBoxId::from_taffy(node_id) == self.root
+    }
+
+    fn prepare_child_layout_input(&self, node_id: NodeId, inputs: LayoutInput) -> LayoutInput {
+        let writing_mode = self.get_writing_mode(node_id);
+        let mut inputs = inputs.for_child_writing_mode(writing_mode, self.layout_environment);
+        if !self.is_viewport_taffy_node(node_id) {
+            let layout_box_id = LayoutBoxId::from_taffy(node_id);
+            if !self.is_quirky_viewport_filler(layout_box_id) {
+                return inputs;
+            }
+            // HTML's quirks viewport filler is an auto-size policy supplied by
+            // the containing formatting context. It consumes the margin-box
+            // available block size before preferred-ratio transfer and keeps
+            // authored min/max constraints in the normal used-size pipeline.
+            inputs.block_auto_behavior = AutoSizeBehavior::FillAvailable;
+        }
+        inputs
+    }
+
     fn resolve_calc_value(&self, value: *const (), basis: f32) -> f32 {
         resolve_stylo_calc_value(value, basis)
     }
