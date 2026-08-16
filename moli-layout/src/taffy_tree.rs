@@ -6,23 +6,25 @@ use taffy::{
     AlignContent, AutoSizeBehavior, AvailableSpace, BlockContext, BlockFormattingContext,
     CacheTree, Clear, Dimension, Display, FloatDirection, IntrinsicSizeResult, Layout,
     LayoutBlockContainer, LayoutFlexboxContainer, LayoutGridContainer, LayoutInput, LayoutOutput,
-    LayoutPartialTree, Line, LogicalOffset, LogicalStaticPosition, MaybeMath, MaybeResolve, NodeId,
-    OutOfFlowCandidate, OutOfFlowContainingBlock, Point, ResolveOrZero, RoundTree, RunMode, Size,
-    SizingMode, SizingPurpose, Style, TraversePartialTree, TraverseTree, WritingDirection,
-    compute_block_layout, compute_cached_layout, compute_cached_size,
-    compute_content_alignment_offset, compute_flexbox_layout, compute_grid_layout,
-    compute_hidden_layout, compute_leaf_layout_with_tree, compute_out_of_flow_layout,
-    compute_replaced_layout, compute_root_layout, resolve_content_alignment_fallback, round_layout,
+    LayoutPartialTree, Line, LogicalBoxStrut, LogicalOffset, LogicalSize, LogicalStaticPosition,
+    MaybeMath, MaybeResolve, NodeId, OutOfFlowCandidate, OutOfFlowContainingBlock, Point,
+    ResolveOrZero, RoundTree, RunMode, Size, SizingMode, SizingPurpose, Style, TraversePartialTree,
+    TraverseTree, WritingDirection, compute_block_layout, compute_cached_layout,
+    compute_cached_size, compute_content_alignment_offset, compute_flexbox_layout,
+    compute_grid_layout, compute_hidden_layout, compute_leaf_layout_with_tree,
+    compute_out_of_flow_layout, compute_replaced_layout, compute_root_layout,
+    resolve_content_alignment_fallback, round_layout,
 };
 
 use crate::{
     LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic, LayoutWorld, PaintRect, PaintViewport,
     inline::{
-        InlineFormattingContext, InlineFragments, InlineLinePlacement, InlineObjectRole,
-        break_inline_lines, build_inline_fragments, build_inline_line_placements,
+        InlineCoordinateSpace, InlineFormattingContext, InlineFragments, InlineLinePlacement,
+        InlineObjectRole, LineRelativeFragments, LineRelativeOffset, break_inline_lines,
+        build_inline_fragments, build_inline_line_placements, flow_relative_line_rect,
         relative_atomic_inset_offset,
     },
-    style::{InlineDirection, resolve_stylo_calc_value},
+    style::{InlineBaselineType, InlineDirection, resolve_stylo_calc_value},
     table::{compute_table_layout, prepare_table_layout_trees},
     world::{OutOfFlowCandidateChild, OutOfFlowStaticPosition},
 };
@@ -404,37 +406,64 @@ where
             .margin
             .resolve_or_zero(Some(percentage_basis), resolve_stylo_calc_value);
         let gap = marker_style.font_size() * 0.5;
-        let direction = world.boxes[item.index()].style.direction();
-        let x = match direction {
-            InlineDirection::Ltr => {
-                item_layout.border.left + item_layout.padding.left
-                    - output.size.width
-                    - marker_margin.right
-                    - gap
-            }
-            InlineDirection::Rtl => {
-                item_layout.size.width - item_layout.border.right - item_layout.padding.right
-                    + marker_margin.left
-                    + gap
-            }
-        };
+        let item_style = &world.boxes[item.index()].style;
+        let writing_direction = item_style.writing_direction();
+        let coordinates = InlineCoordinateSpace::new(parent_writing_mode);
+        let logical_marker_size = coordinates.to_logical_size(output.size);
+        let logical_marker_margin = writing_direction.to_logical_box_strut(marker_margin);
         let item_baseline = world.boxes[item.index()]
             .inline_layout
             .as_ref()
             .and_then(|context| context.line_placements.first())
-            .map(|line| item_layout.border.top + item_layout.padding.top + line.baseline);
-        let marker_baseline = world.boxes[marker.index()]
-            .inline_layout
-            .as_ref()
-            .and_then(|context| context.line_placements.first())
-            .map(|line| line.baseline)
-            .unwrap_or(output.size.height);
-        let y = item_baseline
-            .map(|baseline| baseline - marker_baseline)
-            .unwrap_or(item_layout.border.top + item_layout.padding.top);
+            .map(|line| coordinates.to_physical_line_baseline(line, parent_size));
+        let marker_baseline = if output.first_baselines == Point::NONE {
+            coordinates.to_physical_line_block_baseline(
+                Some(
+                    item_style
+                        .inline_baseline_type()
+                        .synthesized_ascent(logical_marker_size.block_size),
+                ),
+                output.size,
+            )
+        } else {
+            output.first_baselines
+        };
+        // Chromium keeps an outside marker as a logical fragment: it is
+        // placed before the content's inline-start and baseline-aligned on
+        // the block axis. Converting that one offset handles horizontal RTL
+        // and both vertical modes without separate physical x/y branches.
+        let mut relative_location = writing_direction.converter(parent_size).to_physical_point(
+            LogicalOffset {
+                inline_offset: -logical_marker_size.inline_size
+                    - logical_marker_margin.inline_end
+                    - gap,
+                block_offset: 0.0,
+            },
+            output.size,
+        );
+        if parent_writing_mode.is_horizontal() {
+            if let (Some(item), Some(marker)) = (
+                item_baseline.and_then(|baseline| baseline.y),
+                marker_baseline.y,
+            ) {
+                relative_location.y = item - marker;
+            }
+        } else if let (Some(item), Some(marker)) = (
+            item_baseline.and_then(|baseline| baseline.x),
+            marker_baseline.x,
+        ) {
+            relative_location.x = item - marker;
+        }
+        let content_origin = Point {
+            x: item_layout.border.left + item_layout.padding.left,
+            y: item_layout.border.top + item_layout.padding.top,
+        };
         world.set_inline_child_layout(
             marker,
-            Point { x, y },
+            Point {
+                x: content_origin.x + relative_location.x,
+                y: content_origin.y + relative_location.y,
+            },
             output,
             marker.index(),
             Some(percentage_basis),
@@ -1308,6 +1337,8 @@ where
     ) -> InlineLayoutResult {
         let style = self.boxes[id.index()].style.taffy.clone();
         let writing_mode = self.boxes[id.index()].style.writing_mode();
+        let writing_direction = self.boxes[id.index()].style.writing_direction();
+        let inline_coordinates = InlineCoordinateSpace::new(writing_mode);
         let is_floated = box_is_effectively_floated(self, id);
         let percentage_basis = box_model_percentage_basis(inputs, writing_mode);
         let alignment = self.boxes[id.index()].style.text_align();
@@ -1358,9 +1389,6 @@ where
             (measurement, inline_context.as_mut())
         {
             depends_on_block_constraints = measurement.depends_on_block_constraints;
-            let content_box_height =
-                (output.size.height - padding.top - padding.bottom - border.top - border.bottom)
-                    .max(0.0);
             let content_box_size = Size {
                 width: (output.size.width
                     - padding.left
@@ -1368,25 +1396,54 @@ where
                     - border.left
                     - border.right)
                     .max(0.0),
-                height: content_box_height,
+                height: (output.size.height
+                    - padding.top
+                    - padding.bottom
+                    - border.top
+                    - border.bottom)
+                    .max(0.0),
             };
+            let logical_content_box_size = inline_coordinates.to_logical_size(content_box_size);
+            let logical_padding = writing_direction.to_logical_box_strut(padding);
             let block_offset = single_subject_block_alignment_offset(
                 style.align_content,
-                content_box_height - measurement.alignment_block_size,
+                logical_content_box_size.block_size - measurement.alignment_block_size,
             );
             measurement.translate_block_axis(block_offset);
-            output.content_size.height = output.content_size.height.max(
+            let mut logical_content_size = inline_coordinates.to_logical_size(output.content_size);
+            logical_content_size.block_size = logical_content_size.block_size.max(
                 measurement.alignment_block_size
-                    + padding.top
-                    + padding.bottom
+                    + logical_padding.block_start
+                    + logical_padding.block_end
                     + block_offset.max(0.0),
             );
-            output.first_baselines.y = measurement
-                .first_baseline
-                .map(|baseline| baseline + padding.top + border.top);
-            output.last_baselines.y = measurement
-                .last_baseline
-                .map(|baseline| baseline + padding.top + border.top);
+            output.content_size = inline_coordinates.to_physical_size(logical_content_size);
+            let content_offset = Point {
+                x: padding.left + border.left,
+                y: padding.top + border.top,
+            };
+            let physical_baseline = |line: Option<&InlineLinePlacement>| {
+                let baseline = line.map_or(Point::NONE, |line| {
+                    inline_coordinates.to_physical_line_baseline(line, content_box_size)
+                });
+                Point {
+                    x: baseline.x.map(|x| x + content_offset.x),
+                    y: baseline.y.map(|y| y + content_offset.y),
+                }
+            };
+            output.first_baselines = physical_baseline(
+                measurement
+                    .line_placements
+                    .iter()
+                    .find(|line| !line.phantom),
+            );
+            output.last_baselines = physical_baseline(
+                measurement
+                    .line_placements
+                    .iter()
+                    .rev()
+                    .find(|line| !line.phantom),
+            );
             if measurement.line_placements.iter().any(|line| !line.phantom) {
                 output.margins_can_collapse_through = false;
             }
@@ -1394,16 +1451,15 @@ where
                 self.position_inline_objects(
                     inline_context,
                     &measurement,
-                    Point {
-                        x: padding.left + border.left,
-                        y: padding.top + border.top,
-                    },
+                    content_offset,
                     content_box_size,
                     output.size,
                     writing_mode,
                     self.boxes[id.index()].style.direction(),
                 );
-                inline_context.fragments = measurement.fragments;
+                inline_context.fragments = measurement
+                    .fragments
+                    .into_physical(inline_coordinates, content_box_size);
                 inline_context.line_placements = measurement.line_placements;
                 inline_context.laid_out = Some(measurement.layout);
             }
@@ -1564,6 +1620,13 @@ where
         block_context: Option<&mut BlockContext<'_>>,
     ) -> InlineMeasurement {
         let parent_writing_mode = self.boxes[owner.index()].style.writing_mode();
+        let writing_direction = self.boxes[owner.index()].style.writing_direction();
+        let owner_taffy_size = self.boxes[owner.index()].style.taffy.size;
+        let inline_coordinates = InlineCoordinateSpace::new(parent_writing_mode);
+        let logical_known_dimensions = inline_coordinates.to_logical_size(known_dimensions);
+        let logical_input_known_dimensions =
+            inline_coordinates.to_logical_size(inputs.known_dimensions);
+        let logical_available_space = inline_coordinates.to_logical_size(available_space);
         let child_inputs = LayoutInput {
             run_mode: inputs.run_mode,
             sizing_mode: SizingMode::InherentSize,
@@ -1610,10 +1673,13 @@ where
                         .taffy
                         .margin
                         .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
-                    let margin_size = Size {
+                    let physical_margin_size = Size {
                         width: margins.left + margins.right,
                         height: margins.top + margins.bottom,
                     };
+                    let logical_margins = writing_direction.to_logical_box_strut(margins);
+                    let line_relative_margins =
+                        inline_coordinates.to_line_relative_box_strut(margins);
                     // Child layout algorithms consume the border-box space
                     // left after the parent resolves margins. Blocks, flex
                     // and grid establish the same contract before recursing;
@@ -1623,11 +1689,11 @@ where
                             width: child_inputs
                                 .available_space
                                 .width
-                                .maybe_sub(margin_size.width),
+                                .maybe_sub(physical_margin_size.width),
                             height: child_inputs
                                 .available_space
                                 .height
-                                .maybe_sub(margin_size.height),
+                                .maybe_sub(physical_margin_size.height),
                         },
                         ..child_inputs
                     };
@@ -1638,18 +1704,23 @@ where
                     } else {
                         self.compute_atomic_inline_layout(object.box_id, atomic_inputs)
                     };
-                    inline_box.width =
-                        (margins.left + margins.right + child_output.size.width).max(0.0);
-                    inline_box.height =
-                        (margins.top + margins.bottom + child_output.size.height).max(0.0);
+                    let logical_child_size = inline_coordinates.to_logical_size(child_output.size);
+                    inline_box.width = (logical_margins.inline_start
+                        + logical_margins.inline_end
+                        + logical_child_size.inline_size)
+                        .max(0.0);
+                    inline_box.height = (logical_margins.block_start
+                        + logical_margins.block_end
+                        + logical_child_size.block_size)
+                        .max(0.0);
                     let object_index = usize::try_from(inline_box.id)
                         .expect("Parley returned an inline object id outside usize");
                     atomic_baseline_ascents[object_index] = self
-                        .atomic_inline_baseline(object.box_id, child_output)
-                        .map(|baseline| margins.top + baseline);
+                        .atomic_inline_baseline(object.box_id, child_output, parent_writing_mode)
+                        .map(|baseline| logical_margins.block_start + baseline);
                     atomic[object_index] = Some(AtomicMeasurement {
                         output: child_output,
-                        margins,
+                        margins: line_relative_margins,
                     });
                 }
                 InlineObjectRole::OutOfFlow => {
@@ -1674,13 +1745,26 @@ where
                         .taffy
                         .border
                         .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
-                    let logical_start = object.role == InlineObjectRole::StartEdge;
-                    let physical_left =
-                        logical_start == (child_style.direction() == InlineDirection::Ltr);
-                    let (margin, padding, border) = if physical_left {
-                        (margins.left, padding.left, border.left)
+                    let logical_margins = child_style
+                        .writing_direction()
+                        .to_logical_box_strut(margins);
+                    let logical_padding = child_style
+                        .writing_direction()
+                        .to_logical_box_strut(padding);
+                    let logical_border =
+                        child_style.writing_direction().to_logical_box_strut(border);
+                    let (margin, padding, border) = if object.role == InlineObjectRole::StartEdge {
+                        (
+                            logical_margins.inline_start,
+                            logical_padding.inline_start,
+                            logical_border.inline_start,
+                        )
                     } else {
-                        (margins.right, padding.right, border.right)
+                        (
+                            logical_margins.inline_end,
+                            logical_padding.inline_end,
+                            logical_border.inline_end,
+                        )
                     };
                     inline_box.width = (margin + padding + border).max(0.0);
                     inline_box.height = 0.0;
@@ -1692,26 +1776,25 @@ where
             }
         }
 
-        let containing_width = known_dimensions
-            .width
-            .or_else(|| available_space.width.into_option())
+        let containing_inline_size = logical_known_dimensions
+            .inline_size
+            .or_else(|| logical_available_space.inline_size.into_option())
             .unwrap_or_default();
         let (indent, indent_options) = self.boxes[owner.index()]
             .style
-            .text_indent(containing_width);
+            .text_indent(containing_inline_size);
         layout.set_text_indent(indent, indent_options);
-        let content_widths = layout.calculate_content_widths();
-        let has_definite_width = known_dimensions.width.is_some()
-            || inputs.known_dimensions.width.is_some()
-            || self.boxes[owner.index()]
-                .style
-                .taffy
-                .size
-                .width
-                .maybe_resolve(inputs.parent_size.width, resolve_stylo_calc_value)
+        let content_inline_sizes = layout.calculate_content_widths();
+        let logical_style_size = inline_coordinates.to_logical_size(owner_taffy_size);
+        let logical_parent_size = inline_coordinates.to_logical_size(inputs.parent_size);
+        let has_definite_inline_size = logical_known_dimensions.inline_size.is_some()
+            || logical_input_known_dimensions.inline_size.is_some()
+            || logical_style_size
+                .inline_size
+                .maybe_resolve(logical_parent_size.inline_size, resolve_stylo_calc_value)
                 .is_some();
         let is_unstretched_flex_or_grid_item = inputs.run_mode == RunMode::PerformLayout
-            && inputs.known_dimensions.width.is_none()
+            && logical_input_known_dimensions.inline_size.is_none()
             && self.boxes[owner.index()]
                 .layout_parent
                 .is_some_and(|parent| {
@@ -1720,12 +1803,12 @@ where
                 });
         let is_intrinsic_contribution =
             inputs.sizing_purpose == SizingPurpose::IntrinsicContribution;
-        let shrink_to_fit = !has_definite_width
+        let shrink_to_fit = !has_definite_inline_size
             && (is_floated
                 // A content-based block parent can probe this IFC with a
-                // finite available width while its own content width is still
-                // unknown. That is an intrinsic contribution, so clamp the
-                // available width between the IFC's min/max-content sizes
+                // finite available inline size while its own content inline
+                // size is still unknown. That is an intrinsic contribution, so clamp the
+                // available inline size between the IFC's min/max-content sizes
                 // instead of stretching to the probe constraint.
                 || is_intrinsic_contribution
                 // Flex/grid layout passes an auto inline size as unknown when
@@ -1741,17 +1824,21 @@ where
                 )
                 || self.boxes[owner.index()].style.taffy.item_is_table);
         let min_float_inputs = LayoutInput {
-            available_space: Size {
-                width: AvailableSpace::MinContent,
-                height: AvailableSpace::MaxContent,
-            },
+            available_space: inline_coordinates.to_physical_size(LogicalSize {
+                inline_size: AvailableSpace::MinContent,
+                block_size: AvailableSpace::MaxContent,
+            }),
             ..child_inputs
         };
-        let mut float_min_width: f32 = 0.0;
-        let mut float_max_width: f32 = 0.0;
+        let mut float_min_inline_size: f32 = 0.0;
+        let mut float_max_inline_size: f32 = 0.0;
         let mut left_band: f32 = 0.0;
         let mut right_band: f32 = 0.0;
-        if !matches!(available_space.width, AvailableSpace::Definite(_)) || shrink_to_fit {
+        if !matches!(
+            logical_available_space.inline_size,
+            AvailableSpace::Definite(_)
+        ) || shrink_to_fit
+        {
             for object in context
                 .objects
                 .iter()
@@ -1763,6 +1850,7 @@ where
                 let margin = style
                     .margin
                     .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
+                let logical_margin = writing_direction.to_logical_box_strut(margin);
                 if matches!(clear, taffy::Clear::Left | taffy::Clear::Both) {
                     left_band = 0.0;
                 }
@@ -1788,29 +1876,33 @@ where
                         .size,
                     )
                 };
-                float_min_width = float_min_width.max(min_size.width + margin.left + margin.right);
-                let outer_width = max_size.width + margin.left + margin.right;
+                let min_inline_size = inline_coordinates.to_logical_size(min_size).inline_size;
+                let max_inline_size = inline_coordinates.to_logical_size(max_size).inline_size;
+                float_min_inline_size = float_min_inline_size
+                    .max(min_inline_size + logical_margin.inline_start + logical_margin.inline_end);
+                let outer_inline_size =
+                    max_inline_size + logical_margin.inline_start + logical_margin.inline_end;
                 match float {
-                    taffy::Float::Left => left_band += outer_width,
-                    taffy::Float::Right => right_band += outer_width,
+                    taffy::Float::Left => left_band += outer_inline_size,
+                    taffy::Float::Right => right_band += outer_inline_size,
                     taffy::Float::None => {}
                 }
-                float_max_width = float_max_width.max(left_band + right_band);
+                float_max_inline_size = float_max_inline_size.max(left_band + right_band);
             }
         }
-        let width = known_dimensions.width.unwrap_or_else(|| {
-            match available_space.width {
-                AvailableSpace::MinContent => content_widths.min.max(float_min_width),
-                AvailableSpace::MaxContent => content_widths.max + float_max_width,
+        let inline_size = logical_known_dimensions.inline_size.unwrap_or_else(|| {
+            match logical_available_space.inline_size {
+                AvailableSpace::MinContent => content_inline_sizes.min.max(float_min_inline_size),
+                AvailableSpace::MaxContent => content_inline_sizes.max + float_max_inline_size,
                 // Taffy has already resolved and clamped the content-box
                 // inline size before invoking the leaf measure function. A
-                // normal block IFC must lay out into that definite width;
+                // normal block IFC must lay out into that definite inline size;
                 // shrinking it to max-content here made RTL alignment and
-                // text-indent observe an unrelated inner width.
-                AvailableSpace::Definite(limit) if shrink_to_fit => (content_widths.max
-                    + float_max_width)
+                // text-indent observe an unrelated inner size.
+                AvailableSpace::Definite(limit) if shrink_to_fit => (content_inline_sizes.max
+                    + float_max_inline_size)
                     .min(limit)
-                    .max(content_widths.min.max(float_min_width)),
+                    .max(content_inline_sizes.min.max(float_min_inline_size)),
                 AvailableSpace::Definite(limit) => limit,
             }
             .max(0.0)
@@ -1819,27 +1911,30 @@ where
         // definite flex/grid constraint, while Parley's content-width and
         // line-breaking passes can accumulate the same glyph advances in a
         // slightly different order. Preserve the max-content boundary plus a
-        // small floating-point margin when those widths differ only by noise.
-        // Otherwise a one-line flex item can immediately rewrap during final
-        // layout. Keep genuinely constrained widths unchanged so normal
+        // small floating-point margin when those inline sizes differ only by
+        // noise. Otherwise a one-line flex item can immediately rewrap during
+        // final layout. Keep genuinely constrained sizes unchanged so normal
         // wrapping is unaffected.
-        let intrinsic_max_width = content_widths.max + float_max_width;
-        let intrinsic_tolerance = width.abs().max(1.0) * f32::EPSILON * 8.0;
-        let line_break_width = if intrinsic_max_width <= width + intrinsic_tolerance {
-            width.max(intrinsic_max_width + intrinsic_tolerance)
-        } else {
-            width
-        };
-        let max_advance = match available_space.width {
+        let intrinsic_max_inline_size = content_inline_sizes.max + float_max_inline_size;
+        let intrinsic_tolerance = inline_size.abs().max(1.0) * f32::EPSILON * 8.0;
+        let line_break_inline_size =
+            if intrinsic_max_inline_size <= inline_size + intrinsic_tolerance {
+                inline_size.max(intrinsic_max_inline_size + intrinsic_tolerance)
+            } else {
+                inline_size
+            };
+        let max_advance = match logical_available_space.inline_size {
             AvailableSpace::MaxContent => None,
-            AvailableSpace::MinContent | AvailableSpace::Definite(_) => Some(line_break_width),
+            AvailableSpace::MinContent | AvailableSpace::Definite(_) => {
+                Some(line_break_inline_size)
+            }
         };
         let has_inline_float = context
             .objects
             .iter()
             .any(|object| object.role == InlineObjectRole::Float);
-        let mut float_height = None;
-        let mut alignment_float_height = 0.0;
+        let mut contained_float_block_size = None;
+        let mut alignment_float_block_size = 0.0;
         if has_inline_float
             || block_context
                 .as_ref()
@@ -1855,10 +1950,6 @@ where
                 resolve_stylo_calc_value,
             );
             let padding_border = padding + border;
-            let writing_direction = WritingDirection::new(
-                parent_writing_mode,
-                self.boxes[owner.index()].style.taffy.direction,
-            );
             let logical_padding_border = writing_direction.to_logical_box_strut(padding_border);
             let line_insets = if writing_direction.direction == taffy::Direction::Rtl {
                 [
@@ -1871,8 +1962,9 @@ where
                     logical_padding_border.inline_end,
                 ]
             };
-            let outer_inline_size =
-                width + logical_padding_border.inline_start + logical_padding_border.inline_end;
+            let outer_inline_size = inline_size
+                + logical_padding_border.inline_start
+                + logical_padding_border.inline_end;
             if let Some(block_context) = block_context {
                 let contains_floats = block_context.is_bfc_root();
                 if contains_floats {
@@ -1883,15 +1975,15 @@ where
                 self.break_inline_lines_with_floats(
                     context,
                     &mut layout,
-                    width,
+                    inline_size,
                     child_inputs,
                     &mut content_context,
                     writing_direction,
                     &mut floats,
                 );
-                alignment_float_height = content_context.floated_block_size_contribution();
+                alignment_float_block_size = content_context.floated_block_size_contribution();
                 if contains_floats {
-                    float_height = Some(alignment_float_height);
+                    contained_float_block_size = Some(alignment_float_block_size);
                 }
             } else {
                 let mut formatting_context = BlockFormattingContext::new();
@@ -1902,14 +1994,14 @@ where
                 self.break_inline_lines_with_floats(
                     context,
                     &mut layout,
-                    width,
+                    inline_size,
                     child_inputs,
                     &mut content_context,
                     writing_direction,
                     &mut floats,
                 );
-                alignment_float_height = content_context.floated_block_size_contribution();
-                float_height = Some(alignment_float_height);
+                alignment_float_block_size = content_context.floated_block_size_contribution();
+                contained_float_block_size = Some(alignment_float_block_size);
             }
         } else {
             break_inline_lines(context, &mut layout, max_advance);
@@ -1927,29 +2019,18 @@ where
             &atomic_baseline_ascents,
             &structural_edge_contributions,
         );
-        let mut height = layout.height() + line_expansion;
-        if let Some(float_height) = float_height {
-            height = height.max(float_height);
+        let mut block_size = layout.height() + line_expansion;
+        if let Some(float_block_size) = contained_float_block_size {
+            block_size = block_size.max(float_block_size);
         }
-        let alignment_block_size = height.max(alignment_float_height);
-        let first_baseline = line_placements
-            .iter()
-            .find(|line| !line.phantom)
-            .map(|line| line.baseline);
-        let last_baseline = line_placements
-            .iter()
-            .rev()
-            .find(|line| !line.phantom)
-            .map(|line| line.baseline);
+        let alignment_block_size = block_size.max(alignment_float_block_size);
         let fragments = build_inline_fragments(context, &layout, &line_placements);
         InlineMeasurement {
-            size: Size {
-                width: known_dimensions.width.unwrap_or(width),
-                height: known_dimensions.height.unwrap_or(height),
-            },
+            size: inline_coordinates.to_physical_size(LogicalSize {
+                inline_size: logical_known_dimensions.inline_size.unwrap_or(inline_size),
+                block_size: logical_known_dimensions.block_size.unwrap_or(block_size),
+            }),
             alignment_block_size,
-            first_baseline,
-            last_baseline,
             layout,
             atomic,
             floats,
@@ -1960,28 +2041,46 @@ where
         }
     }
 
-    fn atomic_inline_baseline(&self, id: LayoutBoxId, output: LayoutOutput) -> Option<f32> {
+    fn atomic_inline_baseline(
+        &self,
+        id: LayoutBoxId,
+        output: LayoutOutput,
+        parent_writing_mode: taffy::WritingMode,
+    ) -> Option<f32> {
         let layout_box = &self.boxes[id.index()];
-        match layout_box.style.display() {
+        // A physical baseline is meaningful to the parent line only when
+        // both boxes use the same writing mode. Blink's LogicalBoxFragment
+        // enforces the same boundary before exposing First/LastBaseline;
+        // orthogonal atomic boxes synthesize against the parent's dominant
+        // baseline instead.
+        if layout_box.style.writing_mode() != parent_writing_mode {
+            return None;
+        }
+        let physical_baseline = match layout_box.style.display() {
             // Blink's block layout marks these atomic fragments to use their
             // last baseline. A scrolling inline-block instead forces baseline
             // synthesis from its margin-box edge.
             crate::LayoutDisplay::InlineBlock | crate::LayoutDisplay::InlineListItem => {
-                (layout_box.style.taffy.overflow.x == taffy::Overflow::Visible
-                    && layout_box.style.taffy.overflow.y == taffy::Overflow::Visible)
-                    .then_some(output.last_baselines.y)
-                    .flatten()
+                if layout_box.style.taffy.overflow.x == taffy::Overflow::Visible
+                    && layout_box.style.taffy.overflow.y == taffy::Overflow::Visible
+                {
+                    output.last_baselines
+                } else {
+                    Point::NONE
+                }
             }
             // Flex, grid, and table formatting contexts expose their first
             // baseline as the automatic inline-level baseline. Do not apply
             // the inline-block overflow exception to these fragment types.
             crate::LayoutDisplay::InlineFlex
             | crate::LayoutDisplay::InlineGrid
-            | crate::LayoutDisplay::InlineTable => output.first_baselines.y,
+            | crate::LayoutDisplay::InlineTable => output.first_baselines,
             // Replaced and other atomic inline-level boxes synthesize their
             // baseline at the appropriate box edge in the caller.
-            _ => None,
-        }
+            _ => Point::NONE,
+        };
+        InlineCoordinateSpace::new(parent_writing_mode)
+            .to_line_block_baseline(physical_baseline, output.size)
     }
 
     fn break_inline_lines_with_floats(
@@ -2047,9 +2146,16 @@ where
                     // Child available space is the border-box slot remaining
                     // after margins for both replaced and non-replaced floats.
                     let layout_inputs = LayoutInput {
-                        available_space: child_inputs
-                            .available_space
-                            .map_width(|width| width.maybe_sub(margin.left + margin.right)),
+                        available_space: Size {
+                            width: child_inputs
+                                .available_space
+                                .width
+                                .maybe_sub(margin.left + margin.right),
+                            height: child_inputs
+                                .available_space
+                                .height
+                                .maybe_sub(margin.top + margin.bottom),
+                        },
                         ..child_inputs
                     };
                     let output = self.compute_child_layout(child.to_taffy(), layout_inputs);
@@ -2110,6 +2216,7 @@ where
         };
         let writing_direction =
             WritingDirection::new(container_writing_mode, container_taffy_direction);
+        let inline_coordinates = InlineCoordinateSpace::new(container_writing_mode);
         let converter = writing_direction.converter(content_box_size);
         for floated in &measurement.floats {
             let relative_location =
@@ -2127,6 +2234,7 @@ where
         }
         for (line_index, line) in measurement.layout.lines().enumerate() {
             let line_placement = measurement.line_placements.get(line_index);
+            let line_rect = flow_relative_line_rect(&line, line_placement);
             for (item_index, item) in line.items().enumerate() {
                 let PositionedLayoutItem::InlineBox(positioned) = item else {
                     continue;
@@ -2146,9 +2254,22 @@ where
                     let owner = self.boxes[object.box_id.index()]
                         .inline_context_owner
                         .unwrap_or_else(|| panic!("out-of-flow IFC object lost its owner"));
+                    let relative_point = inline_coordinates.to_physical_line_point(
+                        line_rect,
+                        LineRelativeOffset::new(
+                            if inline_level {
+                                positioned.x - line_rect.inline_offset
+                            } else {
+                                0.0
+                            },
+                            positioned.y + vertical_offset - line_rect.block_offset,
+                        ),
+                        Size::ZERO,
+                        content_box_size,
+                    );
                     let point = Point {
-                        x: content_offset.x + if inline_level { positioned.x } else { 0.0 },
-                        y: content_offset.y + positioned.y + vertical_offset,
+                        x: content_offset.x + relative_point.x,
+                        y: content_offset.y + relative_point.y,
                     };
                     self.boxes[object.box_id.index()].out_of_flow_static_position =
                         Some(OutOfFlowStaticPosition {
@@ -2173,17 +2294,23 @@ where
                 let inset_offset = relative_atomic_inset_offset(
                     &self.boxes[object.box_id.index()].style.taffy,
                     content_box_size,
-                    container_direction,
+                    writing_direction,
+                );
+                let relative_location = inline_coordinates.to_physical_line_point(
+                    line_rect,
+                    LineRelativeOffset::new(
+                        positioned.x - line_rect.inline_offset + atomic.margins.inline_start,
+                        positioned.y + vertical_offset - line_rect.block_offset
+                            + atomic.margins.block_start,
+                    ),
+                    atomic.output.size,
+                    content_box_size,
                 );
                 self.set_inline_child_layout(
                     object.box_id,
                     Point {
-                        x: content_offset.x + positioned.x + atomic.margins.left + inset_offset.x,
-                        y: content_offset.y
-                            + positioned.y
-                            + atomic.margins.top
-                            + vertical_offset
-                            + inset_offset.y,
+                        x: content_offset.x + relative_location.x + inset_offset.x,
+                        y: content_offset.y + relative_location.y + inset_offset.y,
                     },
                     atomic.output,
                     object_index,
@@ -2408,7 +2535,7 @@ mod tests {
 #[derive(Clone, Copy)]
 struct AtomicMeasurement {
     output: LayoutOutput,
-    margins: taffy::Rect<f32>,
+    margins: LogicalBoxStrut<f32>,
 }
 
 #[derive(Clone, Copy)]
@@ -2423,17 +2550,15 @@ struct InlineFloatPlacement {
 struct InlineMeasurement {
     size: Size<f32>,
     /// Block-end extent of every IFC child used as the single alignment
-    /// subject. Unlike `size.height`, this includes non-contained floats
-    /// without making them contribute to normal-flow auto height.
+    /// subject. Unlike the block axis of `size`, this includes non-contained
+    /// floats without making them contribute to normal-flow auto block-size.
     alignment_block_size: f32,
-    first_baseline: Option<f32>,
-    last_baseline: Option<f32>,
     layout: parley::Layout<crate::stylo_to_parley::TextBrush>,
     atomic: Vec<Option<AtomicMeasurement>>,
     floats: Vec<InlineFloatPlacement>,
     percentage_basis: Option<f32>,
     line_placements: Vec<InlineLinePlacement>,
-    fragments: InlineFragments,
+    fragments: LineRelativeFragments,
     /// Whether any atomic or floated child contribution changes with the
     /// containing block's block-size.
     depends_on_block_constraints: bool,
@@ -2448,12 +2573,6 @@ impl InlineMeasurement {
     fn translate_block_axis(&mut self, offset: f32) {
         if offset == 0.0 {
             return;
-        }
-        if let Some(first_baseline) = &mut self.first_baseline {
-            *first_baseline += offset;
-        }
-        if let Some(last_baseline) = &mut self.last_baseline {
-            *last_baseline += offset;
         }
         for placement in &mut self.line_placements {
             placement.translate_block_axis(offset);
@@ -2484,6 +2603,7 @@ fn single_subject_block_alignment_offset(alignment: Option<AlignContent>, free_s
 fn empty_inline_context() -> InlineFormattingContext {
     InlineFormattingContext {
         root_style: LayoutBoxId::from_index(0),
+        baseline_type: InlineBaselineType::Alphabetic,
         unbroken: parley::Layout::default(),
         laid_out: None,
         text_units: Vec::new(),

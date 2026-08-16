@@ -146,6 +146,29 @@ pub(crate) enum InlineDirection {
     Rtl,
 }
 
+/// Dominant baseline used by an inline formatting context.
+///
+/// CSS Writing Modes selects an alphabetic baseline for horizontal flow and
+/// an ideographic central baseline for the vertical writing modes supported
+/// by standalone Stylo. Keeping this as line-layout protocol mirrors Blink's
+/// `FontBaseline`: atomic boxes without a usable child baseline synthesize
+/// against this value instead of assuming every block axis points downward.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum InlineBaselineType {
+    #[default]
+    Alphabetic,
+    Central,
+}
+
+impl InlineBaselineType {
+    pub(crate) const fn synthesized_ascent(self, block_size: f32) -> f32 {
+        match self {
+            Self::Alphabetic => block_size,
+            Self::Central => block_size * 0.5,
+        }
+    }
+}
+
 impl InlineDirection {
     const fn from_taffy(direction: taffy::Direction) -> Self {
         match direction {
@@ -985,6 +1008,14 @@ impl ResolvedLayoutStyle {
     /// Returns the inherited writing mode retained for layout.
     pub(crate) fn writing_mode(&self) -> taffy::WritingMode {
         self.writing_mode
+    }
+
+    pub(crate) fn inline_baseline_type(&self) -> InlineBaselineType {
+        if self.writing_mode.is_horizontal() {
+            InlineBaselineType::Alphabetic
+        } else {
+            InlineBaselineType::Central
+        }
     }
 
     pub(crate) const fn writing_direction(&self) -> taffy::WritingDirection {
