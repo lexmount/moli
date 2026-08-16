@@ -111,6 +111,221 @@ async fn wait_for_image_event_task(
     );
 }
 
+fn raster_pixel(image: &moli_image::RgbaImage, x: u32, y: u32) -> [u8; 4] {
+    let offset = ((y * image.width + x) * 4) as usize;
+    image.rgba[offset..offset + 4]
+        .try_into()
+        .expect("RGBA pixel")
+}
+
+#[tokio::test]
+async fn object_png_url_constructs_a_replaced_box_and_suppresses_fallback() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    loader.set_image_fetch_enabled(true);
+    let mut vm = new_parsed_page_task_executor_test_vm(
+        "https://object-image.test/page.html",
+        r#"<!doctype html>
+        <style>body { margin: 0 }</style>
+        <object id="png-object" data="/assets/green.png"
+                style="display:block;width:100px;aspect-ratio:1/1">
+          <div id="png-fallback"
+               style="width:31px;height:23px;background:rgb(255,0,0)"></div>
+        </object>"#,
+        &loader,
+    );
+    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Image));
+    vm.eval(
+        r#"
+        (() => {
+          const object = document.getElementById("png-object");
+          globalThis.__pngObjectEvents = [];
+          object.addEventListener("load", () => __pngObjectEvents.push("load"));
+          object.addEventListener("error", () => __pngObjectEvents.push("error"));
+        })()
+        "#,
+    )
+    .expect("PNG object listeners should install");
+
+    assert!(
+        vm.take_pending_subresource_fetch_infos().is_empty(),
+        "parser-discovered object loads begin at the interactive transition"
+    );
+    let owner = vm
+        .current_main_document_task_owner()
+        .expect("main document owner");
+    let interactive = vm
+        .finish_current_main_document_parsing(owner)
+        .expect("parser EOF should prepare interactive");
+    vm.apply_main_document_interactive_lifecycle_action(interactive)
+        .expect("interactive transition should register the PNG object");
+
+    let pending = vm.take_pending_subresource_fetch_infos();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(
+        pending[0].url.as_str(),
+        "https://object-image.test/assets/green.png"
+    );
+    let pixels = moli_image::RgbaImage::try_new(20, 50, [0, 128, 0, 255].repeat(20 * 50))
+        .expect("valid green PNG pixels");
+    let png = moli_image::encode_png(&pixels).expect("green PNG should encode");
+    vm.fulfill_pending_subresource_fetch(
+        pending[0].internal_id,
+        200,
+        vec![("Content-Type".to_owned(), "image/png".to_owned())],
+        crate::runtime::RendererSyntheticResponseBody::from_bytes(png.bytes),
+    )
+    .expect("PNG object response should fulfill");
+    run_next_image_event_task(&mut vm, &loader, "PNG object load event").await;
+
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+              const entry = performance.getEntriesByName(new URL("/assets/green.png", location.href).href)[0];
+              return `${__pngObjectEvents.join("|")}:${entry?.initiatorType}`;
+            })()"#,
+        )
+        .expect("PNG object event should evaluate"),
+        "load:object"
+    );
+    let snapshot = vm
+        .screenshot_layout_snapshot(moli_layout::PaintViewport::new(120, 120, 1.0))
+        .expect("PNG object layout should succeed")
+        .expect("PNG object fixture should retain a layout root");
+    let image = moli_paint::raster_snapshot(&snapshot).expect("PNG object should rasterize");
+    assert_eq!(raster_pixel(&image, 50, 50), [0, 128, 0, 255]);
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+              const object = document.getElementById("png-object").getBoundingClientRect();
+              const fallback = document.getElementById("png-fallback").getBoundingClientRect();
+              return `${object.width}|${object.height}|${fallback.width}|${fallback.height}`;
+            })()"#,
+        )
+        .expect("PNG object geometry should evaluate"),
+        "100|100|0|0"
+    );
+}
+
+#[tokio::test]
+async fn object_svg_type_constructs_a_replaced_box_and_suppresses_fallback() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    loader.set_image_fetch_enabled(true);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://object-svg.test/page.html",
+        &loader,
+    );
+    vm.eval(
+        r#"
+        (() => {
+          document.body.style.margin = "0";
+          const object = document.createElement("object");
+          object.id = "svg-object";
+          object.type = "image/svg+xml";
+          object.style.cssText = "display:block;width:100px;aspect-ratio:1/1";
+          const fallback = document.createElement("div");
+          fallback.id = "svg-fallback";
+          fallback.style.cssText = "width:31px;height:23px;background:rgb(255,0,0)";
+          object.appendChild(fallback);
+          globalThis.__svgObjectEvents = [];
+          object.addEventListener("load", () => __svgObjectEvents.push("load"));
+          object.addEventListener("error", () => __svgObjectEvents.push("error"));
+          document.body.appendChild(object);
+          object.data = "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2020%2050'%3E%3Crect%20width='20'%20height='50'%20fill='rgb(0,128,0)'/%3E%3C/svg%3E";
+        })()
+        "#,
+    )
+    .expect("SVG object request should start");
+
+    run_next_image_event_task(&mut vm, &loader, "SVG object load event").await;
+    assert_eq!(
+        vm.eval("globalThis.__svgObjectEvents.join('|')")
+            .expect("SVG object event should evaluate"),
+        "load"
+    );
+    let snapshot = vm
+        .screenshot_layout_snapshot(moli_layout::PaintViewport::new(120, 120, 1.0))
+        .expect("SVG object layout should succeed")
+        .expect("SVG object fixture should retain a layout root");
+    let image = moli_paint::raster_snapshot(&snapshot).expect("SVG object should rasterize");
+    assert_eq!(raster_pixel(&image, 50, 50), [0, 128, 0, 255]);
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+              const object = document.getElementById("svg-object").getBoundingClientRect();
+              const fallback = document.getElementById("svg-fallback").getBoundingClientRect();
+              return `${object.width}|${object.height}|${fallback.width}|${fallback.height}`;
+            })()"#,
+        )
+        .expect("SVG object geometry should evaluate"),
+        "100|100|0|0"
+    );
+}
+
+#[tokio::test]
+async fn failed_object_image_switches_to_fallback_content() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    loader.set_image_fetch_enabled(true);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://object-fallback.test/page.html",
+        &loader,
+    );
+    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Image));
+    vm.eval(
+        r#"
+        (() => {
+          document.body.style.margin = "0";
+          const object = document.createElement("object");
+          object.id = "failed-object";
+          object.type = "image/png";
+          object.style.display = "block";
+          const fallback = document.createElement("div");
+          fallback.id = "object-fallback";
+          fallback.style.cssText = "width:40px;height:30px;background:rgb(0,0,255)";
+          object.appendChild(fallback);
+          globalThis.__failedObjectEvents = [];
+          object.addEventListener("load", () => __failedObjectEvents.push("load"));
+          object.addEventListener("error", () => __failedObjectEvents.push("error"));
+          document.body.appendChild(object);
+          object.data = "/broken-resource";
+        })()
+        "#,
+    )
+    .expect("failed object request should start");
+
+    let pending = vm.take_pending_subresource_fetch_infos();
+    assert_eq!(pending.len(), 1);
+    vm.fulfill_pending_subresource_fetch(
+        pending[0].internal_id,
+        404,
+        vec![("Content-Type".to_owned(), "text/plain".to_owned())],
+        crate::runtime::RendererSyntheticResponseBody::empty(),
+    )
+    .expect("failed object response should fulfill");
+    run_next_image_event_task(&mut vm, &loader, "failed object error event").await;
+
+    assert_eq!(
+        vm.eval("globalThis.__failedObjectEvents.join('|')")
+            .expect("failed object event should evaluate"),
+        "error"
+    );
+    let snapshot = vm
+        .screenshot_layout_snapshot(moli_layout::PaintViewport::new(80, 60, 1.0))
+        .expect("object fallback layout should succeed")
+        .expect("object fallback fixture should retain a layout root");
+    let image = moli_paint::raster_snapshot(&snapshot).expect("object fallback should rasterize");
+    assert_eq!(raster_pixel(&image, 20, 15), [0, 0, 255, 255]);
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+              const fallback = document.getElementById("object-fallback").getBoundingClientRect();
+              return `${fallback.width}|${fallback.height}`;
+            })()"#,
+        )
+        .expect("object fallback geometry should evaluate"),
+        "40|30"
+    );
+}
+
 #[tokio::test]
 async fn render_image_decode_requires_both_real_layout_and_image_fetch() {
     let cases = [
