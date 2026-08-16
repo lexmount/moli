@@ -1361,6 +1361,7 @@ where
             | LayoutBoxKind::TableRow
             | LayoutBoxKind::TableCell
             | LayoutBoxKind::FormControl
+            | LayoutBoxKind::ImageFallback
             | LayoutBoxKind::AnonymousBlock
             | LayoutBoxKind::AnonymousFlexItem
             | LayoutBoxKind::AnonymousGridItem

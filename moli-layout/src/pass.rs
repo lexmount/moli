@@ -175,7 +175,7 @@ where
         for index in 0..world.boxes.len() {
             let layout_box = &world.boxes[index];
             if !layout_box.element_semantics().is_some_and(|semantics| {
-                semantics.replaced == Some(crate::LayoutReplacedKind::Frame)
+                semantics.replaced_kind() == Some(crate::LayoutReplacedKind::Frame)
             }) {
                 continue;
             }
