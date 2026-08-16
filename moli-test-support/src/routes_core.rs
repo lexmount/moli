@@ -467,6 +467,37 @@ pub(super) async fn streaming_chunked_html_page() -> Response {
         .expect("streaming html response should build")
 }
 
+pub(super) async fn streaming_slow_html_tail_page() -> Response {
+    let (tx, rx) = tokio::sync::mpsc::channel(2);
+    tokio::spawn(async move {
+        if tx
+            .send(Ok::<Bytes, std::convert::Infallible>(Bytes::from_static(
+                b"<!doctype html><html><head><title>slow tail</title></head><body><main id=\"early\">early",
+            )))
+            .await
+            .is_err()
+        {
+            return;
+        }
+        // Keep initial page creation parked in its streaming-parser
+        // continuation long enough for a caller-owned readiness deadline to
+        // cancel the fetch and synchronously tear down the browser context.
+        sleep(Duration::from_millis(1_000)).await;
+        let _ = tx
+            .send(Ok::<Bytes, std::convert::Infallible>(Bytes::from_static(
+                b"</main></body></html>",
+            )))
+            .await;
+    });
+
+    Response::builder()
+        .header(CONTENT_TYPE, "text/html; charset=utf-8")
+        .body(Body::from_stream(
+            tokio_stream::wrappers::ReceiverStream::new(rx),
+        ))
+        .expect("slow-tail streaming html response should build")
+}
+
 pub(super) async fn location_nav_replace_source_page() -> Html<&'static str> {
     Html(LOCATION_NAV_REPLACE_SOURCE_HTML)
 }

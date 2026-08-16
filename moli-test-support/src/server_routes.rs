@@ -96,6 +96,10 @@ pub(super) fn build_router() -> Router {
         )
         .route("/streaming/chunked-html", get(streaming_chunked_html_page))
         .route(
+            "/streaming/slow-html-tail",
+            get(streaming_slow_html_tail_page),
+        )
+        .route(
             "/location-nav/replace-source",
             get(location_nav_replace_source_page),
         )

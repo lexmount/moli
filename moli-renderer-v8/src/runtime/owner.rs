@@ -4437,7 +4437,13 @@ impl RendererOwnerHandle {
                     // empty page entry.
                     remove_page_on_bound_owner_local_store(token);
                     entry.reject_pending_phase_one_navigation("Location navigation was cancelled.");
-                    self.restore_live_page_entry(token, entry);
+                    // Re-enter directly through the residence boundary. The
+                    // rejection above consumes and closes the entry's last
+                    // active PageVm, so the normal live-entry helper cannot
+                    // settle renderer output. The sticky retirement is
+                    // observed first by the store-level restore, which tears
+                    // down the checked-out entry without requiring a PageVm.
+                    restore_entry_after_command_on_bound_owner_local_store(token, entry);
                 }
             }
             RenderRuntimeTurn::ContinueLivePageNavigationPostParseLifecycle { token, .. } => {

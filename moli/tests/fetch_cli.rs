@@ -22,6 +22,7 @@ use serde_json::Value;
 use std::{
     io::Write,
     path::PathBuf,
+    process::Command,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -2887,6 +2888,62 @@ fn cli_dump_json_keeps_transport_failures_as_process_errors() -> Result<()> {
     let stderr = clean_output(&output.stderr);
     assert!(stdout.is_empty(), "stdout={stdout}");
     assert!(stderr.contains("failed to fetch"), "stderr={stderr}");
+    Ok(())
+}
+
+#[test]
+fn cli_streaming_page_creation_timeout_exits_cleanly_for_every_wait_mode() -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let server = runtime.block_on(FixtureServer::spawn())?;
+    let url = server.url("/streaming/slow-html-tail");
+
+    // Run a real child process so this regression distinguishes the expected
+    // exit code from SIGABRT. The response has committed its headers and first
+    // HTML chunk, but page creation remains parked on the delayed parser tail
+    // when the shared readiness deadline expires.
+    for wait_until in [
+        "domcontentloaded",
+        "load",
+        "networkidle",
+        "domstable",
+        "done",
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_moli"))
+            .args([
+                "fetch",
+                "--log-level",
+                "error",
+                "--http-no-proxy",
+                "*",
+                "--wait-until",
+                wait_until,
+                "--timeout",
+                "400",
+                "--dump",
+                "html",
+                &url,
+            ])
+            .output()?;
+        let stdout = clean_output(&output.stdout);
+        let stderr = clean_output(&output.stderr);
+
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "wait_until={wait_until} must report a normal fetch failure instead of aborting: stdout={stdout}\nstderr={stderr}"
+        );
+        assert!(stdout.is_empty(), "wait_until={wait_until} stdout={stdout}");
+        assert!(
+            stderr.contains("timed out after 400 ms"),
+            "wait_until={wait_until} stderr={stderr}"
+        );
+        assert!(
+            !stderr.contains("resident renderer page entry must retain an active PageVm"),
+            "wait_until={wait_until} leaked the renderer teardown invariant: stderr={stderr}"
+        );
+    }
+
+    runtime.block_on(server.shutdown());
     Ok(())
 }
 
