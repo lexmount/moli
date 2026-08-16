@@ -146,6 +146,22 @@ pub(crate) enum InlineDirection {
     Rtl,
 }
 
+impl InlineDirection {
+    const fn from_taffy(direction: taffy::Direction) -> Self {
+        match direction {
+            taffy::Direction::Ltr => Self::Ltr,
+            taffy::Direction::Rtl => Self::Rtl,
+        }
+    }
+
+    const fn to_taffy(self) -> taffy::Direction {
+        match self {
+            Self::Ltr => taffy::Direction::Ltr,
+            Self::Rtl => taffy::Direction::Rtl,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum InlineUnicodeBidi {
     #[default]
@@ -850,6 +866,7 @@ impl ResolvedLayoutStyle {
         mut taffy: Style<Atom>,
         background_color: PaintColor,
     ) -> Self {
+        let direction = InlineDirection::from_taffy(taffy.direction);
         taffy.aspect_ratio = usable_aspect_ratio(taffy.aspect_ratio);
         let preferred_aspect_ratio = PreferredAspectRatio::from_taffy(taffy.aspect_ratio);
         taffy.display = taffy_display(display);
@@ -878,7 +895,7 @@ impl ResolvedLayoutStyle {
             white_space_collapse: InlineWhiteSpaceCollapse::Collapse,
             text_transform: InlineTextTransform::None,
             text_align: parley::Alignment::Start,
-            direction: InlineDirection::Ltr,
+            direction,
             writing_mode: taffy::WritingMode::HorizontalTb,
             unicode_bidi: InlineUnicodeBidi::Normal,
             vertical_align: InlineVerticalAlign::default(),
@@ -968,6 +985,10 @@ impl ResolvedLayoutStyle {
     /// Returns the inherited writing mode retained for layout.
     pub(crate) fn writing_mode(&self) -> taffy::WritingMode {
         self.writing_mode
+    }
+
+    pub(crate) const fn writing_direction(&self) -> taffy::WritingDirection {
+        taffy::WritingDirection::new(self.writing_mode, self.direction.to_taffy())
     }
 
     /// Overrides the CSS-pixel baseline shift for a synthetic inline style.
