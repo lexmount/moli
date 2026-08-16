@@ -58,6 +58,19 @@ impl ScriptVm {
     ) -> Result<bool> {
         let task = authorization.into_task();
         let owner = task.owner();
+        if task.kind() == RendererPageRenderingUpdateTaskKind::FontFaceSetReady {
+            // CSS may change after the terminal font response queued this
+            // task. Blink updates style/layout again in
+            // FontFaceSetDocument::FireDoneEventIfPossible(); do the source
+            // half here while ScriptVm can still admit concrete fetches, then
+            // let the exact-cycle dispatcher revalidate before layout.
+            self.with_default_context_scope(|scope, host_ptr| {
+                unsafe { &mut *host_ptr }
+                    .apply_pending_stylesheet_source_css_projections(scope, host_ptr);
+                Ok(())
+            })?;
+            self.reconcile_document_web_fonts_for_layout();
+        }
         self.with_default_context_scope(|scope, host_ptr| {
             unsafe { &mut *host_ptr }
                 .apply_authorized_rendering_update(

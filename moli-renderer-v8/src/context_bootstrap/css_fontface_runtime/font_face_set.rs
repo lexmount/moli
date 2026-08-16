@@ -4,9 +4,10 @@ use super::query::{
     make_rejected_dom_exception_promise,
 };
 use super::storage::{
-    array_contains_value, font_face_set_faces_array, font_face_set_manual_faces_array,
-    initialize_font_face_set_object, is_font_face_value, rebuild_font_face_set_faces,
-    replace_font_face_set_ready_promise, set_font_face_set_slot_value, set_font_face_set_status,
+    array_contains_value, font_face_set_faces_array, font_face_set_has_document_load_cycle,
+    font_face_set_manual_faces_array, initialize_font_face_set_object, is_font_face_value,
+    rebuild_font_face_set_faces, replace_font_face_set_ready_promise, set_font_face_set_slot_value,
+    set_font_face_set_status,
 };
 use super::*;
 
