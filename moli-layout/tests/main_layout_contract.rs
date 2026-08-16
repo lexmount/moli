@@ -957,6 +957,83 @@ fn flex_alignment_supplies_the_static_position_outside_its_containing_block() {
 }
 
 #[test]
+fn vertical_rtl_flex_static_position_preserves_the_authored_main_direction() {
+    for writing_mode in [
+        taffy::WritingMode::VerticalRl,
+        taffy::WritingMode::VerticalLr,
+    ] {
+        for (flex_direction, justify_content, expected_y) in [
+            (FlexDirection::Row, AlignContent::FLEX_START, 40.0),
+            (FlexDirection::Row, AlignContent::FLEX_END, 0.0),
+            (FlexDirection::Row, AlignContent::SPACE_BETWEEN, 40.0),
+            (FlexDirection::RowReverse, AlignContent::FLEX_START, 0.0),
+            (FlexDirection::RowReverse, AlignContent::FLEX_END, 40.0),
+            (FlexDirection::RowReverse, AlignContent::SPACE_BETWEEN, 0.0),
+        ] {
+            let source = FixtureSource {
+                nodes: vec![
+                    FixtureNode::div("vertical-flex", vec![1]),
+                    FixtureNode::div("absolute", Vec::new()),
+                ],
+            };
+            let mut styles = FixtureStyles::default();
+            styles.0.insert(
+                0,
+                resolved(
+                    LayoutDisplay::Flex,
+                    Style {
+                        display: Display::Flex,
+                        direction: taffy::Direction::Rtl,
+                        flex_direction,
+                        justify_content: Some(justify_content),
+                        size: Size {
+                            width: length(20.0),
+                            height: length(80.0),
+                        },
+                        ..Style::default()
+                    },
+                    PaintColor::TRANSPARENT,
+                )
+                .with_position(LayoutPosition::Relative)
+                .with_writing_mode(writing_mode),
+            );
+            styles.0.insert(
+                1,
+                resolved(
+                    LayoutDisplay::Block,
+                    Style {
+                        direction: taffy::Direction::Rtl,
+                        size: Size {
+                            width: length(10.0),
+                            height: length(40.0),
+                        },
+                        ..Style::default()
+                    },
+                    RED,
+                )
+                .with_position(LayoutPosition::Absolute)
+                .with_writing_mode(writing_mode),
+            );
+
+            let snapshot = render(&source, &mut styles, PaintViewport::new(100, 100, 1.0));
+            assert_rect(
+                solid_rect(&snapshot, RED),
+                PaintRect::new(
+                    if writing_mode == taffy::WritingMode::VerticalRl {
+                        10.0
+                    } else {
+                        0.0
+                    },
+                    expected_y,
+                    10.0,
+                    40.0,
+                ),
+            );
+        }
+    }
+}
+
+#[test]
 fn non_direct_absolute_descendant_ignores_grid_placement_lines() {
     let source = FixtureSource {
         nodes: vec![
