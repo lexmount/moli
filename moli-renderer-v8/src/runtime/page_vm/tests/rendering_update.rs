@@ -2383,6 +2383,63 @@ document.body.innerHTML = `
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn screenshot_transfers_replaced_intrinsic_block_constraints_into_inline_contributions() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/replaced-intrinsic-constraints.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0}
+.test{width:max-content;border:5px solid;margin:5px}
+.flex-row{display:flex;flex-direction:row}
+.flex-column{display:flex;flex-direction:column}
+.grid{display:grid}
+canvas{display:block;width:max-content;height:0}
+</style>`;
+document.body.innerHTML = `
+<div id=block-min class=test><canvas width=50 height=50 style="min-height:max-content"></canvas></div>
+<div id=block-max class=test><canvas width=50 height=50 style="height:100px;max-height:max-content"></canvas></div>
+<div id=flex-row-min class="test flex-row"><canvas width=50 height=50 style="min-height:max-content"></canvas></div>
+<div id=flex-row-max class="test flex-row"><canvas width=50 height=50 style="height:100px;max-height:max-content"></canvas></div>
+<div id=flex-column-min class="test flex-column"><canvas width=50 height=50 style="min-height:max-content"></canvas></div>
+<div id=flex-column-max class="test flex-column"><canvas width=50 height=50 style="height:100px;max-height:max-content"></canvas></div>
+<div id=grid-min class="test grid"><canvas width=50 height=50 style="min-height:max-content"></canvas></div>
+<div id=grid-max class="test grid"><canvas width=50 height=50 style="height:100px;max-height:max-content"></canvas></div>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(300, 600, 1.0))?
+            .expect("replaced intrinsic-constraint fixture must retain a layout root");
+
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                r#"['block-min','block-max','flex-row-min','flex-row-max','flex-column-min','flex-column-max','grid-min','grid-max']
+  .map(id => {
+    const wrapper = document.getElementById(id);
+    const canvas = wrapper.firstElementChild;
+    return `${wrapper.offsetWidth},${wrapper.offsetHeight},${canvas.offsetWidth},${canvas.offsetHeight}`;
+  })
+  .join('|')"#,
+            )?,
+            "60,60,50,50|60,60,50,50|60,60,50,50|60,60,50,50|60,60,50,50|60,60,50,50|60,60,50,50|60,60,50,50",
+            "intrinsic block constraints must clamp replaced content before its ratio determines inline contributions",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("replaced intrinsic-constraint fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_paints_fresh_inline_svg_resources_with_computed_current_color() {
     run_page_vm_async_test(async move {
         let loader =
