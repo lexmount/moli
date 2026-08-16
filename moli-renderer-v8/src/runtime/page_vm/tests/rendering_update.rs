@@ -2333,6 +2333,56 @@ return [
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn screenshot_sizes_empty_tables_without_phantom_border_spacing() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/empty-table-sizing.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0}
+table{border-spacing:10px}
+</style>`;
+document.body.innerHTML = `
+<table id=empty></table>
+<table id=empty-body><tbody></tbody></table>
+<table id=empty-row><tbody><tr></tr></tbody></table>
+<table id=border style="border:10px solid transparent"></table>
+<table id=padding style="padding:10px"></table>
+<table id=definite style="width:100px;height:40px"></table>
+<table id=caption><caption><div style="width:30px;height:10px"></div></caption></table>
+<table id=column><col style="width:30px"></table>
+<table id=column-row><col style="width:30px"><tbody><tr></tr></tbody></table>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(200, 200, 1.0))?
+            .expect("empty-table fixture must retain a layout root");
+
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                r#"['empty','empty-body','empty-row','border','padding','definite','caption','column','column-row']
+  .map(id => { const table = document.getElementById(id); return `${table.offsetWidth},${table.offsetHeight}`; })
+  .join('|')"#,
+            )?,
+            "0,0|0,0|0,0|20,20|20,20|100,40|30,10|50,0|50,20",
+            "an empty table should use real box decorations and authored sizes, not a phantom grid track or border spacing",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("empty-table sizing fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_paints_fresh_inline_svg_resources_with_computed_current_color() {
     run_page_vm_async_test(async move {
         let loader =
