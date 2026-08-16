@@ -26,10 +26,11 @@ pub(in crate::native_bridge) use metrics::{
 };
 pub(crate) use provider::{
     observable_bounding_client_rect, observable_bounding_client_rects, observable_caret_position,
-    observable_client_rects, observable_deep_hit_test, observable_element_metrics,
-    observable_event_offset, observable_geometry_batch, observable_hit_test,
-    observable_hit_test_all, observable_input_hit_test, observable_scroll_adjusted_client_rect,
-    observable_scroll_into_view_geometry, observable_sources_with_fragments,
+    observable_client_rects, observable_deep_hit_test, observable_document_scroll_metrics,
+    observable_element_metrics, observable_event_offset, observable_geometry_batch,
+    observable_hit_test, observable_hit_test_all, observable_input_hit_test,
+    observable_scroll_adjusted_client_rect, observable_scroll_into_view_geometry,
+    observable_sources_with_fragments,
 };
 pub(in crate::native_bridge) use rects::{
     node_get_bounding_client_rect_callback, node_get_client_rects_callback,

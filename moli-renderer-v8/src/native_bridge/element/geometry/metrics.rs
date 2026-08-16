@@ -10,9 +10,27 @@ use super::super::super::{
 use super::super::styles::raw_inline_style_property_value;
 use super::super::{queue_revealed_lazy_image_loads, queue_revealed_lazy_media_loads};
 use super::{
-    ClientRect, compute_mock_client_rect, observable_element_metrics,
-    observable_scroll_into_view_geometry,
+    ClientRect, compute_mock_client_rect, observable_document_scroll_metrics,
+    observable_element_metrics, observable_scroll_into_view_geometry,
 };
+
+fn document_scrolling_element_for_node(
+    runtime: &JsContextHost,
+    handle: DomHandle,
+) -> Result<Option<DomHandle>, moli_layout::LayoutError> {
+    if !runtime.dom_host().is_connected(handle) {
+        return Ok(None);
+    }
+    let Some(document) = runtime.dom_host().owner_document_handle(handle) else {
+        return Ok(None);
+    };
+    observable_document_scroll_metrics(
+        runtime,
+        document,
+        moli_layout::LayoutFlushReason::SynchronousGeometry,
+    )
+    .map(|metrics| metrics.scrolling_element)
+}
 
 fn node_scroll_position_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -20,6 +38,10 @@ fn node_scroll_position_value<'s>(
     horizontal: bool,
 ) -> Result<f64, moli_layout::LayoutError> {
     if let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, object) {
+        if document_scrolling_element_for_node(unsafe { &*runtime_ptr }, handle)? == Some(handle) {
+            let (x, y) = crate::window_host::current_window_scroll_position(scope);
+            return Ok(if horizontal { x } else { y });
+        }
         let metrics = observable_element_metrics(
             unsafe { &*runtime_ptr },
             handle,
@@ -84,8 +106,9 @@ fn node_scroll_position_setter_for_object<'s>(
         (0.0, f64::MAX)
     };
     let value = value.clamp(minimum, maximum);
-    let is_scrolling_element = runtime.dom_host().document_element_handle() == Some(handle);
     let document = runtime.dom_host().owner_document_handle(handle);
+    let is_scrolling_element =
+        document_scrolling_element_for_node(runtime, handle)? == Some(handle);
     let Some(element) = runtime
         .dom_host_mut()
         .node_mut(handle)
@@ -282,7 +305,7 @@ fn aligned_scroll_position(
 fn apply_observable_window_scroll(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
-    scrolling_element: DomHandle,
+    viewport_source: DomHandle,
     target_x: f64,
     target_y: f64,
     current_x: f64,
@@ -292,17 +315,18 @@ fn apply_observable_window_scroll(
     if !changed {
         return false;
     }
-    set_node_scroll_position(
-        scope,
-        runtime_ptr,
-        scrolling_element,
-        target_x,
-        target_y,
-        false,
-    );
-    let endpoint = unsafe { &*runtime_ptr }
+    let document = unsafe { &*runtime_ptr }
         .dom_host()
-        .owner_document_handle(scrolling_element)
+        .owner_document_handle(viewport_source);
+    if let Some(carrier) = document.and_then(|document| {
+        unsafe { &*runtime_ptr }
+            .dom_host()
+            .dom()
+            .document_element_handle_for_document(document)
+    }) {
+        set_node_scroll_position(scope, runtime_ptr, carrier, target_x, target_y, false);
+    }
+    let endpoint = document
         .and_then(|document| unsafe { &*runtime_ptr }.window_endpoint_for_document(document));
     if let Some(endpoint) = endpoint {
         unsafe { &mut *runtime_ptr }.scroll_window_endpoint_to(scope, endpoint, target_x, target_y);
@@ -383,6 +407,7 @@ pub(crate) fn perform_wheel_scroll_default_action(
             0,
             moli_layout::LayoutScrollContainerMetrics {
                 source: target,
+                kind: moli_layout::LayoutScrollContainerKind::Element,
                 metrics,
             },
         );
@@ -393,8 +418,8 @@ pub(crate) fn perform_wheel_scroll_default_action(
         if remaining_x == 0.0 && remaining_y == 0.0 {
             break;
         }
-        let (current_x, current_y) =
-            node_scroll_position(unsafe { &*runtime_ptr }, container.source);
+        let current_x = f64::from(container.metrics.scroll_offset.x);
+        let current_y = f64::from(container.metrics.scroll_offset.y);
         let (target_x, next_remaining_x) = consume_wheel_axis(
             current_x,
             f64::from(container.metrics.minimum_scroll_offset.x),
@@ -415,17 +440,7 @@ pub(crate) fn perform_wheel_scroll_default_action(
             continue;
         }
 
-        let container_document = unsafe { &*runtime_ptr }
-            .dom_host()
-            .owner_document_handle(container.source);
-        let is_document_scroller = container_document.is_some_and(|document| {
-            unsafe { &*runtime_ptr }
-                .dom_host()
-                .dom()
-                .document_element_handle_for_document(document)
-                == Some(container.source)
-        });
-        if is_document_scroller {
+        if container.kind == moli_layout::LayoutScrollContainerKind::Viewport {
             changed |= apply_observable_window_scroll(
                 scope,
                 runtime_ptr,
@@ -608,17 +623,7 @@ fn scroll_node_into_view_with_geometry(
         if delta_x == 0.0 && delta_y == 0.0 {
             continue;
         }
-        let container_document = unsafe { &*runtime_ptr }
-            .dom_host()
-            .owner_document_handle(container.source);
-        let is_document_scroller = container_document.is_some_and(|document| {
-            unsafe { &*runtime_ptr }
-                .dom_host()
-                .dom()
-                .document_element_handle_for_document(document)
-                == Some(container.source)
-        });
-        if is_document_scroller {
+        if container.kind == moli_layout::LayoutScrollContainerKind::Viewport {
             changed |= apply_observable_window_scroll(
                 scope,
                 runtime_ptr,
@@ -831,7 +836,13 @@ fn scroll_node_to<'s>(
     if receiver_is_detached {
         return Ok(());
     }
-    let (current_left, current_top) = node_scroll_position(unsafe { &*runtime_ptr }, handle);
+    let is_scrolling_element =
+        document_scrolling_element_for_node(unsafe { &*runtime_ptr }, handle)? == Some(handle);
+    let (current_left, current_top) = if is_scrolling_element {
+        crate::window_host::current_window_scroll_position(scope)
+    } else {
+        node_scroll_position(unsafe { &*runtime_ptr }, handle)
+    };
     let (left, top) = if relative {
         let (delta_left, delta_top) = parse_scroll_coordinates(scope, &args, 0.0, 0.0);
         (current_left + delta_left, current_top + delta_top)
@@ -854,11 +865,7 @@ fn scroll_node_to<'s>(
         f64::from(metrics.minimum_scroll_offset.y),
         f64::from(metrics.maximum_scroll_offset.y),
     );
-    if unsafe { &*runtime_ptr }
-        .dom_host()
-        .document_element_handle()
-        == Some(handle)
-    {
+    if is_scrolling_element {
         let _ = apply_observable_window_scroll(
             scope,
             runtime_ptr,

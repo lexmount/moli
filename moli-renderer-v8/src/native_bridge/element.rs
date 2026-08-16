@@ -389,11 +389,11 @@ pub(crate) fn install_html_select_element_prototype_bindings(
 pub use geometry::ClientRect;
 pub(crate) use geometry::{
     apply_scroll_observable_effects, observable_bounding_client_rect, observable_caret_position,
-    observable_deep_hit_test, observable_event_offset, observable_geometry_batch,
-    observable_hit_test, observable_hit_test_all, observable_input_hit_test,
-    observable_scroll_adjusted_client_rect, observable_sources_with_fragments,
-    perform_wheel_scroll_default_action, queue_scroll_observable_effects,
-    scroll_node_into_view_at_start,
+    observable_deep_hit_test, observable_document_scroll_metrics, observable_event_offset,
+    observable_geometry_batch, observable_hit_test, observable_hit_test_all,
+    observable_input_hit_test, observable_scroll_adjusted_client_rect,
+    observable_sources_with_fragments, perform_wheel_scroll_default_action,
+    queue_scroll_observable_effects, scroll_node_into_view_at_start,
 };
 pub(super) use geometry::{
     node_client_height_getter_function, node_client_left_getter_function,

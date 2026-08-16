@@ -1,6 +1,6 @@
 use std::{fmt::Debug, hash::Hash, sync::Arc};
 
-use crate::{LayoutError, ResolvedLayoutStyle};
+use crate::{LayoutError, LayoutPoint, ResolvedLayoutStyle};
 
 /// Source-node category needed by CSS box construction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -579,6 +579,15 @@ pub trait LayoutSource {
     fn root(&self) -> Self::NodeId;
     fn document_mode(&self) -> LayoutDocumentMode {
         LayoutDocumentMode::NoQuirks
+    }
+    /// The first HTML body belonging to this document view, whether or not it
+    /// currently generates a CSS box.
+    fn document_body(&self) -> Option<Self::NodeId> {
+        None
+    }
+    /// Scroll offset owned by the layout viewport rather than by a CSS box.
+    fn viewport_scroll_offset(&self) -> LayoutPoint {
+        self.scroll_offset(self.root())
     }
     /// Returns the parent in the same flattened tree exposed by [`Self::flat_children`].
     /// The view root must return `None`, even when it has a DOM parent outside the view.
