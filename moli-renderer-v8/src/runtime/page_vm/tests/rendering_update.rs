@@ -2569,6 +2569,50 @@ document.body.innerHTML = `<div class=row><div class=item id=ask><i class=icon><
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn block_in_inline_cssom_uses_structural_ancestors() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/block-in-inline-ancestry.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;font-size:0}
+#parent{position:relative}
+#block{height:20px}
+#absolute{position:absolute;height:10px}
+</style>`;
+document.body.innerHTML = `<span id=parent><div id=block><div id=absolute></div></div></span>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(200, 100, 1.0))?
+            .expect("block-in-inline fixture must retain a layout root");
+
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                r#"[
+document.getElementById('block').offsetParent === document.getElementById('parent'),
+document.getElementById('absolute').offsetParent === document.getElementById('parent')
+].join('|')"#,
+            )?,
+            "true|true",
+            "formatting promotion must preserve LayoutObject ancestry for CSSOM",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("block-in-inline CSSOM ancestry fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn stylesheet_lifecycle_registers_only_the_current_documents_data_web_fonts() {
     run_page_vm_async_test(async move {
         let loader =

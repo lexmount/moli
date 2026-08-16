@@ -406,6 +406,11 @@ where
         children: Vec<LayoutBoxId>,
         allow_inline_split: bool,
     ) -> Result<Vec<LayoutBoxId>, LayoutError> {
+        // Preserve the LayoutObject/source ownership before table repair,
+        // anonymous block wrapping, or block-in-inline splitting rewrites the
+        // formatting tree. A promoted block must still see its inline source
+        // parent for containing-block and CSSOM ancestry.
+        world.record_structural_children(box_id, &children)?;
         let table_role = self.table_role(world, box_id)?;
         let children = if table_role == Some(TableBoxRole::Column) {
             Vec::new()

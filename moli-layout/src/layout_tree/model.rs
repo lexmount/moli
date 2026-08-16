@@ -308,7 +308,11 @@ pub struct LayoutScrollExtent {
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutBoxGeometry {
     pub id: LayoutOutputBoxId,
+    /// Source/LayoutObject ancestry before formatting-tree normalization.
+    pub structural_parent: Option<LayoutOutputBoxId>,
+    /// Parent in the normalized formatting tree.
     pub parent: Option<LayoutOutputBoxId>,
+    /// Parent used by the numeric layout algorithm.
     pub layout_parent: Option<LayoutOutputBoxId>,
     pub position: LayoutPosition,
     pub coordinate_space: LayoutCoordinateSpaceId,
