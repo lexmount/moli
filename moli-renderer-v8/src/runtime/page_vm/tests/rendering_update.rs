@@ -2089,6 +2089,111 @@ html,body{{margin:0;padding:0;background:white}}
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn screenshot_recascades_nearest_table_cell_presentation_style() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/table-cell-presentation-style.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0}
+table{border-spacing:0}
+td{font-size:0;border:0}
+.content{width:10px;height:10px}
+#author-cell{padding:7px}
+</style>`;
+document.body.innerHTML = `
+<table><tr><td id=default-cell><div class=content></div></td></tr></table>
+<table id=legacy-table cellpadding=4><tr><td id=legacy-cell><div class=content></div></td></tr></table>
+<table cellpadding=3><tr><td><table cellpadding=5><tr><td id=nested-cell><div class=content></div></td></tr></table></td></tr></table>
+<table id=author-table cellpadding=4><tr><td id=author-cell><div class=content></div></td></tr></table>`;
+const orphan = document.createElement('td');
+orphan.id = 'orphan-cell';
+orphan.innerHTML = '<div class=content></div>';
+document.body.append(orphan);
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+
+        let viewport = moli_layout::PaintViewport::new(200, 200, 1.0);
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(viewport)?
+            .expect("table-cell fixture must retain a layout root");
+        let read_cells = r#"(() => {
+const read = (id, includeGeometry = true) => {
+  const cell = document.getElementById(id);
+  const style = getComputedStyle(cell);
+  const values = [style.paddingTop,style.paddingRight,style.paddingBottom,style.paddingLeft];
+  if (includeGeometry) values.push(cell.offsetWidth,cell.offsetHeight);
+  return values.join(',');
+};
+return [
+  read('default-cell'),
+  read('legacy-cell'),
+  read('nested-cell'),
+  read('author-cell'),
+  read('orphan-cell', false),
+].join('|');
+})()
+"#;
+        assert_eq!(
+            page_vm.vm_mut().eval(read_cells)?,
+            "1px,1px,1px,1px,12,12|4px,4px,4px,4px,18,18|5px,5px,5px,5px,20,20|7px,7px,7px,7px,24,24|1px,1px,1px,1px",
+            "table cells must use the nearest table's legacy padding while author CSS and the orphan-cell UA fallback remain authoritative",
+        );
+
+        page_vm
+            .vm_mut()
+            .eval("document.getElementById('legacy-table').setAttribute('cellpadding','8')")?;
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(viewport)?
+            .expect("mutated table-cell fixture must retain a layout root");
+        assert_eq!(
+            page_vm.vm_mut().eval(read_cells)?,
+            "1px,1px,1px,1px,12,12|8px,8px,8px,8px,26,26|5px,5px,5px,5px,20,20|7px,7px,7px,7px,24,24|1px,1px,1px,1px",
+            "cellpadding mutation must recascade descendant cells without crossing a nested table boundary",
+        );
+
+        page_vm
+            .vm_mut()
+            .eval("document.getElementById('legacy-table').setAttribute('cellpadding','0')")?;
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(viewport)?
+            .expect("zero-cellpadding fixture must retain a layout root");
+        assert_eq!(
+            page_vm.vm_mut().eval(read_cells)?,
+            "1px,1px,1px,1px,12,12|0px,0px,0px,0px,10,10|5px,5px,5px,5px,20,20|7px,7px,7px,7px,24,24|1px,1px,1px,1px",
+            "cellpadding=0 must remove the shared presentational declaration",
+        );
+
+        page_vm
+            .vm_mut()
+            .eval("document.getElementById('legacy-table').removeAttribute('cellpadding')")?;
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(viewport)?
+            .expect("default-cellpadding fixture must retain a layout root");
+        assert_eq!(
+            page_vm.vm_mut().eval(read_cells)?,
+            "1px,1px,1px,1px,12,12|1px,1px,1px,1px,12,12|5px,5px,5px,5px,20,20|7px,7px,7px,7px,24,24|1px,1px,1px,1px",
+            "removing cellpadding must restore the historical 1px default",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("table-cell presentational-style fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_paints_fresh_inline_svg_resources_with_computed_current_color() {
     run_page_vm_async_test(async move {
         let loader =
