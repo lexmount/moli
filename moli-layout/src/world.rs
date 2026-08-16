@@ -396,7 +396,10 @@ where
     pub(crate) source_mapping: HashMap<N, LayoutBoxId>,
     pub(crate) display_contents_mapping: HashMap<N, Vec<LayoutBoxId>>,
     pub(crate) root: LayoutBoxId,
+    pub(crate) document_element: N,
+    pub(crate) document_body: Option<N>,
     pub(crate) document_mode: crate::LayoutDocumentMode,
+    pub(crate) viewport_scroll_offset: crate::LayoutPoint,
     pub(crate) viewport_layout: ViewportLayoutState,
     /// Document/view state shared by the active layout pass.
     pub(crate) layout_environment: LayoutEnvironment,
@@ -406,13 +409,22 @@ impl<N> LayoutWorld<N>
 where
     N: Copy + Debug + Eq + Hash,
 {
-    pub(crate) fn new(root: LayoutBox<N>, document_mode: crate::LayoutDocumentMode) -> Self {
+    pub(crate) fn new(
+        root: LayoutBox<N>,
+        document_element: N,
+        document_body: Option<N>,
+        document_mode: crate::LayoutDocumentMode,
+        viewport_scroll_offset: crate::LayoutPoint,
+    ) -> Self {
         Self {
             boxes: vec![root],
             source_mapping: HashMap::new(),
             display_contents_mapping: HashMap::new(),
             root: LayoutBoxId::from_index(0),
+            document_element,
+            document_body,
             document_mode,
+            viewport_scroll_offset,
             viewport_layout: ViewportLayoutState::default(),
             layout_environment: LayoutEnvironment::NONE,
         }
@@ -423,12 +435,74 @@ where
     }
 
     pub(crate) fn is_document_body(&self, id: LayoutBoxId) -> bool {
+        self.document_body
+            .is_some_and(|body| self.boxes[id.index()].source == Some(body))
+    }
+
+    /// Whether this box's overflow is propagated to the layout viewport.
+    ///
+    /// The root always propagates. In an HTML document the body also
+    /// propagates while the root's computed overflow remains visible. This is
+    /// the LayoutObject-level distinction Blink exposes through
+    /// `IsScrollContainer()`: computed overflow remains authored, but the box
+    /// no longer owns a local scrolling mechanism.
+    pub(crate) fn overflow_propagates_to_viewport(&self, id: LayoutBoxId) -> bool {
+        self.is_document_element(id)
+            || (self.is_document_body(id) && !self.boxes[self.root.index()].style.clips_overflow())
+    }
+
+    pub(crate) fn clips_overflow(&self, id: LayoutBoxId) -> bool {
+        !self.overflow_propagates_to_viewport(id) && self.boxes[id.index()].style.clips_overflow()
+    }
+
+    pub(crate) fn establishes_scroll_container(&self, id: LayoutBoxId) -> bool {
+        !self.overflow_propagates_to_viewport(id)
+            && self.boxes[id.index()].style.establishes_scroll_container()
+    }
+
+    /// The box whose overflow policy controls the layout viewport. This is a
+    /// first-class viewport relation rather than a local scroll-container
+    /// special case, matching Blink's `ViewportDefiningElement` split.
+    fn viewport_defining_box(&self) -> LayoutBoxId {
+        if !self.boxes[self.root.index()].style.clips_overflow()
+            && let Some(body) = self.document_body
+            && let Some(body) = self.source_mapping.get(&body).copied()
+            && self.overflow_propagates_to_viewport(body)
+        {
+            return body;
+        }
+        self.root
+    }
+
+    pub(crate) fn viewport_allows_user_scroll_x(&self) -> bool {
+        self.boxes[self.viewport_defining_box().index()]
+            .style
+            .allows_viewport_user_scroll_x()
+    }
+
+    pub(crate) fn viewport_allows_user_scroll_y(&self) -> bool {
+        self.boxes[self.viewport_defining_box().index()]
+            .style
+            .allows_viewport_user_scroll_y()
+    }
+
+    pub(crate) fn clips_descendant_paint(&self, id: LayoutBoxId) -> bool {
         let layout_box = &self.boxes[id.index()];
-        layout_box.structural_parent == Some(self.root)
-            && layout_box
-                .element_semantics
-                .as_ref()
-                .is_some_and(|semantics| semantics.is_html_element("body"))
+        self.clips_overflow(id)
+            || (layout_box.is_eligible_for_paint_or_layout_containment()
+                && layout_box.style.applies_paint_containment())
+    }
+
+    pub(crate) fn document_scrolling_element(&self) -> Option<N> {
+        if self.document_mode != crate::LayoutDocumentMode::Quirks {
+            return Some(self.document_element);
+        }
+        let body = self.document_body?;
+        let body_is_scroll_container = self
+            .source_mapping
+            .get(&body)
+            .is_some_and(|id| self.establishes_scroll_container(*id));
+        (!body_is_scroll_container).then_some(body)
     }
 
     /// Whether this box participates in the HTML body-fills-viewport quirk.

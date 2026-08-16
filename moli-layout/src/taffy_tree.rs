@@ -622,7 +622,7 @@ where
     let mut ancestor = world.boxes[id.index()].parent;
     while let Some(candidate) = ancestor {
         let layout_box = &world.boxes[candidate.index()];
-        if layout_box.style.establishes_scroll_container() {
+        if world.establishes_scroll_container(candidate) {
             let layout = layout_box.unrounded_layout;
             let origin = unrounded_global_origin(world, candidate);
             return Some(PaintRect::new(

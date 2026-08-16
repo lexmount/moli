@@ -1631,6 +1631,23 @@ impl ResolvedLayoutStyle {
         self.taffy.overflow.y == taffy::Overflow::Scroll
     }
 
+    /// The viewport treats propagated `overflow: visible` as an automatic
+    /// scrolling mechanism. `hidden` and `clip` still permit programmatic
+    /// scrolling, but they suppress user-initiated scrolling.
+    pub(crate) fn allows_viewport_user_scroll_x(&self) -> bool {
+        matches!(
+            self.taffy.overflow.x,
+            taffy::Overflow::Visible | taffy::Overflow::Scroll
+        )
+    }
+
+    pub(crate) fn allows_viewport_user_scroll_y(&self) -> bool {
+        matches!(
+            self.taffy.overflow.y,
+            taffy::Overflow::Visible | taffy::Overflow::Scroll
+        )
+    }
+
     pub(crate) fn text_leaf_from(parent: &Self) -> Self {
         Self {
             computed: parent.computed.clone(),

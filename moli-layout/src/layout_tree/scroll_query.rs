@@ -8,7 +8,8 @@ use super::{
         LayoutRect, LayoutTransform2D,
     },
     query::{
-        LayoutIntersectionGeometry, LayoutScrollContainerMetrics, LayoutScrollIntoViewGeometry,
+        LayoutIntersectionGeometry, LayoutScrollContainerKind, LayoutScrollContainerMetrics,
+        LayoutScrollIntoViewGeometry,
     },
     tree::FrozenLayoutTree,
 };
@@ -51,20 +52,34 @@ where
         while let Some(box_id) = candidate {
             let geometry = self.box_geometry(box_id)?;
             let extent = self.scroll_extent(box_id)?;
-            if (extent.is_scroll_container || box_id == self.root_box)
+            if extent.is_scroll_container
                 && let Some(container_source) = self
                     .boxes
                     .get(box_id.index())
                     .and_then(|layout_box| layout_box.geometry_source)
+                && Some(container_source) != self.document_scrolling_element
                 && seen.insert(container_source)
                 && let Some(metrics) = self.element_metrics_for_source(container_source)
             {
                 scroll_containers.push(LayoutScrollContainerMetrics {
                     source: container_source,
+                    kind: LayoutScrollContainerKind::Element,
                     metrics,
                 });
             }
             candidate = geometry.layout_parent.or(geometry.parent);
+        }
+        let viewport_source = self
+            .document_scrolling_element
+            .unwrap_or(self.document_element);
+        if seen.insert(viewport_source)
+            && let Some(metrics) = self.viewport_scroll_metrics_for_source(viewport_source)
+        {
+            scroll_containers.push(LayoutScrollContainerMetrics {
+                source: viewport_source,
+                kind: LayoutScrollContainerKind::Viewport,
+                metrics,
+            });
         }
         Some(LayoutScrollIntoViewGeometry {
             target_rects,

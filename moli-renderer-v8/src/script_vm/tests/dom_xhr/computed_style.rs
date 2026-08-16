@@ -3895,6 +3895,99 @@ body { width: 100px; height: 120px; overflow: hidden; }
 }
 
 #[test]
+fn quirks_scrolling_element_follows_viewport_overflow_propagation() {
+    let mut physical_body_scroller = new_parsed_test_vm(
+        "https://quirks-physical-body-scroller.test/",
+        r#"<style>
+html { overflow: clip; }
+body { width: 100px; aspect-ratio: 1 / 1; overflow: scroll; }
+</style><body></body>"#,
+    );
+    let physical_result = physical_body_scroller
+        .eval(
+            r#"[
+  document.scrollingElement?.localName ?? 'null',
+  document.body.clientHeight,
+  document.body.scrollHeight,
+  document.body.offsetHeight
+].join('|')"#,
+        )
+        .expect("physical quirks body scroller should evaluate");
+    assert_eq!(physical_result, "null|1080|1064|1064");
+
+    let mut viewport_body_scroller = new_parsed_test_vm(
+        "https://quirks-viewport-body-scroller.test/",
+        r#"<style>
+body { width: 100px; aspect-ratio: 1 / 1; overflow: clip; }
+</style><body></body>"#,
+    );
+    let viewport_result = viewport_body_scroller
+        .eval(
+            r#"[
+  document.scrollingElement?.localName ?? 'null',
+  document.body.clientHeight,
+  document.body.scrollHeight,
+  document.body.offsetHeight
+].join('|')"#,
+        )
+        .expect("viewport-projected quirks body scroller should evaluate");
+    assert_eq!(viewport_result, "body|1080|1080|1064");
+}
+
+#[test]
+fn quirks_scrolling_element_reuses_geometry_until_a_fresh_screenshot() {
+    let mut vm = new_parsed_test_vm(
+        "https://quirks-scrolling-snapshot.test/",
+        r#"<style>
+body { width: 100px; aspect-ratio: 1 / 1; }
+</style><body></body>"#,
+    );
+    assert_eq!(
+        vm.eval("document.scrollingElement.localName")
+            .expect("cold scrolling-element selection should evaluate"),
+        "body"
+    );
+
+    assert_eq!(
+        vm.eval(
+            r#"document.documentElement.style.overflow = 'clip';
+document.body.style.overflow = 'scroll';
+document.scrollingElement?.localName ?? 'null'"#,
+        )
+        .expect("warm scrolling-element selection should evaluate"),
+        "body",
+        "synchronous geometry reads retain the latest published tree"
+    );
+    vm.screenshot_layout_snapshot(moli_layout::PaintViewport::new(320, 200, 1.0))
+        .expect("fresh physical-body screenshot layout should succeed")
+        .expect("quirks fixture should retain a layout root");
+    assert_eq!(
+        vm.eval("document.scrollingElement?.localName ?? 'null'")
+            .expect("refreshed physical-body selection should evaluate"),
+        "null"
+    );
+
+    vm.eval(
+        r#"document.documentElement.style.overflow = 'visible';
+document.body.style.overflow = 'clip'"#,
+    )
+    .expect("viewport overflow propagation should mutate");
+    assert_eq!(
+        vm.eval("document.scrollingElement?.localName ?? 'null'")
+            .expect("stale physical-body selection should evaluate"),
+        "null"
+    );
+    vm.screenshot_layout_snapshot(moli_layout::PaintViewport::new(320, 200, 1.0))
+        .expect("fresh viewport-body screenshot layout should succeed")
+        .expect("quirks fixture should retain a layout root");
+    assert_eq!(
+        vm.eval("document.scrollingElement.localName")
+            .expect("refreshed viewport-body selection should evaluate"),
+        "body"
+    );
+}
+
+#[test]
 fn inspector_runtime_evaluate_uses_child_context_window_surface() {
     let mut vm = new_storage_test_vm("https://inspector-child-window-viewport.test/");
     vm.eval(
