@@ -14,6 +14,11 @@ pub(crate) use accessors::{
     node_document_adopted_style_sheets_getter_function,
     node_document_adopted_style_sheets_setter_function, node_document_style_sheets_getter_function,
 };
+pub(crate) use font_faces::{
+    begin_document_font_face_set_load_cycle_for_document,
+    settle_document_font_face_set_load_cycle_for_document,
+    synchronize_font_face_set_load_state_for_attribute,
+};
 pub(crate) use projection::{
     apply_stylesheet_owner_css_projections, apply_stylesheet_source_css_projection,
 };

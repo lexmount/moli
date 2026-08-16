@@ -3344,6 +3344,190 @@ document.close();
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn font_face_set_ready_waits_for_the_exact_font_cycle_and_its_layout() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        loader.set_optional_resource_fetch_mask(
+            crate::protocol_types::OptionalResourceFetchMask::FONT,
+        );
+        let document_url = Url::parse("https://example.com/font-ready-layout.html")?;
+        let (mut page_vm, _resource_source, _owner_wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        let encoded_font = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../moli-layout/tests/fixtures/moli-ahem.woff2"
+        ));
+        let encoded = base64::engine::general_purpose::STANDARD.encode(encoded_font);
+
+        let initial = page_vm.vm_mut().eval(&format!(
+            r#"
+globalThis.__fontReadyBefore = document.fonts.ready;
+document.head.innerHTML = `<style>
+@font-face {{ font-family:MoliReadyAhem; src:url(data:font/woff2;base64,{encoded}) format('woff2') }}
+div {{ font:10px/1 MoliReadyAhem }}
+.inline-block {{ display:inline-block; height:100px }}
+</style>`;
+document.body.innerHTML = `<div><span id=empty></span><span class=inline-block></span></div>`;
+globalThis.__fontReadyDuring = document.fonts.ready;
+globalThis.__fontReadySettled = false;
+globalThis.__fontReadyDuring.then(value => {{
+  globalThis.__fontReadySettled = value === document.fonts;
+}});
+JSON.stringify({{
+  changed: __fontReadyBefore !== __fontReadyDuring,
+  stable: __fontReadyDuring === document.fonts.ready,
+  status: document.fonts.status,
+  settled: __fontReadySettled
+}})
+"#,
+        ))?;
+        assert_eq!(
+            initial,
+            r#"{"changed":true,"stable":true,"status":"loading","settled":false}"#,
+            "the ready getter must reserve the loading cycle before task-boundary admission"
+        );
+
+        page_vm
+            .vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+        assert_eq!(
+            page_vm.vm_mut().eval("String(__fontReadySettled)")?,
+            "false",
+            "a data-font terminal alone must not resolve ready before layout"
+        );
+        assert_eq!(
+            page_vm.vm_mut().document_web_font_counts_for_test(),
+            (1, 1, 1)
+        );
+
+        page_vm.vm_mut().eval(&format!(
+            r#"
+const lateStyle = document.createElement('style');
+lateStyle.textContent = `@font-face {{
+  font-family:MoliLateAhem;
+  src:url(data:font/woff2;base64,{encoded}) format('woff2');
+}}`;
+document.head.append(lateStyle);
+'late-face-installed'
+"#,
+        ))?;
+
+        let claimed = page_vm
+            .claim_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::RenderingUpdate)
+            .expect("font completion should publish one exact rendering update");
+        let (_, selected_kind) = claimed
+            .rendering_update_owner_and_kind()
+            .expect("font readiness must remain on the rendering task source");
+        assert_eq!(
+            selected_kind,
+            RendererPageRenderingUpdateTaskKind::FontFaceSetReady
+        );
+        page_vm
+            .run_claimed_selected_page_task_for_test(claimed, &loader)
+            .await?;
+        assert_eq!(
+            page_vm.vm_mut().document_web_font_counts_for_test(),
+            (2, 2, 2),
+            "the ready task must reconcile a font face added after the task was queued"
+        );
+
+        let settled = page_vm.vm_mut().eval(
+            r#"
+const rect = empty.getBoundingClientRect();
+const containing = empty.parentElement.getBoundingClientRect();
+JSON.stringify({
+  settled: __fontReadySettled,
+  stable: __fontReadyDuring === document.fonts.ready,
+  status: document.fonts.status,
+  y: rect.y - containing.y,
+  height: rect.height
+})
+"#,
+        )?;
+        assert_eq!(
+            settled,
+            r#"{"settled":true,"stable":true,"status":"loaded","y":92,"height":10}"#,
+            "ready must resolve only after layout publishes the loaded font's geometry"
+        );
+        assert_eq!(
+            page_vm
+                .vm()
+                .layout_pass_observability_for_test()
+                .3
+                .expect("font-ready layout metrics")
+                .reason,
+            moli_layout::LayoutFlushReason::FontLoading
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("FontFaceSet ready layout-barrier test should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_layout_completes_an_unobserved_font_cycle() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        loader.set_optional_resource_fetch_mask(
+            crate::protocol_types::OptionalResourceFetchMask::FONT,
+        );
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/font-screenshot-layout.html")?,
+        );
+        let encoded_font = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../moli-layout/tests/fixtures/moli-ahem.woff2"
+        ));
+        let encoded = base64::engine::general_purpose::STANDARD.encode(encoded_font);
+
+        page_vm.vm_mut().eval(&format!(
+            r#"
+void document.fonts;
+document.head.innerHTML = `<style>
+@font-face {{ font-family:MoliScreenshotAhem; src:url(data:font/woff2;base64,{encoded}) format('woff2') }}
+div {{ font:10px/1 MoliScreenshotAhem }}
+.inline-block {{ display:inline-block; height:100px }}
+</style>`;
+document.body.innerHTML = `<div><span id=empty></span><span class=inline-block></span></div>`;
+'installed'
+"#,
+        ))?;
+        page_vm
+            .vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+        assert_eq!(
+            page_vm.vm_mut().eval("document.fonts.status")?,
+            "loading",
+            "font completion alone must leave the cycle pending until a layout consumes it"
+        );
+
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(320, 200, 1.0))?
+            .expect("the explicit screenshot should publish loaded-font geometry");
+        let settled = page_vm.vm_mut().eval(
+            r#"
+const rect = empty.getBoundingClientRect();
+const containing = empty.parentElement.getBoundingClientRect();
+JSON.stringify({ status: document.fonts.status, y: rect.y - containing.y, height: rect.height })
+"#,
+        )?;
+        assert_eq!(
+            settled,
+            r#"{"status":"loaded","y":92,"height":10}"#,
+            "a normal explicit fresh-layout consumer should settle an unobserved font cycle"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("screenshot font-cycle layout test should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn same_family_unicode_range_faces_shape_mixed_text_with_both_subsets() {
     run_page_vm_async_test(async move {
         let loader =

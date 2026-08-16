@@ -56,11 +56,13 @@ pub(in crate::context_bootstrap) fn font_face_set_load_callback<'s>(
     }
     let matching_faces = font_face_set_matching_faces_array(scope, this, &parsed.font)
         .unwrap_or_else(|| v8::Array::new(scope, 0));
-    set_font_face_set_status(scope, this, "loading");
-    let _ = dispatch_font_face_set_event(scope, this, "loading", None);
-    replace_font_face_set_ready_promise(scope, this);
-    set_font_face_set_status(scope, this, "loaded");
-    let _ = dispatch_font_face_set_event(scope, this, "loadingdone", Some(matching_faces));
+    if !font_face_set_has_document_load_cycle(scope, this) {
+        set_font_face_set_status(scope, this, "loading");
+        let _ = dispatch_font_face_set_event(scope, this, "loading", None);
+        let _ = replace_font_face_set_ready_promise(scope, this);
+        set_font_face_set_status(scope, this, "loaded");
+        let _ = dispatch_font_face_set_event(scope, this, "loadingdone", Some(matching_faces));
+    }
     let faces_value = matching_faces.into();
     match resolved_promise(scope, faces_value) {
         Some(promise) => rv.set(v8::Local::<v8::Value>::from(promise)),
