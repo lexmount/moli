@@ -658,11 +658,10 @@ where
     N: Copy + Debug + Eq + Hash,
 {
     while let Some(id) = candidate {
-        let layout_box = &world.boxes[id.index()];
-        if layout_box.establishes_positioned_containing_block() {
+        if world.establishes_positioned_containing_block(id) {
             return Some(id);
         }
-        candidate = layout_box.structural_parent;
+        candidate = world.boxes[id.index()].structural_parent;
     }
     None
 }
@@ -675,11 +674,10 @@ where
     N: Copy + Debug + Eq + Hash,
 {
     while let Some(id) = candidate {
-        let layout_box = &world.boxes[id.index()];
-        if layout_box.establishes_fixed_containing_block() {
+        if world.establishes_fixed_containing_block(id) {
             return Some(id);
         }
-        candidate = layout_box.structural_parent;
+        candidate = world.boxes[id.index()].structural_parent;
     }
     None
 }
@@ -688,18 +686,129 @@ fn inline_box_containing_rect<N>(
     world: &LayoutWorld<N>,
     owner: LayoutBoxId,
     containing_block: LayoutBoxId,
+    owner_content_size: Size<f32>,
 ) -> Option<PaintRect>
 where
     N: Copy + Debug + Eq + Hash,
 {
     let context = world.boxes[owner.index()].inline_layout.as_ref()?;
-    context
+    let containing_box = &world.boxes[containing_block.index()];
+    let containing_inline_size = world.boxes[owner.index()]
+        .style
+        .writing_mode()
+        .to_logical(owner_content_size)
+        .inline_size;
+    let style = &containing_box.style;
+    let margin = style
+        .taffy
+        .margin
+        .resolve_or_zero(Some(containing_inline_size), resolve_stylo_calc_value);
+    let padding = style
+        .taffy
+        .padding
+        .resolve_or_zero(Some(containing_inline_size), resolve_stylo_calc_value);
+    let border = style
+        .taffy
+        .border
+        .resolve_or_zero(Some(containing_inline_size), resolve_stylo_calc_value);
+    let mut fragment_rects = context
         .fragments
         .boxes
         .iter()
         .filter(|fragment| fragment.box_id == containing_block)
-        .map(|fragment| fragment.rect)
-        .reduce(union_paint_rect)
+        .map(|fragment| {
+            let geometry = crate::inline::inline_fragment_box_geometry(
+                fragment,
+                style.writing_direction(),
+                margin,
+                padding,
+                border,
+            );
+            (fragment.line_index, geometry.border_rect)
+        })
+        .collect::<Vec<_>>();
+    fragment_rects.sort_by_key(|(line_index, _)| *line_index);
+
+    let start_line = fragment_rects.first()?.0;
+    let start_rect = fragment_rects
+        .iter()
+        .take_while(|(line_index, _)| *line_index == start_line)
+        .map(|(_, rect)| *rect)
+        .reduce(union_paint_rect)?;
+    // Blink keeps the previous end fragment when a later fragment belongs to
+    // an empty line box. Moli's phantom line placement is the equivalent used
+    // line-box state.
+    let end_line = fragment_rects
+        .iter()
+        .rev()
+        .find(|(line_index, _)| {
+            context
+                .line_placements
+                .get(*line_index)
+                .is_none_or(|line| !line.phantom)
+        })
+        .map_or(start_line, |(line_index, _)| *line_index);
+    let end_rect = fragment_rects
+        .iter()
+        .filter(|(line_index, _)| *line_index == end_line)
+        .map(|(_, rect)| *rect)
+        .reduce(union_paint_rect)?;
+
+    // Match Blink's InlineContainingBlockUtils: the logical start comes from
+    // the first fragment, the logical end from the last non-empty fragment,
+    // and the border edges are inset to produce the padding-box containing
+    // block. Opposite inline directions retain their physical inline edges.
+    let owner_direction = world.boxes[owner.index()].style.writing_direction();
+    let inline_direction = style.writing_direction();
+    debug_assert_eq!(owner_direction.mode, inline_direction.mode);
+    let converter = owner_direction.converter(owner_content_size);
+    let start_size = Size {
+        width: start_rect.width,
+        height: start_rect.height,
+    };
+    let end_size = Size {
+        width: end_rect.width,
+        height: end_rect.height,
+    };
+    let mut start = converter.to_logical_point(
+        Point {
+            x: start_rect.x,
+            y: start_rect.y,
+        },
+        start_size,
+    );
+    let mut end = converter.to_logical_point(
+        Point {
+            x: end_rect.x,
+            y: end_rect.y,
+        },
+        end_size,
+    );
+    let end_size = converter.to_logical_size(end_size);
+    end.inline_offset += end_size.inline_size;
+    end.block_offset += end_size.block_size;
+
+    let logical_border = inline_direction.to_logical_box_strut(border);
+    start.block_offset += logical_border.block_start;
+    end.block_offset -= logical_border.block_end;
+    if owner_direction == inline_direction {
+        start.inline_offset += logical_border.inline_start;
+        end.inline_offset -= logical_border.inline_end;
+    }
+    end.inline_offset = end.inline_offset.max(start.inline_offset);
+    end.block_offset = end.block_offset.max(start.block_offset);
+    let logical_size = LogicalSize {
+        inline_size: end.inline_offset - start.inline_offset,
+        block_size: end.block_offset - start.block_offset,
+    };
+    let physical_size = converter.to_physical_size(logical_size);
+    let physical_offset = converter.to_physical_point(start, physical_size);
+    Some(PaintRect::new(
+        physical_offset.x,
+        physical_offset.y,
+        physical_size.width,
+        physical_size.height,
+    ))
 }
 
 fn union_paint_rect(left: PaintRect, right: PaintRect) -> PaintRect {
@@ -1528,6 +1637,8 @@ where
             .f32_max(Size::ZERO),
             writing_direction,
         };
+        let content_size =
+            (default_containing_block.area_size - padding.sum_axes()).f32_max(Size::ZERO);
         let fallback_static_position =
             LogicalStaticPosition::new(writing_direction.converter(output.size).to_logical_point(
                 Point {
@@ -1553,6 +1664,7 @@ where
                 child,
                 default_containing_block,
                 content_offset,
+                content_size,
             );
             let static_position = self
                 .get_out_of_flow_static_position(
@@ -1584,6 +1696,7 @@ where
         child: LayoutBoxId,
         default: OutOfFlowContainingBlock,
         content_offset: Point<f32>,
+        owner_content_size: Size<f32>,
     ) -> OutOfFlowContainingBlock {
         let Some(containing_block) = self.boxes[child.index()].positioned_containing_block else {
             return default;
@@ -1592,7 +1705,9 @@ where
         if !containing_box.inline_flattened || containing_box.inline_context_owner != Some(owner) {
             return default;
         }
-        let Some(rect) = inline_box_containing_rect(self, owner, containing_block) else {
+        let Some(rect) =
+            inline_box_containing_rect(self, owner, containing_block, owner_content_size)
+        else {
             return default;
         };
 

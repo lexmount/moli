@@ -956,6 +956,100 @@ offsets['shadow-action']=shadow.getElementById('shadow-action').offsetParent?.id
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn filter_effects_establish_positioned_containing_blocks_except_on_the_root() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/filter-containing-blocks.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html{filter:opacity(99%);will-change:backdrop-filter}
+html,body{margin:0;padding:0}
+.case{width:160px;height:50px;margin:10px 0 0 100px}
+.absolute{position:absolute;left:11px;top:12px;width:10px;height:10px}
+.fixed{position:fixed;left:13px;top:14px;width:10px;height:10px}
+#filter{filter:opacity(80%)}
+#backdrop{backdrop-filter:blur(0px)}
+#will-filter{will-change:filter}
+#will-backdrop{will-change:backdrop-filter}
+#inline-filter{filter:opacity(80%)}
+#block-inline-filter{margin-left:100px;will-change:filter}
+.fixed-origin{position:fixed;left:0;top:0;width:10px;height:10px}
+#root-fixed{position:fixed;left:7px;top:8px;width:10px;height:10px}
+</style>`;
+document.body.innerHTML = `
+<div id=filter class=case><span id=filter-absolute class=absolute></span><span id=filter-fixed class=fixed></span></div>
+<div id=backdrop class=case><span id=backdrop-absolute class=absolute></span><span id=backdrop-fixed class=fixed></span></div>
+<div id=will-filter class=case><span id=will-filter-absolute class=absolute></span><span id=will-filter-fixed class=fixed></span></div>
+<div id=will-backdrop class=case><span id=will-backdrop-absolute class=absolute></span><span id=will-backdrop-fixed class=fixed></span></div>
+<div class=case>prefix <span id=inline-filter>inline<span id=inline-filter-fixed class=fixed></span></span></div>
+<span id=block-inline-filter>FAIL<div id=block-inline-filter-fixed class=fixed-origin></div></span>
+<span id=root-fixed></span>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+
+        // Geometry reads intentionally consume the most recently rendered
+        // layout. Produce that render explicitly before querying offsetParent.
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0))?
+            .expect("filter fixture must retain a layout root");
+
+        let offsets = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries([
+'filter-absolute','filter-fixed','backdrop-absolute','backdrop-fixed',
+'will-filter-absolute','will-filter-fixed','will-backdrop-absolute','will-backdrop-fixed',
+'inline-filter-fixed','block-inline-filter-fixed','root-fixed'
+].map(id=>[id,document.getElementById(id).offsetParent?.id??null])))"#,
+        )?;
+        let offsets: serde_json::Value = serde_json::from_str(&offsets)?;
+        for (id, expected) in [
+            ("filter-absolute", Some("filter")),
+            ("filter-fixed", Some("filter")),
+            ("backdrop-absolute", Some("backdrop")),
+            ("backdrop-fixed", Some("backdrop")),
+            ("will-filter-absolute", Some("will-filter")),
+            ("will-filter-fixed", Some("will-filter")),
+            ("will-backdrop-absolute", Some("will-backdrop")),
+            ("will-backdrop-fixed", Some("will-backdrop")),
+            ("inline-filter-fixed", Some("inline-filter")),
+            ("block-inline-filter-fixed", Some("block-inline-filter")),
+            ("root-fixed", None),
+        ] {
+            assert_eq!(
+                offsets[id].as_str(),
+                expected,
+                "unexpected offsetParent for {id}: {offsets}"
+            );
+        }
+        let inline_geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify((()=>{const rect=id=>document.getElementById(id).getBoundingClientRect();const inline=rect('inline-filter');const inlineFixed=rect('inline-filter-fixed');const blockInline=rect('block-inline-filter');const blockInlineFixed=rect('block-inline-filter-fixed');return [inline.x,inline.y,inlineFixed.x,inlineFixed.y,blockInline.x,blockInline.y,blockInlineFixed.x,blockInlineFixed.y]})())"#,
+        )?;
+        let inline_geometry: [f32; 8] = serde_json::from_str(&inline_geometry)?;
+        assert!(
+            (inline_geometry[2] - inline_geometry[0] - 13.0).abs() <= 0.05
+                && (inline_geometry[3] - inline_geometry[1] - 14.0).abs() <= 0.05,
+            "inline filter did not resolve fixed insets from its fragment: {inline_geometry:?}"
+        );
+        assert!(
+            (inline_geometry[6] - inline_geometry[4]).abs() <= 0.05
+                && (inline_geometry[7] - inline_geometry[5]).abs() <= 0.05,
+            "block-in-inline filter did not position its fixed child: {inline_geometry:?}"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("filter containing-block fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn fixed_flex_auto_margin_consumes_free_space_once() {
     run_page_vm_async_test(async move {
         let loader =
