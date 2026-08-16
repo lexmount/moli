@@ -116,7 +116,7 @@ where
             // `display:none`.
             root.source = None;
         }
-        let mut world = LayoutWorld::new(root);
+        let mut world = LayoutWorld::new(root, self.source.document_mode());
         let root_box = world.root();
         if root_generates_principal_box {
             world.map_source(source_root, root_box);

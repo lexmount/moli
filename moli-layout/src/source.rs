@@ -11,6 +11,18 @@ pub enum LayoutSourceKind {
     Other,
 }
 
+/// Document mode that changes browser layout and CSSOM View semantics.
+///
+/// This is sampled once into the pass-local layout world. Layout never retains
+/// or calls back into the live document after construction.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum LayoutDocumentMode {
+    #[default]
+    NoQuirks,
+    LimitedQuirks,
+    Quirks,
+}
+
 /// Namespace family needed by box construction and diagnostics.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum LayoutNamespace {
@@ -565,6 +577,9 @@ pub trait LayoutSource {
         Self: 'a;
 
     fn root(&self) -> Self::NodeId;
+    fn document_mode(&self) -> LayoutDocumentMode {
+        LayoutDocumentMode::NoQuirks
+    }
     /// Returns the parent in the same flattened tree exposed by [`Self::flat_children`].
     /// The view root must return `None`, even when it has a DOM parent outside the view.
     fn flat_parent(&self, node: Self::NodeId) -> Option<Self::NodeId>;
