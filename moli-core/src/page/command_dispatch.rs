@@ -95,8 +95,20 @@ impl Page {
         if let Some(attachment_id) = self.renderer_agent_attachment_id {
             command.bind_inspector_attachment(attachment_id);
         }
+        let pending = if self.renderer_agent_attachment_id.is_some() {
+            self.handle.enqueue_protocol_command_in_inspector_session(
+                command,
+                self.renderer_devtools_command_session_id.clone(),
+            )?
+        } else {
+            // CLI, embedding and other renderer-owner callers reuse the thin
+            // protocol-turn capture policy, but they are not a
+            // DevToolsSession receiver and must not acquire a Main ingress
+            // lane that is scoped to a renderer attachment.
+            self.handle.enqueue_protocol_command(command)?
+        };
         Ok(PendingPageCommand {
-            pending: self.handle.enqueue_protocol_command(command)?,
+            pending,
             renderer_agent_attachment_id: self.renderer_agent_attachment_id,
         })
     }
@@ -383,6 +395,9 @@ impl PendingRuntimeInspectorCommandDispatch {
                     RendererRuntimeInspectorMainCommandCompletion::Inspector => {
                         Ok(CompletedRuntimeInspectorCommandDispatch::Inspector)
                     }
+                    RendererRuntimeInspectorMainCommandCompletion::Page(_) => Err(anyhow::anyhow!(
+                        "a Runtime Inspector command entered nested non-V8 Page dispatch"
+                    )),
                     RendererRuntimeInspectorMainCommandCompletion::Canceled => {
                         Ok(CompletedRuntimeInspectorCommandDispatch::Canceled)
                     }

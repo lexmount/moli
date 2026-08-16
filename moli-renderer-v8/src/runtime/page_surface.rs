@@ -3653,8 +3653,142 @@ pub struct RendererInspectorCommandEnvelope {
     pause_effect: RendererInspectorPauseCommandEffect,
     main_dispatch_boundary: RendererInspectorMainDispatchBoundary,
     payload: RendererInspectorCommandPayload,
-    main_ingress_first_dispatch:
+}
+
+/// One command delivered by the renderer's Main DevTools receiver.
+///
+/// Unlike `RendererInspectorCommandEnvelope`, this envelope is deliberately
+/// agent-neutral: protocol commands that ultimately need the renderer Page,
+/// DOM, CSS, Accessibility, or V8 agents all enter the same Main receiver.
+/// The boxed payload keeps that admission boundary structural without adding
+/// a second allowlist of `RendererPageCommand` variants.
+#[doc(hidden)]
+pub struct RendererDevToolsMainCommandEnvelope {
+    ticket: RendererInspectorIngressTicket,
+    payload: Box<RendererPageCommand>,
+    first_dispatch:
         Option<crate::script_vm::inspector_main::RendererInspectorMainFirstDispatchGuard>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RendererDevToolsMainNestedDispatch {
+    InspectorSession,
+    PageAgent,
+    OwnerOnly,
+}
+
+impl RendererDevToolsMainCommandEnvelope {
+    pub(crate) fn from_protocol_command(command: RendererPageCommand) -> Self {
+        Self::from_protocol_command_in_session(command, None)
+    }
+
+    pub(crate) fn from_protocol_command_in_session(
+        command: RendererPageCommand,
+        inspector_session_id: Option<String>,
+    ) -> Self {
+        let ticket = match &command {
+            RendererPageCommand::Inspector(envelope) => envelope.ticket().clone(),
+            RendererPageCommand::DevToolsMain(_) => {
+                panic!("a Main DevTools command cannot be enveloped twice")
+            }
+            _ => RendererInspectorIngressTicket::new(
+                None,
+                inspector_session_id,
+                RendererInspectorCommandRoute::MainThread,
+            ),
+        };
+        Self {
+            ticket,
+            payload: Box::new(command),
+            first_dispatch: None,
+        }
+    }
+
+    pub(crate) fn ticket(&self) -> &RendererInspectorIngressTicket {
+        &self.ticket
+    }
+
+    pub(crate) fn payload(&self) -> &RendererPageCommand {
+        self.payload.as_ref()
+    }
+
+    pub(crate) fn first_dispatch_lifecycle(&self) -> RendererInspectorFirstDispatchLifecycle {
+        RendererInspectorFirstDispatchLifecycle::OrderedUntilFirstDispatch
+    }
+
+    pub(crate) fn nested_dispatch(&self) -> RendererDevToolsMainNestedDispatch {
+        match self.payload.as_ref() {
+            RendererPageCommand::Inspector(envelope)
+                if envelope.can_dispatch_at_nested_inspector_session_boundary() =>
+            {
+                RendererDevToolsMainNestedDispatch::InspectorSession
+            }
+            RendererPageCommand::Inspector(_) => RendererDevToolsMainNestedDispatch::OwnerOnly,
+            RendererPageCommand::DevToolsMain(_) => {
+                unreachable!("a Main DevTools command cannot contain another Main envelope")
+            }
+            _ => RendererDevToolsMainNestedDispatch::PageAgent,
+        }
+    }
+
+    pub(crate) fn inspector_envelope(&self) -> Option<&RendererInspectorCommandEnvelope> {
+        match self.payload.as_ref() {
+            RendererPageCommand::Inspector(envelope) => Some(envelope),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn into_nested_inspector_envelope(self) -> RendererInspectorCommandEnvelope {
+        assert_eq!(
+            self.nested_dispatch(),
+            RendererDevToolsMainNestedDispatch::InspectorSession,
+            "only a session-boundary Inspector command may enter nested V8 dispatch"
+        );
+        let RendererPageCommand::Inspector(envelope) = *self.payload else {
+            unreachable!("nested Inspector dispatch kind requires an Inspector payload")
+        };
+        envelope
+    }
+
+    pub(crate) fn into_inspector_envelope(self) -> Option<RendererInspectorCommandEnvelope> {
+        match *self.payload {
+            RendererPageCommand::Inspector(envelope) => Some(envelope),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn into_nested_page_command(self) -> RendererPageCommand {
+        assert_eq!(
+            self.nested_dispatch(),
+            RendererDevToolsMainNestedDispatch::PageAgent,
+            "only a non-V8 Main agent command may enter nested Page dispatch"
+        );
+        *self.payload
+    }
+
+    pub(crate) fn bind_first_dispatch(
+        &mut self,
+        first_dispatch: crate::script_vm::inspector_main::RendererInspectorMainFirstDispatchGuard,
+    ) {
+        assert!(
+            self.first_dispatch.is_none(),
+            "a Main DevTools envelope can own only one first-dispatch permit"
+        );
+        self.first_dispatch = Some(first_dispatch);
+    }
+
+    pub(crate) fn into_owner_parts(
+        mut self,
+    ) -> (
+        crate::script_vm::inspector_main::RendererInspectorMainFirstDispatchGuard,
+        RendererPageCommand,
+    ) {
+        let first_dispatch = self
+            .first_dispatch
+            .take()
+            .expect("an owner-dispatched Main DevTools command must retain its lane permit");
+        (first_dispatch, *self.payload)
+    }
 }
 
 enum RendererInspectorCommandPayload {
@@ -3677,7 +3811,6 @@ impl RendererInspectorCommandEnvelope {
             pause_effect: RendererInspectorPauseCommandEffect::None,
             main_dispatch_boundary: RendererInspectorMainDispatchBoundary::PageOwner,
             payload: RendererInspectorCommandPayload::MainThread(command),
-            main_ingress_first_dispatch: None,
         }
     }
 
@@ -3719,7 +3852,6 @@ impl RendererInspectorCommandEnvelope {
             pause_effect: RendererInspectorPauseCommandEffect::from_message(message.as_ref()),
             main_dispatch_boundary,
             payload: RendererInspectorCommandPayload::MainThread(command),
-            main_ingress_first_dispatch: None,
         }
     }
 
@@ -3741,7 +3873,6 @@ impl RendererInspectorCommandEnvelope {
             pause_effect: RendererInspectorPauseCommandEffect::from_message(message.as_ref()),
             main_dispatch_boundary: RendererInspectorMainDispatchBoundary::InspectorSession,
             payload: RendererInspectorCommandPayload::Io { raw_json, response },
-            main_ingress_first_dispatch: None,
         }
     }
 
@@ -3766,26 +3897,12 @@ impl RendererInspectorCommandEnvelope {
     }
 
     pub(crate) fn into_main_thread_parts(
-        mut self,
+        self,
     ) -> (RendererInspectorIngressTicket, RendererInspectorPageCommand) {
-        if let Some(mut first_dispatch) = self.main_ingress_first_dispatch.take() {
-            first_dispatch.release();
-        }
         let RendererInspectorCommandPayload::MainThread(command) = self.payload else {
             panic!("an Inspector IO envelope cannot enter Page owner dispatch");
         };
         (self.ticket, command)
-    }
-
-    pub(crate) fn bind_main_ingress_first_dispatch(
-        &mut self,
-        first_dispatch: crate::script_vm::inspector_main::RendererInspectorMainFirstDispatchGuard,
-    ) {
-        assert!(
-            self.main_ingress_first_dispatch.is_none(),
-            "a Main Inspector envelope can own only one ingress dispatch permit"
-        );
-        self.main_ingress_first_dispatch = Some(first_dispatch);
     }
 
     fn main_thread_payload(&self) -> &RendererInspectorPageCommand {
@@ -3842,10 +3959,6 @@ impl RendererInspectorCommandEnvelope {
         String,
         RendererRuntimeInspectorResponseSender,
     ) {
-        assert!(
-            self.main_ingress_first_dispatch.is_none(),
-            "a direct nested Main dispatch must keep its first-dispatch guard outside the envelope"
-        );
         assert_eq!(
             self.main_dispatch_boundary,
             RendererInspectorMainDispatchBoundary::InspectorSession,
@@ -3982,28 +4095,19 @@ fn main_protocol_can_dispatch_at_inspector_session_boundary(
         return false;
     }
 
-    if matches!(method, Some("Runtime.compileScript"))
-        && params.is_some_and(|params| {
-            params.contains_key("contextId") || params.contains_key("executionContextId")
-        })
-        || matches!(method, Some("Runtime.runScript"))
-            && params.is_some_and(|params| params.contains_key("executionContextId"))
-    {
-        return false;
-    }
-
     match owner_context_resolution_action {
-        // A default-world evaluate needs no renderer context-id rewrite. It is
-        // the useful Chromium-style nested Main case while JavaScript is
-        // paused. Explicit context targeting remains an owner operation.
-        Some("evaluate") => !params.is_some_and(|params| {
-            params.contains_key("contextId") || params.contains_key("executionContextId")
-        }),
-        // An object/unique-context target is already complete. A missing or
-        // numeric executionContextId requires PageVm to choose/rewrite it.
+        // Page.createIsolatedWorld and Runtime.executionContextCreated expose
+        // V8 Inspector's native context id. Context-targeted commands can
+        // therefore enter Chromium's nested Main receiver without borrowing
+        // PageVm; an unknown or retired id is rejected by V8 itself.
+        Some("evaluate") => true,
+        // A target supplied by object, unique context, or numeric Inspector
+        // context is complete. Only the target-less compatibility form needs
+        // PageVm to insert Moli's default execution context.
         Some("callFunctionOn") => params.is_some_and(|params| {
-            !params.contains_key("executionContextId")
-                && (params.contains_key("objectId") || params.contains_key("uniqueContextId"))
+            params.contains_key("objectId")
+                || params.contains_key("uniqueContextId")
+                || params.contains_key("executionContextId")
         }),
         Some(_) => false,
         None => true,
@@ -4103,6 +4207,8 @@ pub(crate) enum RendererInspectorPageCommand {
 
 #[non_exhaustive]
 pub enum RendererPageCommand {
+    #[doc(hidden)]
+    DevToolsMain(RendererDevToolsMainCommandEnvelope),
     Inspector(RendererInspectorCommandEnvelope),
     EvaluateExpression {
         expression: String,
@@ -4627,10 +4733,6 @@ pub enum RendererRuntimeRemoteObjectResolution {
 }
 
 impl RendererPageCommand {
-    pub(crate) fn from_inspector_envelope(envelope: RendererInspectorCommandEnvelope) -> Self {
-        Self::Inspector(envelope)
-    }
-
     fn inspector_command(
         inspector_session_id: Option<String>,
         command: RendererInspectorPageCommand,

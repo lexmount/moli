@@ -48,6 +48,7 @@ mod javascript_dialog;
 mod lifecycle_decision;
 mod main_document_ready_gate;
 mod navigation;
+mod nested_main;
 mod owner;
 mod owner_deadline_index;
 mod owner_local;
@@ -299,6 +300,7 @@ pub(super) use self::page_state::RendererPageEntry;
 pub use self::page_state::RendererPageRecord;
 pub(crate) use self::page_state::RendererPageSlotHandle;
 pub use self::page_state::RendererPageState;
+pub(crate) use self::page_surface::RendererDevToolsMainNestedDispatch;
 use self::page_surface::RendererPageTable;
 pub use self::page_surface::RendererRuntimeInspectorMessageResponseOrder;
 pub use self::page_surface::{
@@ -307,14 +309,14 @@ pub use self::page_surface::{
     RendererAutofillTriggerOutcome, RendererAutofillTriggerRequest, RendererCaptureScreenshotReply,
     RendererCapturedScreenshot, RendererCommandTurnCompletion, RendererCommandTurnOutput,
     RendererCountEntry, RendererDedicatedWorkerTargetEvent, RendererDedicatedWorkerTargetInfo,
-    RendererDevToolsAgentToken, RendererDocumentBoxModel, RendererDocumentChildNodeSnapshotEvent,
-    RendererDocumentChildNodeSnapshotEvents, RendererDocumentChildNodeSnapshots,
-    RendererDocumentFrontendNodeIdsResolution, RendererDocumentHitTestResult,
-    RendererDocumentIsolateAccountingDiagnostics, RendererDocumentNodeAttributesResolution,
-    RendererDocumentNodeClientRect, RendererDocumentNodeGeometry,
-    RendererDocumentNodePropertyResolution, RendererDocumentNodeReference,
-    RendererDocumentNodeTextResolution, RendererDocumentQuerySelectorNode,
-    RendererDocumentQuerySelectorResolution,
+    RendererDevToolsAgentToken, RendererDevToolsMainCommandEnvelope, RendererDocumentBoxModel,
+    RendererDocumentChildNodeSnapshotEvent, RendererDocumentChildNodeSnapshotEvents,
+    RendererDocumentChildNodeSnapshots, RendererDocumentFrontendNodeIdsResolution,
+    RendererDocumentHitTestResult, RendererDocumentIsolateAccountingDiagnostics,
+    RendererDocumentNodeAttributesResolution, RendererDocumentNodeClientRect,
+    RendererDocumentNodeGeometry, RendererDocumentNodePropertyResolution,
+    RendererDocumentNodeReference, RendererDocumentNodeTextResolution,
+    RendererDocumentQuerySelectorNode, RendererDocumentQuerySelectorResolution,
     RendererDocumentQuerySelectorWithChildNodeSnapshotEvents,
     RendererDocumentSourcedSameDocumentNavigation,
     RendererDocumentSourcedTopLevelLocationNavigation, RendererDomAttributeMutation,
@@ -442,6 +444,7 @@ pub(crate) use crate::service_worker_runtime::{
     ServiceWorkerSyncRegistrationResult, ServiceWorkerVersionId, ServiceWorkerWorkerMessage,
     service_worker_exposed_client_id,
 };
+pub(crate) use nested_main::dispatch_nested_main_page_command;
 
 static NEXT_RENDERER_OWNER_LOCAL_HOST_ID: AtomicU64 = AtomicU64::new(1);
 

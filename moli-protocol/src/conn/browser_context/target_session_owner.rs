@@ -3285,9 +3285,16 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
     ) -> Result<&mut TargetRuntimeSlot, String> {
-        self.target_session_owner_mut(session_id)
+        let renderer_inspector_session_id =
+            self.target_renderer_runtime_inspector_session_id_for_session(session_id);
+        let slot = self
+            .target_session_owner_mut(session_id)
             .and_then(TargetSessionOwnerMut::into_runtime_slot_mut)
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
+        if let Some(page) = slot.loaded_page_mut() {
+            page.set_renderer_devtools_command_session_id(renderer_inspector_session_id);
+        }
+        Ok(slot)
     }
 
     pub(crate) fn runtime_session_owner_slot(

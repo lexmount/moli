@@ -8,7 +8,20 @@ impl PageVm {
     ) -> Result<RendererPageReply> {
         let throttling_started =
             renderer_page_command_uses_cpu_throttling(&command).then(std::time::Instant::now);
-        let result = match command {
+        let result = self.dispatch_renderer_page_command(command);
+        self.apply_cpu_throttling_delay_after_page_command(throttling_started)
+            .await;
+        result
+    }
+
+    pub(in crate::runtime) fn dispatch_renderer_page_command(
+        &mut self,
+        command: RendererPageCommand,
+    ) -> Result<RendererPageReply> {
+        match command {
+            RendererPageCommand::DevToolsMain(_) => Err(anyhow!(
+                "the Page owner must unwrap a Main DevTools transport envelope before agent dispatch"
+            )),
             RendererPageCommand::Inspector(command) => {
                 self.dispatch_renderer_inspector_command(command)
             }
@@ -1110,10 +1123,7 @@ impl PageVm {
             RendererPageCommand::PanicForTesting => {
                 panic!("renderer page command panicked for testing")
             }
-        };
-        self.apply_cpu_throttling_delay_after_page_command(throttling_started)
-            .await;
-        result
+        }
     }
 
     fn dispatch_renderer_inspector_command(
@@ -1362,6 +1372,9 @@ impl PageVm {
 }
 
 fn renderer_page_command_uses_cpu_throttling(command: &RendererPageCommand) -> bool {
+    if let RendererPageCommand::DevToolsMain(envelope) = command {
+        return renderer_page_command_uses_cpu_throttling(envelope.payload());
+    }
     if let RendererPageCommand::Inspector(envelope) = command {
         return envelope.uses_cpu_throttling();
     }

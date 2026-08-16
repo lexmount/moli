@@ -240,6 +240,14 @@ pub enum RendererOwnerCommand {
         token: RendererPageToken,
         command: RendererPageCommand,
     },
+    /// Renderer-side cleanup after the browser/protocol owner has already
+    /// disconnected a DevTools session and closed both of its ingress lanes.
+    /// This is lifecycle work, not another frontend Inspector command.
+    FinalizeRuntimeInspectorSessionDetach {
+        token: RendererPageToken,
+        inspector_session_id: Option<String>,
+        pause_guard: RendererRuntimeInspectorSessionDetachGuard,
+    },
     WaitForNetworkIdle {
         token: RendererPageToken,
         timeout_ms: u64,
@@ -280,6 +288,7 @@ pub enum RendererOwnerReply {
     PreparedRendererDocumentCommitConfigurationUpdated,
     PreparedRendererDocumentCanceled,
     AsyncPageCommandRan(Box<RendererCommandTurnOutput>),
+    RuntimeInspectorSessionDetachFinalized(bool),
     PageRemoved,
     TestingCurrentPageState(Arc<RendererPageState>),
     TestingRendererPageView(RendererPageView),
@@ -2339,6 +2348,41 @@ impl RendererOwnerHandle {
                         capture_policy,
                     },
                 ))
+            }
+            RendererOwnerCommand::FinalizeRuntimeInspectorSessionDetach {
+                token,
+                inspector_session_id,
+                pause_guard: _pause_guard,
+            } => {
+                let mut entry = match checkout_entry_for_owner_turn_on_bound_owner_local_store(
+                    token,
+                ) {
+                    Ok(entry) => entry,
+                    Err(
+                        RendererPageLocalEntryCheckoutError::Retired
+                        | RendererPageLocalEntryCheckoutError::Missing,
+                    ) => {
+                        return Ok(RendererOwnerReply::RuntimeInspectorSessionDetachFinalized(
+                            false,
+                        ))
+                        .into();
+                    }
+                    Err(RendererPageLocalEntryCheckoutError::Busy) => {
+                        return Err(anyhow!(
+                            "renderer page {} remained checked out while finalizing Inspector session detach",
+                            token.page_id.as_u64()
+                        ))
+                        .into();
+                    }
+                };
+                let detached = entry
+                    .page_vm_mut()
+                    .detach_runtime_inspector_session(inspector_session_id.as_deref());
+                restore_entry_after_command_on_bound_owner_local_store(token, entry);
+                Ok(RendererOwnerReply::RuntimeInspectorSessionDetachFinalized(
+                    detached,
+                ))
+                .into()
             }
             RendererOwnerCommand::WaitForNetworkIdle {
                 token,
@@ -4692,6 +4736,16 @@ impl RendererOwnerHandle {
         command: RendererPageCommand,
         capture_policy: super::RendererPageStateCapturePolicy,
     ) -> RenderRuntimeDispatchOutcome {
+        if let RendererPageCommand::DevToolsMain(envelope) = command {
+            let (mut first_dispatch, command) = envelope.into_owner_parts();
+            // Crossing into the Page owner's command dispatcher is the Main
+            // receiver's first-dispatch boundary. Unwrap here so the existing
+            // typed continuations (promise awaits, navigation followers and
+            // wait commands) keep seeing the concrete command rather than a
+            // transport envelope.
+            let _post_dispatch_wake = first_dispatch.release_for_dispatch();
+            return Box::pin(self.run_live_page_command_turn(token, command, capture_policy)).await;
+        }
         match command {
             RendererPageCommand::WaitForSelector {
                 selector,
@@ -6208,7 +6262,7 @@ impl RendererOwnerHandle {
                     command_admission_output_predecessor,
                     turn: Box::new(RenderRuntimeTurn::RunLivePageCommand {
                         token,
-                        command: RendererPageCommand::from_inspector_envelope(envelope),
+                        command: RendererPageCommand::DevToolsMain(envelope),
                         capture_policy,
                     }),
                 }

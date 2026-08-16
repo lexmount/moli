@@ -5,7 +5,10 @@ use super::context_registry::{
 };
 use crate::{
     inspector_microtasks::with_scoped_inspector_microtasks,
-    runtime::RendererRuntimeInspectorResponseSender,
+    runtime::{
+        RendererDevToolsMainNestedDispatch, RendererOwnerReply,
+        RendererRuntimeInspectorResponseSender, dispatch_nested_main_page_command,
+    },
     script_vm::{
         inspector_io::{
             RendererInspectorInterruptTarget, RendererInspectorIoCommand,
@@ -179,31 +182,42 @@ impl RendererInspectorSessionExecutorLocal {
     }
 
     fn run_message_loop_on_pause(&self, context_group_id: i32) {
-        if !self.bridge.enter_pause() {
+        let Some(pause_loop_policy) = self.bridge.enter_pause() else {
             return;
-        }
+        };
         let mut prefer_main = true;
         while let Some(command) = self.bridge.wait_for_pause_work(|| {
-            let command = if prefer_main {
-                self.main_ingress
+            let command = match pause_loop_policy {
+                crate::script_vm::inspector_pause::RendererInspectorPauseLoopPolicy::IoOnly => {
+                    self.io_ingress
+                        .claim_for_pause()
+                        .map(RendererInspectorNestedCommand::Io)
+                }
+                crate::script_vm::inspector_pause::RendererInspectorPauseLoopPolicy::MainAndIo
+                    if prefer_main => self
+                    .main_ingress
                     .claim_for_pause()
                     .map(RendererInspectorNestedCommand::Main)
                     .or_else(|| {
                         self.io_ingress
                             .claim_for_pause()
                             .map(RendererInspectorNestedCommand::Io)
-                    })
-            } else {
-                self.io_ingress
-                    .claim_for_pause()
-                    .map(RendererInspectorNestedCommand::Io)
-                    .or_else(|| {
-                        self.main_ingress
-                            .claim_for_pause()
-                            .map(RendererInspectorNestedCommand::Main)
-                    })
+                    }),
+                crate::script_vm::inspector_pause::RendererInspectorPauseLoopPolicy::MainAndIo => {
+                    self.io_ingress
+                        .claim_for_pause()
+                        .map(RendererInspectorNestedCommand::Io)
+                        .or_else(|| {
+                            self.main_ingress
+                                .claim_for_pause()
+                                .map(RendererInspectorNestedCommand::Main)
+                        })
+                }
             };
-            if command.is_some() {
+            if command.is_some()
+                && pause_loop_policy
+                    == crate::script_vm::inspector_pause::RendererInspectorPauseLoopPolicy::MainAndIo
+            {
                 prefer_main = !prefer_main;
             }
             command
@@ -232,6 +246,20 @@ impl RendererInspectorSessionExecutorLocal {
     }
 
     fn dispatch_main_command(&self, context_group_id: i32, command: RendererInspectorMainCommand) {
+        match command.nested_dispatch() {
+            RendererDevToolsMainNestedDispatch::PageAgent => {
+                let first_dispatch = self.main_ingress.first_dispatch_guard(&command);
+                let (page_command, reply_tx) = command.into_nested_page_parts();
+                let result = dispatch_nested_main_page_command(page_command, first_dispatch)
+                    .map(|output| RendererOwnerReply::AsyncPageCommandRan(Box::new(output)));
+                let _ = reply_tx.send(result);
+                return;
+            }
+            RendererDevToolsMainNestedDispatch::InspectorSession => {}
+            RendererDevToolsMainNestedDispatch::OwnerOnly => {
+                unreachable!("an owner-only Main command cannot be claimed by the pause loop")
+            }
+        }
         let session_key = command.ticket().session().clone();
         let session = self
             .sessions

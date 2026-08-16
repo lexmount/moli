@@ -204,6 +204,42 @@ impl RendererPageHandle {
         RendererRuntimeInspectorSessionDetachGuard::new(self.inspector_pause_bridge.clone())
     }
 
+    /// Disconnects one frontend Inspector route without waiting for the Page
+    /// owner to return from JavaScript.
+    ///
+    /// Chromium acknowledges `Target.detachFromTarget` after dropping the
+    /// browser-side DevToolsSession pipes; destruction of the renderer-side
+    /// V8InspectorSession is a subsequent Main-thread task. Mirror that
+    /// boundary here: cancel both ingress lanes synchronously, then enqueue an
+    /// owner-only cleanup whose reply is deliberately detached. The retained
+    /// pause guard also releases a nested debugger loop so the cleanup can
+    /// eventually reach the owner.
+    pub fn detach_runtime_inspector_session(
+        &self,
+        inspector_session_id: Option<String>,
+    ) -> anyhow::Result<()> {
+        let session = DevToolsSessionKey::from_wire_session_id(
+            inspector_session_id
+                .as_deref()
+                .filter(|session_id| !session_id.is_empty()),
+        );
+        self.inspector_main_ingress
+            .detach_session(self.devtools_agent_token, &session);
+        self.inspector_io_ingress
+            .detach_session(self.devtools_agent_token, &session);
+
+        let pause_guard = self.arm_runtime_inspector_session_detach();
+        let reply_rx = self.render_runtime.enqueue(
+            RendererOwnerCommand::FinalizeRuntimeInspectorSessionDetach {
+                token: self.token(),
+                inspector_session_id,
+                pause_guard,
+            },
+        )?;
+        drop(reply_rx);
+        Ok(())
+    }
+
     pub fn enqueue_async_command(
         &self,
         command: RendererPageCommand,
@@ -211,6 +247,8 @@ impl RendererPageHandle {
         self.enqueue_async_command_with_capture_policy(
             command,
             RendererPageStateCapturePolicy::FullReport,
+            false,
+            None,
         )
     }
 
@@ -228,6 +266,22 @@ impl RendererPageHandle {
         self.enqueue_async_command_with_capture_policy(
             command,
             RendererPageStateCapturePolicy::ProtocolTurn,
+            false,
+            None,
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn enqueue_protocol_command_in_inspector_session(
+        &self,
+        command: RendererPageCommand,
+        inspector_session_id: Option<String>,
+    ) -> anyhow::Result<RendererPageCommandPending> {
+        self.enqueue_async_command_with_capture_policy(
+            command,
+            RendererPageStateCapturePolicy::ProtocolTurn,
+            true,
+            inspector_session_id,
         )
     }
 
@@ -235,6 +289,8 @@ impl RendererPageHandle {
         &self,
         command: RendererPageCommand,
         capture_policy: RendererPageStateCapturePolicy,
+        route_protocol_main_receiver: bool,
+        inspector_session_id: Option<String>,
     ) -> anyhow::Result<RendererPageCommandPending> {
         let javascript_dialog_watch = command
             .interruptible_by_javascript_dialog()
@@ -248,6 +304,19 @@ impl RendererPageHandle {
                 page_id = self.page_id(),
                 stage = "page_handle_command_dispatch",
             );
+        }
+        if route_protocol_main_receiver {
+            let route = self.inspector_main_ingress.enqueue_protocol_page_command(
+                self.token(),
+                self.devtools_agent_token,
+                command,
+                inspector_session_id,
+                capture_policy,
+            );
+            return Ok(RendererPageCommandPending {
+                dispatch: RendererPageCommandPendingDispatch::InspectorMain(Box::new(route)),
+                javascript_dialog_watch,
+            });
         }
         let command = match command {
             RendererPageCommand::Inspector(envelope) => {
@@ -405,6 +474,7 @@ impl RendererPageCommandPending {
                 RendererPageCommandPendingDispatch::InspectorMain(route) => {
                     match route.wait_for_completion().await? {
                         RendererRuntimeInspectorMainCommandCompletion::Owner(output) => Ok(*output),
+                        RendererRuntimeInspectorMainCommandCompletion::Page(output) => Ok(*output),
                         RendererRuntimeInspectorMainCommandCompletion::Inspector => Err(anyhow!(
                             "an owner-only Inspector Main command entered nested dispatch"
                         )),

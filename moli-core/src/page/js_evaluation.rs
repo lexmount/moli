@@ -772,19 +772,17 @@ impl Page {
         &mut self,
         inspector_session_id: Option<&str>,
     ) -> Result<bool> {
-        let pause_guard = self.handle.arm_runtime_inspector_session_detach();
-        let reply = self
-            .dispatch_page_command_async(RendererPageCommand::detach_runtime_inspector_session(
-                inspector_session_id.map(str::to_owned),
-                pause_guard,
-            ))
-            .await?;
-        expect_page_reply!(
-            reply,
-            "detach runtime inspector session page command",
-            "a bool reply",
-            RendererPageReply::Bool(detached) => Ok(detached),
-        )
+        self.handle
+            .detach_runtime_inspector_session(inspector_session_id.map(str::to_owned))?;
+        if self.renderer_devtools_command_session_id.as_deref() == inspector_session_id {
+            // `runtime_session_owner_slot_mut` stamps the current frontend
+            // session onto the Page before command construction. Do not leave
+            // a detached auxiliary session as the fallback provenance for a
+            // later owner-side observation that is not itself entered through
+            // a CDP session lookup.
+            self.renderer_devtools_command_session_id = None;
+        }
+        Ok(true)
     }
 
     pub async fn runtime_console_messages_with_context_async(

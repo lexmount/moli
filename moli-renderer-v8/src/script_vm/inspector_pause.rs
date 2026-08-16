@@ -43,9 +43,23 @@ enum RendererInspectorPausePhase {
     Paused,
 }
 
+/// Selects which DevTools receivers may be pumped by V8's nested pause loop.
+///
+/// Chromium runs a nestable Main-thread message loop for ordinary debugger
+/// pauses, but instrumentation pauses only process interrupting Inspector
+/// work. The policy is captured from the `Debugger.paused` notification before
+/// V8 calls `run_message_loop_on_pause`, so the loop never needs to inspect a
+/// command method or infer priority from its queue.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum RendererInspectorPauseLoopPolicy {
+    MainAndIo,
+    IoOnly,
+}
+
 struct RendererInspectorPauseBridgeState {
     next_preface_id: u64,
     phase: RendererInspectorPausePhase,
+    pause_loop_policy: RendererInspectorPauseLoopPolicy,
     quit_requested: bool,
     session_detach_arms: usize,
     target_closed: bool,
@@ -179,6 +193,7 @@ impl RendererInspectorPauseBridge {
             state: Mutex::new(RendererInspectorPauseBridgeState {
                 next_preface_id: 1,
                 phase: RendererInspectorPausePhase::Running,
+                pause_loop_policy: RendererInspectorPauseLoopPolicy::MainAndIo,
                 quit_requested: false,
                 session_detach_arms: 0,
                 target_closed: false,
@@ -200,6 +215,7 @@ impl std::fmt::Debug for RendererInspectorPauseBridge {
         formatter
             .debug_struct("RendererInspectorPauseBridge")
             .field("phase", &state.phase)
+            .field("pause_loop_policy", &state.pause_loop_policy)
             .field("quit_requested", &state.quit_requested)
             .field("session_detach_arms", &state.session_detach_arms)
             .field("target_closed", &state.target_closed)
@@ -408,13 +424,13 @@ impl RendererInspectorPauseBridge {
             .expect("runtime inspector session detach arm count underflow");
     }
 
-    pub(super) fn enter_pause(&self) -> bool {
+    pub(super) fn enter_pause(&self) -> Option<RendererInspectorPauseLoopPolicy> {
         let mut state = self.shared.state.lock();
         if state.target_closed || state.phase != RendererInspectorPausePhase::Entering {
-            return false;
+            return None;
         }
         state.phase = RendererInspectorPausePhase::Paused;
-        true
+        Some(state.pause_loop_policy)
     }
 
     pub(crate) fn wait_for_pause_work<T>(&self, mut claim: impl FnMut() -> Option<T>) -> Option<T> {
@@ -441,6 +457,7 @@ impl RendererInspectorPauseBridge {
     pub(super) fn leave_pause(&self) {
         let mut state = self.shared.state.lock();
         state.phase = RendererInspectorPausePhase::Running;
+        state.pause_loop_policy = RendererInspectorPauseLoopPolicy::MainAndIo;
         state.quit_requested = false;
         // Commands that lost the nested-loop race stay in their route-specific
         // ingress. Main retains its owner task; IO retains owner and interrupt
@@ -467,6 +484,7 @@ impl RendererInspectorPauseBridge {
             RendererInspectorPausePhase::Running => {}
             RendererInspectorPausePhase::Entering => {
                 state.phase = RendererInspectorPausePhase::Running;
+                state.pause_loop_policy = RendererInspectorPauseLoopPolicy::MainAndIo;
                 state.quit_requested = false;
             }
             RendererInspectorPausePhase::Paused => {
@@ -573,8 +591,27 @@ impl RendererInspectorPauseBridge {
         if command_transition_complete {
             state.pending_command_transition = None;
         }
-        if is_paused_notification && state.phase == RendererInspectorPausePhase::Running {
-            state.phase = RendererInspectorPausePhase::Entering;
+        if is_paused_notification {
+            let is_instrumentation_pause = message
+                .get("params")
+                .and_then(|params| params.get("reason"))
+                .and_then(Value::as_str)
+                == Some("instrumentation");
+            if state.phase == RendererInspectorPausePhase::Running {
+                state.phase = RendererInspectorPausePhase::Entering;
+                state.pause_loop_policy = if is_instrumentation_pause {
+                    RendererInspectorPauseLoopPolicy::IoOnly
+                } else {
+                    RendererInspectorPauseLoopPolicy::MainAndIo
+                };
+            } else if state.phase == RendererInspectorPausePhase::Entering
+                && is_instrumentation_pause
+            {
+                // Multiple V8InspectorSessions observe the same isolate pause.
+                // Any session identifying it as instrumentation tightens the
+                // shared loop policy before V8 enters the client loop.
+                state.pause_loop_policy = RendererInspectorPauseLoopPolicy::IoOnly;
+            }
         }
         if state.phase == RendererInspectorPausePhase::Running && !resumes_reported_pause {
             RendererInspectorPauseNotificationRoute::OrdinaryTurn
@@ -795,7 +832,10 @@ mod tests {
             })))
             .is_empty()
         );
-        assert!(bridge.enter_pause());
+        assert_eq!(
+            bridge.enter_pause(),
+            Some(RendererInspectorPauseLoopPolicy::MainAndIo)
+        );
 
         let (response, _response_rx) = response_sender(41);
         let command_route = enqueue_command(
@@ -863,7 +903,10 @@ mod tests {
             })))
             .is_empty()
         );
-        assert!(bridge.enter_pause());
+        assert_eq!(
+            bridge.enter_pause(),
+            Some(RendererInspectorPauseLoopPolicy::MainAndIo)
+        );
 
         let (response, _response_rx) = response_sender(43);
         let command_route = enqueue_command(
@@ -919,7 +962,10 @@ mod tests {
             })))
             .is_empty()
         );
-        assert!(bridge.enter_pause());
+        assert_eq!(
+            bridge.enter_pause(),
+            Some(RendererInspectorPauseLoopPolicy::MainAndIo)
+        );
 
         let (response, _response_rx) = response_sender(42);
         let command_route = enqueue_command(
@@ -1020,7 +1066,10 @@ mod tests {
             .is_empty(),
             "paused notification should publish at the pause boundary"
         );
-        assert!(bridge.enter_pause());
+        assert_eq!(
+            bridge.enter_pause(),
+            Some(RendererInspectorPauseLoopPolicy::MainAndIo)
+        );
         bridge.leave_pause();
         assert_eq!(
             bridge.shared.state.lock().phase,
@@ -1048,6 +1097,47 @@ mod tests {
             route.route_notification(&unpaired),
             RendererInspectorPauseNotificationRoute::OrdinaryTurn
         );
+    }
+
+    #[test]
+    fn instrumentation_pause_selects_io_only_nested_loop_policy() {
+        let bridge = RendererInspectorPauseBridge::default();
+        configure_page(&bridge, PageId::new_for_testing(1));
+        let route = outbound_route(&bridge);
+
+        assert!(
+            expect_immediate_preface(route.route_notification(&json!({
+                "method": "Debugger.paused",
+                "params": {
+                    "reason": "instrumentation",
+                    "callFrames": [],
+                },
+            })))
+            .is_empty()
+        );
+        assert_eq!(
+            bridge.enter_pause(),
+            Some(RendererInspectorPauseLoopPolicy::IoOnly),
+            "instrumentation pauses must not pump the Main DevTools receiver"
+        );
+        bridge.leave_pause();
+
+        assert!(
+            expect_immediate_preface(route.route_notification(&json!({
+                "method": "Debugger.paused",
+                "params": {
+                    "reason": "other",
+                    "callFrames": [],
+                },
+            })))
+            .is_empty()
+        );
+        assert_eq!(
+            bridge.enter_pause(),
+            Some(RendererInspectorPauseLoopPolicy::MainAndIo),
+            "ordinary pauses must restore the nestable Main receiver"
+        );
+        bridge.leave_pause();
     }
 
     #[tokio::test]
@@ -1127,7 +1217,10 @@ mod tests {
         assert!(expect_immediate_preface(route_paused(&bridge)).is_empty());
 
         bridge.request_quit();
-        assert!(bridge.enter_pause());
+        assert_eq!(
+            bridge.enter_pause(),
+            Some(RendererInspectorPauseLoopPolicy::MainAndIo)
+        );
         let io_ingress = io_ingress(&bridge);
         assert!(io_ingress.wait_and_claim_for_pause(&bridge).is_none());
         bridge.leave_pause();
@@ -1147,7 +1240,7 @@ mod tests {
             route_paused(&bridge),
             RendererInspectorPauseNotificationRoute::Drop
         );
-        assert!(!bridge.enter_pause());
+        assert_eq!(bridge.enter_pause(), None);
         assert_eq!(
             bridge.shared.state.lock().phase,
             RendererInspectorPausePhase::Running
@@ -1167,7 +1260,7 @@ mod tests {
             route_paused(&bridge),
             RendererInspectorPauseNotificationRoute::Drop
         );
-        assert!(!bridge.enter_pause());
+        assert_eq!(bridge.enter_pause(), None);
         assert_eq!(
             bridge.shared.state.lock().phase,
             RendererInspectorPausePhase::Running

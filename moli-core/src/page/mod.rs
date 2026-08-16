@@ -187,6 +187,7 @@ pub struct Page {
     page_state: PageStateCache,
     handle: RendererPageHandle,
     renderer_agent_attachment_id: Option<RendererAgentAttachmentId>,
+    renderer_devtools_command_session_id: Option<String>,
     page_creation_artifacts: Option<Box<RendererPageCreationArtifacts>>,
 }
 
@@ -211,6 +212,7 @@ impl Page {
             page_state: PageStateCache::new(page_state),
             handle,
             renderer_agent_attachment_id: None,
+            renderer_devtools_command_session_id: None,
             page_creation_artifacts: None,
         }
     }
@@ -224,6 +226,7 @@ impl Page {
             page_state: PageStateCache::new(page_state),
             handle,
             renderer_agent_attachment_id: None,
+            renderer_devtools_command_session_id: None,
             page_creation_artifacts: Some(Box::new(page_creation_artifacts)),
         }
     }
@@ -241,6 +244,11 @@ impl Page {
     #[doc(hidden)]
     pub fn renderer_devtools_agent_token(&self) -> RendererDevToolsAgentToken {
         self.handle.devtools_agent_token()
+    }
+
+    #[doc(hidden)]
+    pub fn set_renderer_devtools_command_session_id(&mut self, session_id: Option<String>) {
+        self.renderer_devtools_command_session_id = session_id;
     }
 
     #[doc(hidden)]
