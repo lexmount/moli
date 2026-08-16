@@ -581,6 +581,8 @@ where
                         box_id: LayoutOutputBoxId::from_index(target),
                         line_index: text.line_index,
                         source_utf16_range: text.source_utf16_range.clone(),
+                        is_forced_line_break: text.is_forced_line_break,
+                        inline_axis: text.inline_axis,
                         rtl: text.rtl,
                     },
                     rect: offset_rect(text.rect, content_origin),

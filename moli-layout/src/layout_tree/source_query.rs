@@ -7,7 +7,8 @@ use crate::LayoutPosition;
 use super::{
     model::{
         LayoutBoxModel, LayoutCoordinateSpaceId, LayoutFragmentBoxModel, LayoutFragmentKind,
-        LayoutOutputBoxId, LayoutPoint, LayoutQuad, LayoutRect, LayoutSize, LayoutTransform2D,
+        LayoutOutputBoxId, LayoutPhysicalAxis, LayoutPoint, LayoutQuad, LayoutRect, LayoutSize,
+        LayoutTransform2D,
     },
     query::{LayoutElementMetrics, LayoutNodeOutput},
     tree::FrozenLayoutTree,
@@ -294,6 +295,7 @@ where
             box_id: LayoutOutputBoxId,
             line_index: usize,
             rtl: bool,
+            inline_axis: LayoutPhysicalAxis,
             coordinate_space: LayoutCoordinateSpaceId,
             rect: LayoutRect,
         }
@@ -307,6 +309,8 @@ where
                     box_id,
                     line_index,
                     source_utf16_range,
+                    is_forced_line_break,
+                    inline_axis,
                     rtl,
                     ..
                 } = &fragment.kind
@@ -317,6 +321,14 @@ where
                     .end
                     .saturating_sub(source_utf16_range.start);
                 let (selected_start, selected_end) = if utf16_range.is_empty() {
+                    // Blink's LayoutText::AbsoluteQuadsForRange skips a
+                    // forced-break FragmentItem for collapsed ranges. The
+                    // adjacent text fragment then supplies the upstream or
+                    // downstream caret quad; retaining the break itself
+                    // would incorrectly return geometry on both lines.
+                    if *is_forced_line_break {
+                        return None;
+                    }
                     if utf16_range.start < source_utf16_range.start
                         || utf16_range.start > source_utf16_range.end
                     {
@@ -342,16 +354,26 @@ where
                 let start_ratio = selected_start as f32 / denominator;
                 let end_ratio = selected_end as f32 / denominator;
                 let visual_start_ratio = if *rtl { 1.0 - end_ratio } else { start_ratio };
-                let rect = LayoutRect::new(
-                    fragment.rect.x + fragment.rect.width * visual_start_ratio,
-                    fragment.rect.y,
-                    fragment.rect.width * (end_ratio - start_ratio),
-                    fragment.rect.height,
-                );
+                let selected_ratio = end_ratio - start_ratio;
+                let rect = match inline_axis {
+                    LayoutPhysicalAxis::Horizontal => LayoutRect::new(
+                        fragment.rect.x + fragment.rect.width * visual_start_ratio,
+                        fragment.rect.y,
+                        fragment.rect.width * selected_ratio,
+                        fragment.rect.height,
+                    ),
+                    LayoutPhysicalAxis::Vertical => LayoutRect::new(
+                        fragment.rect.x,
+                        fragment.rect.y + fragment.rect.height * visual_start_ratio,
+                        fragment.rect.width,
+                        fragment.rect.height * selected_ratio,
+                    ),
+                };
                 Some(SelectedTextRect {
                     box_id: *box_id,
                     line_index: *line_index,
                     rtl: *rtl,
+                    inline_axis: *inline_axis,
                     coordinate_space: fragment.coordinate_space,
                     rect,
                 })
@@ -369,27 +391,49 @@ where
                 .then_with(|| left.box_id.index().cmp(&right.box_id.index()))
                 .then_with(|| left.line_index.cmp(&right.line_index))
                 .then_with(|| left.rtl.cmp(&right.rtl))
-                .then_with(|| left.rect.y.total_cmp(&right.rect.y))
-                .then_with(|| left.rect.x.total_cmp(&right.rect.x))
+                .then_with(|| match left.inline_axis {
+                    LayoutPhysicalAxis::Horizontal => left
+                        .rect
+                        .y
+                        .total_cmp(&right.rect.y)
+                        .then_with(|| left.rect.x.total_cmp(&right.rect.x)),
+                    LayoutPhysicalAxis::Vertical => left
+                        .rect
+                        .x
+                        .total_cmp(&right.rect.x)
+                        .then_with(|| left.rect.y.total_cmp(&right.rect.y)),
+                })
         });
         let mut merged: Vec<SelectedTextRect> = Vec::with_capacity(selected.len());
         for fragment in selected {
             let can_merge = merged.last().is_some_and(|previous| {
-                let tolerance = previous
-                    .rect
-                    .width
+                let (previous_inline_size, fragment_inline_size) = match fragment.inline_axis {
+                    LayoutPhysicalAxis::Horizontal => (previous.rect.width, fragment.rect.width),
+                    LayoutPhysicalAxis::Vertical => (previous.rect.height, fragment.rect.height),
+                };
+                let tolerance = previous_inline_size
                     .abs()
-                    .max(fragment.rect.width.abs())
+                    .max(fragment_inline_size.abs())
                     .max(1.0)
                     * f32::EPSILON
                     * 16.0;
                 previous.box_id == fragment.box_id
                     && previous.line_index == fragment.line_index
                     && previous.rtl == fragment.rtl
+                    && previous.inline_axis == fragment.inline_axis
                     && previous.coordinate_space == fragment.coordinate_space
-                    && (previous.rect.y - fragment.rect.y).abs() <= tolerance
-                    && (previous.rect.height - fragment.rect.height).abs() <= tolerance
-                    && fragment.rect.x <= previous.rect.right() + tolerance
+                    && (match fragment.inline_axis {
+                        LayoutPhysicalAxis::Horizontal => {
+                            (previous.rect.y - fragment.rect.y).abs() <= tolerance
+                                && (previous.rect.height - fragment.rect.height).abs() <= tolerance
+                                && fragment.rect.x <= previous.rect.right() + tolerance
+                        }
+                        LayoutPhysicalAxis::Vertical => {
+                            (previous.rect.x - fragment.rect.x).abs() <= tolerance
+                                && (previous.rect.width - fragment.rect.width).abs() <= tolerance
+                                && fragment.rect.y <= previous.rect.bottom() + tolerance
+                        }
+                    })
             });
             if can_merge {
                 let previous = merged.last_mut().expect("checked above");

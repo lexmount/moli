@@ -16,7 +16,8 @@ use taffy::{
 };
 
 use crate::{
-    LayoutBoxId, LayoutBoxKind, LayoutWorld, PaintColor, PaintEdgeSizes, PaintRect,
+    LayoutBoxId, LayoutBoxKind, LayoutPhysicalAxis, LayoutWorld, PaintColor, PaintEdgeSizes,
+    PaintRect,
     style::{
         InlineBaselineType, InlineDirection, InlineTextTransform, InlineUnicodeBidi,
         InlineVerticalAlign, InlineWhiteSpaceCollapse, LayoutInlineAlignment,
@@ -119,6 +120,14 @@ pub(crate) struct InlineCoordinateSpace {
 impl InlineCoordinateSpace {
     pub(crate) const fn new(writing_mode: WritingMode) -> Self {
         Self { writing_mode }
+    }
+
+    pub(crate) const fn physical_inline_axis(self) -> LayoutPhysicalAxis {
+        if self.writing_mode.is_horizontal() {
+            LayoutPhysicalAxis::Horizontal
+        } else {
+            LayoutPhysicalAxis::Vertical
+        }
     }
 
     pub(crate) fn to_logical_size<T>(self, size: Size<T>) -> LogicalSize<T> {
@@ -371,6 +380,7 @@ pub(crate) struct InlineSourceMapEntry {
     pub(crate) box_id: LayoutBoxId,
     pub(crate) source_byte_range: Range<usize>,
     pub(crate) source_utf16_range: Range<usize>,
+    pub(crate) is_forced_line_break: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -393,7 +403,7 @@ pub(crate) struct InlineTextUnit {
 enum InlineTextUnitKind {
     Text,
     Control,
-    ElementLineBreak { box_id: LayoutBoxId },
+    ForcedLineBreak { element_box: Option<LayoutBoxId> },
 }
 
 impl InlineTextUnitKind {
@@ -403,9 +413,15 @@ impl InlineTextUnitKind {
 
     const fn element_line_break_box(self) -> Option<LayoutBoxId> {
         match self {
-            Self::ElementLineBreak { box_id } => Some(box_id),
-            Self::Text | Self::Control => None,
+            Self::ForcedLineBreak {
+                element_box: Some(box_id),
+            } => Some(box_id),
+            Self::Text | Self::Control | Self::ForcedLineBreak { .. } => None,
         }
+    }
+
+    const fn is_forced_line_break(self) -> bool {
+        matches!(self, Self::ForcedLineBreak { .. })
     }
 }
 
@@ -675,6 +691,8 @@ impl LineRelativeFragments {
                     box_id: text.box_id,
                     source_byte_range: text.source_byte_range,
                     source_utf16_range: text.source_utf16_range,
+                    is_forced_line_break: text.is_forced_line_break,
+                    inline_axis: coordinates.physical_inline_axis(),
                     rtl: text.rtl,
                     rect: coordinates.to_physical_line_rect(
                         flow_lines[text.line_index],
@@ -731,6 +749,8 @@ pub(crate) struct InlineSourceFragment {
     pub(crate) box_id: LayoutBoxId,
     pub(crate) source_byte_range: Range<usize>,
     pub(crate) source_utf16_range: Range<usize>,
+    pub(crate) is_forced_line_break: bool,
+    pub(crate) inline_axis: LayoutPhysicalAxis,
     pub(crate) rtl: bool,
     pub(crate) rect: PaintRect,
 }
@@ -741,6 +761,7 @@ struct LineRelativeSourceFragment {
     box_id: LayoutBoxId,
     source_byte_range: Range<usize>,
     source_utf16_range: Range<usize>,
+    is_forced_line_break: bool,
     rtl: bool,
     rect: LineRelativeRect,
 }
@@ -1006,6 +1027,7 @@ pub(crate) fn build_inline_fragments(
                             source_byte_end: source.source_byte_range.end,
                             source_utf16_start: source.source_utf16_range.start,
                             source_utf16_end: source.source_utf16_range.end,
+                            is_forced_line_break: source.is_forced_line_break,
                             line_index,
                             rtl: cluster.is_rtl(),
                         })
@@ -1082,6 +1104,7 @@ pub(crate) fn build_inline_fragments(
                 box_id: LayoutBoxId::from_index(key.box_index),
                 source_byte_range: key.source_byte_start..key.source_byte_end,
                 source_utf16_range: key.source_utf16_start..key.source_utf16_end,
+                is_forced_line_break: key.is_forced_line_break,
                 rtl: key.rtl,
                 rect: line_rect.line_relative_rect(accumulator.rect(line_rect)?),
             })
@@ -1829,6 +1852,7 @@ struct SourceFragmentKey {
     source_byte_end: usize,
     source_utf16_start: usize,
     source_utf16_end: usize,
+    is_forced_line_break: bool,
     line_index: usize,
     rtl: bool,
 }
@@ -2510,7 +2534,7 @@ impl InlineNormalizer {
                     '\n',
                     ancestors,
                     sources,
-                    InlineTextUnitKind::Text,
+                    InlineTextUnitKind::ForcedLineBreak { element_box: None },
                 );
                 self.line_has_content = false;
             }
@@ -2529,7 +2553,11 @@ impl InlineNormalizer {
                     character,
                     ancestors,
                     sources,
-                    InlineTextUnitKind::Text,
+                    if character == '\n' {
+                        InlineTextUnitKind::ForcedLineBreak { element_box: None }
+                    } else {
+                        InlineTextUnitKind::Text
+                    },
                 );
                 if mode == InlineWhiteSpaceCollapse::BreakSpaces && character == ' ' {
                     // Parley 0.10 has no CSS `break-spaces` mode. U+200B adds
@@ -2628,7 +2656,9 @@ impl InlineNormalizer {
             '\n',
             ancestors,
             Vec::new(),
-            InlineTextUnitKind::ElementLineBreak { box_id },
+            InlineTextUnitKind::ForcedLineBreak {
+                element_box: Some(box_id),
+            },
         );
         self.line_has_content = false;
         self.capitalize_word_start = true;
@@ -2750,6 +2780,7 @@ impl InlineNormalizer {
                     box_id: source.box_id,
                     source_byte_range: source.byte_range.clone(),
                     source_utf16_range: source.utf16_range.clone(),
+                    is_forced_line_break: unit.kind.is_forced_line_break(),
                 })
             })
             .collect();
@@ -3141,24 +3172,28 @@ mod tests {
                     box_id: first,
                     source_byte_range: 0..1,
                     source_utf16_range: 0..1,
+                    is_forced_line_break: false,
                 },
                 InlineSourceMapEntry {
                     output_range: 1..2,
                     box_id: first,
                     source_byte_range: 1..2,
                     source_utf16_range: 1..2,
+                    is_forced_line_break: true,
                 },
                 InlineSourceMapEntry {
                     output_range: 1..2,
                     box_id: second,
                     source_byte_range: 0..1,
                     source_utf16_range: 0..1,
+                    is_forced_line_break: true,
                 },
                 InlineSourceMapEntry {
                     output_range: 2..3,
                     box_id: second,
                     source_byte_range: 1..2,
                     source_utf16_range: 1..2,
+                    is_forced_line_break: false,
                 },
             ]
         );

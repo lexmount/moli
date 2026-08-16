@@ -5,7 +5,8 @@ use std::{collections::HashSet, fmt::Debug, hash::Hash};
 use super::{
     model::{
         LayoutBoxModel, LayoutClipChainId, LayoutCoordinateSpaceId, LayoutFragmentId,
-        LayoutFragmentKind, LayoutOutputBoxId, LayoutPoint, LayoutQuad, LayoutRect,
+        LayoutFragmentKind, LayoutOutputBoxId, LayoutPhysicalAxis, LayoutPoint, LayoutQuad,
+        LayoutRect,
     },
     tree::FrozenLayoutTree,
 };
@@ -181,6 +182,7 @@ where
         let LayoutFragmentKind::Text {
             box_id,
             source_utf16_range,
+            inline_axis,
             rtl,
             ..
         } = &fragment.kind
@@ -192,23 +194,42 @@ where
         let source_len = source_utf16_range
             .end
             .saturating_sub(source_utf16_range.start);
-        let on_left_half = local_point.x <= fragment.rect.x + fragment.rect.width * 0.5;
-        let at_source_start = if *rtl { !on_left_half } else { on_left_half };
-        let fragment_offset = if at_source_start { 0 } else { source_len };
-        let caret_x = if at_source_start == *rtl {
-            fragment.rect.right()
+        let on_visual_start_half = match inline_axis {
+            LayoutPhysicalAxis::Horizontal => {
+                local_point.x <= fragment.rect.x + fragment.rect.width * 0.5
+            }
+            LayoutPhysicalAxis::Vertical => {
+                local_point.y <= fragment.rect.y + fragment.rect.height * 0.5
+            }
+        };
+        let at_source_start = if *rtl {
+            !on_visual_start_half
         } else {
-            fragment.rect.x
+            on_visual_start_half
+        };
+        let fragment_offset = if at_source_start { 0 } else { source_len };
+        let caret_rect = match inline_axis {
+            LayoutPhysicalAxis::Horizontal => {
+                let x = if at_source_start == *rtl {
+                    fragment.rect.right()
+                } else {
+                    fragment.rect.x
+                };
+                LayoutRect::new(x, fragment.rect.y, 0.0, fragment.rect.height)
+            }
+            LayoutPhysicalAxis::Vertical => {
+                let y = if at_source_start == *rtl {
+                    fragment.rect.bottom()
+                } else {
+                    fragment.rect.y
+                };
+                LayoutRect::new(fragment.rect.x, y, fragment.rect.width, 0.0)
+            }
         };
         Some(LayoutCaretPosition {
             source: entry.source,
             utf16_offset: Some(source_utf16_range.start + fragment_offset),
-            rect: space.local_to_viewport.map_rect(LayoutRect::new(
-                caret_x,
-                fragment.rect.y,
-                0.0,
-                fragment.rect.height,
-            )),
+            rect: space.local_to_viewport.map_rect(caret_rect),
             ancestor_boxes: self.ancestor_box_models(*box_id),
         })
     }

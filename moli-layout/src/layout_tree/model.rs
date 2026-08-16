@@ -338,6 +338,15 @@ pub struct LayoutFragmentBoxModel {
     pub margin: LayoutRect,
 }
 
+/// Physical axis followed by an inline fragment after writing-mode
+/// projection. Text offsets advance horizontally in horizontal writing modes
+/// and vertically in vertical or sideways writing modes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayoutPhysicalAxis {
+    Horizontal,
+    Vertical,
+}
+
 /// A geometry fragment kind. IDs contained here are valid only in the same
 /// [`crate::FrozenLayoutTree`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -366,6 +375,11 @@ pub enum LayoutFragmentKind {
         box_id: LayoutOutputBoxId,
         line_index: usize,
         source_utf16_range: Range<usize>,
+        /// Whether this source fragment is a preserved segment break that
+        /// forced a new line. Collapsed Range geometry treats it differently
+        /// from an ordinary soft-wrap boundary.
+        is_forced_line_break: bool,
+        inline_axis: LayoutPhysicalAxis,
         rtl: bool,
     },
 }
