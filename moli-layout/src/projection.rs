@@ -1044,83 +1044,51 @@ where
         owner_layout.border.left + owner_layout.padding.left,
         owner_layout.border.top + owner_layout.padding.top,
     );
-    let containing_width = (owner_layout.size.width
-        - owner_layout.border.left
-        - owner_layout.border.right
-        - owner_layout.padding.left
-        - owner_layout.padding.right)
-        .max(0.0);
+    let content_box_size = taffy::Size {
+        width: (owner_layout.size.width
+            - owner_layout.border.left
+            - owner_layout.border.right
+            - owner_layout.padding.left
+            - owner_layout.padding.right)
+            .max(0.0),
+        height: (owner_layout.size.height
+            - owner_layout.border.top
+            - owner_layout.border.bottom
+            - owner_layout.padding.top
+            - owner_layout.padding.bottom)
+            .max(0.0),
+    };
+    let containing_inline_size = owner
+        .style
+        .writing_mode()
+        .to_logical(content_box_size)
+        .inline_size;
     let inline_box = &world.boxes[fragment.box_id.index()];
     let style = &inline_box.style;
     let padding = style.taffy.padding.resolve_or_zero(
-        Some(containing_width),
+        Some(containing_inline_size),
         crate::style::resolve_stylo_calc_value,
     );
     let border = style.taffy.border.resolve_or_zero(
-        Some(containing_width),
+        Some(containing_inline_size),
         crate::style::resolve_stylo_calc_value,
     );
     let margin = style.taffy.margin.resolve_or_zero(
-        Some(containing_width),
+        Some(containing_inline_size),
         crate::style::resolve_stylo_calc_value,
     );
-    let ltr = style.direction() == crate::style::InlineDirection::Ltr;
-    let has_left_edge = if ltr {
-        fragment.has_start_edge
-    } else {
-        fragment.has_end_edge
-    };
-    let has_right_edge = if ltr {
-        fragment.has_end_edge
-    } else {
-        fragment.has_start_edge
-    };
-    let left_margin = if has_left_edge {
-        margin.left.max(0.0)
-    } else {
-        0.0
-    };
-    let right_margin = if has_right_edge {
-        margin.right.max(0.0)
-    } else {
-        0.0
-    };
-    let left_padding = if has_left_edge { padding.left } else { 0.0 };
-    let right_padding = if has_right_edge { padding.right } else { 0.0 };
-    let left_border = if has_left_edge { border.left } else { 0.0 };
-    let right_border = if has_right_edge { border.right } else { 0.0 };
-    let border_box = LayoutRect::new(
-        content_origin.x + fragment.rect.x + left_margin,
-        content_origin.y + fragment.rect.y - padding.top - border.top,
-        (fragment.rect.width - left_margin - right_margin).max(0.0),
-        fragment.rect.height + padding.top + padding.bottom + border.top + border.bottom,
-    );
-    let padding_box = inset_rect(
-        border_box,
-        border.top,
-        right_border,
-        border.bottom,
-        left_border,
-    );
-    let content_box = inset_rect(
-        padding_box,
-        padding.top,
-        right_padding,
-        padding.bottom,
-        left_padding,
-    );
-    let margin_box = outset_rect(
-        border_box,
-        margin.top,
-        right_margin,
-        margin.bottom,
-        left_margin,
+    let geometry = crate::inline::inline_fragment_box_geometry(
+        fragment,
+        style.writing_direction(),
+        margin,
+        padding,
+        border,
     );
     LayoutFragmentBoxModel {
-        content: content_box,
-        padding: padding_box,
-        border: border_box,
-        margin: margin_box,
+        content: offset_rect(geometry.content_rect, content_origin),
+        padding: offset_rect(geometry.padding_rect, content_origin),
+        border: offset_rect(geometry.border_rect, content_origin),
+        margin: offset_rect(geometry.margin_rect, content_origin),
     }
 }
 
