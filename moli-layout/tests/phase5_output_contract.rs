@@ -449,6 +449,87 @@ fn inline_output_preserves_line_text_and_utf16_source_fragments() {
 }
 
 #[test]
+fn inline_offset_metrics_use_fragment_bounds_and_keep_empty_sibling_anchors() {
+    let source = Source(vec![
+        Node::element("root", vec![1, 3]),
+        Node::element("reference", vec![2]),
+        Node::text("reference-text", "ref"),
+        Node::element("empty-target", vec![4]),
+        Node::text("collapsed-trailing-space", " "),
+    ]);
+    let mut styles = Styles::default();
+    styles.0.insert(
+        0,
+        fixed_size(LayoutDisplay::Block, 80.0, 80.0).with_text_metrics(10.0, 10.0),
+    );
+    for node in 1..=4 {
+        styles.0.insert(
+            node,
+            resolved(LayoutDisplay::Inline, Style::default()).with_text_metrics(10.0, 10.0),
+        );
+    }
+
+    let output = build(&source, &mut styles);
+    let reference = output
+        .element_metrics_for_source(1)
+        .expect("reference inline metrics");
+    let target = output
+        .element_metrics_for_source(3)
+        .expect("empty target inline metrics");
+
+    assert!(reference.offset_size.width > 0.0);
+    assert_close(
+        target.offset_position.x,
+        reference.offset_position.x + reference.offset_size.width,
+    );
+    assert_close(target.offset_position.y, reference.offset_position.y);
+}
+
+#[test]
+fn multiline_inline_offset_size_is_the_nonempty_fragment_union() {
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("multiline-inline", vec![2]),
+        Node::text("wrapped-text", "ref ref ref"),
+    ]);
+    let mut styles = Styles::default();
+    styles.0.insert(
+        0,
+        fixed_size(LayoutDisplay::Block, 14.0, 100.0).with_text_metrics(10.0, 10.0),
+    );
+    for node in 1..=2 {
+        styles.0.insert(
+            node,
+            resolved(LayoutDisplay::Inline, Style::default()).with_text_metrics(10.0, 10.0),
+        );
+    }
+
+    let output = build(&source, &mut styles);
+    let fragments = output
+        .client_rects_for_source(1)
+        .into_iter()
+        .map(|quad| quad.bounding_rect())
+        .filter(|rect| rect.width > 0.0 && rect.height > 0.0)
+        .collect::<Vec<_>>();
+    assert!(
+        fragments.len() > 1,
+        "the fixture must generate multiple inline fragments: {fragments:?}"
+    );
+    let union = fragments[1..]
+        .iter()
+        .copied()
+        .fold(fragments[0], LayoutRect::union);
+    let metrics = output
+        .element_metrics_for_source(1)
+        .expect("multiline inline metrics");
+
+    assert_close(metrics.offset_position.x, fragments[0].x);
+    assert_close(metrics.offset_position.y, fragments[0].y);
+    assert_close(metrics.offset_size.width, union.width);
+    assert_close(metrics.offset_size.height, union.height);
+}
+
+#[test]
 fn inline_and_range_rects_use_font_bounds_instead_of_the_css_line_height() {
     const CJK_TEXT: &str = "台风白海豚在浙江玉环沿海登陆";
     const LATIN_TEXT: &str = "Title text";

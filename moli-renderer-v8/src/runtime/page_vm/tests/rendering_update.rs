@@ -2569,6 +2569,69 @@ document.body.innerHTML = `<div class=row><div class=item id=ask><i class=icon><
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn inline_offset_metrics_union_fragments_before_empty_trailing_space() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        loader.set_optional_resource_fetch_mask(
+            crate::protocol_types::OptionalResourceFetchMask::FONT,
+        );
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/inline-offset-fragments.html")?,
+        );
+        let encoded_font = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../moli-layout/tests/fixtures/moli-ahem.woff2"
+        ));
+        let encoded = base64::engine::general_purpose::STANDARD.encode(encoded_font);
+        page_vm.vm_mut().eval(&format!(
+            r#"
+document.head.innerHTML = `<style>
+@font-face {{ font-family:MoliAhem; src:url(data:font/woff2;base64,{encoded}) format('woff2') }}
+html,body {{ margin:0 }}
+.container {{ position:relative; width:80px; height:70px; padding:10px; font:10px/10px MoliAhem }}
+</style>`;
+document.body.innerHTML = `
+<div class=container><br><span>ref</span><span class=target> </span></div>`;
+'installed'
+"#
+        ))?;
+        page_vm
+            .vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"(()=>{const target=document.querySelector('.target');const reference=target.previousSibling;return JSON.stringify({reference:[reference.offsetLeft,reference.offsetTop,reference.offsetWidth,reference.offsetHeight],target:[target.offsetLeft,target.offsetTop]})})()"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        let reference = geometry["reference"]
+            .as_array()
+            .unwrap_or_else(|| panic!("missing reference metrics: {geometry}"));
+        let target = geometry["target"]
+            .as_array()
+            .unwrap_or_else(|| panic!("missing target metrics: {geometry}"));
+        let number = |values: &[serde_json::Value], axis: usize| {
+            values[axis].as_f64().expect("numeric offset geometry")
+        };
+        assert!(
+            number(reference, 2) > 0.0,
+            "horizontal inline width: {geometry}"
+        );
+        assert_eq!(
+            number(target, 0),
+            number(reference, 0) + number(reference, 2),
+            "the empty inline starts after the reference fragment: {geometry}"
+        );
+        assert_eq!(number(target, 1), number(reference, 1));
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("inline offset fragment fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn stylesheet_lifecycle_registers_only_the_current_documents_data_web_fonts() {
     run_page_vm_async_test(async move {
         let loader =
