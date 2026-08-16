@@ -3011,6 +3011,85 @@ document.body.innerHTML = `
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn inline_offset_metrics_union_fragments_before_empty_trailing_space() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        loader.set_optional_resource_fetch_mask(
+            crate::protocol_types::OptionalResourceFetchMask::FONT,
+        );
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/inline-offset-fragments.html")?,
+        );
+        let encoded_font = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../moli-layout/tests/fixtures/moli-ahem.woff2"
+        ));
+        let encoded = base64::engine::general_purpose::STANDARD.encode(encoded_font);
+        page_vm.vm_mut().eval(&format!(
+            r#"
+document.head.innerHTML = `<style>
+@font-face {{ font-family:MoliAhem; src:url(data:font/woff2;base64,{encoded}) format('woff2') }}
+html,body {{ margin:0 }}
+.container {{ position:relative; width:80px; height:70px; padding:10px; font:10px/10px MoliAhem }}
+</style>`;
+document.body.innerHTML = `
+<div class=container style="writing-mode:horizontal-tb"><br><span>ref</span><span class=target> </span></div>
+<div class=container style="writing-mode:vertical-lr"><br><span>ref</span><span class=target> </span></div>
+<div class=container style="writing-mode:vertical-rl"><br><span>ref</span><span class=target> </span></div>`;
+'installed'
+"#
+        ))?;
+        page_vm
+            .vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify([...document.querySelectorAll('.target')].map((target,index)=>{const reference=target.previousSibling;return {index,reference:[reference.offsetLeft,reference.offsetTop,reference.offsetWidth,reference.offsetHeight],target:[target.offsetLeft,target.offsetTop]}}))"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        let cases = geometry
+            .as_array()
+            .unwrap_or_else(|| panic!("missing inline offset cases: {geometry}"));
+        assert_eq!(cases.len(), 3, "all writing modes must be measured");
+        for case in cases {
+            let index = case["index"].as_u64().expect("case index") as usize;
+            let reference = case["reference"]
+                .as_array()
+                .unwrap_or_else(|| panic!("missing reference metrics: {geometry}"));
+            let target = case["target"]
+                .as_array()
+                .unwrap_or_else(|| panic!("missing target metrics: {geometry}"));
+            let number = |values: &[serde_json::Value], axis: usize| {
+                values[axis].as_f64().expect("numeric offset geometry")
+            };
+            if index == 0 {
+                assert!(number(reference, 2) > 0.0, "horizontal inline width: {geometry}");
+                assert_eq!(
+                    number(target, 0),
+                    number(reference, 0) + number(reference, 2),
+                    "the empty horizontal inline starts after the reference fragment: {geometry}"
+                );
+                assert_eq!(number(target, 1), number(reference, 1));
+            } else {
+                assert!(number(reference, 3) > 0.0, "vertical inline height: {geometry}");
+                assert_eq!(number(target, 0), number(reference, 0));
+                assert_eq!(
+                    number(target, 1),
+                    number(reference, 1) + number(reference, 3),
+                    "the empty vertical inline starts after the reference fragment: {geometry}"
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("inline offset fragment fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn collapsed_ranges_skip_forced_break_fragments_but_keep_soft_wrap_affinity() {
     run_page_vm_async_test(async move {
         let loader =
