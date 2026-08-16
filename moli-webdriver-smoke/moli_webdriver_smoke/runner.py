@@ -15,6 +15,10 @@ from .fixture import FixtureServer
 from .groups.bidi import run_bidi_group
 from .groups.classic import run_classic_group
 from .groups.navigation_errors import run_navigation_errors_group
+from .groups.script_interrupt import (
+    run_chromedriver_script_timeout_group,
+    run_moli_script_interrupt_group,
+)
 from .groups.selenium import run_selenium_group
 from .groups.semantics import run_semantics_group
 from .groups.url_policy import run_url_policy_group
@@ -107,6 +111,18 @@ ALL_GROUPS: tuple[SmokeGroup, ...] = (
         "navigation-errors",
         "Chromium/WPT Classic and BiDi navigation argument, missing-context, address-error, envelope, and post-failure liveness matrix.",
         run_navigation_errors_group,
+        default=False,
+    ),
+    SmokeGroup(
+        "script-timeout-chromium",
+        "ChromeDriver Classic script-timeout yield boundary and repeated same-window recovery oracle.",
+        run_chromedriver_script_timeout_group,
+        default=False,
+    ),
+    SmokeGroup(
+        "script-interrupt",
+        "Moli Classic script timeout preemption of non-yielding sync/async JavaScript through renderer IO, with repeated same-window recovery.",
+        run_moli_script_interrupt_group,
         default=False,
     ),
 )

@@ -29,6 +29,20 @@ HTTP and BiDi error envelopes, unchanged Classic URL, and post-failure session
 liveness. The baseline was executed on 2026-08-09 with Debian Chromium
 145.0.7632.116 and matching ChromeDriver 145.0.7632.117.
 
+The script-timeout boundary has two deliberately separate optional groups:
+
+- `script-timeout-chromium` is the ChromeDriver 147 oracle. A yielding async
+  script times out near its deadline, while a bounded non-yielding loop first
+  returns to the renderer and only then produces `script timeout`.
+- `script-interrupt` is Moli's renderer-IO extension. It runs actual infinite
+  loops through both Classic sync and async execution, requires timeout-driven
+  `Runtime.terminateExecution` near the configured deadline, and repeats
+  recovery work in the same window after every termination.
+
+The split is intentional: the Moli group proves preemption, while the
+ChromeDriver group records that ChromeDriver itself does not offer the same
+non-yielding WebDriver timeout behavior.
+
 ## Coverage
 
 - WebDriver Classic status/session/delete value envelopes.
@@ -148,6 +162,7 @@ uv run moli-webdriver-smoke --group selenium
 uv run moli-webdriver-smoke --group semantics --continue-on-failure
 uv run moli-webdriver-smoke --group url-policy --continue-on-failure
 uv run moli-webdriver-smoke --group navigation-errors --continue-on-failure
+uv run moli-webdriver-smoke --group script-interrupt
 MOLI_WEBDRIVER_SMOKE_GROUPS=classic,bidi,selenium uv run moli-webdriver-smoke
 ```
 
@@ -170,6 +185,25 @@ uv run moli-webdriver-smoke \
   --browser-name chrome \
   --browser-binary ~/chromium/src/out/Default/chrome \
   --group semantics --continue-on-failure
+```
+
+Run the bounded ChromeDriver script-timeout oracle against the local Chromium
+147 pair:
+
+```bash
+~/chromium/src/out/Default/chromedriver --port=9515
+
+uv run moli-webdriver-smoke \
+  --endpoint http://127.0.0.1:9515 \
+  --browser-name chrome \
+  --browser-binary ~/chromium/src/out/Default/chrome \
+  --group script-timeout-chromium
+```
+
+Run Moli's non-yielding sync/async termination contract against `moli serve`:
+
+```bash
+uv run moli-webdriver-smoke --group script-interrupt
 ```
 
 Run the Chromium/WPT navigation failure matrix against any matching local

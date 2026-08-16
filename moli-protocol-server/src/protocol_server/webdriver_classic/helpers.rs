@@ -72,7 +72,8 @@ fn classic_error_status(code: ClassicErrorCode) -> StatusCode {
         ClassicErrorCode::JavascriptError | ClassicErrorCode::MoveTargetOutOfBounds => {
             StatusCode::INTERNAL_SERVER_ERROR
         }
-        ClassicErrorCode::ScriptTimeout | ClassicErrorCode::Timeout => StatusCode::REQUEST_TIMEOUT,
+        ClassicErrorCode::ScriptTimeout => StatusCode::INTERNAL_SERVER_ERROR,
+        ClassicErrorCode::Timeout => StatusCode::REQUEST_TIMEOUT,
         ClassicErrorCode::UnknownCommand => StatusCode::NOT_FOUND,
         ClassicErrorCode::UnsupportedOperation => StatusCode::METHOD_NOT_ALLOWED,
         ClassicErrorCode::SessionNotCreated

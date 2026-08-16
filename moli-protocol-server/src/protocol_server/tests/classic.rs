@@ -10906,7 +10906,7 @@ async fn webdriver_classic_execute_sync_honors_script_timeout() {
         }),
     )
     .await;
-    assert_eq!(timeout_status, StatusCode::REQUEST_TIMEOUT);
+    assert_eq!(timeout_status, StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(timeout_response["value"]["error"], json!("script timeout"));
 
     let reset_timeouts = classic_request_json_with_body(
@@ -10994,7 +10994,7 @@ async fn webdriver_classic_execute_sync_timeout_interrupts_non_yielding_script()
     )
     .await
     .expect("non-yielding script timeout must interrupt V8 and return");
-    assert_eq!(timeout_status, StatusCode::REQUEST_TIMEOUT);
+    assert_eq!(timeout_status, StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(timeout_response["value"]["error"], json!("script timeout"));
 
     let reset_timeouts = classic_request_json_with_body(
@@ -11062,7 +11062,7 @@ async fn webdriver_classic_execute_async_honors_script_timeout() {
         }),
     )
     .await;
-    assert_eq!(timeout_status, StatusCode::REQUEST_TIMEOUT);
+    assert_eq!(timeout_status, StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(timeout_response["value"]["error"], json!("script timeout"));
 
     let reset_timeouts = classic_request_json_with_body(
