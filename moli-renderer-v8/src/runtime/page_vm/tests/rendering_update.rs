@@ -558,6 +558,56 @@ nestedDocument.body.appendChild(nestedViewportSized);
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn screenshot_composites_transparent_iframe_canvas_over_its_owner_background() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/transparent-iframe-canvas.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.documentElement.style.cssText = 'margin:0;padding:0;background:white';
+document.body.style.cssText = 'margin:0;padding:0';
+document.body.innerHTML = `
+<iframe id=transparent style="position:absolute;left:0;top:0;display:block;width:100px;aspect-ratio:1/1;border:0;background:green"></iframe>
+<iframe id=colored style="position:absolute;left:110px;top:0;display:block;width:100px;aspect-ratio:1/1;border:0;background:green"></iframe>`;
+const colored = document.getElementById('colored').contentDocument;
+colored.documentElement.style.cssText = 'margin:0;padding:0;background:blue';
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+
+        let snapshot = page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(210, 100, 1.0))?
+            .expect("iframe canvas fixture must retain a root");
+        let image = moli_paint::raster_snapshot(&snapshot)?;
+        let pixel = |x: u32, y: u32| {
+            let index = ((y * image.width + x) * 4) as usize;
+            &image.rgba[index..index + 4]
+        };
+
+        assert_eq!(
+            pixel(50, 50),
+            [0, 128, 0, 255],
+            "a transparent child canvas must expose the iframe owner's background"
+        );
+        assert_eq!(
+            pixel(160, 50),
+            [0, 0, 255, 255],
+            "a child document's own canvas background must still cover the owner"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("transparent iframe canvas fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_and_screencast_paint_fresh_canvas_2d_backing_stores() {
     run_page_vm_async_test(async move {
         let loader =

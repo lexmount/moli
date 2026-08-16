@@ -1020,11 +1020,13 @@ impl PaintSnapshot {
             shape: PaintShape::Rect(clip),
             transform: local_to_surface,
         });
-        self.push_fragment(PaintFragment::Fill {
-            shape: PaintShape::Rect(clip),
-            brush: PaintBrush::Solid(child.canvas_color),
-            transform: local_to_surface,
-        });
+        if child.canvas_color.alpha > 0.0 {
+            self.push_fragment(PaintFragment::Fill {
+                shape: PaintShape::Rect(clip),
+                brush: PaintBrush::Solid(child.canvas_color),
+                transform: local_to_surface,
+            });
+        }
         for fragment in child.fragments {
             if let Some(fragment) = rebase_embedded_fragment(
                 fragment,
