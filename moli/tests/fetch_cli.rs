@@ -1701,6 +1701,135 @@ fn cli_wait_response_matches_url_body_and_json_without_networkidle() -> Result<(
 }
 
 #[test]
+fn cli_readiness_plan_combines_early_response_selector_and_script() -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let server = runtime.block_on(FixtureServer::spawn())?;
+    let url = server.url("/wait-until-readiness-plan");
+    let output = run_fetch_cli_with_dump_and_args(
+        &url,
+        "html",
+        &[
+            "--timeout",
+            "1600",
+            "--wait-response-url",
+            "/wait-until-json-data",
+            "--wait-response-body",
+            "SUCCESS",
+            "--wait-response-json",
+            "data.url=/item/42",
+            "--wait-selector",
+            "#readiness-selector",
+            "--wait-script",
+            "globalThis.readinessScriptReady === true",
+        ],
+    )?;
+    runtime.block_on(server.shutdown());
+
+    assert!(
+        output.status.success(),
+        "combined readiness plan failed: stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = clean_output(&output.stdout);
+    assert!(
+        stdout.contains("data-readiness-response=\"SUCCESS\""),
+        "the response completed while the parser-blocking script delayed Load and must remain matchable: {stdout}"
+    );
+    assert!(
+        stdout.contains("id=\"readiness-selector\""),
+        "stdout={stdout}"
+    );
+    assert!(
+        stdout.contains("data-readiness-script=\"true\""),
+        "stdout={stdout}"
+    );
+    assert!(
+        stdout.contains("data-readiness-order=\"response,selector,script\""),
+        "stdout={stdout}"
+    );
+    Ok(())
+}
+
+#[test]
+fn cli_readiness_plan_does_not_restart_timeout_for_script() -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let server = runtime.block_on(FixtureServer::spawn())?;
+    let url = server.url("/wait-until-readiness-plan");
+    let output = run_fetch_cli_with_dump_and_args(
+        &url,
+        "html",
+        &[
+            "--timeout",
+            "700",
+            "--wait-response-url",
+            "/wait-until-json-data",
+            "--wait-selector",
+            "#readiness-selector",
+            "--wait-script",
+            "globalThis.readinessScriptReady === true",
+        ],
+    )?;
+    runtime.block_on(server.shutdown());
+
+    assert!(
+        !output.status.success(),
+        "a fresh 700 ms script timeout would incorrectly reach the 500 ms post-Load flag: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = clean_output(&output.stdout);
+    let stderr = clean_output(&output.stderr);
+    assert!(stdout.is_empty(), "stdout={stdout}");
+    assert!(
+        stderr.contains("failed while waiting for script to become truthy"),
+        "the shared deadline should expire during the final plan phase: stderr={stderr}"
+    );
+    Ok(())
+}
+
+#[test]
+fn cli_readiness_timeout_identifies_response_selector_and_script_phases() -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let server = runtime.block_on(FixtureServer::spawn())?;
+    let url = server.url("/static");
+    let cases: [(&[&str], &str); 3] = [
+        (
+            &["--wait-response-url", "/response-that-never-arrives"],
+            "failed while waiting for subresource response",
+        ),
+        (
+            &["--wait-selector", "#selector-that-never-appears"],
+            "failed while waiting for selector `#selector-that-never-appears`",
+        ),
+        (
+            &["--wait-script", "globalThis.scriptThatNeverBecomesTruthy"],
+            "failed while waiting for script to become truthy",
+        ),
+    ];
+
+    for (args, expected_phase) in cases {
+        let mut args = args.to_vec();
+        args.extend(["--timeout", "350"]);
+        let output = run_fetch_cli_with_dump_and_args(&url, "html", &args)?;
+        let stdout = clean_output(&output.stdout);
+        let stderr = clean_output(&output.stderr);
+        assert!(
+            !output.status.success(),
+            "phase={expected_phase} stdout={stdout}"
+        );
+        assert!(stdout.is_empty(), "phase={expected_phase} stdout={stdout}");
+        assert!(
+            stderr.contains(expected_phase),
+            "expected phase `{expected_phase}` in stderr={stderr}"
+        );
+    }
+
+    runtime.block_on(server.shutdown());
+    Ok(())
+}
+
+#[test]
 fn cli_trace_network_can_include_matched_response_body_text() -> Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
@@ -2254,6 +2383,93 @@ fn cli_redirect_wait_can_extend_http_error_navigation_grace() -> Result<()> {
     assert!(
         stdout.contains("id=\"http-error-navigation-load-tail\""),
         "the configured grace must still preserve the requested Load stage: stdout={stdout}"
+    );
+    Ok(())
+}
+
+#[test]
+fn cli_readiness_plan_continues_after_http_error_replacement_navigation() -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let server = runtime.block_on(FixtureServer::spawn())?;
+    let url = server.url("/wait-until-readiness-http-error-navigation");
+    let output = run_fetch_cli_with_dump_and_args(
+        &url,
+        "html",
+        &[
+            "--timeout",
+            "1800",
+            "--wait-response-url",
+            "/wait-until-json-data",
+            "--wait-response-json",
+            "data.url=/item/42",
+            "--wait-selector",
+            "#readiness-navigation-selector",
+            "--wait-script",
+            "globalThis.readinessNavigationScriptReady === true",
+        ],
+    )?;
+    runtime.block_on(server.shutdown());
+
+    assert!(
+        output.status.success(),
+        "replacement readiness plan failed: stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = clean_output(&output.stdout);
+    assert!(
+        stdout.contains("id=\"readiness-navigation-target\""),
+        "stdout={stdout}"
+    );
+    assert!(
+        stdout.contains("data-readiness-navigation-response=\"SUCCESS\""),
+        "stdout={stdout}"
+    );
+    assert!(
+        stdout.contains("id=\"readiness-navigation-selector\""),
+        "stdout={stdout}"
+    );
+    assert!(
+        stdout.contains("data-readiness-navigation-script=\"true\""),
+        "stdout={stdout}"
+    );
+    assert!(!stdout.contains("id=\"readiness-challenge\""));
+    Ok(())
+}
+
+#[test]
+fn cli_http_error_replacement_and_post_waits_share_one_deadline() -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let server = runtime.block_on(FixtureServer::spawn())?;
+    let url = server.url("/wait-until-readiness-http-error-navigation");
+    let output = run_fetch_cli_with_dump_and_args(
+        &url,
+        "html",
+        &[
+            "--timeout",
+            "850",
+            "--wait-response-url",
+            "/wait-until-json-data",
+            "--wait-selector",
+            "#readiness-navigation-selector",
+            "--wait-script",
+            "globalThis.readinessNavigationScriptReady === true",
+        ],
+    )?;
+    runtime.block_on(server.shutdown());
+
+    assert!(
+        !output.status.success(),
+        "a fresh post-navigation script timeout would incorrectly succeed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = clean_output(&output.stdout);
+    let stderr = clean_output(&output.stderr);
+    assert!(stdout.is_empty(), "stdout={stdout}");
+    assert!(
+        stderr.contains("failed while waiting for script to become truthy"),
+        "the replacement and earlier post waits should leave the script phase with only the remaining budget: stderr={stderr}"
     );
     Ok(())
 }

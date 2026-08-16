@@ -5,7 +5,7 @@
 //! lifecycle decision cannot reset or extend the caller's timeout budget.
 
 use super::{
-    Browser, FetchedDocument, RenderedDomWaitUntil, RendererLifecycleDecider,
+    Browser, FetchDeadline, FetchedDocument, RenderedDomWaitUntil, RendererLifecycleDecider,
     RendererLifecycleDecision, RendererLifecycleSnapshot, RendererReplyBoundary,
 };
 use anyhow::{Context, Result, anyhow};
@@ -30,6 +30,25 @@ impl Browser {
     where
         F: FnOnce(RendererLifecycleSnapshot) -> Result<RendererLifecycleDecision> + Send + 'static,
     {
+        let deadline = FetchDeadline::new(timeout)?;
+        self.fetch_document_with_lifecycle_decider_and_deadline(
+            request, wait_until, deadline, decider,
+        )
+        .await
+    }
+
+    /// Applies a lifecycle decision using a caller-owned absolute deadline.
+    /// The same deadline can then gate response, selector, and script waits.
+    pub async fn fetch_document_with_lifecycle_decider_and_deadline<F>(
+        &self,
+        request: Request,
+        wait_until: RenderedDomWaitUntil,
+        deadline: FetchDeadline,
+        decider: F,
+    ) -> Result<FetchedDocument>
+    where
+        F: FnOnce(RendererLifecycleSnapshot) -> Result<RendererLifecycleDecision> + Send + 'static,
+    {
         anyhow::ensure!(
             matches!(
                 wait_until,
@@ -43,7 +62,7 @@ impl Browser {
         self.fetch_document_with_wait(
             request,
             wait_until,
-            timeout,
+            deadline,
             RendererReplyBoundary::Stage,
             Some(decider),
         )

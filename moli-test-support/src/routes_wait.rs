@@ -23,6 +23,38 @@ const WAIT_UNTIL_COMPLETE_DELAYED_DOM_MUTATION_HTML: &str = "<!doctype html><htm
 const WAIT_UNTIL_COMPLETE_SLOW_FETCH_HTML: &str = "<!doctype html><html><body data-state=\"init\"><script>window.addEventListener('load', () => { fetch('/wait-until-very-slow-data').then(r => r.text()).then(text => { document.body.setAttribute('data-state', text); const main = document.createElement('main'); main.id = 'late-slow-fetch'; main.textContent = text; document.body.appendChild(main); }); });</script></body></html>";
 const WAIT_UNTIL_COMPLETE_SLOW_XHR_HTML: &str = "<!doctype html><html><body data-state=\"init\"><script>window.addEventListener('load', () => { const xhr = new XMLHttpRequest(); xhr.open('GET', '/wait-until-very-slow-data'); xhr.onload = () => { document.body.setAttribute('data-state', xhr.responseText); const main = document.createElement('main'); main.id = 'late-slow-xhr'; main.textContent = xhr.responseText; document.body.appendChild(main); }; xhr.send(); });</script></body></html>";
 const WAIT_UNTIL_DELAYED_JSON_FETCH_HTML: &str = "<!doctype html><html><body data-state=\"init\"><script>window.addEventListener('load', () => { setTimeout(() => { fetch('/wait-until-json-data').then(r => r.json()).then(data => { document.body.setAttribute('data-state', data.ret[0]); const main = document.createElement('main'); main.id = 'late-json'; main.textContent = data.data.url; document.body.appendChild(main); }); }, 75); });</script></body></html>";
+const WAIT_UNTIL_READINESS_PLAN_HTML: &str = r#"<!doctype html>
+<html><head><title>readiness plan</title></head><body data-readiness-order="">
+<script>
+window.readinessOrder = [];
+window.runtimeOwnedInOrderLoadOrder = [];
+const noteReadiness = value => {
+  window.readinessOrder.push(value);
+  document.body.setAttribute('data-readiness-order', window.readinessOrder.join(','));
+};
+fetch('/wait-until-json-data').then(response => response.json()).then(data => {
+  document.body.setAttribute('data-readiness-response', data.ret[0]);
+  noteReadiness('response');
+});
+</script>
+<script src="/assets/runtime_owned_in_order_load_slow.js"></script>
+<script>
+window.addEventListener('load', () => {
+  setTimeout(() => {
+    const ready = document.createElement('main');
+    ready.id = 'readiness-selector';
+    ready.textContent = 'selector-ready';
+    document.body.appendChild(ready);
+    noteReadiness('selector');
+  }, 100);
+  setTimeout(() => {
+    window.readinessScriptReady = true;
+    document.body.setAttribute('data-readiness-script', 'true');
+    noteReadiness('script');
+  }, 500);
+});
+</script>
+</body></html>"#;
 const WAIT_UNTIL_COOKIE_FETCH_HTML: &str = "<!doctype html><html><body data-state=\"init\"><script>window.addEventListener('load', () => { setTimeout(() => { fetch('/wait-until-cookie-data').then(r => r.json()).then(data => { document.body.setAttribute('data-state', data.cookie); const main = document.createElement('main'); main.id = 'late-cookie'; main.textContent = data.cookie; document.body.appendChild(main); }); }, 75); });</script></body></html>";
 // See WAIT_UNTIL_DELAYED_FETCH_HTML for the 75 -> 300 ms rationale.
 const WAIT_UNTIL_DELAYED_XHR_HTML: &str = "<!doctype html><html><body data-state=\"init\"><script>window.addEventListener('load', () => { setTimeout(() => { const xhr = new XMLHttpRequest(); xhr.open('GET', '/wait-until-data'); xhr.onload = () => { document.body.setAttribute('data-state', xhr.responseText); const main = document.createElement('main'); main.id = 'late-xhr'; main.textContent = xhr.responseText; document.body.appendChild(main); }; xhr.send(); }, 300); });</script></body></html>";
@@ -39,6 +71,41 @@ const WAIT_UNTIL_INTERVAL_FETCH_HTML: &str = "<!doctype html><html><body data-st
 const WAIT_UNTIL_INTERVAL_DOM_MUTATION_HTML: &str = "<!doctype html><html><body data-state=\"init\"><main id=\"mutation-count\">0</main><script>window.addEventListener('load', () => { setInterval(() => { const count = Number(document.body.getAttribute('data-mutation-count') || '0') + 1; document.body.setAttribute('data-mutation-count', String(count)); document.getElementById('mutation-count').textContent = String(count); }, 50); });</script></body></html>";
 const WAIT_UNTIL_HTTP_ERROR_NAVIGATION_CHALLENGE_HTML: &str = "<!doctype html><html><head><title>403 challenge</title></head><body><main id=\"challenge\">http-error-navigation=challenge</main><script>window.addEventListener('load', () => { setTimeout(() => { document.cookie = 'moli-http-error-navigation=passed; Path=/; Max-Age=3600; SameSite=Lax'; location.reload(); }, 75); });</script></body></html>";
 const WAIT_UNTIL_HTTP_ERROR_LATE_NAVIGATION_CHALLENGE_HTML: &str = "<!doctype html><html><head><title>late 403 challenge</title></head><body><main id=\"challenge\">http-error-navigation=late-challenge</main><script>window.addEventListener('load', () => { setTimeout(() => { document.cookie = 'moli-http-error-navigation=passed; Path=/; Max-Age=3600; SameSite=Lax'; location.reload(); }, 1200); });</script></body></html>";
+const WAIT_UNTIL_READINESS_HTTP_ERROR_CHALLENGE_HTML: &str = r#"<!doctype html>
+<html><head><title>readiness 403 challenge</title></head><body>
+<main id="readiness-challenge">readiness=challenge</main>
+<script>
+window.addEventListener('load', () => {
+  setTimeout(() => {
+    document.cookie = 'moli-readiness-navigation=passed; Path=/; Max-Age=3600; SameSite=Lax';
+    location.reload();
+  }, 250);
+});
+</script>
+</body></html>"#;
+const WAIT_UNTIL_READINESS_HTTP_ERROR_FINAL_HTML: &str = r#"<!doctype html>
+<html><head><title>readiness navigation passed</title></head><body>
+<main id="readiness-navigation-target">readiness=navigation-done</main>
+<script>
+window.addEventListener('load', () => {
+  setTimeout(() => {
+    fetch('/wait-until-json-data').then(response => response.json()).then(data => {
+      document.body.setAttribute('data-readiness-navigation-response', data.ret[0]);
+    });
+  }, 100);
+  setTimeout(() => {
+    const ready = document.createElement('main');
+    ready.id = 'readiness-navigation-selector';
+    ready.textContent = 'readiness-navigation=selector';
+    document.body.appendChild(ready);
+  }, 300);
+  setTimeout(() => {
+    window.readinessNavigationScriptReady = true;
+    document.body.setAttribute('data-readiness-navigation-script', 'true');
+  }, 700);
+});
+</script>
+</body></html>"#;
 const WAIT_UNTIL_HTTP_ERROR_NAVIGATION_FINAL_HTML: &str = "<!doctype html><html><head><title>challenge passed</title></head><body><main id=\"http-error-navigation-target\">http-error-navigation=done</main><script>window.httpErrorNavigationDcl = false; window.httpErrorNavigationLoad = false; document.addEventListener('DOMContentLoaded', () => { window.httpErrorNavigationDcl = true; document.body.setAttribute('data-reached-dcl', 'true'); const script = document.createElement('script'); script.src = '/assets/runtime_owned_in_order_load_very_slow.js'; script.onload = () => { window.httpErrorNavigationSlowScript = true; const tail = document.createElement('main'); tail.id = 'http-error-navigation-load-tail'; tail.textContent = 'http-error-navigation=load-tail'; document.body.appendChild(tail); }; document.head.appendChild(script); }); window.addEventListener('load', () => { window.httpErrorNavigationLoad = true; document.body.setAttribute('data-reached-load', 'true'); });</script></body></html>";
 const WAIT_UNTIL_HTTP_ERROR_IMMEDIATE_NAVIGATION_CHALLENGE_HTML: &str = r#"<!doctype html>
 <html><head><title>immediate 403 challenge</title></head><body>
@@ -148,6 +215,10 @@ pub(super) fn add_wait_routes(router: Router) -> Router {
             get(wait_until_delayed_json_fetch_page),
         )
         .route(
+            "/wait-until-readiness-plan",
+            get(wait_until_readiness_plan_page),
+        )
+        .route(
             "/wait-until-cookie-fetch",
             get(wait_until_cookie_fetch_page),
         )
@@ -211,6 +282,10 @@ pub(super) fn add_wait_routes(router: Router) -> Router {
         .route(
             "/wait-until-http-error-late-navigation",
             get(wait_until_http_error_late_navigation_page),
+        )
+        .route(
+            "/wait-until-readiness-http-error-navigation",
+            get(wait_until_readiness_http_error_navigation_page),
         )
         .route("/wait-until-data", get(wait_until_data_page))
         .route("/wait-until-json-data", get(wait_until_json_data_page))
@@ -329,6 +404,18 @@ async fn wait_until_http_error_late_navigation_page(headers: HeaderMap) -> Respo
         .into_response()
 }
 
+async fn wait_until_readiness_http_error_navigation_page(headers: HeaderMap) -> Response {
+    if has_cookie(&headers, "moli-readiness-navigation=passed") {
+        return Html(WAIT_UNTIL_READINESS_HTTP_ERROR_FINAL_HTML).into_response();
+    }
+
+    (
+        StatusCode::FORBIDDEN,
+        Html(WAIT_UNTIL_READINESS_HTTP_ERROR_CHALLENGE_HTML),
+    )
+        .into_response()
+}
+
 async fn wait_until_domcontentloaded_fetch_page() -> Html<&'static str> {
     Html(WAIT_UNTIL_DOMCONTENTLOADED_FETCH_HTML)
 }
@@ -363,6 +450,10 @@ async fn wait_until_complete_slow_xhr_page() -> Html<&'static str> {
 
 async fn wait_until_delayed_json_fetch_page() -> Html<&'static str> {
     Html(WAIT_UNTIL_DELAYED_JSON_FETCH_HTML)
+}
+
+async fn wait_until_readiness_plan_page() -> Html<&'static str> {
+    Html(WAIT_UNTIL_READINESS_PLAN_HTML)
 }
 
 async fn wait_until_cookie_fetch_page() -> Response {

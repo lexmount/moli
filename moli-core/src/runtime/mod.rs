@@ -1,3 +1,4 @@
+mod fetch_deadline;
 mod lifecycle_fetch;
 mod navigation_engine;
 pub mod storage_partition;
@@ -34,6 +35,7 @@ use url::Url;
 pub use crate::renderer::ExternalRawDocumentBodyStream;
 pub use crate::renderer::PageVmInitStage;
 pub use crate::renderer::RendererReplyBoundary;
+pub use fetch_deadline::FetchDeadline;
 pub use moli_renderer_v8::{
     DetachedParserScriptFetchContinuation, RendererBrowserContextRuntime,
     RendererBrowserContextRuntimeOwner, RendererBrowserContextRuntimeOwnerAccess,
@@ -410,10 +412,25 @@ impl Browser {
         wait_until: RenderedDomWaitUntil,
         timeout: Duration,
     ) -> Result<FetchedDocument> {
+        let deadline = FetchDeadline::new(timeout)?;
+        self.fetch_request_document_allow_http_error_with_wait_until_deadline(
+            request, wait_until, deadline,
+        )
+        .await
+    }
+
+    /// Fetches a document to `wait_until` without starting a new timeout
+    /// budget. Callers can reuse `deadline` for later readiness conditions.
+    pub async fn fetch_request_document_allow_http_error_with_wait_until_deadline(
+        &self,
+        request: Request,
+        wait_until: RenderedDomWaitUntil,
+        deadline: FetchDeadline,
+    ) -> Result<FetchedDocument> {
         self.fetch_document_with_wait(
             request,
             wait_until,
-            timeout,
+            deadline,
             RendererReplyBoundary::Stage,
             None,
         )
@@ -424,10 +441,11 @@ impl Browser {
         &self,
         request: Request,
         wait_until: RenderedDomWaitUntil,
-        timeout: Duration,
+        deadline: FetchDeadline,
         reply_boundary: RendererReplyBoundary,
         lifecycle_decider: Option<RendererLifecycleDecider>,
     ) -> Result<FetchedDocument> {
+        let timeout = deadline.timeout();
         let stage = match wait_until {
             RenderedDomWaitUntil::DomContentLoaded => PageVmInitStage::DomContentLoaded,
             RenderedDomWaitUntil::Load => PageVmInitStage::Load,
@@ -444,15 +462,18 @@ impl Browser {
             stage = ?stage,
             "starting fetch_document_allow_http_error_with_wait_until deadline"
         );
-        let outer_timeout = wait_until_outer_timeout(wait_until, timeout);
-        let deadline = tokio::time::Instant::now()
-            .checked_add(outer_timeout)
-            .with_context(|| {
-                anyhow!(
-                    "fetch wait_until {wait_until:?} timeout of {} ms exceeds the supported range",
-                    timeout.as_millis()
-                )
-            })?;
+        // Network-idle and DOM-stable return a best-effort Page after their
+        // renderer-side readiness timer expires. Keep the historical one-second
+        // transport cushion so that Page can cross the owner boundary, while
+        // the logical FetchDeadline remains expired for every later plan step.
+        let outer_deadline = match wait_until {
+            RenderedDomWaitUntil::NetworkIdle | RenderedDomWaitUntil::DomStable => {
+                deadline.at_with_cushion(Duration::from_secs(1))?
+            }
+            RenderedDomWaitUntil::DomContentLoaded
+            | RenderedDomWaitUntil::Load
+            | RenderedDomWaitUntil::Done => deadline.at(),
+        };
         let requested_url = request.url.clone();
         if is_about_blank_url(&requested_url) {
             return self
@@ -461,7 +482,7 @@ impl Browser {
                     wait_until,
                     timeout,
                     stage,
-                    deadline,
+                    outer_deadline,
                     self.materialize_static_html_page(
                         &raw_url,
                         requested_url,
@@ -486,7 +507,7 @@ impl Browser {
                 wait_until,
                 timeout,
                 stage,
-                deadline,
+                outer_deadline,
                 self.fetch_service_worker_main_resource_for_navigation(
                     &request,
                     &navigation_loader,
@@ -514,7 +535,7 @@ impl Browser {
                     wait_until,
                     timeout,
                     stage,
-                    deadline,
+                    outer_deadline,
                     self.materialize_streaming_raw_response_page(
                         &raw_url,
                         requested_url,
@@ -536,7 +557,7 @@ impl Browser {
                 wait_until,
                 timeout,
                 stage,
-                deadline,
+                outer_deadline,
                 navigation_loader.fetch_raw_stream(request),
             )
             .await?;
@@ -557,7 +578,7 @@ impl Browser {
             wait_until,
             timeout,
             stage,
-            deadline,
+            outer_deadline,
             self.materialize_streaming_raw_response_page(
                 &raw_url,
                 requested_url,
@@ -629,6 +650,23 @@ impl Browser {
             .await
     }
 
+    /// Waits for a selector using the unspent portion of `deadline`.
+    pub async fn wait_for_selector_with_deadline(
+        &self,
+        page: &mut Page,
+        selector: &str,
+        deadline: FetchDeadline,
+    ) -> Result<crate::page::RendererDocumentQuerySelectorNode> {
+        let loader = self.resource_request_client();
+        let remaining = deadline.remaining();
+        deadline
+            .wait(
+                "waiting for a selector",
+                page.wait_for_selector(&loader, selector, remaining),
+            )
+            .await
+    }
+
     pub async fn wait_for_script_truthy(
         &self,
         page: &mut Page,
@@ -639,6 +677,24 @@ impl Browser {
             .await
     }
 
+    /// Waits for a truthy script result using the unspent portion of
+    /// `deadline`.
+    pub async fn wait_for_script_truthy_with_deadline(
+        &self,
+        page: &mut Page,
+        expression: &str,
+        deadline: FetchDeadline,
+    ) -> Result<()> {
+        let loader = self.resource_request_client();
+        let remaining = deadline.remaining();
+        deadline
+            .wait(
+                "waiting for a script to become truthy",
+                page.wait_for_script_truthy(&loader, expression, remaining),
+            )
+            .await
+    }
+
     pub async fn wait_for_subresource_response(
         &self,
         page: &mut Page,
@@ -646,6 +702,23 @@ impl Browser {
         timeout: Duration,
     ) -> Result<()> {
         page.wait_for_subresource_response(&self.resource_request_client(), criteria, timeout)
+            .await
+    }
+
+    /// Waits for a matching response using the unspent portion of `deadline`.
+    pub async fn wait_for_subresource_response_with_deadline(
+        &self,
+        page: &mut Page,
+        criteria: crate::page::SubresourceResponseWaitCriteria,
+        deadline: FetchDeadline,
+    ) -> Result<()> {
+        let loader = self.resource_request_client();
+        let remaining = deadline.remaining();
+        deadline
+            .wait(
+                "waiting for a subresource response",
+                page.wait_for_subresource_response(&loader, criteria, remaining),
+            )
             .await
     }
 

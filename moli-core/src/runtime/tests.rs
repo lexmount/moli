@@ -1,8 +1,8 @@
 use moli_test_support as support;
 
 use super::{
-    Browser, NavigationEngine, NavigationPageStorageHandles, NavigationResourceStorageHandles,
-    RenderedDomWaitUntil,
+    Browser, FetchDeadline, FetchedDocument, NavigationEngine, NavigationPageStorageHandles,
+    NavigationResourceStorageHandles, RenderedDomWaitUntil,
     external_raw_document_body_from_streaming_response_with_body_eof_observer,
 };
 use crate::{
@@ -2071,6 +2071,55 @@ async fn wait_for_selector_cancellation_restores_entry_for_close() -> Result<()>
     assert!(
         renderer_owner.record(page_id).is_none(),
         "explicit close after cancelled selector wait should remove the page entry"
+    );
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn fetch_deadline_spans_lifecycle_selector_and_script_without_reset() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let renderer_owner = browser.js_runtime.renderer_owner_handle();
+    let started = std::time::Instant::now();
+    let deadline = FetchDeadline::new(Duration::from_millis(600))?;
+    let fetched = browser
+        .fetch_request_document_allow_http_error_with_wait_until_deadline(
+            Request::get(&server.url("/static"))?,
+            RenderedDomWaitUntil::Load,
+            deadline,
+        )
+        .await?;
+    let FetchedDocument::Page(mut page) = fetched else {
+        panic!("static HTML fixture unexpectedly produced a raw document");
+    };
+    let page_id = page.renderer_page_id();
+
+    browser
+        .wait_for_selector_with_deadline(&mut page, "body", deadline)
+        .await?;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let error = browser
+        .wait_for_script_truthy_with_deadline(&mut page, "false", deadline)
+        .await
+        .unwrap_err();
+
+    assert!(
+        error
+            .chain()
+            .any(|cause| cause.to_string().contains("timed out")),
+        "unexpected deadline error: {error:?}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_millis(800),
+        "the script phase appears to have received a fresh timeout: elapsed={:?}",
+        started.elapsed()
+    );
+    tokio::time::timeout(Duration::from_secs(1), page.close_async()).await??;
+    assert!(
+        renderer_owner.record(page_id).is_none(),
+        "a deadline-cancelled wait must return the Page owner entry for close"
     );
 
     server.shutdown().await;

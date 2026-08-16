@@ -1,11 +1,12 @@
 //! Callable command runner for the Moli CLI.
 
 mod http_error_navigation;
+mod readiness;
 
-use std::{io::Write, sync::Arc, time::Duration};
+use std::{io::Write, sync::Arc};
 
 use crate::{
-    cli::{Cli, Commands, FetchWaitUntil, normalize_args_for_compat},
+    cli::{Cli, Commands, normalize_args_for_compat},
     config::AppConfig,
     cookie_cache, fetch_dump,
 };
@@ -13,13 +14,12 @@ use anyhow::Result;
 use anyhow::{Context, anyhow};
 use clap::{CommandFactory, Parser};
 use moli_core::runtime::{
-    Browser, FetchedDocument, NavigationRuntimeConfig, PageVmInitStage, RenderedDomWaitUntil,
-    storage_partition::StoragePartitionState,
+    Browser, FetchedDocument, NavigationRuntimeConfig, storage_partition::StoragePartitionState,
 };
 use moli_fetch::{Request, ensure_http_status_success};
 use moli_protocol_server::ProtocolServer;
 
-use self::http_error_navigation::{fetch_with_http_error_navigation, is_http_error_status};
+use self::{http_error_navigation::is_http_error_status, readiness::ReadinessPlan};
 
 pub async fn run_from_env() -> Result<()> {
     let cli = Cli::parse_from(normalize_args_for_compat(std::env::args_os()));
@@ -61,59 +61,10 @@ pub async fn run_cli_with_config<W: Write>(
             let browser = Browser::new(config.browser.clone())
                 .context("failed to initialize browser runtime")?;
             load_cookie_state(&browser, &config)?;
-            let timeout = std::time::Duration::from_millis(args.timeout);
-            let navigation_grace = Duration::from_millis(args.redirect_wait_ms);
             let request = build_fetch_request(&args.url, &config)?;
-            let fetch_result = match args.wait_until {
-                FetchWaitUntil::Done => {
-                    fetch_with_http_error_navigation(
-                        &browser,
-                        request,
-                        RenderedDomWaitUntil::Done,
-                        timeout,
-                        navigation_grace,
-                    )
-                    .await
-                }
-                FetchWaitUntil::DomContentLoaded => {
-                    fetch_with_http_error_navigation(
-                        &browser,
-                        request,
-                        RenderedDomWaitUntil::DomContentLoaded,
-                        timeout,
-                        navigation_grace,
-                    )
-                    .await
-                }
-                FetchWaitUntil::Load => {
-                    fetch_with_http_error_navigation(
-                        &browser,
-                        request,
-                        RenderedDomWaitUntil::Load,
-                        timeout,
-                        navigation_grace,
-                    )
-                    .await
-                }
-                FetchWaitUntil::NetworkIdle => {
-                    browser
-                        .fetch_request_document_allow_http_error_with_wait_until(
-                            request,
-                            RenderedDomWaitUntil::NetworkIdle,
-                            timeout,
-                        )
-                        .await
-                }
-                FetchWaitUntil::DomStable => {
-                    browser
-                        .fetch_request_document_allow_http_error_with_wait_until(
-                            request,
-                            RenderedDomWaitUntil::DomStable,
-                            timeout,
-                        )
-                        .await
-                }
-            };
+            let readiness =
+                ReadinessPlan::from_fetch_args(&args, config.fetch.response_wait.clone())?;
+            let fetch_result = readiness.fetch_document(&browser, request).await;
             let fetched_document = match fetch_result {
                 Ok(document) => document,
                 Err(error) => {
@@ -125,7 +76,7 @@ pub async fn run_cli_with_config<W: Write>(
             let mut page = match fetched_document {
                 FetchedDocument::Page(page) => page,
                 FetchedDocument::Raw(raw_document) => {
-                    if lifecycle_stage_for_fetch_wait(args.wait_until).is_some()
+                    if readiness.lifecycle_stage().is_some()
                         && is_http_error_status(raw_document.status())
                     {
                         let status_error = ensure_http_status_success(
@@ -140,12 +91,7 @@ pub async fn run_cli_with_config<W: Write>(
                             )
                             .with_context(|| anyhow!("failed to fetch `{}`", args.url));
                     }
-                    if config.fetch.response_wait.is_some()
-                        || args.wait_selector.is_some()
-                        || args.wait_script.is_some()
-                        || args.wait_script_file.is_some()
-                        || args.delay_ms > 0
-                    {
+                    if readiness.has_page_waits() || args.delay_ms > 0 {
                         finalize_fetch_browser(browser);
                         return Err(anyhow!(
                             "raw non-HTML document fetch does not support page wait options"
@@ -163,9 +109,7 @@ pub async fn run_cli_with_config<W: Write>(
                 }
             };
 
-            if lifecycle_stage_for_fetch_wait(args.wait_until).is_some()
-                && is_http_error_status(page.status())
-            {
+            if readiness.lifecycle_stage().is_some() && is_http_error_status(page.status()) {
                 let error = ensure_http_status_success(
                     page.final_url().as_str(),
                     page.status(),
@@ -185,42 +129,15 @@ pub async fn run_cli_with_config<W: Write>(
                 return Err(error).with_context(|| anyhow!("failed to fetch `{}`", args.url));
             }
 
-            if let Some(response_wait) = config.fetch.response_wait.clone() {
-                browser
-                    .wait_for_subresource_response(&mut page, response_wait, timeout)
-                    .await
-                    .context("failed while waiting for subresource response")?;
-            }
-
-            if let Some(selector) = args.wait_selector.as_deref() {
-                browser
-                    .wait_for_selector(&mut page, selector, timeout)
-                    .await
-                    .with_context(|| anyhow!("failed while waiting for selector `{selector}`"))?;
-            }
-
-            let wait_script = match (
-                args.wait_script.as_deref(),
-                args.wait_script_file.as_deref(),
-            ) {
-                (Some(_), Some(_)) => {
-                    return Err(anyhow!(
-                        "`--wait-script` and `--wait-script-file` are mutually exclusive"
-                    ));
+            if let Err(error) = readiness.wait_for_page(&browser, &mut page).await {
+                if let Err(close_error) = page.close_async().await {
+                    tracing::warn!(
+                        error = %close_error,
+                        "failed to close fetched page after readiness failure"
+                    );
                 }
-                (Some(script), None) => Some(script.to_owned()),
-                (None, Some(path)) => Some(
-                    std::fs::read_to_string(path)
-                        .with_context(|| anyhow!("failed to read wait script file `{path}`"))?,
-                ),
-                (None, None) => None,
-            };
-
-            if let Some(script) = wait_script.as_deref() {
-                browser
-                    .wait_for_script_truthy(&mut page, script, timeout)
-                    .await
-                    .context("failed while waiting for script to become truthy")?;
+                finalize_fetch_browser(browser);
+                return Err(error).with_context(|| anyhow!("failed to fetch `{}`", args.url));
             }
 
             if args.delay_ms > 0 {
@@ -264,18 +181,6 @@ fn build_fetch_request(url: &str, config: &AppConfig) -> Result<Request> {
     // Keep CLI-provided headers scoped to the initial document navigation.
     request.request_headers = config.fetch.request_headers.clone();
     Ok(request)
-}
-
-fn lifecycle_stage_for_fetch_wait(wait_until: FetchWaitUntil) -> Option<PageVmInitStage> {
-    // Only waits defined by a concrete Document lifecycle milestone opt into
-    // HTTP-error navigation recovery. `done` uses the fetch path's historical
-    // load boundary; network-idle and DOM-stable remain post-load page-state
-    // waits and keep their existing HTTP-error dump behavior.
-    match wait_until {
-        FetchWaitUntil::DomContentLoaded => Some(PageVmInitStage::DomContentLoaded),
-        FetchWaitUntil::Load | FetchWaitUntil::Done => Some(PageVmInitStage::Load),
-        FetchWaitUntil::NetworkIdle | FetchWaitUntil::DomStable => None,
-    }
 }
 
 fn load_cookie_state(browser: &Browser, config: &AppConfig) -> Result<()> {
