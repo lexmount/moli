@@ -216,6 +216,75 @@ pub enum LayoutReplacedKind {
     FormControl,
 }
 
+/// Renderer-resolved fallback content for an unavailable HTML image.
+///
+/// Resource lifecycle is deliberately absent from the layout crate. The
+/// renderer selects this disposition only after the image request can no
+/// longer produce primary replaced content; layout then owns the resulting
+/// box construction and used-style adjustment.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct LayoutImageFallbackContent {
+    alternative_text: Arc<str>,
+    has_nonempty_alt_attribute: bool,
+    quirks_mode: bool,
+}
+
+impl LayoutImageFallbackContent {
+    pub fn new(
+        alternative_text: impl Into<Arc<str>>,
+        has_nonempty_alt_attribute: bool,
+        quirks_mode: bool,
+    ) -> Self {
+        Self {
+            alternative_text: alternative_text.into(),
+            has_nonempty_alt_attribute,
+            quirks_mode,
+        }
+    }
+
+    pub fn alternative_text(&self) -> &str {
+        &self.alternative_text
+    }
+
+    pub const fn has_nonempty_alt_attribute(&self) -> bool {
+        self.has_nonempty_alt_attribute
+    }
+
+    pub const fn is_quirks_mode(&self) -> bool {
+        self.quirks_mode
+    }
+}
+
+/// Mutually exclusive content selected for an element's principal layout box.
+///
+/// Keeping fallback content in this sum type prevents an element from being
+/// classified as both a replaced leaf and a fallback container. That mirrors
+/// the layout-object reattachment boundary used by browser engines when an
+/// image request becomes terminally unavailable.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub enum LayoutElementContent {
+    #[default]
+    Normal,
+    Replaced(LayoutReplacedKind),
+    ImageFallback(LayoutImageFallbackContent),
+}
+
+impl LayoutElementContent {
+    pub const fn replaced_kind(&self) -> Option<LayoutReplacedKind> {
+        match self {
+            Self::Replaced(kind) => Some(*kind),
+            Self::Normal | Self::ImageFallback(_) => None,
+        }
+    }
+
+    pub const fn image_fallback(&self) -> Option<&LayoutImageFallbackContent> {
+        match self {
+            Self::ImageFallback(content) => Some(content),
+            Self::Normal | Self::Replaced(_) => None,
+        }
+    }
+}
+
 /// Typed HTML inputs consumed by table construction and sizing.
 ///
 /// Values are normalized by the renderer adapter so the layout crate never
@@ -305,7 +374,7 @@ pub struct LayoutElementSemantics {
     pub namespace: LayoutNamespace,
     pub local_name: Arc<str>,
     pub category: LayoutElementCategory,
-    pub replaced: Option<LayoutReplacedKind>,
+    pub content: LayoutElementContent,
     pub metadata: LayoutElementMetadata,
 }
 
@@ -314,13 +383,13 @@ impl LayoutElementSemantics {
         namespace: LayoutNamespace,
         local_name: impl Into<Arc<str>>,
         category: LayoutElementCategory,
-        replaced: Option<LayoutReplacedKind>,
+        content: LayoutElementContent,
     ) -> Self {
         Self {
             namespace,
             local_name: local_name.into(),
             category,
-            replaced,
+            content,
             metadata: LayoutElementMetadata {
                 table: matches!(category, LayoutElementCategory::Table(_))
                     .then(LayoutTableData::default),
@@ -338,7 +407,15 @@ impl LayoutElementSemantics {
     }
 
     pub const fn is_replaced(&self) -> bool {
-        self.replaced.is_some()
+        matches!(&self.content, LayoutElementContent::Replaced(_))
+    }
+
+    pub const fn replaced_kind(&self) -> Option<LayoutReplacedKind> {
+        self.content.replaced_kind()
+    }
+
+    pub const fn image_fallback(&self) -> Option<&LayoutImageFallbackContent> {
+        self.content.image_fallback()
     }
 
     pub(crate) fn is_html_element(&self, local_name: &str) -> bool {

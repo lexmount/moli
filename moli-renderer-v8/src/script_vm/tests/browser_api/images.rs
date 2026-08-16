@@ -327,6 +327,109 @@ async fn failed_object_image_switches_to_fallback_content() {
 }
 
 #[tokio::test]
+async fn failed_img_rebuilds_as_alt_text_fallback_content() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    loader.set_image_fetch_enabled(true);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://img-fallback.test/page.html",
+        &loader,
+    );
+    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Image));
+    vm.eval(
+        r#"
+        (() => {
+          document.body.style.margin = "0";
+          const image = document.createElement("img");
+          image.id = "failed-image";
+          image.alt = "Should not be 500px high";
+          image.style.cssText = "width:100px;aspect-ratio:1/5;background:yellow";
+          globalThis.__failedImageFallbackEvents = [];
+          image.addEventListener("error", () => __failedImageFallbackEvents.push("error"));
+          document.body.appendChild(image);
+          image.src = "/broken.png";
+        })()
+        "#,
+    )
+    .expect("failed image request should start");
+
+    let pending = vm.take_pending_subresource_fetch_infos();
+    assert_eq!(pending.len(), 1);
+    vm.screenshot_layout_snapshot(moli_layout::PaintViewport::new(320, 540, 1.0))
+        .expect("pending image layout should succeed")
+        .expect("pending image fixture should retain a layout root");
+    assert_eq!(
+        vm.eval(
+            r#"(() => { const image = document.getElementById("failed-image"); return `${image.offsetWidth}|${image.offsetHeight}`; })()"#,
+        )
+        .expect("pending image geometry should evaluate"),
+        "100|500",
+        "a potentially available image remains primary replaced content"
+    );
+
+    vm.fulfill_pending_subresource_fetch(
+        pending[0].internal_id,
+        404,
+        vec![("Content-Type".to_owned(), "text/plain".to_owned())],
+        crate::runtime::RendererSyntheticResponseBody::empty(),
+    )
+    .expect("failed image response should fulfill");
+    run_next_image_event_task(&mut vm, &loader, "failed image fallback error event").await;
+    assert_eq!(
+        vm.eval("globalThis.__failedImageFallbackEvents.join('|')")
+            .expect("failed image event should evaluate"),
+        "error"
+    );
+
+    // Geometry remains snapshot-driven in this renderer. The next screenshot
+    // rebuilds the layout tree from the terminal image-resource disposition.
+    let fallback_snapshot = vm
+        .screenshot_layout_snapshot(moli_layout::PaintViewport::new(320, 540, 1.0))
+        .expect("failed image fallback layout should succeed")
+        .expect("failed image fallback fixture should retain a layout root");
+    assert!(fallback_snapshot.fragments.iter().any(
+        |fragment| matches!(fragment, moli_layout::PaintFragment::GlyphRun(run) if !run.glyphs.is_empty())
+    ));
+    assert_eq!(
+        vm.eval(
+            r#"(() => { const image = document.getElementById("failed-image"); return `${image.offsetHeight > 0}|${image.offsetHeight !== 500}`; })()"#,
+        )
+        .expect("failed image fallback geometry should evaluate"),
+        "true|true",
+        "non-empty alt text makes a standards-mode inline fallback non-replaced"
+    );
+
+    vm.eval("document.getElementById('failed-image').alt = ''")
+        .expect("empty alt mutation should evaluate");
+    vm.screenshot_layout_snapshot(moli_layout::PaintViewport::new(320, 540, 1.0))
+        .expect("empty-alt fallback layout should succeed")
+        .expect("empty-alt fallback fixture should retain a layout root");
+    assert_eq!(
+        vm.eval(
+            r#"(() => { const image = document.getElementById("failed-image"); return `${image.offsetWidth}|${image.offsetHeight}`; })()"#,
+        )
+        .expect("empty-alt fallback geometry should evaluate"),
+        "100|500",
+        "an empty alt attribute retains authored fallback sizing"
+    );
+
+    vm.eval(
+        "(() => { const image = document.getElementById('failed-image'); image.alt = 'fallback'; image.style.display = 'block'; })()",
+    )
+    .expect("block fallback mutation should evaluate");
+    vm.screenshot_layout_snapshot(moli_layout::PaintViewport::new(320, 540, 1.0))
+        .expect("block fallback layout should succeed")
+        .expect("block fallback fixture should retain a layout root");
+    assert_eq!(
+        vm.eval(
+            r#"(() => { const image = document.getElementById("failed-image"); return `${image.offsetWidth}|${image.offsetHeight}`; })()"#,
+        )
+        .expect("block fallback geometry should evaluate"),
+        "100|500",
+        "author block display retains its authored dimensions and ratio"
+    );
+}
+
+#[tokio::test]
 async fn parser_discovered_embed_uses_the_shared_image_resource_pipeline() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     loader.set_image_fetch_enabled(true);

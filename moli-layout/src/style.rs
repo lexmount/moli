@@ -52,9 +52,9 @@ use taffy::{
 };
 
 use crate::{
-    LayoutPoint, LayoutRect, LayoutTransform2D, PaintBlendMode, PaintBorderColors,
-    PaintBorderStyle, PaintBorderStyles, PaintBoxShadow, PaintColor, PaintCornerRadii,
-    PaintCornerRadius, PaintEdgeSizes, PaintFragment,
+    LayoutElementContent, LayoutPoint, LayoutRect, LayoutTransform2D, PaintBlendMode,
+    PaintBorderColors, PaintBorderStyle, PaintBorderStyles, PaintBoxShadow, PaintColor,
+    PaintCornerRadii, PaintCornerRadius, PaintEdgeSizes, PaintFragment,
 };
 
 /// Marker families implemented by the Phase 4 list formatter.
@@ -1768,6 +1768,59 @@ impl ResolvedLayoutStyle {
         self.taffy.item_is_replaced = true;
     }
 
+    /// Applies element-content-dependent used-style rules at the box-tree
+    /// construction boundary.
+    ///
+    /// A terminally unavailable HTML image is rebuilt as fallback flow
+    /// content, not measured as a replaced leaf. Blink resets a standards-mode
+    /// inline fallback's preferred dimensions when non-empty `alt` text makes
+    /// it non-replaced; missing/empty `alt`, quirks mode, and non-inline author
+    /// display retain the authored sizing behavior.
+    pub(crate) fn adjust_for_element_content(&mut self, content: &LayoutElementContent) {
+        let LayoutElementContent::ImageFallback(fallback) = content else {
+            return;
+        };
+
+        let width_is_auto = self.taffy.size.width.is_auto();
+        let height_is_auto = self.taffy.size.height.is_auto();
+        if fallback.is_quirks_mode() {
+            if !width_is_auto && height_is_auto {
+                self.taffy.size.height = self.taffy.size.width;
+            } else if !height_is_auto && width_is_auto {
+                self.taffy.size.width = self.taffy.size.height;
+            }
+        }
+
+        if !self.image_fallback_is_atomic(content) && self.display == LayoutDisplay::Inline {
+            self.taffy.size = Size {
+                width: taffy::Dimension::auto(),
+                height: taffy::Dimension::auto(),
+            };
+            self.preferred_aspect_ratio = PreferredAspectRatio::Auto;
+            self.taffy.aspect_ratio = None;
+        }
+    }
+
+    /// Whether failed-image fallback content participates as a sized atomic
+    /// object instead of ordinary phrasing content.
+    ///
+    /// This is the layout-object counterpart of Blink's
+    /// `TreatImageAsReplaced`: the fallback remains content-bearing (its alt
+    /// text is laid out), but an authored two-axis size or one size plus a
+    /// preferred ratio makes it atomic when the document is in quirks mode or
+    /// the image has no non-empty `alt` value.
+    pub(crate) fn image_fallback_is_atomic(&self, content: &LayoutElementContent) -> bool {
+        let LayoutElementContent::ImageFallback(fallback) = content else {
+            return false;
+        };
+        let has_intrinsic_dimensions =
+            !self.taffy.size.width.is_auto() && !self.taffy.size.height.is_auto();
+        let has_dimensions_from_ratio = self.preferred_aspect_ratio != PreferredAspectRatio::Auto
+            && (!self.taffy.size.width.is_auto() || !self.taffy.size.height.is_auto());
+        (has_intrinsic_dimensions || has_dimensions_from_ratio)
+            && (fallback.is_quirks_mode() || !fallback.has_nonempty_alt_attribute())
+    }
+
     pub(crate) fn resolved_aspect_ratio(&self, natural_ratio: Option<f32>) -> ResolvedAspectRatio {
         self.preferred_aspect_ratio
             .resolve(natural_ratio, self.taffy.box_sizing)
@@ -2367,6 +2420,7 @@ pub(crate) fn resolve_stylo_calc_value(calc_ptr: *const (), parent_size: f32) ->
 #[cfg(test)]
 mod aspect_ratio_tests {
     use super::*;
+    use crate::LayoutImageFallbackContent;
 
     #[test]
     fn replaced_ratio_resolution_preserves_auto_precedence_and_box_basis() {
@@ -2382,6 +2436,51 @@ mod aspect_ratio_tests {
         let fallback = PreferredAspectRatio::AutoAndRatio(1.0).resolve(None, BoxSizing::BorderBox);
         assert_eq!(fallback.ratio, Some(1.0));
         assert_eq!(fallback.box_sizing, BoxSizing::ContentBox);
+    }
+
+    #[test]
+    fn failed_image_fallback_adjusts_used_sizing_from_content_disposition() {
+        let style_for = |display, has_nonempty_alt_attribute, quirks_mode| {
+            let mut style = ResolvedLayoutStyle::synthetic(
+                display,
+                Style {
+                    size: Size {
+                        width: taffy::Dimension::length(100.0),
+                        height: taffy::Dimension::auto(),
+                    },
+                    aspect_ratio: Some(0.2),
+                    ..Style::default()
+                },
+                PaintColor::TRANSPARENT,
+            );
+            style.adjust_for_element_content(&LayoutElementContent::ImageFallback(
+                LayoutImageFallbackContent::new(
+                    "fallback",
+                    has_nonempty_alt_attribute,
+                    quirks_mode,
+                ),
+            ));
+            style
+        };
+
+        let inline_text = style_for(LayoutDisplay::Inline, true, false);
+        assert!(inline_text.taffy.size.width.is_auto());
+        assert!(inline_text.taffy.size.height.is_auto());
+        assert_eq!(inline_text.taffy.aspect_ratio, None);
+
+        let missing_alt = style_for(LayoutDisplay::Inline, false, false);
+        assert!(!missing_alt.taffy.size.width.is_auto());
+        assert!(missing_alt.taffy.size.height.is_auto());
+        assert_eq!(missing_alt.taffy.aspect_ratio, Some(0.2));
+
+        let block = style_for(LayoutDisplay::Block, true, false);
+        assert!(!block.taffy.size.width.is_auto());
+        assert!(block.taffy.size.height.is_auto());
+        assert_eq!(block.taffy.aspect_ratio, Some(0.2));
+
+        let quirks = style_for(LayoutDisplay::Inline, true, true);
+        assert_eq!(quirks.taffy.size.width, quirks.taffy.size.height);
+        assert_eq!(quirks.taffy.aspect_ratio, Some(0.2));
     }
 }
 

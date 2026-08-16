@@ -2,12 +2,13 @@ use std::collections::HashMap;
 
 use moli_layout::{
     DocumentLayoutServices, LayoutAnonymousReason, LayoutBoxKind, LayoutCapabilityDiagnostic,
-    LayoutDisplay, LayoutElementCategory, LayoutElementSemantics, LayoutError,
-    LayoutFormControlKind, LayoutInlineAlignment, LayoutInputControlKind, LayoutListRole,
-    LayoutNamespace, LayoutPosition, LayoutPseudo, LayoutReplacedKind, LayoutSource,
-    LayoutSourceKind, LayoutStyleResolver, LayoutTableRole, PaintColor, PaintFragment, PaintRect,
-    PaintViewport, ReplacedMetrics, ResolvedLayoutStyle, ScreenshotLayoutRequest,
-    build_layout_world, build_screenshot_snapshot, normalize_layout_source,
+    LayoutDisplay, LayoutElementCategory, LayoutElementContent, LayoutElementSemantics,
+    LayoutError, LayoutFormControlKind, LayoutImageFallbackContent, LayoutInlineAlignment,
+    LayoutInputControlKind, LayoutListRole, LayoutNamespace, LayoutPosition, LayoutPseudo,
+    LayoutReplacedKind, LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutTableRole,
+    PaintColor, PaintFragment, PaintRect, PaintViewport, ReplacedMetrics, ResolvedLayoutStyle,
+    ScreenshotLayoutRequest, build_layout_world, build_screenshot_snapshot,
+    normalize_layout_source,
 };
 use style::Atom;
 use taffy::{Dimension, Display, FlexDirection, Rect, Size, Style, style_helpers::length};
@@ -33,7 +34,7 @@ impl TestNode {
                 LayoutNamespace::Html,
                 "div",
                 LayoutElementCategory::Generic,
-                None,
+                LayoutElementContent::Normal,
             )),
             replaced_metrics: None,
         }
@@ -55,7 +56,7 @@ impl TestNode {
                 LayoutNamespace::Html,
                 local_name,
                 category,
-                replaced,
+                replaced.map_or(LayoutElementContent::Normal, LayoutElementContent::Replaced),
             )),
             replaced_metrics: None,
         }
@@ -93,7 +94,7 @@ impl TestNode {
                 LayoutNamespace::Html,
                 "img",
                 LayoutElementCategory::Generic,
-                Some(LayoutReplacedKind::Image),
+                LayoutElementContent::Replaced(LayoutReplacedKind::Image),
             )),
             replaced_metrics: Some(ReplacedMetrics {
                 intrinsic_width: Some(width),
@@ -414,6 +415,114 @@ fn mixed_flow_wraps_each_inline_run_in_one_anonymous_block() {
             "  anonymous-block path=0/2 display=block owner=root anonymous=mixed-flow-inline-run fc=inline\n",
             "    text path=0/2/0 display=inline source=text-after text=\"after\"\n",
         )
+    );
+}
+
+#[test]
+fn image_fallback_is_a_flow_container_with_owned_alternative_text() {
+    let source = TestSource {
+        root: 0,
+        nodes: vec![
+            TestNode::element("root", vec![1]),
+            TestNode {
+                label: "broken-image",
+                kind: LayoutSourceKind::Element,
+                text: None,
+                children: vec![2],
+                element_semantics: Some(LayoutElementSemantics::new(
+                    LayoutNamespace::Html,
+                    "img",
+                    LayoutElementCategory::Generic,
+                    LayoutElementContent::ImageFallback(LayoutImageFallbackContent::new(
+                        "alternative text",
+                        true,
+                        false,
+                    )),
+                )),
+                replaced_metrics: None,
+            },
+            TestNode::text("suppressed-source-child", "must not participate"),
+        ],
+    };
+    let mut styles = TestStyles::default();
+    styles.primary.insert(0, style(LayoutDisplay::Block));
+    styles.primary.insert(1, style(LayoutDisplay::Inline));
+
+    let world = build_layout_world(&source, &mut styles).unwrap();
+    let image = world.source_box(1).expect("fallback host should own a box");
+    let image_box = world.box_by_id(image).expect("fallback host box");
+    assert_eq!(image_box.kind(), LayoutBoxKind::PrincipalInline);
+    assert!(
+        image_box
+            .element_semantics()
+            .unwrap()
+            .image_fallback()
+            .is_some()
+    );
+    assert_eq!(image_box.children().len(), 1);
+
+    let alternative = world
+        .box_by_id(image_box.children()[0])
+        .expect("fallback alternative text box");
+    assert_eq!(alternative.kind(), LayoutBoxKind::Text);
+    assert_eq!(alternative.owner(), Some(1));
+    assert_eq!(alternative.text(), Some("alternative text"));
+    assert_eq!(world.source_box(2), None);
+    assert_eq!(styles.primary_queries, vec![0, 1]);
+}
+
+#[test]
+fn sized_image_fallback_is_a_content_bearing_atomic_inline() {
+    let source = TestSource {
+        root: 0,
+        nodes: vec![
+            TestNode::element("root", vec![1]),
+            TestNode {
+                label: "broken-image",
+                kind: LayoutSourceKind::Element,
+                text: None,
+                children: Vec::new(),
+                element_semantics: Some(LayoutElementSemantics::new(
+                    LayoutNamespace::Html,
+                    "img",
+                    LayoutElementCategory::Generic,
+                    LayoutElementContent::ImageFallback(LayoutImageFallbackContent::new(
+                        "title fallback",
+                        false,
+                        false,
+                    )),
+                )),
+                replaced_metrics: None,
+            },
+        ],
+    };
+    let mut styles = TestStyles::default();
+    styles.primary.insert(0, style(LayoutDisplay::Block));
+    styles.primary.insert(
+        1,
+        ResolvedLayoutStyle::synthetic(
+            LayoutDisplay::Inline,
+            Style {
+                size: Size {
+                    width: Dimension::length(100.0),
+                    height: Dimension::auto(),
+                },
+                aspect_ratio: Some(0.2),
+                ..Style::default()
+            },
+            PaintColor::TRANSPARENT,
+        ),
+    );
+
+    let world = build_layout_world(&source, &mut styles).unwrap();
+    let image = world.source_box(1).expect("fallback host should own a box");
+    let image_box = world.box_by_id(image).expect("fallback host box");
+    assert_eq!(image_box.kind(), LayoutBoxKind::ImageFallback);
+    assert_eq!(image_box.style().display(), LayoutDisplay::Inline);
+    assert_eq!(image_box.children().len(), 1);
+    assert_eq!(
+        world.box_by_id(image_box.children()[0]).unwrap().text(),
+        Some("title fallback")
     );
 }
 

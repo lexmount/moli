@@ -104,6 +104,7 @@ where
                 LayoutBoxKind::PrincipalBlock
                 | LayoutBoxKind::PrincipalFlowRoot
                 | LayoutBoxKind::PrincipalInlineBlock
+                | LayoutBoxKind::ImageFallback
                 | LayoutBoxKind::ListItem
                 | LayoutBoxKind::InlineListItem
                 | LayoutBoxKind::TableCaption
@@ -188,8 +189,14 @@ fn write_normalized_node(
             element.local_name,
             element.category.debug_name()
         )?;
-        if let Some(replaced) = element.replaced {
+        if let Some(replaced) = element.replaced_kind() {
             write!(formatter, " replaced={}", replaced.debug_name())?;
+        } else if let Some(fallback) = element.image_fallback() {
+            write!(
+                formatter,
+                " content=image-fallback alternative={:?}",
+                fallback.alternative_text()
+            )?;
         }
     }
     if let Some(reason) = node.anonymous_reason {

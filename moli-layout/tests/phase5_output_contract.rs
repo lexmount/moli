@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
 use moli_layout::{
-    DocumentLayoutServices, LayoutDisplay, LayoutElementCategory, LayoutElementSemantics,
-    LayoutError, LayoutFlushReason, LayoutFragmentKind, LayoutNamespace, LayoutPassRequest,
-    LayoutPassResult, LayoutPhysicalAxis, LayoutPoint, LayoutPosition, LayoutQuery,
-    LayoutQueryAnswer, LayoutQueryBatch, LayoutRect, LayoutSource, LayoutSourceKind,
+    DocumentLayoutServices, LayoutDisplay, LayoutElementCategory, LayoutElementContent,
+    LayoutElementSemantics, LayoutError, LayoutFlushReason, LayoutFragmentKind, LayoutNamespace,
+    LayoutPassRequest, LayoutPassResult, LayoutPhysicalAxis, LayoutPoint, LayoutPosition,
+    LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutRect, LayoutSource, LayoutSourceKind,
     LayoutStyleResolver, LayoutTransform2D, LayoutViewport, PaintColor, ResolvedLayoutStyle,
     build_layout_pass,
 };
@@ -75,7 +75,7 @@ impl LayoutSource for Source {
                 LayoutNamespace::Html,
                 "div",
                 LayoutElementCategory::Generic,
-                None,
+                LayoutElementContent::Normal,
             )
         })
     }

@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
 use moli_layout::{
-    DocumentLayoutServices, LayoutDisplay, LayoutElementCategory, LayoutElementSemantics,
-    LayoutError, LayoutNamespace, LayoutPosition, LayoutPseudo, LayoutReplacedKind, LayoutSource,
-    LayoutSourceKind, LayoutStyleResolver, PaintBlendMode, PaintColor, PaintFragment, PaintRect,
-    PaintSnapshot, PaintViewport, ReplacedMetrics, ResolvedLayoutStyle, ScreenshotLayoutRequest,
-    build_screenshot_snapshot,
+    DocumentLayoutServices, LayoutDisplay, LayoutElementCategory, LayoutElementContent,
+    LayoutElementSemantics, LayoutError, LayoutNamespace, LayoutPosition, LayoutPseudo,
+    LayoutReplacedKind, LayoutSource, LayoutSourceKind, LayoutStyleResolver, PaintBlendMode,
+    PaintColor, PaintFragment, PaintRect, PaintSnapshot, PaintViewport, ReplacedMetrics,
+    ResolvedLayoutStyle, ScreenshotLayoutRequest, build_screenshot_snapshot,
 };
 use style::Atom;
 use taffy::{
@@ -38,7 +38,7 @@ impl FixtureNode {
                 LayoutNamespace::Html,
                 local_name,
                 LayoutElementCategory::Generic,
-                None,
+                LayoutElementContent::Normal,
             ),
             children,
             replaced_metrics: None,
@@ -52,7 +52,7 @@ impl FixtureNode {
                 LayoutNamespace::Svg,
                 "svg",
                 LayoutElementCategory::Generic,
-                Some(LayoutReplacedKind::Svg),
+                LayoutElementContent::Replaced(LayoutReplacedKind::Svg),
             ),
             children: Vec::new(),
             replaced_metrics: Some(ReplacedMetrics {
@@ -71,7 +71,7 @@ impl FixtureNode {
                 LayoutNamespace::Html,
                 "iframe",
                 LayoutElementCategory::Generic,
-                Some(LayoutReplacedKind::Frame),
+                LayoutElementContent::Replaced(LayoutReplacedKind::Frame),
             ),
             children: Vec::new(),
             replaced_metrics: None,

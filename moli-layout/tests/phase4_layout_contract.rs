@@ -1,14 +1,15 @@
 use std::{collections::HashMap, sync::Arc};
 
 use moli_layout::{
-    DocumentLayoutServices, LayoutDisplay, LayoutElementCategory, LayoutElementMetadata,
-    LayoutElementSemantics, LayoutError, LayoutFormControlData, LayoutFormControlKind,
-    LayoutImageResource, LayoutInputControlKind, LayoutListData, LayoutListMarkerPosition,
-    LayoutListMarkerType, LayoutListRole, LayoutNamespace, LayoutPosition, LayoutPseudo,
-    LayoutReplacedKind, LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutTableData,
-    LayoutTableRole, LayoutTextSelection, PaintBrush, PaintColor, PaintFragment, PaintRect,
-    PaintShape, PaintSnapshot, PaintTransform2D, PaintViewport, ReplacedMetrics,
-    ReplacedObjectSize, ResolvedLayoutStyle, ScreenshotLayoutRequest, build_screenshot_snapshot,
+    DocumentLayoutServices, LayoutDisplay, LayoutElementCategory, LayoutElementContent,
+    LayoutElementMetadata, LayoutElementSemantics, LayoutError, LayoutFormControlData,
+    LayoutFormControlKind, LayoutImageResource, LayoutInputControlKind, LayoutListData,
+    LayoutListMarkerPosition, LayoutListMarkerType, LayoutListRole, LayoutNamespace,
+    LayoutPosition, LayoutPseudo, LayoutReplacedKind, LayoutSource, LayoutSourceKind,
+    LayoutStyleResolver, LayoutTableData, LayoutTableRole, LayoutTextSelection, PaintBrush,
+    PaintColor, PaintFragment, PaintRect, PaintShape, PaintSnapshot, PaintTransform2D,
+    PaintViewport, ReplacedMetrics, ReplacedObjectSize, ResolvedLayoutStyle,
+    ScreenshotLayoutRequest, build_screenshot_snapshot,
 };
 use style::Atom;
 use taffy::{
@@ -47,7 +48,7 @@ impl Node {
                 LayoutNamespace::Html,
                 local_name,
                 category,
-                replaced,
+                replaced.map_or(LayoutElementContent::Normal, LayoutElementContent::Replaced),
             )),
             text: None,
             children,

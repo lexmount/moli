@@ -2329,6 +2329,7 @@ fn collect_box<N>(
             kind,
             LayoutBoxKind::Replaced
                 | LayoutBoxKind::FormControl
+                | LayoutBoxKind::ImageFallback
                 | LayoutBoxKind::InlineTableWrapper
         );
     if !structural_inline {
