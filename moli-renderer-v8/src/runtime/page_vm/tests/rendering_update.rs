@@ -2949,6 +2949,7 @@ async fn br_client_rects_use_forced_break_fragments_in_all_writing_modes() {
             r#"
 document.head.innerHTML = `<style>
 @font-face {{ font-family:MoliAhem; src:url(data:font/woff2;base64,{encoded}) format('woff2') }}
+@font-face {{ font-family:"Times New Roman"; src:url(data:font/woff2;base64,{encoded}) format('woff2') }}
 html,body {{ margin:0 }}
 .case {{ position:absolute; left:0; width:200px; height:100px; font:20px MoliAhem }}
 .strut-case {{ position:absolute; left:300px; width:200px; font:20px MoliAhem }}
@@ -2960,6 +2961,7 @@ document.body.innerHTML = `
 <div id=vlr-rtl class=case style="top:300px;writing-mode:vertical-lr;direction:rtl"><br></div>
 <div id=vrl-ltr class=case style="top:400px;writing-mode:vertical-rl;direction:ltr"><br></div>
 <div id=vrl-rtl class=case style="top:500px;writing-mode:vertical-rl;direction:rtl"><br></div>
+<div id=htb-default class=case style="top:600px;font:16px serif"><br></div>
 <div id=br-after-large-text class=strut-case style="top:0"><span style="font-size:40px">A</span><br style="font-size:10px"></div>
 <div id=br-with-own-style class=strut-case style="top:100px"><br style="font-size:10px"></div>
 <div id=br-in-large-inline class=strut-case style="top:200px"><span style="font-size:40px"><br style="font-size:10px"></span></div>`;
@@ -2981,6 +2983,7 @@ document.body.innerHTML = `
             ("vlr-rtl", [0.0, 100.0, 20.0, 0.0]),
             ("vrl-ltr", [180.0, 0.0, 20.0, 0.0]),
             ("vrl-rtl", [180.0, 100.0, 20.0, 0.0]),
+            ("htb-default", [0.0, 0.0, 0.0, 16.0]),
             ("br-after-large-text", [24.0, 16.0, 0.0, 20.0]),
             ("br-with-own-style", [0.0, 0.0, 0.0, 20.0]),
             ("br-in-large-inline", [0.0, 0.0, 0.0, 40.0]),

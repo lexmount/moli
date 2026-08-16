@@ -1,6 +1,10 @@
 use super::*;
 use moli_core::LayoutPolicy;
 
+fn fixed_height_scroll_rows() -> String {
+    "<div style='height:20px'>row</div>".repeat(60)
+}
+
 async fn renderer_backend_node_id_for_live_expression(
     ctx: &mut TestContext,
     evaluate_id: u64,
@@ -1387,7 +1391,7 @@ async fn scroll_into_view_if_needed_accepts_element_node() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
 
-    let rows = "<div>row</div>".repeat(60);
+    let rows = fixed_height_scroll_rows();
     let url = format!(
         "data:text/html,<!doctype html><html><body>{rows}<div id='box'></div></body></html>"
     );
@@ -1541,7 +1545,7 @@ async fn scroll_into_view_if_needed_supports_object_id() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
 
-    let rows = "<div>row</div>".repeat(60);
+    let rows = fixed_height_scroll_rows();
     let url = format!(
         "data:text/html,<!doctype html><html><body>{rows}<div id='box'></div></body></html>"
     );
@@ -1590,7 +1594,7 @@ async fn scroll_into_view_if_needed_supports_object_id() {
 async fn scroll_into_view_if_needed_uses_first_rendered_child_of_display_contents() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
-    let rows = "<div>row</div>".repeat(60);
+    let rows = fixed_height_scroll_rows();
     let url = format!(
         "data:text/html,<!doctype html><body>{rows}<button id=contents style='display:contents'>target</button></body>"
     );
@@ -1632,7 +1636,7 @@ async fn scroll_into_view_if_needed_uses_first_rendered_child_of_display_content
 async fn scroll_into_view_if_needed_honors_stylesheet_display_and_visibility() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
-    let rows = "<div>row</div>".repeat(60);
+    let rows = fixed_height_scroll_rows();
     let url = format!(
         "data:text/html,<!doctype html><style>.contents{{display:contents}}.none{{display:none}}.invisible{{visibility:hidden}}</style><body>{rows}<button id=contents class=contents>contents text</button><div id=none class=none><span>suppressed child</span></div><button id=invisible class=invisible>invisible box</button></body>"
     );
@@ -1789,7 +1793,7 @@ async fn scroll_into_view_if_needed_observes_live_style_change_before_scrolling(
 async fn scroll_into_view_if_needed_clamps_relative_rect_to_document_scroll_range() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
-    let rows = "<div>row</div>".repeat(60);
+    let rows = fixed_height_scroll_rows();
     let url = format!("data:text/html,<!doctype html><body>{rows}<div id=target></div></body>");
     navigate_to_url_and_wait_for_load_async(&mut ctx, 44, url).await;
     ctx.process_async(json!({
