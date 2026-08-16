@@ -4,7 +4,7 @@ use anyhow::{Result, anyhow};
 
 use super::{
     RendererCommandTurnOutput, RendererPageCommand, RendererPageReply,
-    RendererRuntimeCommandOutput, owner_local_store::RendererPageLocalEntry, page_vm::PageVm,
+    RendererRuntimeCommandOutput, owner_local_store::LivePageEntry, page_vm::PageVm,
 };
 use crate::devtools::ingress::main::RendererInspectorMainFirstDispatchGuard;
 
@@ -38,9 +38,7 @@ impl Drop for ActiveNestedMainPageGuard {
     }
 }
 
-pub(super) fn bind_active_nested_main_page(
-    entry: &mut RendererPageLocalEntry,
-) -> ActiveNestedMainPageGuard {
+pub(super) fn bind_active_nested_main_page(entry: &mut LivePageEntry) -> ActiveNestedMainPageGuard {
     let active_page = ActiveNestedMainPage {
         page_vm: NonNull::from(entry.page_vm_mut()),
         entry_slot: entry.slot.clone(),

@@ -5,14 +5,15 @@ use super::navigation::{
 };
 use super::owner_local::RendererAttachedPage;
 use super::owner_local_store::{
-    LivePageNavigationFailureRecipient, LivePageNavigationFollowOutcome,
-    LivePageNavigationFollowTurn, LivePagePendingNavigationCompletion,
-    LivePagePendingNavigationPhaseOneAdvance, NavigationReplyPolicy, RendererDisplacedOrdinaryTurn,
+    LivePageEntry, LivePageEntryCheckoutError, LivePageNavigationFailureRecipient,
+    LivePageNavigationFollowOutcome, LivePageNavigationFollowTurn,
+    LivePagePendingNavigationCompletion, LivePagePendingNavigationPhaseOneAdvance,
+    NavigationReplyPolicy, PendingPhaseOneEntryAdvance, RendererDisplacedOrdinaryTurn,
     RendererDocumentIsolateAllocator, RendererDocumentIsolateReservation,
     RendererOwnerLocalContext, RendererOwnerLocalStore, RendererPageCommandDispatch,
-    RendererPageCreationResolution, RendererPageLocalEntry, RendererPageLocalEntryCheckoutError,
-    RendererPageScheduledTurn, RendererPageToken, RendererPageTurnAdmission,
-    RendererPageTurnCheckoutError, RendererPendingPageCreation, RendererPreparedDocumentResidence,
+    RendererPageCreationResolution, RendererPageScheduledTurn, RendererPageToken,
+    RendererPageTurnAdmission, RendererPageTurnCheckoutError, RendererPendingPageCreation,
+    RendererPreparedDocumentResidence, RetiringPageEntry,
     advance_document_lifecycle_one_page_turn_via_local_task,
     advance_dom_stable_wait_turn_on_entry_via_local_task,
     advance_network_idle_wait_turn_on_entry_via_local_task,
@@ -47,6 +48,7 @@ use super::owner_local_store::{
     resolve_pending_page_creation_on_bound_owner_local_store,
     restore_entry_after_command_on_bound_owner_local_store,
     restore_entry_after_document_lifecycle_on_bound_owner_local_store,
+    restore_retiring_entry_after_command_on_bound_owner_local_store,
     schedule_page_turn_on_bound_owner_local_store,
     settle_owner_maintenance_task_on_bound_owner_local_store,
     snapshot_due_page_task_tokens_on_bound_owner_local_store,
@@ -2371,15 +2373,14 @@ impl RendererOwnerHandle {
                 ) {
                     Ok(entry) => entry,
                     Err(
-                        RendererPageLocalEntryCheckoutError::Retired
-                        | RendererPageLocalEntryCheckoutError::Missing,
+                        LivePageEntryCheckoutError::Retired | LivePageEntryCheckoutError::Missing,
                     ) => {
                         return Ok(RendererOwnerReply::RuntimeInspectorSessionDetachFinalized(
                             false,
                         ))
                         .into();
                     }
-                    Err(RendererPageLocalEntryCheckoutError::Busy) => {
+                    Err(LivePageEntryCheckoutError::Busy) => {
                         return Err(anyhow!(
                             "renderer page {} remained checked out while finalizing Inspector session detach",
                             token.page_id.as_u64()
@@ -3205,29 +3206,52 @@ impl RendererOwnerHandle {
         }
     }
 
-    fn restore_live_page_entry(&self, token: RendererPageToken, mut entry: RendererPageLocalEntry) {
+    fn restore_live_page_entry(&self, token: RendererPageToken, mut entry: LivePageEntry) {
         // Freeze this owner turn before making the Page resident again. The
         // concrete publication is already source-bound, so a later lifecycle
         // turn never needs to rescan or publish output on this turn's behalf.
-        // Cancellation of a committed phase-one navigation can intentionally
-        // retire the last PageVm before this entry is restored. In that case
-        // there is no live producer left to settle; the owner-local restore
-        // below performs the retired-entry teardown.
-        let output = entry
-            .active_page_vm()
-            .is_some()
-            .then(|| entry.page_vm_mut().settle_renderer_output_publication())
-            .flatten();
+        let output = entry.page_vm_mut().settle_renderer_output_publication();
         restore_entry_after_command_on_bound_owner_local_store(token, entry);
         if let Some(output) = output {
             self.publish_renderer_output(output);
         }
     }
 
+    fn retire_pending_phase_one_page_entry(
+        &self,
+        token: RendererPageToken,
+        entry: LivePageEntry,
+        reason: &str,
+    ) {
+        // Retirement becomes sticky while the checked-out entry still owns
+        // its PageVm. Rejecting the navigation then consumes the live type and
+        // returns a teardown-only entry that cannot reach live restoration.
+        remove_page_on_bound_owner_local_store(token);
+        let entry = entry.reject_pending_phase_one_navigation(reason);
+        restore_retiring_entry_after_command_on_bound_owner_local_store(token, entry);
+    }
+
+    fn finish_retiring_phase_one_navigation_failure(
+        &self,
+        token: RendererPageToken,
+        mut entry: RetiringPageEntry,
+        error: anyhow::Error,
+    ) -> RenderRuntimeDispatchOutcome {
+        entry.settle_standalone_navigation_follow(false);
+        tracing::warn!(
+            page_id = token.page_id.as_u64(),
+            failure = %error,
+            "retiring page after phase-one navigation lost its active PageVm"
+        );
+        remove_page_on_bound_owner_local_store(token);
+        restore_retiring_entry_after_command_on_bound_owner_local_store(token, entry);
+        Err(error).into()
+    }
+
     async fn finish_live_page_navigation_failure(
         &self,
         token: RendererPageToken,
-        mut entry: RendererPageLocalEntry,
+        mut entry: LivePageEntry,
         retire_page_on_failure: bool,
         disposition: LivePageNavigationFailureDisposition,
     ) -> RenderRuntimeDispatchOutcome {
@@ -3961,7 +3985,7 @@ impl RendererOwnerHandle {
     async fn run_one_document_lifecycle_turn(
         &self,
         token: RendererPageToken,
-        entry: RendererPageLocalEntry,
+        entry: LivePageEntry,
         source_label: &'static str,
         displaced_ordinary: RendererDisplacedOrdinaryTurn,
     ) -> RenderRuntimeDispatchOutcome {
@@ -4098,7 +4122,7 @@ impl RendererOwnerHandle {
     fn finish_page_turn(
         &self,
         token: RendererPageToken,
-        mut entry: RendererPageLocalEntry,
+        mut entry: LivePageEntry,
         source_label: &'static str,
         output_ordering: RendererOutputPublicationOrdering,
     ) -> RenderRuntimeDispatchOutcome {
@@ -4265,7 +4289,7 @@ impl RendererOwnerHandle {
         let token = task.token();
         let entry = match checkout_entry_for_owner_turn_on_bound_owner_local_store(token) {
             Ok(entry) => entry,
-            Err(RendererPageLocalEntryCheckoutError::Busy) => {
+            Err(LivePageEntryCheckoutError::Busy) => {
                 // A maintenance task may wait behind other bounded owner
                 // turns, but those turns always restore the Page entry before
                 // returning or parking their continuation. Reaching this arm
@@ -4276,10 +4300,7 @@ impl RendererOwnerHandle {
                     token.page_id.as_u64()
                 );
             }
-            Err(
-                RendererPageLocalEntryCheckoutError::Retired
-                | RendererPageLocalEntryCheckoutError::Missing,
-            ) => {
+            Err(LivePageEntryCheckoutError::Retired | LivePageEntryCheckoutError::Missing) => {
                 return RenderRuntimeDispatchOutcome::BackgroundComplete(Ok(()));
             }
         };
@@ -4351,14 +4372,11 @@ impl RendererOwnerHandle {
         &self,
         token: RendererPageToken,
         continuation: &'static str,
-    ) -> Option<RendererPageLocalEntry> {
+    ) -> Option<LivePageEntry> {
         match checkout_entry_for_owner_turn_on_bound_owner_local_store(token) {
             Ok(entry) => Some(entry),
-            Err(
-                RendererPageLocalEntryCheckoutError::Retired
-                | RendererPageLocalEntryCheckoutError::Missing,
-            ) => None,
-            Err(RendererPageLocalEntryCheckoutError::Busy) => {
+            Err(LivePageEntryCheckoutError::Retired | LivePageEntryCheckoutError::Missing) => None,
+            Err(LivePageEntryCheckoutError::Busy) => {
                 panic!(
                     "renderer page {} remained checked out while cancelling {continuation}",
                     token.page_id.as_u64()
@@ -4427,23 +4445,15 @@ impl RendererOwnerHandle {
             RenderRuntimeTurn::ContinueLivePagePendingLocationNavigationPhaseOne {
                 token, ..
             } => {
-                if let Some(mut entry) = self.checkout_live_page_entry_for_cancellation(
+                if let Some(entry) = self.checkout_live_page_entry_for_cancellation(
                     token,
                     "phase-one location navigation",
                 ) {
-                    // Retirement must become sticky before the checked-out
-                    // entry loses its only active PageVm. Restoring it then
-                    // performs teardown instead of briefly republishing an
-                    // empty page entry.
-                    remove_page_on_bound_owner_local_store(token);
-                    entry.reject_pending_phase_one_navigation("Location navigation was cancelled.");
-                    // Re-enter directly through the residence boundary. The
-                    // rejection above consumes and closes the entry's last
-                    // active PageVm, so the normal live-entry helper cannot
-                    // settle renderer output. The sticky retirement is
-                    // observed first by the store-level restore, which tears
-                    // down the checked-out entry without requiring a PageVm.
-                    restore_entry_after_command_on_bound_owner_local_store(token, entry);
+                    self.retire_pending_phase_one_page_entry(
+                        token,
+                        entry,
+                        "Location navigation was cancelled.",
+                    );
                 }
             }
             RenderRuntimeTurn::ContinueLivePageNavigationPostParseLifecycle { token, .. } => {
@@ -4485,7 +4495,7 @@ impl RendererOwnerHandle {
     async fn finish_live_page_entry_with_page_state(
         &self,
         token: RendererPageToken,
-        entry: RendererPageLocalEntry,
+        entry: LivePageEntry,
         reply: RendererPageReply,
         turn_records: Vec<PendingRendererOutputRecord>,
     ) -> RenderRuntimeDispatchOutcome {
@@ -4503,7 +4513,7 @@ impl RendererOwnerHandle {
     async fn finish_live_page_entry_with_page_state_and_continuation(
         &self,
         token: RendererPageToken,
-        mut entry: RendererPageLocalEntry,
+        mut entry: LivePageEntry,
         reply: RendererPageReply,
         turn_records: Vec<PendingRendererOutputRecord>,
         post_response_continuation: Option<RendererPageCommandPostResponseContinuation>,
@@ -4575,7 +4585,7 @@ impl RendererOwnerHandle {
     async fn finish_live_page_navigation_completion(
         &self,
         token: RendererPageToken,
-        mut entry: RendererPageLocalEntry,
+        mut entry: LivePageEntry,
         completion: LivePagePendingNavigationCompletion,
     ) -> RenderRuntimeDispatchOutcome {
         entry.settle_standalone_navigation_follow(true);
@@ -4677,7 +4687,7 @@ impl RendererOwnerHandle {
     async fn refresh_live_page_before_wait(
         &self,
         token: RendererPageToken,
-        entry: RendererPageLocalEntry,
+        entry: LivePageEntry,
     ) -> Result<()> {
         let (entry, page_state_result) =
             commit_page_state_on_entry_via_local_task(self.state.local_executor.clone(), entry)
@@ -4690,7 +4700,7 @@ impl RendererOwnerHandle {
     async fn finish_live_page_navigation_download(
         &self,
         token: RendererPageToken,
-        mut entry: RendererPageLocalEntry,
+        mut entry: LivePageEntry,
         completion: LivePagePendingNavigationCompletion,
         download: RendererPendingDownloadActivation,
     ) -> RenderRuntimeDispatchOutcome {
@@ -4738,7 +4748,7 @@ impl RendererOwnerHandle {
     fn continue_live_page_pending_navigation(
         &self,
         token: RendererPageToken,
-        mut entry: RendererPageLocalEntry,
+        mut entry: LivePageEntry,
         stage: PageVmInitStage,
         follow_count: usize,
         completion: LivePagePendingNavigationCompletion,
@@ -5120,7 +5130,7 @@ impl RendererOwnerHandle {
     async fn complete_live_page_command_turn(
         &self,
         token: RendererPageToken,
-        mut entry: RendererPageLocalEntry,
+        mut entry: LivePageEntry,
         reply: RendererPageReply,
         should_follow_pending_navigation: bool,
         turn_records: Vec<PendingRendererOutputRecord>,
@@ -5895,7 +5905,7 @@ impl RendererOwnerHandle {
     async fn handle_live_page_post_parse_lifecycle_outcome(
         &self,
         token: RendererPageToken,
-        entry: RendererPageLocalEntry,
+        entry: LivePageEntry,
         target_stage: PageVmInitStage,
         follow_count: usize,
         completion: LivePagePendingNavigationCompletion,
@@ -6163,12 +6173,18 @@ impl RendererOwnerHandle {
                     Ok(entry) => entry,
                     Err(error) => return Err(error).into(),
                 };
-                let (entry, advance_result) =
-                    advance_pending_phase_one_navigation_on_entry_via_local_task(
-                        self.state.local_executor.clone(),
-                        entry,
-                    )
-                    .await;
+                let advance = advance_pending_phase_one_navigation_on_entry_via_local_task(
+                    self.state.local_executor.clone(),
+                    entry,
+                )
+                .await;
+                let (entry, advance_result) = match advance {
+                    PendingPhaseOneEntryAdvance::Live { entry, result } => (entry, result),
+                    PendingPhaseOneEntryAdvance::Retiring { entry, error } => {
+                        return self
+                            .finish_retiring_phase_one_navigation_failure(token, entry, error);
+                    }
+                };
                 match advance_result {
                     Ok(LivePagePendingNavigationPhaseOneAdvance::Pending { wake_token }) => {
                         self.restore_live_page_entry(token, entry);

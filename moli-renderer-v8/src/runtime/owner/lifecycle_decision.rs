@@ -15,7 +15,7 @@ use crate::runtime::document_lifecycle::RendererDocumentLifecycleWaitOutcome;
 use crate::runtime::lifecycle_decision::{
     RendererLifecycleDecider, RendererLifecycleDecision, RendererLifecycleSnapshot,
 };
-use crate::runtime::owner_local_store::RendererPageLocalEntry;
+use crate::runtime::owner_local_store::LivePageEntry;
 use crate::runtime::page_vm::renderer_document_lifecycle_milestone_for_stage;
 use anyhow::{Context, Result, anyhow, ensure};
 use std::time::Instant;
@@ -35,7 +35,7 @@ impl PendingLifecycleNavigation {
 }
 
 fn capture_lifecycle_snapshot(
-    entry: &RendererPageLocalEntry,
+    entry: &LivePageEntry,
     target_stage: crate::PageVmInitStage,
 ) -> Result<RendererLifecycleSnapshot> {
     let document = entry.page_vm().document_lifecycle.identity();

@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Result, ensure};
 
 use super::owner_local_store::{
-    RendererPageLocalEntry, RendererPageToken, run_entry_on_bound_owner_local_store_local_task,
+    LivePageEntry, RendererPageToken, run_entry_on_bound_owner_local_store_local_task,
 };
 use crate::local_executor::JsLocalExecutor;
 
@@ -137,9 +137,9 @@ fn next_moderate_memory_pressure_deadline_after(now: Instant) -> Instant {
 
 pub(super) async fn execute_owner_maintenance_task_on_local_lane(
     local_executor: JsLocalExecutor,
-    entry: RendererPageLocalEntry,
+    entry: LivePageEntry,
     task: RendererOwnerMaintenanceTask,
-) -> (RendererPageLocalEntry, Result<()>) {
+) -> (LivePageEntry, Result<()>) {
     run_entry_on_bound_owner_local_store_local_task(local_executor, entry, move |entry| {
         Box::pin(async move {
             match task.action() {
