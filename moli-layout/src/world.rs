@@ -56,6 +56,9 @@ pub enum LayoutBoxKind {
     FormControl,
     LineBreak,
     Replaced,
+    /// Content-bearing fallback layout object for a terminally unavailable
+    /// image that HTML asks the user agent to treat as a sized atomic object.
+    ImageFallback,
     AnonymousBlock,
     AnonymousFlexItem,
     AnonymousGridItem,
@@ -100,6 +103,7 @@ impl LayoutBoxKind {
             Self::FormControl => "form-control",
             Self::LineBreak => "line-break",
             Self::Replaced => "replaced",
+            Self::ImageFallback => "image-fallback",
             Self::AnonymousBlock => "anonymous-block",
             Self::AnonymousFlexItem => "anonymous-flex-item",
             Self::AnonymousGridItem => "anonymous-grid-item",
@@ -902,6 +906,7 @@ fn default_capability_diagnostics(
         | Kind::FormControl => None,
         Kind::LineBreak => None,
         Kind::Replaced => None,
+        Kind::ImageFallback => None,
         Kind::PrincipalBlock
         | Kind::PrincipalFlowRoot
         | Kind::PrincipalFlex

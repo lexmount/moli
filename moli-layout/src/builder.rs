@@ -80,6 +80,7 @@ where
         let Some(mut root_style) = self.styles.primary_style(source_root)? else {
             return Err(LayoutError::MissingRootStyle { source_label });
         };
+        root_style.adjust_for_element_content(&root_semantics.content);
         let root_metrics = self.source.replaced_metrics(source_root);
         if root_semantics.is_hidden_input()
             || (root_style.display() == LayoutDisplay::Contents
@@ -128,7 +129,13 @@ where
             LayoutDisplay::None | LayoutDisplay::Contents
         ) && !is_leaf_element(&root_semantics, root_kind, &root_style)
         {
-            self.populate_root(&mut world, root_box, source_root, &root_style)?;
+            self.populate_root(
+                &mut world,
+                root_box,
+                source_root,
+                &root_semantics,
+                &root_style,
+            )?;
         }
 
         world.compact_reachable();
@@ -141,6 +148,7 @@ where
         world: &mut LayoutWorld<S::NodeId>,
         root_box: LayoutBoxId,
         source_node: S::NodeId,
+        semantics: &LayoutElementSemantics,
         style: &ResolvedLayoutStyle,
     ) -> Result<(), LayoutError> {
         if !self.active_sources.insert(source_node) {
@@ -149,7 +157,7 @@ where
             });
         }
         let result = (|| {
-            let children = self.build_element_child_stream(world, source_node, style)?;
+            let children = self.build_element_child_stream(world, source_node, semantics, style)?;
             let _ = self.attach_children(world, root_box, source_node, style, children, false)?;
             Ok(())
         })();
@@ -211,6 +219,7 @@ where
             let Some(mut style) = self.styles.primary_style(source_node)? else {
                 return Ok(Vec::new());
             };
+            style.adjust_for_element_content(&semantics.content);
             let metrics = self.source.replaced_metrics(source_node);
             if semantics.is_replaced() {
                 style.mark_replaced();
@@ -231,7 +240,8 @@ where
             match style.display() {
                 LayoutDisplay::None => Ok(Vec::new()),
                 LayoutDisplay::Contents => {
-                    let children = self.build_element_child_stream(world, source_node, &style)?;
+                    let children =
+                        self.build_element_child_stream(world, source_node, &semantics, &style)?;
                     world.map_display_contents_source(source_node, &children);
                     Ok(children)
                 }
@@ -252,7 +262,8 @@ where
                         return Ok(vec![id]);
                     }
 
-                    let children = self.build_element_child_stream(world, source_node, &style)?;
+                    let children =
+                        self.build_element_child_stream(world, source_node, &semantics, &style)?;
                     self.attach_children(world, id, source_node, &style, children, true)
                 }
             }
@@ -295,6 +306,7 @@ where
         &mut self,
         world: &mut LayoutWorld<S::NodeId>,
         source_node: S::NodeId,
+        semantics: &LayoutElementSemantics,
         style: &ResolvedLayoutStyle,
     ) -> Result<Vec<LayoutBoxId>, LayoutError> {
         let mut children = Vec::new();
@@ -302,11 +314,43 @@ where
             children.extend(self.build_pseudo(world, source_node, LayoutPseudo::Marker)?);
         }
         children.extend(self.build_pseudo(world, source_node, LayoutPseudo::Before)?);
-        for child in self.checked_flat_children(source_node)? {
-            children.extend(self.build_source_node(world, child, style)?);
+        if let Some(fallback) = semantics.image_fallback() {
+            if !fallback.alternative_text().is_empty() {
+                children.push(self.allocate_image_fallback_text(
+                    world,
+                    source_node,
+                    style,
+                    fallback.alternative_text(),
+                ));
+            }
+        } else {
+            for child in self.checked_flat_children(source_node)? {
+                children.extend(self.build_source_node(world, child, style)?);
+            }
         }
         children.extend(self.build_pseudo(world, source_node, LayoutPseudo::After)?);
         Ok(children)
+    }
+
+    fn allocate_image_fallback_text(
+        &self,
+        world: &mut LayoutWorld<S::NodeId>,
+        owner: S::NodeId,
+        style: &ResolvedLayoutStyle,
+        text: &str,
+    ) -> LayoutBoxId {
+        world.allocate(LayoutWorld::new_box(
+            None,
+            Some(owner),
+            None,
+            format!("{}::image-fallback-text", self.source.label(owner)),
+            Some(self.source.label(owner)),
+            None,
+            None,
+            LayoutBoxKind::Text,
+            ResolvedLayoutStyle::text_leaf_from(style),
+            Some(Arc::from(text)),
+        ))
     }
 
     fn build_pseudo(
@@ -1148,7 +1192,7 @@ where
                 "element local name must not be empty",
             ));
         }
-        if semantics.replaced.is_none() && self.source.replaced_metrics(node).is_some() {
+        if !semantics.is_replaced() && self.source.replaced_metrics(node).is_some() {
             return Err(LayoutError::source_contract(
                 source,
                 "non-replaced element exposed replaced metrics",
@@ -1199,7 +1243,7 @@ fn build_replaced_context(
     }
     form_control_context(semantics, style.font_size(), style.line_height()).or_else(|| {
         semantics
-            .replaced
+            .replaced_kind()
             .map(|kind| ReplacedContext::for_element(kind, metrics))
     })
 }
@@ -1227,6 +1271,9 @@ fn principal_kind(
     semantics: &LayoutElementSemantics,
     style: &ResolvedLayoutStyle,
 ) -> LayoutBoxKind {
+    if style.image_fallback_is_atomic(&semantics.content) {
+        return LayoutBoxKind::ImageFallback;
+    }
     match semantics.category {
         LayoutElementCategory::LineBreak => return LayoutBoxKind::LineBreak,
         LayoutElementCategory::FormControl(_) => return LayoutBoxKind::FormControl,
