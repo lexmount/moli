@@ -96,30 +96,15 @@ where
                 }
             })
             .unwrap_or(LayoutPoint::ZERO);
-        let layout_origin = output
-            .fragments
-            .iter()
-            .find_map(|id| {
-                let fragment = self.fragment(*id)?;
-                let LayoutFragmentKind::InlineBox {
-                    box_id: fragment_box,
-                    ..
-                } = fragment.kind
-                else {
-                    return None;
-                };
-                if fragment_box != box_id {
-                    return None;
-                }
-                let border = fragment.box_model?.border;
-                let owner = self.coordinate_space(fragment.coordinate_space)?.owner?;
-                let owner_origin = self.box_geometry(owner)?.layout_origin_in_document;
-                Some(LayoutPoint::new(
-                    owner_origin.x + border.x,
-                    owner_origin.y + border.y,
-                ))
-            })
+        let inline_offset_geometry = self.inline_offset_geometry(&output, box_id);
+        let layout_origin = inline_offset_geometry
+            .map(|geometry| geometry.0)
             .unwrap_or(geometry.layout_origin_in_document);
+        let offset_size = inline_offset_geometry
+            .map(|geometry| geometry.1)
+            .unwrap_or_else(|| {
+                LayoutSize::new(geometry.border_box.width, geometry.border_box.height)
+            });
         let client_size = if is_root {
             LayoutSize::new(
                 self.viewport.css_width as f32,
@@ -142,7 +127,7 @@ where
                 layout_origin.x - offset_parent_origin.x,
                 layout_origin.y - offset_parent_origin.y,
             ),
-            offset_size: LayoutSize::new(geometry.border_box.width, geometry.border_box.height),
+            offset_size,
             content_size: LayoutSize::new(geometry.content_box.width, geometry.content_box.height),
             client_size,
             client_border: LayoutPoint::new(
@@ -418,6 +403,56 @@ impl<N> FrozenLayoutTree<N>
 where
     N: Copy + Debug + Eq + Hash,
 {
+    /// Returns the untransformed CSSOM offset geometry for a flattened inline.
+    ///
+    /// CSSOM View defines `offsetLeft`/`offsetTop` from the first fragment and
+    /// `offsetWidth`/`offsetHeight` from the bounding box of all non-empty
+    /// border-box fragments. Mapping each fragment through its IFC owner's
+    /// document-layout origin keeps that geometry in one physical coordinate
+    /// system while intentionally excluding transforms and scrolling.
+    fn inline_offset_geometry(
+        &self,
+        output: &LayoutNodeOutput,
+        box_id: LayoutOutputBoxId,
+    ) -> Option<(LayoutPoint, LayoutSize)> {
+        let mut first_origin = None;
+        let mut bounds = None::<LayoutRect>;
+
+        for id in &output.fragments {
+            let fragment = self.fragment(*id)?;
+            let LayoutFragmentKind::InlineBox {
+                box_id: fragment_box,
+                ..
+            } = fragment.kind
+            else {
+                continue;
+            };
+            if fragment_box != box_id {
+                continue;
+            }
+            let mut border = fragment.box_model?.border;
+            let owner = self.coordinate_space(fragment.coordinate_space)?.owner?;
+            let owner_origin = self.box_geometry(owner)?.layout_origin_in_document;
+            border.x += owner_origin.x;
+            border.y += owner_origin.y;
+            first_origin.get_or_insert(LayoutPoint::new(border.x, border.y));
+
+            // Blink's BoundingBoxRelativeToFirstFragment uses UniteIfNonZero:
+            // an empty fragment supplies the offset anchor but cannot stretch
+            // the size union across lines by its zero-area position alone.
+            if border.width <= 0.0 || border.height <= 0.0 {
+                continue;
+            }
+            bounds = Some(bounds.map_or(border, |current| current.union(border)));
+        }
+
+        let origin = first_origin?;
+        let size = bounds.map_or(LayoutSize::ZERO, |rect| {
+            LayoutSize::new(rect.width, rect.height)
+        });
+        Some((origin, size))
+    }
+
     fn project_fragment_box_models(
         &self,
         models: &[(LayoutCoordinateSpaceId, LayoutFragmentBoxModel)],
