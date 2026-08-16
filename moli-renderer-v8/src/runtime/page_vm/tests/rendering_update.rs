@@ -2928,6 +2928,86 @@ document.body.innerHTML = `<div class=row><div class=item id=ask><i class=icon><
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn br_client_rects_use_forced_break_fragments_in_all_writing_modes() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        loader.set_optional_resource_fetch_mask(
+            crate::protocol_types::OptionalResourceFetchMask::FONT,
+        );
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/br-client-rects.html")?,
+        );
+        let encoded_font = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../moli-layout/tests/fixtures/moli-ahem.woff2"
+        ));
+        let encoded = base64::engine::general_purpose::STANDARD.encode(encoded_font);
+        page_vm.vm_mut().eval(&format!(
+            r#"
+document.head.innerHTML = `<style>
+@font-face {{ font-family:MoliAhem; src:url(data:font/woff2;base64,{encoded}) format('woff2') }}
+html,body {{ margin:0 }}
+.case {{ position:absolute; left:0; width:200px; height:100px; font:20px MoliAhem }}
+.strut-case {{ position:absolute; left:300px; width:200px; font:20px MoliAhem }}
+</style>`;
+document.body.innerHTML = `
+<div id=htb-ltr class=case style="top:0;writing-mode:horizontal-tb;direction:ltr"><br></div>
+<div id=htb-rtl class=case style="top:100px;writing-mode:horizontal-tb;direction:rtl"><br></div>
+<div id=vlr-ltr class=case style="top:200px;writing-mode:vertical-lr;direction:ltr"><br></div>
+<div id=vlr-rtl class=case style="top:300px;writing-mode:vertical-lr;direction:rtl"><br></div>
+<div id=vrl-ltr class=case style="top:400px;writing-mode:vertical-rl;direction:ltr"><br></div>
+<div id=vrl-rtl class=case style="top:500px;writing-mode:vertical-rl;direction:rtl"><br></div>
+<div id=br-after-large-text class=strut-case style="top:0"><span style="font-size:40px">A</span><br style="font-size:10px"></div>
+<div id=br-with-own-style class=strut-case style="top:100px"><br style="font-size:10px"></div>
+<div id=br-in-large-inline class=strut-case style="top:200px"><span style="font-size:40px"><br style="font-size:10px"></span></div>`;
+'installed'
+"#
+        ))?;
+        page_vm
+            .vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries([...document.querySelectorAll('.case,.strut-case')].map(parent=>{const outer=parent.getBoundingClientRect();const rects=parent.querySelector('br').getClientRects();return [parent.id,{count:rects.length,rect:[rects[0].x-outer.x,rects[0].y-outer.y,rects[0].width,rects[0].height]}]})))"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        for (id, expected) in [
+            ("htb-ltr", [0.0, 0.0, 0.0, 20.0]),
+            ("htb-rtl", [200.0, 0.0, 0.0, 20.0]),
+            ("vlr-ltr", [0.0, 0.0, 20.0, 0.0]),
+            ("vlr-rtl", [0.0, 100.0, 20.0, 0.0]),
+            ("vrl-ltr", [180.0, 0.0, 20.0, 0.0]),
+            ("vrl-rtl", [180.0, 100.0, 20.0, 0.0]),
+            ("br-after-large-text", [24.0, 16.0, 0.0, 20.0]),
+            ("br-with-own-style", [0.0, 0.0, 0.0, 20.0]),
+            ("br-in-large-inline", [0.0, 0.0, 0.0, 40.0]),
+        ] {
+            assert_eq!(
+                geometry[id]["count"].as_u64(),
+                Some(1),
+                "Chromium exposes exactly one forced-break fragment for {id}: {geometry}"
+            );
+            let actual = geometry[id]["rect"]
+                .as_array()
+                .unwrap_or_else(|| panic!("missing geometry for {id}: {geometry}"));
+            for (index, expected) in expected.into_iter().enumerate() {
+                let actual = actual[index].as_f64().expect("numeric geometry") as f32;
+                assert!(
+                    (actual - expected).abs() <= 0.05,
+                    "{id}[{index}]: expected Chromium geometry {expected}, got {actual}; geometry={geometry}"
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("BR client-rect fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn stylesheet_lifecycle_registers_only_the_current_documents_data_web_fonts() {
     run_page_vm_async_test(async move {
         let loader =
