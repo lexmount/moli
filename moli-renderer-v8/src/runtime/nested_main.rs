@@ -6,7 +6,7 @@ use super::{
     RendererCommandTurnOutput, RendererPageCommand, RendererPageReply,
     RendererRuntimeCommandOutput, owner_local_store::RendererPageLocalEntry, page_vm::PageVm,
 };
-use crate::script_vm::inspector_main::RendererInspectorMainFirstDispatchGuard;
+use crate::devtools::ingress::main::RendererInspectorMainFirstDispatchGuard;
 
 #[derive(Clone)]
 struct ActiveNestedMainPage {

@@ -31,11 +31,11 @@ pub(crate) use self::v8_backend::{
     RendererInspectorIsolateBackendHandle, dispatch_inspector_io_owner_wake,
     dispatch_inspector_main_owner_wake,
 };
+use crate::devtools::target::RendererDevToolsTargetHandle;
 #[cfg(test)]
 use crate::runtime::{
     RendererRuntimeCommandOutputRecorder, RendererRuntimeInspectorResponseSender,
 };
-use crate::script_vm::inspector_pause::RendererInspectorPauseBridge;
 use crate::{
     frame_owner_model::FrameRealmId,
     protocol_types::RuntimeBindingRegistration,
@@ -55,9 +55,7 @@ pub(crate) struct DocumentInspectorBinding {
     context_registrations: DocumentInspectorContextRegistrations,
     agent: RendererDevToolsAgent,
     backend: RefCell<DocumentInspectorBackendState>,
-    pause_bridge: RendererInspectorPauseBridge,
-    main_ingress: crate::script_vm::inspector_main::RendererInspectorMainIngress,
-    io_ingress: crate::script_vm::inspector_io::RendererInspectorIoIngress,
+    devtools_target: RendererDevToolsTargetHandle,
 }
 
 impl std::fmt::Debug for DocumentInspectorBinding {
@@ -97,16 +95,12 @@ pub(super) struct ReportedExecutionContext {
 
 impl DocumentInspectorBinding {
     pub(crate) fn new(isolate_backend: RendererInspectorIsolateBackendHandle) -> Self {
-        let pause_bridge = isolate_backend.pause_bridge();
-        let main_ingress = isolate_backend.main_ingress();
-        let io_ingress = isolate_backend.io_ingress();
+        let devtools_target = isolate_backend.devtools_target();
         Self {
             context_registrations: DocumentInspectorContextRegistrations::default(),
             agent: RendererDevToolsAgent::new(isolate_backend),
             backend: RefCell::new(DocumentInspectorBackendState::new()),
-            pause_bridge,
-            main_ingress,
-            io_ingress,
+            devtools_target,
         }
     }
 
@@ -118,18 +112,8 @@ impl DocumentInspectorBinding {
         self
     }
 
-    pub(crate) fn pause_bridge(&self) -> RendererInspectorPauseBridge {
-        self.pause_bridge.clone()
-    }
-
-    pub(crate) fn io_ingress(&self) -> crate::script_vm::inspector_io::RendererInspectorIoIngress {
-        self.io_ingress.clone()
-    }
-
-    pub(crate) fn main_ingress(
-        &self,
-    ) -> crate::script_vm::inspector_main::RendererInspectorMainIngress {
-        self.main_ingress.clone()
+    pub(crate) fn devtools_target(&self) -> RendererDevToolsTargetHandle {
+        self.devtools_target.clone()
     }
 
     pub(crate) fn dom_debugger_pause_scheduler(&self) -> RendererDomDebuggerPauseScheduler {

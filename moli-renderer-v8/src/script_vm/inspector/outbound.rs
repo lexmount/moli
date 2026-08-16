@@ -1,12 +1,12 @@
+use crate::devtools::pause::{
+    RendererInspectorPauseNotificationRoute, RendererInspectorPausePrefaceGuard,
+    RendererInspectorSessionOutboundRoute,
+};
 use crate::runtime::{
     PendingRendererOutputRecord, RendererCommandTurnOutputRecorder, RendererProtocolObservation,
     RendererRuntimeCommandOutputRecorder, RendererRuntimeInspectorMessage,
     RendererRuntimeInspectorMessageBatch, RendererRuntimeInspectorResponseSender,
     RendererTurnOutputJournal,
-};
-use crate::script_vm::inspector_pause::{
-    RendererInspectorPauseNotificationRoute, RendererInspectorPausePrefaceGuard,
-    RendererInspectorSessionOutboundRoute,
 };
 use anyhow::Result;
 use moli_page_types::{DevToolsSessionKey, RendererDevToolsAgentToken};
@@ -213,9 +213,7 @@ impl InspectorOutbound {
     fn publish_pause_value(
         &self,
         mut preface: Vec<RendererRuntimeInspectorMessage>,
-        command_output: Option<
-            crate::script_vm::inspector_pause::RendererInspectorPauseCommandOutputRoute,
-        >,
+        command_output: Option<crate::devtools::pause::RendererInspectorPauseCommandOutputRoute>,
         value: Value,
     ) {
         let session = self
@@ -708,23 +706,27 @@ mod tests {
         let journal = RendererTurnOutputJournal::new(
             RendererOutputStreamIdentity::new_page_for_protocol_test(PageId::new_for_testing(41)),
         );
-        let pause_bridge =
-            crate::script_vm::inspector_pause::RendererInspectorPauseBridge::default();
+        let pause_bridge = crate::devtools::pause::RendererInspectorPauseBridge::default();
         pause_bridge.configure_page_route(journal.clone());
         let agent_token = RendererDevToolsAgentToken::allocate();
         let session = DevToolsSessionKey::Primary;
-        let io_ingress = crate::script_vm::inspector_io::RendererInspectorIoIngress::new(
+        let io_ingress = crate::devtools::ingress::io::RendererInspectorIoIngress::new(
             pause_bridge.pause_loop_wake(),
             None,
         );
-        let main_ingress = crate::script_vm::inspector_main::RendererInspectorMainIngress::new(
-            crate::script_vm::inspector_route::RendererInspectorSessionExecutorRouteId::new(1),
+        let main_ingress = crate::devtools::ingress::main::RendererInspectorMainIngress::new(
+            crate::devtools::route::RendererInspectorSessionExecutorRouteId::new(1),
             pause_bridge.pause_loop_wake(),
         );
         let outbound = InspectorOutbound::for_frontend(
             agent_token,
             session.clone(),
-            pause_bridge.outbound_route(main_ingress, io_ingress, agent_token, session.clone()),
+            crate::devtools::target::RendererDevToolsTargetHandle::new(
+                pause_bridge.clone(),
+                main_ingress,
+                io_ingress,
+            )
+            .outbound_route(agent_token, session.clone()),
             Some(journal.clone()),
         );
         let recorder = RendererCommandTurnOutputRecorder::default();

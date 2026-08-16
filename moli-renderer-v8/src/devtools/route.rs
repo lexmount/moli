@@ -1,3 +1,5 @@
+//! Isolate-local routing identity shared by DevTools ingress and its renderer executor.
+
 use std::num::NonZeroUsize;
 
 /// Identifies one isolate-local Inspector session executor.

@@ -692,10 +692,6 @@ mod indexed_db_task_body;
 mod input_dispatch;
 mod input_helpers;
 mod inspector;
-pub(crate) mod inspector_io;
-pub(crate) mod inspector_main;
-pub(crate) mod inspector_pause;
-pub(crate) mod inspector_route;
 pub(crate) use inspector::{dispatch_inspector_io_owner_wake, dispatch_inspector_main_owner_wake};
 mod isolated_worlds;
 mod main_document_lifecycle;
@@ -1024,16 +1020,8 @@ pub(super) struct ScriptVmRendererDocumentIsolateOps<'a> {
 }
 
 impl ScriptVm {
-    pub(crate) fn inspector_pause_bridge(&self) -> inspector_pause::RendererInspectorPauseBridge {
-        self.page_inspector.pause_bridge()
-    }
-
-    pub(crate) fn inspector_io_ingress(&self) -> inspector_io::RendererInspectorIoIngress {
-        self.page_inspector.io_ingress()
-    }
-
-    pub(crate) fn inspector_main_ingress(&self) -> inspector_main::RendererInspectorMainIngress {
-        self.page_inspector.main_ingress()
+    pub(crate) fn devtools_target(&self) -> crate::devtools::target::RendererDevToolsTargetHandle {
+        self.page_inspector.devtools_target()
     }
 
     pub(super) fn set_root_document_lifecycle(
@@ -6457,7 +6445,10 @@ impl ScriptVm {
     pub(super) fn settle_renderer_output_publication(
         &mut self,
     ) -> Option<crate::runtime::RendererOutputPublication> {
-        self.page_inspector.pause_bridge().finish_owner_turn();
+        self.page_inspector
+            .devtools_target()
+            .pause_ref()
+            .finish_owner_turn();
         self.sync_runtime_observable_source_events()
             .expect("runtime observable source synchronization should be infallible");
         let environment = self.renderer_page_script_environment.as_ref()?;

@@ -3431,9 +3431,7 @@ impl RendererOwnerLocalStore {
                     .publish_pending_non_javascript_location_navigation()?;
             }
             let javascript_dialog_broker = entry.page_vm().javascript_dialog_broker();
-            let inspector_pause_bridge = entry.page_vm().inspector_pause_bridge();
-            let inspector_main_ingress = entry.page_vm().inspector_main_ingress();
-            let inspector_io_ingress = entry.page_vm().inspector_io_ingress();
+            let devtools_target = entry.page_vm().devtools_target();
             let script_execution_control = entry.slot.script_execution_control();
             let page_state = Self::commit_current_vm_page_state_on_entry(&mut entry)?;
             let initial_runtime_realms = entry.page_vm_mut().vm_mut().runtime_realm_inventory();
@@ -3445,9 +3443,7 @@ impl RendererOwnerLocalStore {
             let creation_artifacts = entry.page_vm_mut().take_page_creation_artifacts();
             Ok((
                 javascript_dialog_broker,
-                inspector_pause_bridge,
-                inspector_main_ingress,
-                inspector_io_ingress,
+                devtools_target,
                 script_execution_control,
                 page_state,
                 devtools_agent_token,
@@ -3475,9 +3471,7 @@ impl RendererOwnerLocalStore {
         let finalized = result.map(
             |(
                 javascript_dialog_broker,
-                inspector_pause_bridge,
-                inspector_main_ingress,
-                inspector_io_ingress,
+                devtools_target,
                 script_execution_control,
                 page_state,
                 devtools_agent_token,
@@ -3491,9 +3485,7 @@ impl RendererOwnerLocalStore {
                         devtools_agent_token,
                         page_context_cancel_tx,
                         javascript_dialog_broker,
-                        inspector_pause_bridge,
-                        inspector_main_ingress,
-                        inspector_io_ingress,
+                        devtools_target,
                         script_execution_control,
                         page_state,
                         creation_diagnostics,
@@ -3927,23 +3919,19 @@ impl RendererOwnerLocalStore {
         let attached_entry = attached_page
             .resident_entry_mut()
             .expect("new renderer page must be resident after attach commit");
-        attached_entry
-            .page_vm()
-            .inspector_pause_bridge()
-            .configure_page_route(
-                attached_entry
-                    .page_vm()
-                    .renderer_page_script_environment()
-                    .expect("an attached Page must own a renderer script environment")
-                    .output_journal(),
-            );
-        attached_entry
-            .page_vm()
-            .inspector_main_ingress()
+        let devtools_target = attached_entry.page_vm().devtools_target();
+        devtools_target.pause_ref().configure_page_route(
+            attached_entry
+                .page_vm()
+                .renderer_page_script_environment()
+                .expect("an attached Page must own a renderer script environment")
+                .output_journal(),
+        );
+        devtools_target
+            .main_ref()
             .configure_owner_wake(owner.render_runtime.clone());
-        attached_entry
-            .page_vm()
-            .inspector_io_ingress()
+        devtools_target
+            .io_ref()
             .configure_owner_wake(owner.owner_state.inspector_io_wake_tx.clone());
         let _ = attached_entry
             .page_vm_mut()

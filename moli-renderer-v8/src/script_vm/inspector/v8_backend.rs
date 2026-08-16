@@ -3,43 +3,40 @@ use super::context_registry::{
     DocumentInspectorContextGroupId, DocumentInspectorContextRegistrationId,
     DocumentInspectorContextRegistry,
 };
+mod interrupt;
+
 use crate::{
+    devtools::{
+        ingress::{
+            io::{RendererInspectorIoCommand, RendererInspectorIoIngress},
+            main::{
+                RendererInspectorMainCommand, RendererInspectorMainIngress,
+                RendererInspectorMainOwnerDispatch,
+            },
+        },
+        pause::RendererInspectorPauseBridge,
+        route::RendererInspectorSessionExecutorRouteId,
+        target::RendererDevToolsTargetHandle,
+    },
     inspector_microtasks::with_scoped_inspector_microtasks,
     runtime::{
         RendererDevToolsMainNestedDispatch, RendererOwnerReply,
         RendererRuntimeInspectorResponseSender, dispatch_nested_main_page_command,
     },
-    script_vm::{
-        inspector_io::{
-            RendererInspectorInterruptTarget, RendererInspectorIoCommand,
-            RendererInspectorIoIngress, RendererInspectorIoOwnerWake,
-        },
-        inspector_main::{
-            RendererInspectorMainCommand, RendererInspectorMainIngress,
-            RendererInspectorMainOwnerDispatch, RendererInspectorMainOwnerWake,
-        },
-        inspector_pause::RendererInspectorPauseBridge,
-        inspector_route::RendererInspectorSessionExecutorRouteId,
-    },
 };
+use interrupt::{
+    allocate_session_executor_route_id, dispatch_inspector_interrupt, register_session_executor,
+    unregister_session_executor,
+};
+pub(crate) use interrupt::{dispatch_inspector_io_owner_wake, dispatch_inspector_main_owner_wake};
 use moli_page_types::{DevToolsSessionKey, RendererDevToolsAgentToken, V8InspectorSessionState};
 use serde_json::json;
 use std::{
     cell::{Cell, RefCell, UnsafeCell},
     collections::HashMap,
     rc::{Rc, Weak},
-    sync::{
-        Arc,
-        atomic::{AtomicI64, AtomicUsize, Ordering},
-    },
+    sync::atomic::{AtomicI64, Ordering},
 };
-
-thread_local! {
-    static INSPECTOR_SESSION_EXECUTORS: RefCell<HashMap<RendererInspectorSessionExecutorRouteId, Weak<RendererInspectorSessionExecutorLocal>>> =
-        RefCell::new(HashMap::new());
-}
-
-static NEXT_SESSION_EXECUTOR_ROUTE_ID: AtomicUsize = AtomicUsize::new(1);
 
 struct RendererInspectorClient {
     isolate: UnsafeCell<v8::UnsafeRawIsolatePtr>,
@@ -66,9 +63,7 @@ pub(super) struct RendererInspectorSessionExecutorRegistration {
 
 struct RendererInspectorSessionExecutorLocal {
     isolate: UnsafeCell<v8::UnsafeRawIsolatePtr>,
-    bridge: RendererInspectorPauseBridge,
-    main_ingress: RendererInspectorMainIngress,
-    io_ingress: RendererInspectorIoIngress,
+    target: RendererDevToolsTargetHandle,
     route_id: RendererInspectorSessionExecutorRouteId,
     sessions: RefCell<HashMap<(i32, DevToolsSessionKey), RendererInspectorSessionRoute>>,
     interrupt_sessions: RefCell<
@@ -83,12 +78,12 @@ enum RendererInspectorNestedCommand {
 
 impl Drop for RendererInspectorSessionExecutorLocal {
     fn drop(&mut self) {
-        let _ = INSPECTOR_SESSION_EXECUTORS.try_with(|executors| {
-            executors.borrow_mut().remove(&self.route_id);
-        });
-        self.main_ingress
+        unregister_session_executor(self.route_id);
+        self.target
+            .main_ref()
             .close("Inspector session executor was destroyed");
-        self.io_ingress
+        self.target
+            .io_ref()
             .close("Inspector session executor was destroyed");
     }
 }
@@ -120,30 +115,18 @@ impl Drop for RendererInspectorSessionExecutorRegistration {
 impl RendererInspectorSessionExecutorLocal {
     fn new(
         isolate: v8::UnsafeRawIsolatePtr,
-        bridge: RendererInspectorPauseBridge,
-        main_ingress: RendererInspectorMainIngress,
-        io_ingress: RendererInspectorIoIngress,
+        target: RendererDevToolsTargetHandle,
         route_id: RendererInspectorSessionExecutorRouteId,
     ) -> Rc<Self> {
-        debug_assert_eq!(io_ingress.route_id(), Some(route_id));
+        debug_assert_eq!(target.io_ref().route_id(), Some(route_id));
         let session_executor = Rc::new(Self {
             isolate: UnsafeCell::new(isolate),
-            bridge,
-            main_ingress,
-            io_ingress,
+            target,
             route_id,
             sessions: RefCell::new(HashMap::new()),
             interrupt_sessions: RefCell::new(HashMap::new()),
         });
-        let previous = INSPECTOR_SESSION_EXECUTORS.with(|executors| {
-            executors
-                .borrow_mut()
-                .insert(route_id, Rc::downgrade(&session_executor))
-        });
-        assert!(
-            previous.is_none(),
-            "renderer Inspector session-executor route IDs must be unique"
-        );
+        register_session_executor(route_id, &session_executor);
         session_executor
     }
 
@@ -182,41 +165,46 @@ impl RendererInspectorSessionExecutorLocal {
     }
 
     fn run_message_loop_on_pause(&self, context_group_id: i32) {
-        let Some(pause_loop_policy) = self.bridge.enter_pause() else {
+        let Some(pause_loop_policy) = self.target.pause_ref().enter_pause() else {
             return;
         };
         let mut prefer_main = true;
-        while let Some(command) = self.bridge.wait_for_pause_work(|| {
+        while let Some(command) = self.target.pause_ref().wait_for_pause_work(|| {
             let command = match pause_loop_policy {
-                crate::script_vm::inspector_pause::RendererInspectorPauseLoopPolicy::IoOnly => {
-                    self.io_ingress
-                        .claim_for_pause()
-                        .map(RendererInspectorNestedCommand::Io)
-                }
-                crate::script_vm::inspector_pause::RendererInspectorPauseLoopPolicy::MainAndIo
-                    if prefer_main => self
-                    .main_ingress
+                crate::devtools::pause::RendererInspectorPauseLoopPolicy::IoOnly => self
+                    .target
+                    .io_ref()
                     .claim_for_pause()
-                    .map(RendererInspectorNestedCommand::Main)
-                    .or_else(|| {
-                        self.io_ingress
-                            .claim_for_pause()
-                            .map(RendererInspectorNestedCommand::Io)
-                    }),
-                crate::script_vm::inspector_pause::RendererInspectorPauseLoopPolicy::MainAndIo => {
-                    self.io_ingress
+                    .map(RendererInspectorNestedCommand::Io),
+                crate::devtools::pause::RendererInspectorPauseLoopPolicy::MainAndIo
+                    if prefer_main =>
+                {
+                    self.target
+                        .main_ref()
                         .claim_for_pause()
-                        .map(RendererInspectorNestedCommand::Io)
+                        .map(RendererInspectorNestedCommand::Main)
                         .or_else(|| {
-                            self.main_ingress
+                            self.target
+                                .io_ref()
                                 .claim_for_pause()
-                                .map(RendererInspectorNestedCommand::Main)
+                                .map(RendererInspectorNestedCommand::Io)
                         })
                 }
+                crate::devtools::pause::RendererInspectorPauseLoopPolicy::MainAndIo => self
+                    .target
+                    .io_ref()
+                    .claim_for_pause()
+                    .map(RendererInspectorNestedCommand::Io)
+                    .or_else(|| {
+                        self.target
+                            .main_ref()
+                            .claim_for_pause()
+                            .map(RendererInspectorNestedCommand::Main)
+                    }),
             };
             if command.is_some()
                 && pause_loop_policy
-                    == crate::script_vm::inspector_pause::RendererInspectorPauseLoopPolicy::MainAndIo
+                    == crate::devtools::pause::RendererInspectorPauseLoopPolicy::MainAndIo
             {
                 prefer_main = !prefer_main;
             }
@@ -231,7 +219,7 @@ impl RendererInspectorSessionExecutorLocal {
                 }
             }
         }
-        self.bridge.leave_pause();
+        self.target.pause_ref().leave_pause();
     }
 
     fn dispatch_io_command(&self, context_group_id: i32, command: RendererInspectorIoCommand) {
@@ -248,7 +236,7 @@ impl RendererInspectorSessionExecutorLocal {
     fn dispatch_main_command(&self, context_group_id: i32, command: RendererInspectorMainCommand) {
         match command.nested_dispatch() {
             RendererDevToolsMainNestedDispatch::PageAgent => {
-                let first_dispatch = self.main_ingress.first_dispatch_guard(&command);
+                let first_dispatch = self.target.main_ref().first_dispatch_guard(&command);
                 let (page_command, reply_tx) = command.into_nested_page_parts();
                 let result = dispatch_nested_main_page_command(page_command, first_dispatch)
                     .map(|output| RendererOwnerReply::AsyncPageCommandRan(Box::new(output)));
@@ -271,7 +259,7 @@ impl RendererInspectorSessionExecutorLocal {
     }
 
     fn dispatch_next_io_command_from_interrupt(&self) {
-        let Some(command) = self.io_ingress.claim_for_interrupt() else {
+        let Some(command) = self.target.io_ref().claim_for_interrupt() else {
             return;
         };
         let session_key = command.ticket().session();
@@ -284,7 +272,7 @@ impl RendererInspectorSessionExecutorLocal {
     }
 
     fn dispatch_next_io_command_from_owner(&self) {
-        let Some(command) = self.io_ingress.claim_for_owner() else {
+        let Some(command) = self.target.io_ref().claim_for_owner() else {
             return;
         };
         let session_key = command.ticket().session();
@@ -297,8 +285,8 @@ impl RendererInspectorSessionExecutorLocal {
     }
 
     fn claim_next_main_command_from_owner(&self) -> Option<RendererInspectorMainOwnerDispatch> {
-        let command = self.main_ingress.claim_for_owner()?;
-        Some(self.main_ingress.prepare_owner_dispatch(command))
+        let command = self.target.main_ref().claim_for_owner()?;
+        Some(self.target.main_ref().prepare_owner_dispatch(command))
     }
 
     fn dispatch_main_command_to_session(
@@ -306,7 +294,7 @@ impl RendererInspectorSessionExecutorLocal {
         command: RendererInspectorMainCommand,
         session: Option<RendererInspectorSessionRoute>,
     ) {
-        let mut first_dispatch = self.main_ingress.first_dispatch_guard(&command);
+        let mut first_dispatch = self.target.main_ref().first_dispatch_guard(&command);
         let Some(session) = session else {
             let (_, _, response) = command.into_protocol_parts();
             send_inspector_dispatch_error(Some(response), "Inspector session is not available");
@@ -317,7 +305,7 @@ impl RendererInspectorSessionExecutorLocal {
             send_inspector_dispatch_error(Some(response), "Inspector session has been detached");
             return;
         };
-        let _command_dispatch = self.bridge.begin_command_dispatch(
+        let _command_dispatch = self.target.pause_ref().begin_command_dispatch(
             command.command_id(),
             command.ticket(),
             command.pause_effect(),
@@ -327,7 +315,7 @@ impl RendererInspectorSessionExecutorLocal {
         session.outbound.register_response_callback(response);
         let _post_dispatch_wake = first_dispatch.release_for_dispatch();
         v8_session.dispatch_protocol_message(v8::inspector::StringView::from(raw_json.as_bytes()));
-        self.bridge.record_v8_state_update(
+        self.target.pause_ref().record_v8_state_update(
             session.agent_token,
             session.session_key,
             V8InspectorSessionState::from_bytes(v8_session.state()),
@@ -339,7 +327,7 @@ impl RendererInspectorSessionExecutorLocal {
         mut command: RendererInspectorIoCommand,
         session: Option<RendererInspectorSessionRoute>,
     ) {
-        let mut first_dispatch = self.io_ingress.first_dispatch_guard(&command);
+        let mut first_dispatch = self.target.io_ref().first_dispatch_guard(&command);
         let Some(session) = session else {
             send_inspector_dispatch_error(
                 command.take_response(),
@@ -354,7 +342,7 @@ impl RendererInspectorSessionExecutorLocal {
             );
             return;
         };
-        let _command_dispatch = self.bridge.begin_command_dispatch(
+        let _command_dispatch = self.target.pause_ref().begin_command_dispatch(
             command.command_id(),
             command.ticket(),
             command.pause_effect(),
@@ -367,7 +355,7 @@ impl RendererInspectorSessionExecutorLocal {
         v8_session.dispatch_protocol_message(v8::inspector::StringView::from(
             command.raw_json().as_bytes(),
         ));
-        self.bridge.record_v8_state_update(
+        self.target.pause_ref().record_v8_state_update(
             session.agent_token,
             session.session_key,
             V8InspectorSessionState::from_bytes(v8_session.state()),
@@ -375,79 +363,8 @@ impl RendererInspectorSessionExecutorLocal {
     }
 
     fn quit_message_loop_on_pause(&self) {
-        self.bridge.request_quit();
+        self.target.pause_ref().request_quit();
     }
-}
-
-fn allocate_session_executor_route_id() -> usize {
-    NEXT_SESSION_EXECUTOR_ROUTE_ID
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-            current.checked_add(1)
-        })
-        .expect("renderer Inspector session-executor route ID exhausted")
-}
-
-unsafe extern "C" fn dispatch_inspector_interrupt(
-    isolate: v8::UnsafeRawIsolatePtr,
-    data: *mut std::ffi::c_void,
-) {
-    // SAFETY: every accepted request passes one `Arc::into_raw` reference to
-    // V8, and V8 invokes its interrupt callback at most once for that request.
-    // Reconstructing it here consumes exactly that callback-owned reference.
-    let callback_target = unsafe { Arc::from_raw(data.cast::<RendererInspectorInterruptTarget>()) };
-    let interrupt_route_id = callback_target.route_id();
-    let session_executor = INSPECTOR_SESSION_EXECUTORS
-        .try_with(|executors| {
-            executors
-                .borrow()
-                .get(&interrupt_route_id)
-                .and_then(Weak::upgrade)
-        })
-        .ok()
-        .flatten();
-    let Some(session_executor) = session_executor else {
-        return;
-    };
-    let mut isolate_ptr = isolate;
-    let isolate = unsafe { v8::Isolate::ref_from_raw_isolate_ptr_mut(&mut isolate_ptr) };
-    with_scoped_inspector_microtasks(isolate, || {
-        session_executor.dispatch_next_io_command_from_interrupt();
-    });
-}
-
-pub(crate) fn dispatch_inspector_io_owner_wake(wake: RendererInspectorIoOwnerWake) {
-    let session_executor = INSPECTOR_SESSION_EXECUTORS
-        .try_with(|executors| {
-            executors
-                .borrow()
-                .get(&wake.route_id())
-                .and_then(Weak::upgrade)
-        })
-        .ok()
-        .flatten();
-    let Some(session_executor) = session_executor else {
-        return;
-    };
-    let isolate = unsafe { &mut *session_executor.isolate.get() };
-    let isolate = unsafe { v8::Isolate::ref_from_raw_isolate_ptr_mut(isolate) };
-    with_scoped_inspector_microtasks(isolate, || {
-        session_executor.dispatch_next_io_command_from_owner();
-    });
-}
-
-pub(crate) fn dispatch_inspector_main_owner_wake(
-    wake: RendererInspectorMainOwnerWake,
-) -> Option<RendererInspectorMainOwnerDispatch> {
-    INSPECTOR_SESSION_EXECUTORS
-        .try_with(|executors| {
-            executors
-                .borrow()
-                .get(&wake.route_id())
-                .and_then(Weak::upgrade)
-        })
-        .ok()
-        .flatten()
-        .and_then(|session_executor| session_executor.claim_next_main_command_from_owner())
 }
 
 fn send_inspector_dispatch_error(
@@ -590,9 +507,7 @@ struct RendererInspectorIsolateBackendIdentity;
 #[derive(Clone)]
 pub(crate) struct RendererInspectorIsolateBackendHandle {
     identity: Rc<RendererInspectorIsolateBackendIdentity>,
-    pause_bridge: RendererInspectorPauseBridge,
-    main_ingress: RendererInspectorMainIngress,
-    io_ingress: RendererInspectorIoIngress,
+    target: RendererDevToolsTargetHandle,
 }
 
 impl std::fmt::Debug for RendererInspectorIsolateBackendHandle {
@@ -608,9 +523,7 @@ pub(in crate::script_vm) struct RendererInspectorIsolateBackend {
     inspector: v8::inspector::V8Inspector,
     pub(super) context_registry: DocumentInspectorContextRegistry,
     unique_id_state: Rc<RendererInspectorClientUniqueIdState>,
-    pause_bridge: RendererInspectorPauseBridge,
-    main_ingress: RendererInspectorMainIngress,
-    io_ingress: RendererInspectorIoIngress,
+    target: RendererDevToolsTargetHandle,
     session_executor: Rc<RendererInspectorSessionExecutorLocal>,
 }
 
@@ -632,13 +545,9 @@ impl RendererInspectorIsolateBackend {
                 route_id,
             )),
         );
-        let session_executor = RendererInspectorSessionExecutorLocal::new(
-            isolate_ptr,
-            pause_bridge.clone(),
-            main_ingress.clone(),
-            io_ingress.clone(),
-            route_id,
-        );
+        let target = RendererDevToolsTargetHandle::new(pause_bridge, main_ingress, io_ingress);
+        let session_executor =
+            RendererInspectorSessionExecutorLocal::new(isolate_ptr, target.clone(), route_id);
         let inspector_client =
             v8::inspector::V8InspectorClient::new(Box::new(RendererInspectorClient::new(
                 isolate_ptr,
@@ -651,9 +560,7 @@ impl RendererInspectorIsolateBackend {
             inspector: v8::inspector::V8Inspector::create(isolate, inspector_client),
             context_registry,
             unique_id_state,
-            pause_bridge,
-            main_ingress,
-            io_ingress,
+            target,
             session_executor,
         }
     }
@@ -661,22 +568,12 @@ impl RendererInspectorIsolateBackend {
     pub(crate) fn handle(&self) -> RendererInspectorIsolateBackendHandle {
         RendererInspectorIsolateBackendHandle {
             identity: Rc::clone(&self.identity),
-            pause_bridge: self.pause_bridge.clone(),
-            main_ingress: self.main_ingress.clone(),
-            io_ingress: self.io_ingress.clone(),
+            target: self.target.clone(),
         }
     }
 
-    pub(super) fn pause_bridge(&self) -> RendererInspectorPauseBridge {
-        self.pause_bridge.clone()
-    }
-
-    pub(super) fn io_ingress(&self) -> RendererInspectorIoIngress {
-        self.io_ingress.clone()
-    }
-
-    pub(super) fn main_ingress(&self) -> RendererInspectorMainIngress {
-        self.main_ingress.clone()
+    pub(super) fn devtools_target(&self) -> RendererDevToolsTargetHandle {
+        self.target.clone()
     }
 
     pub(super) fn register_session_executor_route(
@@ -789,16 +686,8 @@ impl RendererInspectorIsolateBackend {
 }
 
 impl RendererInspectorIsolateBackendHandle {
-    pub(super) fn pause_bridge(&self) -> RendererInspectorPauseBridge {
-        self.pause_bridge.clone()
-    }
-
-    pub(super) fn io_ingress(&self) -> RendererInspectorIoIngress {
-        self.io_ingress.clone()
-    }
-
-    pub(super) fn main_ingress(&self) -> RendererInspectorMainIngress {
-        self.main_ingress.clone()
+    pub(super) fn devtools_target(&self) -> RendererDevToolsTargetHandle {
+        self.target.clone()
     }
 
     pub(super) fn assert_matches(&self, backend: &RendererInspectorIsolateBackend) {
@@ -817,9 +706,7 @@ impl RendererInspectorIsolateBackendHandle {
         let io_ingress = RendererInspectorIoIngress::new(pause_bridge.pause_loop_wake(), None);
         Self {
             identity: Rc::new(RendererInspectorIsolateBackendIdentity),
-            pause_bridge,
-            main_ingress,
-            io_ingress,
+            target: RendererDevToolsTargetHandle::new(pause_bridge, main_ingress, io_ingress),
         }
     }
 

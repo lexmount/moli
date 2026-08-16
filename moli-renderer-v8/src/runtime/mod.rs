@@ -300,7 +300,6 @@ pub(super) use self::page_state::RendererPageEntry;
 pub use self::page_state::RendererPageRecord;
 pub(crate) use self::page_state::RendererPageSlotHandle;
 pub use self::page_state::RendererPageState;
-pub(crate) use self::page_surface::RendererDevToolsMainNestedDispatch;
 use self::page_surface::RendererPageTable;
 pub use self::page_surface::RendererRuntimeInspectorMessageResponseOrder;
 pub use self::page_surface::{
@@ -309,14 +308,14 @@ pub use self::page_surface::{
     RendererAutofillTriggerOutcome, RendererAutofillTriggerRequest, RendererCaptureScreenshotReply,
     RendererCapturedScreenshot, RendererCommandTurnCompletion, RendererCommandTurnOutput,
     RendererCountEntry, RendererDedicatedWorkerTargetEvent, RendererDedicatedWorkerTargetInfo,
-    RendererDevToolsAgentToken, RendererDevToolsMainCommandEnvelope, RendererDocumentBoxModel,
-    RendererDocumentChildNodeSnapshotEvent, RendererDocumentChildNodeSnapshotEvents,
-    RendererDocumentChildNodeSnapshots, RendererDocumentFrontendNodeIdsResolution,
-    RendererDocumentHitTestResult, RendererDocumentIsolateAccountingDiagnostics,
-    RendererDocumentNodeAttributesResolution, RendererDocumentNodeClientRect,
-    RendererDocumentNodeGeometry, RendererDocumentNodePropertyResolution,
-    RendererDocumentNodeReference, RendererDocumentNodeTextResolution,
-    RendererDocumentQuerySelectorNode, RendererDocumentQuerySelectorResolution,
+    RendererDevToolsAgentToken, RendererDocumentBoxModel, RendererDocumentChildNodeSnapshotEvent,
+    RendererDocumentChildNodeSnapshotEvents, RendererDocumentChildNodeSnapshots,
+    RendererDocumentFrontendNodeIdsResolution, RendererDocumentHitTestResult,
+    RendererDocumentIsolateAccountingDiagnostics, RendererDocumentNodeAttributesResolution,
+    RendererDocumentNodeClientRect, RendererDocumentNodeGeometry,
+    RendererDocumentNodePropertyResolution, RendererDocumentNodeReference,
+    RendererDocumentNodeTextResolution, RendererDocumentQuerySelectorNode,
+    RendererDocumentQuerySelectorResolution,
     RendererDocumentQuerySelectorWithChildNodeSnapshotEvents,
     RendererDocumentSourcedSameDocumentNavigation,
     RendererDocumentSourcedTopLevelLocationNavigation, RendererDomAttributeMutation,
@@ -330,12 +329,10 @@ pub use self::page_surface::{
     RendererDomSearchRegistration, RendererDomSearchResultNode, RendererDomSearchResultsResolution,
     RendererDomSnapshotCaptureOptions, RendererDomSnapshotCapturePayload, RendererDragData,
     RendererDragDataItem, RendererDraggedDirectory, RendererDraggedFile, RendererGeometryQuad,
-    RendererInputDispatchOutcome, RendererInspectorCommandEnvelope, RendererInspectorCommandRoute,
-    RendererInspectorFirstDispatchLifecycle, RendererInspectorIngressTicket,
-    RendererInspectorProtocolConfiguration, RendererInspectorProtocolConfigurationCommand,
-    RendererInspectorSessionRestoreSnapshot, RendererJavaScriptDialogId,
-    RendererJavaScriptDialogSource, RendererLayoutMetrics, RendererMainDocumentCommit,
-    RendererMoliDomMemoryDiagnostics, RendererMoliMemoryDiagnostics,
+    RendererInputDispatchOutcome, RendererInspectorProtocolConfiguration,
+    RendererInspectorProtocolConfigurationCommand, RendererInspectorSessionRestoreSnapshot,
+    RendererJavaScriptDialogId, RendererJavaScriptDialogSource, RendererLayoutMetrics,
+    RendererMainDocumentCommit, RendererMoliDomMemoryDiagnostics, RendererMoliMemoryDiagnostics,
     RendererMoliMemoryScopeDiagnostics, RendererMoliRuntimeMemoryDiagnostics, RendererPageCommand,
     RendererPageCommandPostResponseContinuation, RendererPageCookieFacadeSnapshotReply,
     RendererPageCreationDiagnostics, RendererPageDiagnosticsSnapshot, RendererPageDumpFormat,
@@ -364,7 +361,7 @@ pub use self::page_surface::{
     RendererTouchPoint, RendererWindowDocumentSource, RuntimeConsoleMessageSnapshot,
 };
 pub(crate) use self::page_surface::{
-    RendererCommandTurnOutputRecorder, RendererInspectorPauseCommandEffect,
+    RendererCommandTurnOutputRecorder, RendererInspectorPageCommand,
     RendererRuntimeCommandOutputRecorder, RendererRuntimeInspectorResponsePublication,
     RendererRuntimeObservableSourceQueue,
 };
@@ -404,13 +401,21 @@ pub use self::protocol_output::{
     RendererProtocolObservation, renderer_output_transport_channel,
 };
 pub use self::service_worker_run::RendererServiceWorkerRunIdentity;
-pub(crate) use crate::renderer::PageVmInitStage;
-pub use crate::script_vm::inspector_io::{
+pub use crate::devtools::command::{
+    RendererDevToolsMainCommandEnvelope, RendererInspectorCommandEnvelope,
+    RendererInspectorCommandRoute, RendererInspectorFirstDispatchLifecycle,
+    RendererInspectorIngressTicket,
+};
+pub(crate) use crate::devtools::command::{
+    RendererDevToolsMainNestedDispatch, RendererInspectorPauseCommandEffect,
+};
+pub use crate::devtools::ingress::io::{
     RendererRuntimeInspectorIoCommandClaim, RendererRuntimeInspectorIoCommandRoute,
 };
-pub use crate::script_vm::inspector_main::{
+pub use crate::devtools::ingress::main::{
     RendererRuntimeInspectorMainCommandCompletion, RendererRuntimeInspectorMainCommandRoute,
 };
+pub(crate) use crate::renderer::PageVmInitStage;
 pub(crate) use crate::service_worker_runtime::{
     MaterializedServiceWorkerFetchResponseHead, ServiceWorkerClientFocus,
     ServiceWorkerClientFocusError, ServiceWorkerClientFocusResult, ServiceWorkerClientId,

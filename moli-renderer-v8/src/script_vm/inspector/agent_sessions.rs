@@ -78,16 +78,12 @@ impl RendererDevToolsSessionConnection {
         backend: &RendererInspectorIsolateBackend,
         session_key: DevToolsSessionKey,
     ) -> InspectorOutbound {
-        let pause_bridge = backend.pause_bridge();
         InspectorOutbound::for_frontend(
             self.agent_token,
             session_key.clone(),
-            pause_bridge.outbound_route(
-                backend.main_ingress(),
-                backend.io_ingress(),
-                self.agent_token,
-                session_key,
-            ),
+            backend
+                .devtools_target()
+                .outbound_route(self.agent_token, session_key),
             self.output_journal.clone(),
         )
     }

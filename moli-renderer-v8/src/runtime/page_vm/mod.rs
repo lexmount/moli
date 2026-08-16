@@ -1825,22 +1825,8 @@ impl PageVm {
         self.vm().declare_renderer_output_fence(cursor)
     }
 
-    pub(crate) fn inspector_pause_bridge(
-        &self,
-    ) -> crate::script_vm::inspector_pause::RendererInspectorPauseBridge {
-        self.vm().inspector_pause_bridge()
-    }
-
-    pub(crate) fn inspector_io_ingress(
-        &self,
-    ) -> crate::script_vm::inspector_io::RendererInspectorIoIngress {
-        self.vm().inspector_io_ingress()
-    }
-
-    pub(crate) fn inspector_main_ingress(
-        &self,
-    ) -> crate::script_vm::inspector_main::RendererInspectorMainIngress {
-        self.vm().inspector_main_ingress()
+    pub(crate) fn devtools_target(&self) -> crate::devtools::target::RendererDevToolsTargetHandle {
+        self.vm().devtools_target()
     }
 
     pub(super) fn close_for_context_teardown(&mut self) {

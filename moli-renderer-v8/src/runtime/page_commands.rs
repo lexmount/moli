@@ -19,9 +19,6 @@ impl PageVm {
         command: RendererPageCommand,
     ) -> Result<RendererPageReply> {
         match command {
-            RendererPageCommand::DevToolsMain(_) => Err(anyhow!(
-                "the Page owner must unwrap a Main DevTools transport envelope before agent dispatch"
-            )),
             RendererPageCommand::Inspector(command) => {
                 self.dispatch_renderer_inspector_command(command)
             }
@@ -1372,9 +1369,6 @@ impl PageVm {
 }
 
 fn renderer_page_command_uses_cpu_throttling(command: &RendererPageCommand) -> bool {
-    if let RendererPageCommand::DevToolsMain(envelope) = command {
-        return renderer_page_command_uses_cpu_throttling(envelope.payload());
-    }
     if let RendererPageCommand::Inspector(envelope) = command {
         return envelope.uses_cpu_throttling();
     }

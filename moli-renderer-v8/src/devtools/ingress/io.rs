@@ -1,5 +1,4 @@
 use std::{
-    collections::{BTreeMap, VecDeque},
     ffi::c_void,
     sync::{
         Arc,
@@ -12,14 +11,18 @@ use parking_lot::Mutex;
 use serde_json::json;
 
 use crate::{
+    devtools::{
+        ingress::lane::{
+            RendererDevToolsIngressCommand, RendererDevToolsLaneEnqueueError,
+            RendererDevToolsSessionLaneKey, RendererDevToolsSessionLanes,
+        },
+        pause::RendererInspectorPauseLoopWake,
+        route::RendererInspectorSessionExecutorRouteId,
+    },
     runtime::{
         RendererInspectorCommandEnvelope, RendererInspectorCommandRoute,
         RendererInspectorIngressTicket, RendererInspectorPauseCommandEffect,
         RendererRuntimeInspectorResponseSender,
-    },
-    script_vm::{
-        inspector_pause::RendererInspectorPauseLoopWake,
-        inspector_route::RendererInspectorSessionExecutorRouteId,
     },
 };
 
@@ -85,6 +88,12 @@ impl RendererInspectorIoCommand {
     #[cfg(test)]
     pub(crate) fn claimed_by(&self) -> Option<RendererInspectorIoCommandConsumer> {
         self.claimed_by
+    }
+}
+
+impl RendererDevToolsIngressCommand for RendererInspectorIoCommand {
+    fn ingress_command_id(&self) -> u64 {
+        self.command_id
     }
 }
 
@@ -160,30 +169,14 @@ impl RendererInspectorIoOwnerWake {
     }
 }
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct RendererInspectorIoSessionLaneKey {
-    agent_token: RendererDevToolsAgentToken,
-    session: DevToolsSessionKey,
-}
-
-#[derive(Default)]
-struct RendererInspectorIoSessionLane {
-    active_command_id: Option<u64>,
-    queued: VecDeque<RendererInspectorIoCommand>,
-    ready: bool,
-    detached: bool,
-}
-
 struct RendererInspectorIoState {
-    sessions: BTreeMap<RendererInspectorIoSessionLaneKey, RendererInspectorIoSessionLane>,
-    ready_sessions: VecDeque<RendererInspectorIoSessionLaneKey>,
+    lanes: RendererDevToolsSessionLanes<RendererInspectorIoCommand>,
     owner_wake_tx: Option<tokio::sync::mpsc::UnboundedSender<RendererInspectorIoOwnerWake>>,
-    closed: bool,
 }
 
 pub(crate) struct RendererInspectorIoFirstDispatchGuard {
     ingress: RendererInspectorIoIngress,
-    active: Option<(RendererInspectorIoSessionLaneKey, u64)>,
+    active: Option<(RendererDevToolsSessionLaneKey, u64)>,
     consumer: RendererInspectorIoCommandConsumer,
 }
 
@@ -250,10 +243,8 @@ impl RendererInspectorIoIngress {
         Self {
             shared: Arc::new(RendererInspectorIoShared {
                 state: Mutex::new(RendererInspectorIoState {
-                    sessions: BTreeMap::new(),
-                    ready_sessions: VecDeque::new(),
+                    lanes: RendererDevToolsSessionLanes::default(),
                     owner_wake_tx: None,
-                    closed: false,
                 }),
                 interrupt_armed: AtomicBool::new(false),
                 owner_wake_armed: AtomicBool::new(false),
@@ -296,7 +287,7 @@ impl RendererInspectorIoIngress {
         let has_ready = {
             let mut state = self.shared.state.lock();
             state.owner_wake_tx = Some(owner_wake_tx);
-            !state.ready_sessions.is_empty()
+            state.lanes.has_ready()
         };
         if has_ready {
             self.notify_execution_opportunities();
@@ -317,10 +308,7 @@ impl RendererInspectorIoIngress {
         let (claim_tx, claim_rx) = tokio::sync::oneshot::channel();
         let mut state = self.shared.state.lock();
         let command_id = ticket.sequence();
-        let lane_key = RendererInspectorIoSessionLaneKey {
-            agent_token,
-            session: ticket.session().clone(),
-        };
+        let lane_key = RendererDevToolsSessionLaneKey::new(agent_token, ticket.session().clone());
         let command = RendererInspectorIoCommand {
             command_id,
             agent_token,
@@ -328,34 +316,20 @@ impl RendererInspectorIoIngress {
             claim_tx: Some(claim_tx),
             claimed_by: None,
         };
-        if state.closed {
+        if let Err(rejected) = state.lanes.enqueue(lane_key, command) {
             drop(state);
-            fail_io_command(command, "Inspector IO target is closed");
-            return RendererRuntimeInspectorIoCommandRoute {
-                command_id,
-                ticket,
-                claim_rx: Some(claim_rx),
-                ingress: self.clone(),
-            };
-        }
-        let lane = state.sessions.entry(lane_key.clone()).or_default();
-        if lane.detached {
+            match rejected {
+                RendererDevToolsLaneEnqueueError::TargetClosed(command) => {
+                    fail_io_command(command, "Inspector IO target is closed");
+                }
+                RendererDevToolsLaneEnqueueError::SessionDetached(command) => {
+                    fail_io_command(command, "Inspector IO session was detached");
+                }
+            }
+        } else {
             drop(state);
-            fail_io_command(command, "Inspector IO session was detached");
-            return RendererRuntimeInspectorIoCommandRoute {
-                command_id,
-                ticket,
-                claim_rx: Some(claim_rx),
-                ingress: self.clone(),
-            };
+            self.notify_execution_opportunities();
         }
-        lane.queued.push_back(command);
-        if lane.active_command_id.is_none() && !lane.ready {
-            lane.ready = true;
-            state.ready_sessions.push_back(lane_key);
-        }
-        drop(state);
-        self.notify_execution_opportunities();
         RendererRuntimeInspectorIoCommandRoute {
             command_id,
             ticket,
@@ -367,7 +341,7 @@ impl RendererInspectorIoIngress {
     pub(crate) fn claim_for_owner(&self) -> Option<RendererInspectorIoCommand> {
         self.shared.owner_wake_armed.store(false, Ordering::Release);
         let command = self.claim_next(RendererInspectorIoCommandConsumer::Owner);
-        if command.is_none() && !self.shared.state.lock().ready_sessions.is_empty() {
+        if command.is_none() && self.shared.state.lock().lanes.has_ready() {
             self.notify_execution_opportunities();
         }
         command
@@ -377,7 +351,7 @@ impl RendererInspectorIoIngress {
         let command = self.claim_next(RendererInspectorIoCommandConsumer::Interrupt);
         if command.is_none() {
             self.shared.interrupt_armed.store(false, Ordering::Release);
-            let has_ready = !self.shared.state.lock().ready_sessions.is_empty();
+            let has_ready = self.shared.state.lock().lanes.has_ready();
             if has_ready {
                 self.request_interrupt();
             }
@@ -392,7 +366,7 @@ impl RendererInspectorIoIngress {
     #[cfg(test)]
     pub(crate) fn wait_and_claim_for_pause(
         &self,
-        pause_bridge: &crate::script_vm::inspector_pause::RendererInspectorPauseBridge,
+        pause_bridge: &crate::devtools::pause::RendererInspectorPauseBridge,
     ) -> Option<RendererInspectorIoCommand> {
         pause_bridge.wait_for_pause_work(|| self.claim_for_pause())
     }
@@ -402,50 +376,31 @@ impl RendererInspectorIoIngress {
         consumer: RendererInspectorIoCommandConsumer,
     ) -> Option<RendererInspectorIoCommand> {
         let mut state = self.shared.state.lock();
-        if state.closed {
-            return None;
+        let (_, mut command) = state.lanes.claim_next(|_| true)?;
+        command.claimed_by = Some(consumer);
+        if let Some(claim_tx) = command.claim_tx.take() {
+            let _ = claim_tx.send(RendererRuntimeInspectorIoCommandClaim::Inspector);
         }
-        while let Some(lane_key) = state.ready_sessions.pop_front() {
-            let Some(lane) = state.sessions.get_mut(&lane_key) else {
-                continue;
-            };
-            lane.ready = false;
-            if lane.active_command_id.is_some() {
-                continue;
-            }
-            let Some(mut command) = lane.queued.pop_front() else {
-                continue;
-            };
-            lane.active_command_id = Some(command.command_id);
-            command.claimed_by = Some(consumer);
-            if let Some(claim_tx) = command.claim_tx.take() {
-                let _ = claim_tx.send(RendererRuntimeInspectorIoCommandClaim::Inspector);
-            }
-            return Some(command);
-        }
-        None
+        Some(command)
     }
 
     pub(crate) fn first_dispatch_guard(
         &self,
         command: &RendererInspectorIoCommand,
     ) -> RendererInspectorIoFirstDispatchGuard {
-        let lane_key = RendererInspectorIoSessionLaneKey {
-            agent_token: command.agent_token,
-            session: command.ticket().session().clone(),
-        };
+        let lane_key = RendererDevToolsSessionLaneKey::new(
+            command.agent_token,
+            command.ticket().session().clone(),
+        );
         let state = self.shared.state.lock();
         assert_eq!(
             command.first_dispatch_lifecycle(),
             crate::runtime::RendererInspectorFirstDispatchLifecycle::OrderedUntilFirstDispatch,
         );
-        assert_eq!(
-            state
-                .sessions
-                .get(&lane_key)
-                .and_then(|lane| lane.active_command_id),
-            Some(command.command_id),
-            "a claimed Inspector IO command must own its session lane"
+        state.lanes.assert_active(
+            &lane_key,
+            command.command_id,
+            "a claimed Inspector IO command must own its session lane",
         );
         drop(state);
         RendererInspectorIoFirstDispatchGuard {
@@ -459,66 +414,18 @@ impl RendererInspectorIoIngress {
 
     fn finish_first_dispatch(
         &self,
-        lane_key: RendererInspectorIoSessionLaneKey,
+        lane_key: RendererDevToolsSessionLaneKey,
         command_id: u64,
     ) -> bool {
-        {
-            let mut state = self.shared.state.lock();
-            let (make_ready, remove_lane) = {
-                let lane = state
-                    .sessions
-                    .get_mut(&lane_key)
-                    .expect("an active Inspector IO lane must still exist");
-                assert_eq!(
-                    lane.active_command_id.take(),
-                    Some(command_id),
-                    "only the active Inspector IO command may release its lane"
-                );
-                let make_ready = !lane.detached && !lane.queued.is_empty() && !lane.ready;
-                if make_ready {
-                    lane.ready = true;
-                }
-                (make_ready, lane.queued.is_empty())
-            };
-            if make_ready {
-                state.ready_sessions.push_back(lane_key.clone());
-            }
-            if remove_lane {
-                state.sessions.remove(&lane_key);
-            }
-            !state.ready_sessions.is_empty()
-        }
+        self.shared.state.lock().lanes.finish_first_dispatch(
+            lane_key,
+            command_id,
+            "only the active Inspector IO command may release its lane",
+        )
     }
 
     pub(crate) fn cancel_queued_command(&self, command_id: u64, message: &str) {
-        let command = {
-            let mut state = self.shared.state.lock();
-            let lane_key = state.sessions.iter().find_map(|(key, lane)| {
-                lane.queued
-                    .iter()
-                    .any(|command| command.command_id == command_id)
-                    .then(|| key.clone())
-            });
-            let Some(lane_key) = lane_key else {
-                return;
-            };
-            let lane = state
-                .sessions
-                .get_mut(&lane_key)
-                .expect("located Inspector IO lane must remain present");
-            let position = lane
-                .queued
-                .iter()
-                .position(|command| command.command_id == command_id)
-                .expect("located Inspector IO command must remain queued");
-            let command = lane.queued.remove(position);
-            if lane.queued.is_empty() && lane.active_command_id.is_none() {
-                lane.ready = false;
-                state.ready_sessions.retain(|ready| ready != &lane_key);
-                state.sessions.remove(&lane_key);
-            }
-            command
-        };
+        let command = self.shared.state.lock().lanes.cancel_queued(command_id);
         if let Some(command) = command {
             fail_io_command(command, message);
         }
@@ -529,44 +436,15 @@ impl RendererInspectorIoIngress {
         agent_token: RendererDevToolsAgentToken,
         session: &DevToolsSessionKey,
     ) {
-        let commands = {
-            let mut state = self.shared.state.lock();
-            let lane_key = RendererInspectorIoSessionLaneKey {
-                agent_token,
-                session: session.clone(),
-            };
-            state.ready_sessions.retain(|ready| ready != &lane_key);
-            let Some(_) = state.sessions.get(&lane_key) else {
-                return;
-            };
-            let (commands, remove_lane) = {
-                let lane = state
-                    .sessions
-                    .get_mut(&lane_key)
-                    .expect("located Inspector IO lane must remain present");
-                lane.ready = false;
-                lane.detached = true;
-                (
-                    lane.queued.drain(..).collect::<Vec<_>>(),
-                    lane.active_command_id.is_none(),
-                )
-            };
-            if remove_lane {
-                state.sessions.remove(&lane_key);
-            }
-            commands
-        };
+        let lane_key = RendererDevToolsSessionLaneKey::new(agent_token, session.clone());
+        let commands = self.shared.state.lock().lanes.detach_session(&lane_key);
         for command in commands {
             fail_io_command(command, "Inspector IO session was detached");
         }
     }
 
     pub(crate) fn close(&self, message: &str) {
-        let commands = {
-            let mut state = self.shared.state.lock();
-            state.closed = true;
-            drain_queued_commands(&mut state)
-        };
+        let commands = { self.shared.state.lock().lanes.close_and_drain() };
         self.shared.pause_wake.notify_all();
         for command in commands {
             fail_io_command(command, message);
@@ -574,7 +452,7 @@ impl RendererInspectorIoIngress {
     }
 
     pub(crate) fn cancel_all_queued(&self, message: &str) {
-        let commands = drain_queued_commands(&mut self.shared.state.lock());
+        let commands = self.shared.state.lock().lanes.drain_queued();
         for command in commands {
             fail_io_command(command, message);
         }
@@ -632,32 +510,19 @@ impl RendererInspectorIoIngress {
     }
 }
 
-fn drain_queued_commands(state: &mut RendererInspectorIoState) -> Vec<RendererInspectorIoCommand> {
-    state.ready_sessions.clear();
-    let commands = state
-        .sessions
-        .values_mut()
-        .flat_map(|lane| lane.queued.drain(..))
-        .collect();
-    state
-        .sessions
-        .retain(|_, lane| lane.active_command_id.is_some());
-    commands
-}
-
 impl std::fmt::Debug for RendererInspectorIoIngress {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let state = self.shared.state.lock();
         formatter
             .debug_struct("RendererInspectorIoIngress")
             .field("route_id", &self.route_id())
-            .field("session_lanes", &state.sessions.len())
-            .field("ready_sessions", &state.ready_sessions.len())
+            .field("session_lanes", &state.lanes.session_count())
+            .field("ready_sessions", &state.lanes.ready_count())
             .field(
                 "interrupt_armed",
                 &self.shared.interrupt_armed.load(Ordering::Acquire),
             )
-            .field("closed", &state.closed)
+            .field("closed", &state.lanes.is_closed())
             .finish()
     }
 }
@@ -683,8 +548,7 @@ fn fail_io_command(mut command: RendererInspectorIoCommand, message: &str) {
 mod tests {
     use super::*;
     use crate::{
-        runtime::RendererInspectorIngressTicket,
-        script_vm::inspector_pause::RendererInspectorPauseBridge,
+        devtools::pause::RendererInspectorPauseBridge, runtime::RendererInspectorIngressTicket,
     };
 
     fn ingress() -> RendererInspectorIoIngress {
@@ -788,7 +652,7 @@ mod tests {
         }
 
         assert!(
-            ingress.shared.state.lock().sessions.is_empty(),
+            ingress.shared.state.lock().lanes.session_count() == 0,
             "every stressed first-dispatch lane must retire"
         );
     }
@@ -847,7 +711,7 @@ mod tests {
 
         first_dispatch.release();
         assert!(
-            ingress.shared.state.lock().sessions.is_empty(),
+            ingress.shared.state.lock().lanes.session_count() == 0,
             "the detached lane must retire after its active first dispatch releases"
         );
     }
@@ -884,7 +748,7 @@ mod tests {
 
         first_dispatch.release();
         assert!(
-            ingress.shared.state.lock().sessions.is_empty(),
+            ingress.shared.state.lock().lanes.session_count() == 0,
             "the active lane must retire safely after target close"
         );
 

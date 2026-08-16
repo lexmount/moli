@@ -67,6 +67,10 @@ use super::phase_one::{
 };
 use super::*;
 use crate::RendererTopLevelNavigationDispatch;
+use crate::devtools::ingress::{
+    io::RendererInspectorIoOwnerWake,
+    main::{RendererInspectorMainFirstDispatchGuard, RendererInspectorMainOwnerWake},
+};
 use crate::document_runtime::{
     response_content_security_policies_from_headers,
     response_content_security_report_only_policies_from_headers,
@@ -79,8 +83,7 @@ use crate::referrer_policy::response_referrer_policy_from_headers;
 use crate::render_runtime::{RenderRuntimeEnvelope, RenderRuntimeHandle, RenderRuntimeOwner};
 use crate::script_vm::{
     PendingRuntimeEvaluateCall, RendererDocumentIsolateBootstrap, dispatch_inspector_io_owner_wake,
-    dispatch_inspector_main_owner_wake, inspector_io::RendererInspectorIoOwnerWake,
-    inspector_main::RendererInspectorMainOwnerWake,
+    dispatch_inspector_main_owner_wake,
 };
 use crate::service_worker_runtime::{
     ServiceWorkerRuntimeOwnerWake, service_worker_owner_wake_channel,
@@ -574,6 +577,14 @@ enum RenderRuntimeTurn {
     RunInspectorMainReceiver {
         wake: RendererInspectorMainOwnerWake,
     },
+    /// An owner-claimed Main command carrying its ingress permit until the
+    /// concrete Page agent first-dispatch boundary.
+    RunDevToolsMainCommand {
+        token: RendererPageToken,
+        command: RendererPageCommand,
+        first_dispatch: RendererInspectorMainFirstDispatchGuard,
+        capture_policy: super::RendererPageStateCapturePolicy,
+    },
     RunLivePageCommand {
         token: RendererPageToken,
         command: RendererPageCommand,
@@ -680,7 +691,8 @@ impl RenderRuntimeTurn {
     /// then trying to commit from the stale previous view.
     fn committed_page_view_command_token(&self) -> Option<RendererPageToken> {
         match self {
-            Self::RunLivePageCommand { token, .. }
+            Self::RunDevToolsMainCommand { token, .. }
+            | Self::RunLivePageCommand { token, .. }
             | Self::ContinueLivePageRuntimeCommandLifecycle { token, .. }
             | Self::WaitLivePageNetworkIdle { token, .. }
             | Self::WaitLivePageDomStable { token, .. }
@@ -4437,6 +4449,7 @@ impl RendererOwnerHandle {
             | RenderRuntimeTurn::RunPageTurn { .. }
             | RenderRuntimeTurn::RunOwnerMaintenance { .. }
             | RenderRuntimeTurn::RunInspectorMainReceiver { .. }
+            | RenderRuntimeTurn::RunDevToolsMainCommand { .. }
             | RenderRuntimeTurn::RunLivePageCommand { .. }
             | RenderRuntimeTurn::ResumeLivePageDocumentLifecycleAfterReply { .. }
             | RenderRuntimeTurn::WaitLivePageNetworkIdle { .. }
@@ -4744,16 +4757,6 @@ impl RendererOwnerHandle {
         command: RendererPageCommand,
         capture_policy: super::RendererPageStateCapturePolicy,
     ) -> RenderRuntimeDispatchOutcome {
-        if let RendererPageCommand::DevToolsMain(envelope) = command {
-            let (mut first_dispatch, command) = envelope.into_owner_parts();
-            // Crossing into the Page owner's command dispatcher is the Main
-            // receiver's first-dispatch boundary. Unwrap here so the existing
-            // typed continuations (promise awaits, navigation followers and
-            // wait commands) keep seeing the concrete command rather than a
-            // transport envelope.
-            let _post_dispatch_wake = first_dispatch.release_for_dispatch();
-            return Box::pin(self.run_live_page_command_turn(token, command, capture_policy)).await;
-        }
         match command {
             RendererPageCommand::WaitForSelector {
                 selector,
@@ -6262,18 +6265,32 @@ impl RendererOwnerHandle {
                 let Some(dispatch) = dispatch_inspector_main_owner_wake(wake) else {
                     return RenderRuntimeDispatchOutcome::BackgroundComplete(Ok(()));
                 };
-                let (token, capture_policy, envelope, reply_tx) = dispatch.into_parts();
+                let (token, capture_policy, envelope, first_dispatch, reply_tx) =
+                    dispatch.into_parts();
                 let command_admission_output_predecessor =
                     renderer_output_fence_for_tail_on_bound_owner_local_store(token);
                 RenderRuntimeDispatchOutcome::InspectorMainCommandClaimed {
                     reply_tx,
                     command_admission_output_predecessor,
-                    turn: Box::new(RenderRuntimeTurn::RunLivePageCommand {
+                    turn: Box::new(RenderRuntimeTurn::RunDevToolsMainCommand {
                         token,
-                        command: RendererPageCommand::DevToolsMain(envelope),
+                        command: envelope.into_payload(),
+                        first_dispatch,
                         capture_policy,
                     }),
                 }
+            }
+            RenderRuntimeTurn::RunDevToolsMainCommand {
+                token,
+                command,
+                mut first_dispatch,
+                capture_policy,
+            } => {
+                // Crossing into the Page owner's concrete command dispatcher
+                // is the Main receiver's first-dispatch boundary.
+                let _post_dispatch_wake = first_dispatch.release_for_dispatch();
+                self.run_live_page_command_turn(token, command, capture_policy)
+                    .await
             }
             RenderRuntimeTurn::RunLivePageCommand {
                 token,

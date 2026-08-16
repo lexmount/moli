@@ -20,11 +20,7 @@ pub struct RendererAttachedPage {
     pub(super) devtools_agent_token: RendererDevToolsAgentToken,
     pub(super) page_context_cancel_tx: RendererPageContextCancelSender,
     pub(super) javascript_dialog_broker: RendererJavaScriptDialogBroker,
-    pub(super) inspector_pause_bridge:
-        crate::script_vm::inspector_pause::RendererInspectorPauseBridge,
-    pub(super) inspector_main_ingress:
-        crate::script_vm::inspector_main::RendererInspectorMainIngress,
-    pub(super) inspector_io_ingress: crate::script_vm::inspector_io::RendererInspectorIoIngress,
+    pub(super) devtools_target: crate::devtools::target::RendererDevToolsTargetHandle,
     pub(super) script_execution_control:
         crate::script_execution_control::RendererScriptExecutionControl,
     pub(super) page_state: Arc<RendererPageState>,
@@ -73,9 +69,7 @@ impl RendererAttachedPage {
                 devtools_agent_token: self.devtools_agent_token,
                 page_context_cancel_tx: self.page_context_cancel_tx,
                 javascript_dialog_broker: self.javascript_dialog_broker,
-                inspector_pause_bridge: self.inspector_pause_bridge,
-                inspector_main_ingress: self.inspector_main_ingress,
-                inspector_io_ingress: self.inspector_io_ingress,
+                devtools_target: self.devtools_target,
                 script_execution_control: self.script_execution_control,
                 committed_document_post_response_continuation: self
                     .committed_document_post_response_continuation,
@@ -96,9 +90,7 @@ pub struct RendererPageHandle {
     devtools_agent_token: RendererDevToolsAgentToken,
     page_context_cancel_tx: RendererPageContextCancelSender,
     javascript_dialog_broker: RendererJavaScriptDialogBroker,
-    inspector_pause_bridge: crate::script_vm::inspector_pause::RendererInspectorPauseBridge,
-    inspector_main_ingress: crate::script_vm::inspector_main::RendererInspectorMainIngress,
-    inspector_io_ingress: crate::script_vm::inspector_io::RendererInspectorIoIngress,
+    devtools_target: crate::devtools::target::RendererDevToolsTargetHandle,
     script_execution_control: crate::script_execution_control::RendererScriptExecutionControl,
     committed_document_post_response_continuation:
         Option<RendererPageCommandPostResponseContinuation>,
@@ -124,13 +116,11 @@ pub struct RendererPageTestingHandle {
 
 #[must_use = "the owner detach command must retain this guard until it drops the V8 session"]
 pub struct RendererRuntimeInspectorSessionDetachGuard {
-    inspector_pause_bridge: Option<crate::script_vm::inspector_pause::RendererInspectorPauseBridge>,
+    inspector_pause_bridge: Option<crate::devtools::pause::RendererInspectorPauseBridge>,
 }
 
 impl RendererRuntimeInspectorSessionDetachGuard {
-    fn new(
-        inspector_pause_bridge: crate::script_vm::inspector_pause::RendererInspectorPauseBridge,
-    ) -> Self {
+    fn new(inspector_pause_bridge: crate::devtools::pause::RendererInspectorPauseBridge) -> Self {
         inspector_pause_bridge.arm_session_detach();
         Self {
             inspector_pause_bridge: Some(inspector_pause_bridge),
@@ -183,7 +173,8 @@ impl RendererPageHandle {
         &self,
         envelope: RendererInspectorCommandEnvelope,
     ) -> RendererRuntimeInspectorIoCommandRoute {
-        self.inspector_io_ingress
+        self.devtools_target
+            .io_ref()
             .enqueue_command(self.devtools_agent_token, envelope)
     }
 
@@ -191,7 +182,7 @@ impl RendererPageHandle {
         &self,
         envelope: RendererInspectorCommandEnvelope,
     ) -> RendererRuntimeInspectorMainCommandRoute {
-        self.inspector_main_ingress.enqueue_command(
+        self.devtools_target.main_ref().enqueue_command(
             self.token(),
             self.devtools_agent_token,
             envelope,
@@ -199,7 +190,7 @@ impl RendererPageHandle {
     }
 
     pub fn runtime_inspector_pause_active(&self) -> bool {
-        self.inspector_pause_bridge.is_pause_active()
+        self.devtools_target.pause_ref().is_pause_active()
     }
 
     /// Publishes the DevTools IO-agent script policy without borrowing the
@@ -211,7 +202,7 @@ impl RendererPageHandle {
     pub fn arm_runtime_inspector_session_detach(
         &self,
     ) -> RendererRuntimeInspectorSessionDetachGuard {
-        RendererRuntimeInspectorSessionDetachGuard::new(self.inspector_pause_bridge.clone())
+        RendererRuntimeInspectorSessionDetachGuard::new(self.devtools_target.pause())
     }
 
     /// Disconnects one frontend Inspector route without waiting for the Page
@@ -233,9 +224,7 @@ impl RendererPageHandle {
                 .as_deref()
                 .filter(|session_id| !session_id.is_empty()),
         );
-        self.inspector_main_ingress
-            .detach_session(self.devtools_agent_token, &session);
-        self.inspector_io_ingress
+        self.devtools_target
             .detach_session(self.devtools_agent_token, &session);
 
         let pause_guard = self.arm_runtime_inspector_session_detach();
@@ -316,13 +305,16 @@ impl RendererPageHandle {
             );
         }
         if route_protocol_main_receiver {
-            let route = self.inspector_main_ingress.enqueue_protocol_page_command(
-                self.token(),
-                self.devtools_agent_token,
-                command,
-                inspector_session_id,
-                capture_policy,
-            );
+            let route = self
+                .devtools_target
+                .main_ref()
+                .enqueue_protocol_page_command(
+                    self.token(),
+                    self.devtools_agent_token,
+                    command,
+                    inspector_session_id,
+                    capture_policy,
+                );
             return Ok(RendererPageCommandPending {
                 dispatch: RendererPageCommandPendingDispatch::InspectorMain(Box::new(route)),
                 javascript_dialog_watch,
@@ -330,7 +322,7 @@ impl RendererPageHandle {
         }
         let command = match command {
             RendererPageCommand::Inspector(envelope) => {
-                let route = self.inspector_main_ingress.enqueue_owner_command(
+                let route = self.devtools_target.main_ref().enqueue_owner_command(
                     self.token(),
                     self.devtools_agent_token,
                     envelope,
@@ -421,14 +413,9 @@ impl RendererPageHandle {
         let Some(token) = self.token else {
             return Ok(());
         };
-        self.inspector_pause_bridge.close_target();
-        self.inspector_main_ingress
-            .close("Inspector target closed with its Page handle");
-        self.inspector_io_ingress
-            .close("Inspector target closed with its Page handle");
         let terminated_active_execution = self
-            .inspector_io_ingress
-            .terminate_execution_for_target_close();
+            .devtools_target
+            .close("Inspector target closed with its Page handle");
         self.javascript_dialog_broker.dismiss_pending();
         self.page_context_cancel_tx
             .cancel(RendererPageContextCancelReason::PageClosed);
@@ -522,12 +509,8 @@ impl Drop for RendererPageHandle {
         let Some(token) = self.token.take() else {
             return;
         };
-        if self.inspector_pause_bridge.detach_page(token.page_id) {
-            self.inspector_main_ingress
-                .cancel_all_queued("Inspector Page handle was dropped");
-            self.inspector_io_ingress
-                .cancel_all_queued("Inspector Page handle was dropped");
-        }
+        self.devtools_target
+            .detach_page(token.page_id, "Inspector Page handle was dropped");
         self.javascript_dialog_broker.dismiss_pending();
         self.page_context_cancel_tx
             .cancel(RendererPageContextCancelReason::PageClosed);

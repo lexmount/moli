@@ -1,9 +1,6 @@
-use std::{
-    collections::{BTreeMap, VecDeque},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
 use moli_page_types::{DevToolsSessionKey, RendererDevToolsAgentToken};
@@ -11,6 +8,14 @@ use parking_lot::Mutex;
 use serde_json::json;
 
 use crate::{
+    devtools::{
+        ingress::lane::{
+            RendererDevToolsIngressCommand, RendererDevToolsLaneEnqueueError,
+            RendererDevToolsSessionLaneKey, RendererDevToolsSessionLanes,
+        },
+        pause::RendererInspectorPauseLoopWake,
+        route::RendererInspectorSessionExecutorRouteId,
+    },
     render_runtime::RenderRuntimeHandle,
     runtime::{
         RendererCommandTurnOutput, RendererDevToolsMainCommandEnvelope,
@@ -18,10 +23,6 @@ use crate::{
         RendererInspectorCommandRoute, RendererInspectorIngressTicket,
         RendererInspectorPauseCommandEffect, RendererOwnerReply, RendererPageCommand,
         RendererPageStateCapturePolicy, RendererPageToken, RendererRuntimeInspectorResponseSender,
-    },
-    script_vm::{
-        inspector_pause::RendererInspectorPauseLoopWake,
-        inspector_route::RendererInspectorSessionExecutorRouteId,
     },
 };
 
@@ -130,6 +131,12 @@ impl RendererInspectorMainCommand {
     }
 }
 
+impl RendererDevToolsIngressCommand for RendererInspectorMainCommand {
+    fn ingress_command_id(&self) -> u64 {
+        self.command_id
+    }
+}
+
 pub struct RendererRuntimeInspectorMainCommandRoute {
     command_id: u64,
     ticket: RendererInspectorIngressTicket,
@@ -229,30 +236,14 @@ impl RendererInspectorMainOwnerWake {
     }
 }
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct RendererInspectorMainSessionLaneKey {
-    agent_token: RendererDevToolsAgentToken,
-    session: DevToolsSessionKey,
-}
-
-#[derive(Default)]
-struct RendererInspectorMainSessionLane {
-    active_command_id: Option<u64>,
-    queued: VecDeque<RendererInspectorMainCommand>,
-    ready: bool,
-    detached: bool,
-}
-
 struct RendererInspectorMainState {
-    sessions: BTreeMap<RendererInspectorMainSessionLaneKey, RendererInspectorMainSessionLane>,
-    ready_sessions: VecDeque<RendererInspectorMainSessionLaneKey>,
+    lanes: RendererDevToolsSessionLanes<RendererInspectorMainCommand>,
     owner_runtime: Option<RenderRuntimeHandle>,
-    closed: bool,
 }
 
 pub(crate) struct RendererInspectorMainFirstDispatchGuard {
     ingress: RendererInspectorMainIngress,
-    active: Option<(RendererInspectorMainSessionLaneKey, u64)>,
+    active: Option<(RendererDevToolsSessionLaneKey, u64)>,
 }
 
 pub(crate) struct RendererInspectorMainPostDispatchWakeGuard {
@@ -263,6 +254,7 @@ pub(crate) struct RendererInspectorMainOwnerDispatch {
     page_token: RendererPageToken,
     capture_policy: RendererPageStateCapturePolicy,
     envelope: RendererDevToolsMainCommandEnvelope,
+    first_dispatch: RendererInspectorMainFirstDispatchGuard,
     reply_tx: tokio::sync::oneshot::Sender<anyhow::Result<RendererOwnerReply>>,
 }
 
@@ -273,12 +265,14 @@ impl RendererInspectorMainOwnerDispatch {
         RendererPageToken,
         RendererPageStateCapturePolicy,
         RendererDevToolsMainCommandEnvelope,
+        RendererInspectorMainFirstDispatchGuard,
         tokio::sync::oneshot::Sender<anyhow::Result<RendererOwnerReply>>,
     ) {
         (
             self.page_token,
             self.capture_policy,
             self.envelope,
+            self.first_dispatch,
             self.reply_tx,
         )
     }
@@ -328,10 +322,8 @@ impl RendererInspectorMainIngress {
         Self {
             shared: Arc::new(RendererInspectorMainShared {
                 state: Mutex::new(RendererInspectorMainState {
-                    sessions: BTreeMap::new(),
-                    ready_sessions: VecDeque::new(),
+                    lanes: RendererDevToolsSessionLanes::default(),
                     owner_runtime: None,
-                    closed: false,
                 }),
                 owner_wake_armed: AtomicBool::new(false),
                 route_id,
@@ -344,7 +336,7 @@ impl RendererInspectorMainIngress {
         let has_ready = {
             let mut state = self.shared.state.lock();
             state.owner_runtime = Some(owner_runtime);
-            !state.ready_sessions.is_empty()
+            state.lanes.has_ready()
         };
         if has_ready {
             self.notify_execution_opportunities();
@@ -420,10 +412,7 @@ impl RendererInspectorMainIngress {
         let (owner_reply_tx, owner_reply_rx) = tokio::sync::oneshot::channel();
         let mut state = self.shared.state.lock();
         let command_id = ticket.sequence();
-        let lane_key = RendererInspectorMainSessionLaneKey {
-            agent_token,
-            session: ticket.session().clone(),
-        };
+        let lane_key = RendererDevToolsSessionLaneKey::new(agent_token, ticket.session().clone());
         let command = RendererInspectorMainCommand {
             command_id,
             page_token,
@@ -434,36 +423,20 @@ impl RendererInspectorMainIngress {
             owner_reply_tx: Some(owner_reply_tx),
             claimed_by: None,
         };
-        if state.closed {
+        if let Err(rejected) = state.lanes.enqueue(lane_key, command) {
             drop(state);
-            fail_main_command(command, "Inspector Main target is closed");
-            return RendererRuntimeInspectorMainCommandRoute {
-                command_id,
-                ticket,
-                claim_rx: Some(claim_rx),
-                owner_reply_rx: Some(owner_reply_rx),
-                ingress: self.clone(),
-            };
-        }
-        let lane = state.sessions.entry(lane_key.clone()).or_default();
-        if lane.detached {
+            match rejected {
+                RendererDevToolsLaneEnqueueError::TargetClosed(command) => {
+                    fail_main_command(command, "Inspector Main target is closed");
+                }
+                RendererDevToolsLaneEnqueueError::SessionDetached(command) => {
+                    fail_main_command(command, "Inspector Main session was detached");
+                }
+            }
+        } else {
             drop(state);
-            fail_main_command(command, "Inspector Main session was detached");
-            return RendererRuntimeInspectorMainCommandRoute {
-                command_id,
-                ticket,
-                claim_rx: Some(claim_rx),
-                owner_reply_rx: Some(owner_reply_rx),
-                ingress: self.clone(),
-            };
+            self.notify_execution_opportunities();
         }
-        lane.queued.push_back(command);
-        if lane.active_command_id.is_none() && !lane.ready {
-            lane.ready = true;
-            state.ready_sessions.push_back(lane_key);
-        }
-        drop(state);
-        self.notify_execution_opportunities();
         RendererRuntimeInspectorMainCommandRoute {
             command_id,
             ticket,
@@ -476,7 +449,7 @@ impl RendererInspectorMainIngress {
     pub(crate) fn claim_for_owner(&self) -> Option<RendererInspectorMainCommand> {
         self.shared.owner_wake_armed.store(false, Ordering::Release);
         let command = self.claim_next(RendererInspectorMainCommandConsumer::Owner);
-        if command.is_none() && !self.shared.state.lock().ready_sessions.is_empty() {
+        if command.is_none() && self.shared.state.lock().lanes.has_ready() {
             self.notify_execution_opportunities();
         }
         command
@@ -491,90 +464,55 @@ impl RendererInspectorMainIngress {
         consumer: RendererInspectorMainCommandConsumer,
     ) -> Option<RendererInspectorMainCommand> {
         let mut state = self.shared.state.lock();
-        if state.closed {
-            return None;
-        }
-        let ready_session_count = state.ready_sessions.len();
-        for _ in 0..ready_session_count {
-            let lane_key = state
-                .ready_sessions
-                .pop_front()
-                .expect("the snapshotted Main ready-session count must remain available");
-            let pause_dispatch_blocked = consumer == RendererInspectorMainCommandConsumer::Pause
-                && state
-                    .sessions
-                    .get(&lane_key)
-                    .and_then(|lane| lane.queued.front())
-                    .is_some_and(|command| {
-                        command.nested_dispatch() == RendererDevToolsMainNestedDispatch::OwnerOnly
-                    });
-            if pause_dispatch_blocked {
-                state.ready_sessions.push_back(lane_key);
-                continue;
-            }
-            let Some(lane) = state.sessions.get_mut(&lane_key) else {
-                continue;
-            };
-            lane.ready = false;
-            if lane.active_command_id.is_some() {
-                continue;
-            }
-            let Some(mut command) = lane.queued.pop_front() else {
-                continue;
-            };
-            lane.active_command_id = Some(command.command_id);
-            command.claimed_by = Some(consumer);
-            if let Some(claim_tx) = command.claim_tx.take() {
-                let claim = match consumer {
-                    RendererInspectorMainCommandConsumer::Owner => {
-                        RendererInspectorMainCommandClaim::Owner
+        let (_, mut command) = state.lanes.claim_next(|command| {
+            consumer != RendererInspectorMainCommandConsumer::Pause
+                || command.nested_dispatch() != RendererDevToolsMainNestedDispatch::OwnerOnly
+        })?;
+        command.claimed_by = Some(consumer);
+        if let Some(claim_tx) = command.claim_tx.take() {
+            let claim = match consumer {
+                RendererInspectorMainCommandConsumer::Owner => {
+                    RendererInspectorMainCommandClaim::Owner
+                }
+                RendererInspectorMainCommandConsumer::Pause => match command.nested_dispatch() {
+                    RendererDevToolsMainNestedDispatch::InspectorSession => {
+                        RendererInspectorMainCommandClaim::Inspector
                     }
-                    RendererInspectorMainCommandConsumer::Pause => {
-                        match command.nested_dispatch() {
-                            RendererDevToolsMainNestedDispatch::InspectorSession => {
-                                RendererInspectorMainCommandClaim::Inspector
-                            }
-                            RendererDevToolsMainNestedDispatch::PageAgent => {
-                                RendererInspectorMainCommandClaim::Page
-                            }
-                            RendererDevToolsMainNestedDispatch::OwnerOnly => {
-                                unreachable!("owner-only commands are skipped by pause claim")
-                            }
-                        }
+                    RendererDevToolsMainNestedDispatch::PageAgent => {
+                        RendererInspectorMainCommandClaim::Page
                     }
-                };
-                let _ = claim_tx.send(claim);
-            }
-            if consumer == RendererInspectorMainCommandConsumer::Pause
-                && command.nested_dispatch() == RendererDevToolsMainNestedDispatch::InspectorSession
-            {
-                command.owner_reply_tx.take();
-            }
-            return Some(command);
+                    RendererDevToolsMainNestedDispatch::OwnerOnly => {
+                        unreachable!("owner-only commands are skipped by pause claim")
+                    }
+                },
+            };
+            let _ = claim_tx.send(claim);
         }
-        None
+        if consumer == RendererInspectorMainCommandConsumer::Pause
+            && command.nested_dispatch() == RendererDevToolsMainNestedDispatch::InspectorSession
+        {
+            command.owner_reply_tx.take();
+        }
+        Some(command)
     }
 
     pub(crate) fn first_dispatch_guard(
         &self,
         command: &RendererInspectorMainCommand,
     ) -> RendererInspectorMainFirstDispatchGuard {
-        let lane_key = RendererInspectorMainSessionLaneKey {
-            agent_token: command.agent_token,
-            session: command.ticket().session().clone(),
-        };
+        let lane_key = RendererDevToolsSessionLaneKey::new(
+            command.agent_token,
+            command.ticket().session().clone(),
+        );
         let state = self.shared.state.lock();
         assert_eq!(
             command.first_dispatch_lifecycle(),
             crate::runtime::RendererInspectorFirstDispatchLifecycle::OrderedUntilFirstDispatch,
         );
-        assert_eq!(
-            state
-                .sessions
-                .get(&lane_key)
-                .and_then(|lane| lane.active_command_id),
-            Some(command.command_id),
-            "a claimed Inspector Main command must own its session lane"
+        state.lanes.assert_active(
+            &lane_key,
+            command.command_id,
+            "a claimed Inspector Main command must own its session lane",
         );
         drop(state);
         RendererInspectorMainFirstDispatchGuard {
@@ -596,15 +534,15 @@ impl RendererInspectorMainIngress {
         let RendererInspectorMainCommand {
             page_token,
             capture_policy,
-            mut envelope,
+            envelope,
             owner_reply_tx,
             ..
         } = command;
-        envelope.bind_first_dispatch(first_dispatch);
         RendererInspectorMainOwnerDispatch {
             page_token,
             capture_policy,
             envelope,
+            first_dispatch,
             reply_tx: owner_reply_tx
                 .expect("an owner-claimed Main command must retain its owner reply sender"),
         }
@@ -612,64 +550,18 @@ impl RendererInspectorMainIngress {
 
     fn finish_first_dispatch(
         &self,
-        lane_key: RendererInspectorMainSessionLaneKey,
+        lane_key: RendererDevToolsSessionLaneKey,
         command_id: u64,
     ) -> bool {
-        let mut state = self.shared.state.lock();
-        let (make_ready, remove_lane) = {
-            let lane = state
-                .sessions
-                .get_mut(&lane_key)
-                .expect("an active Inspector Main lane must still exist");
-            assert_eq!(
-                lane.active_command_id.take(),
-                Some(command_id),
-                "only the active Inspector Main command may release its lane"
-            );
-            let make_ready = !lane.detached && !lane.queued.is_empty() && !lane.ready;
-            if make_ready {
-                lane.ready = true;
-            }
-            (make_ready, lane.queued.is_empty())
-        };
-        if make_ready {
-            state.ready_sessions.push_back(lane_key.clone());
-        }
-        if remove_lane {
-            state.sessions.remove(&lane_key);
-        }
-        !state.ready_sessions.is_empty()
+        self.shared.state.lock().lanes.finish_first_dispatch(
+            lane_key,
+            command_id,
+            "only the active Inspector Main command may release its lane",
+        )
     }
 
     pub(crate) fn cancel_queued_command(&self, command_id: u64, message: &str) {
-        let command = {
-            let mut state = self.shared.state.lock();
-            let lane_key = state.sessions.iter().find_map(|(key, lane)| {
-                lane.queued
-                    .iter()
-                    .any(|command| command.command_id == command_id)
-                    .then(|| key.clone())
-            });
-            let Some(lane_key) = lane_key else {
-                return;
-            };
-            let lane = state
-                .sessions
-                .get_mut(&lane_key)
-                .expect("located Inspector Main lane must remain present");
-            let position = lane
-                .queued
-                .iter()
-                .position(|command| command.command_id == command_id)
-                .expect("located Inspector Main command must remain queued");
-            let command = lane.queued.remove(position);
-            if lane.queued.is_empty() && lane.active_command_id.is_none() {
-                lane.ready = false;
-                state.ready_sessions.retain(|ready| ready != &lane_key);
-                state.sessions.remove(&lane_key);
-            }
-            command
-        };
+        let command = self.shared.state.lock().lanes.cancel_queued(command_id);
         if let Some(command) = command {
             fail_main_command(command, message);
         }
@@ -680,44 +572,15 @@ impl RendererInspectorMainIngress {
         agent_token: RendererDevToolsAgentToken,
         session: &DevToolsSessionKey,
     ) {
-        let commands = {
-            let mut state = self.shared.state.lock();
-            let lane_key = RendererInspectorMainSessionLaneKey {
-                agent_token,
-                session: session.clone(),
-            };
-            state.ready_sessions.retain(|ready| ready != &lane_key);
-            let Some(_) = state.sessions.get(&lane_key) else {
-                return;
-            };
-            let (commands, remove_lane) = {
-                let lane = state
-                    .sessions
-                    .get_mut(&lane_key)
-                    .expect("located Inspector Main lane must remain present");
-                lane.ready = false;
-                lane.detached = true;
-                (
-                    lane.queued.drain(..).collect::<Vec<_>>(),
-                    lane.active_command_id.is_none(),
-                )
-            };
-            if remove_lane {
-                state.sessions.remove(&lane_key);
-            }
-            commands
-        };
+        let lane_key = RendererDevToolsSessionLaneKey::new(agent_token, session.clone());
+        let commands = self.shared.state.lock().lanes.detach_session(&lane_key);
         for command in commands {
             fail_main_command(command, "Inspector Main session was detached");
         }
     }
 
     pub(crate) fn close(&self, message: &str) {
-        let commands = {
-            let mut state = self.shared.state.lock();
-            state.closed = true;
-            drain_queued_commands(&mut state)
-        };
+        let commands = { self.shared.state.lock().lanes.close_and_drain() };
         self.shared.pause_wake.notify_all();
         for command in commands {
             fail_main_command(command, message);
@@ -725,7 +588,7 @@ impl RendererInspectorMainIngress {
     }
 
     pub(crate) fn cancel_all_queued(&self, message: &str) {
-        let commands = drain_queued_commands(&mut self.shared.state.lock());
+        let commands = self.shared.state.lock().lanes.drain_queued();
         for command in commands {
             fail_main_command(command, message);
         }
@@ -751,21 +614,6 @@ impl RendererInspectorMainIngress {
         }
         self.shared.pause_wake.notify_one();
     }
-}
-
-fn drain_queued_commands(
-    state: &mut RendererInspectorMainState,
-) -> Vec<RendererInspectorMainCommand> {
-    state.ready_sessions.clear();
-    let commands = state
-        .sessions
-        .values_mut()
-        .flat_map(|lane| lane.queued.drain(..))
-        .collect();
-    state
-        .sessions
-        .retain(|_, lane| lane.active_command_id.is_some());
-    commands
 }
 
 fn fail_main_command(command: RendererInspectorMainCommand, message: &str) {
@@ -804,9 +652,9 @@ impl std::fmt::Debug for RendererInspectorMainIngress {
         formatter
             .debug_struct("RendererInspectorMainIngress")
             .field("route_id", &self.shared.route_id)
-            .field("session_lanes", &state.sessions.len())
-            .field("ready_sessions", &state.ready_sessions.len())
-            .field("closed", &state.closed)
+            .field("session_lanes", &state.lanes.session_count())
+            .field("ready_sessions", &state.lanes.ready_count())
+            .field("closed", &state.lanes.is_closed())
             .finish()
     }
 }
@@ -815,8 +663,8 @@ impl std::fmt::Debug for RendererInspectorMainIngress {
 mod tests {
     use super::*;
     use crate::{
+        devtools::pause::RendererInspectorPauseBridge,
         runtime::{RendererInspectorIngressTicket, RendererRuntimeInspectorAsyncCompletion},
-        script_vm::inspector_pause::RendererInspectorPauseBridge,
     };
 
     fn ingress() -> RendererInspectorMainIngress {
@@ -963,7 +811,7 @@ mod tests {
 
         first_dispatch.release();
         assert!(
-            ingress.shared.state.lock().sessions.is_empty(),
+            ingress.shared.state.lock().lanes.session_count() == 0,
             "the detached lane must retire after its active first dispatch releases"
         );
 

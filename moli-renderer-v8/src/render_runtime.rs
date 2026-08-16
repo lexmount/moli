@@ -5,12 +5,12 @@ use std::thread::{self, JoinHandle};
 use tokio::runtime::LocalOptions;
 use tokio::sync::{mpsc, oneshot};
 
+use super::devtools::ingress::io::RendererInspectorIoOwnerWake;
+use super::devtools::ingress::main::RendererInspectorMainOwnerWake;
 use super::page_task_queue::RendererOwnerWake;
 use super::runtime::{
     RendererOwnerCommand, RendererOwnerHandle, RendererOwnerReply, RendererPageCommand,
 };
-use super::script_vm::inspector_io::RendererInspectorIoOwnerWake;
-use super::script_vm::inspector_main::RendererInspectorMainOwnerWake;
 use super::service_worker_runtime::ServiceWorkerRuntimeOwnerWake;
 use super::shared_worker_runtime::SharedWorkerRuntimeOwnerWake;
 
