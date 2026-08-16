@@ -162,6 +162,7 @@ where
     fragments: Vec<LayoutFragment>,
     scroll_proxy_links: Vec<(N, LayoutOutputBoxId)>,
     pub(crate) scroll_extents: Vec<LayoutScrollExtent>,
+    viewport_scroll_extent: Option<LayoutScrollExtent>,
     pub(crate) coordinate_spaces: Vec<ProjectedCoordinateSpace>,
     pub(crate) clip_chain: Vec<LayoutClipNode>,
     paint_order_count: usize,
@@ -206,6 +207,7 @@ where
             fragments: Vec::new(),
             scroll_proxy_links,
             scroll_extents: Vec::with_capacity(count),
+            viewport_scroll_extent: None,
             coordinate_spaces: Vec::with_capacity(count + 1),
             clip_chain: Vec::new(),
             paint_order_count: 0,
@@ -381,7 +383,7 @@ where
                 continue;
             }
             let child_geometry = &self.boxes[index];
-            let visual_overflow = if self.world.boxes[index].style.clips_overflow() {
+            let visual_overflow = if self.world.clips_overflow(LayoutBoxId::from_index(index)) {
                 child_geometry.border_box
             } else {
                 self.overflow[index]
@@ -404,17 +406,8 @@ where
         for index in 0..self.world.boxes.len() {
             let geometry = &self.boxes[index];
             let overflow = self.overflow[index];
-            let is_root = index == self.world.root.index();
-            let scrollport = if is_root {
-                LayoutRect::new(
-                    0.0,
-                    0.0,
-                    self.viewport.css_width as f32,
-                    self.viewport.css_height as f32,
-                )
-            } else {
-                geometry.padding_box
-            };
+            let id = LayoutBoxId::from_index(index);
+            let scrollport = geometry.padding_box;
             let scroll_size = LayoutSize::new(
                 scrollport
                     .width
@@ -425,8 +418,7 @@ where
             );
             let horizontal_range = (scroll_size.width - scrollport.width).max(0.0);
             let vertical_range = (scroll_size.height - scrollport.height).max(0.0);
-            let is_scroll_container =
-                is_root || self.world.boxes[index].style.establishes_scroll_container();
+            let is_scroll_container = self.world.establishes_scroll_container(id);
             let requested = finite_point(self.world.boxes[index].scroll_offset);
             let (minimum_offset, maximum_offset) = if is_scroll_container {
                 if self.world.boxes[index].style.direction() == crate::style::InlineDirection::Rtl {
@@ -459,14 +451,61 @@ where
                 minimum_offset,
                 maximum_offset,
                 is_scroll_container,
-                allows_user_scroll_x: is_root
-                    || self.world.boxes[index].style.allows_user_scroll_x(),
-                allows_user_scroll_y: is_root
-                    || self.world.boxes[index].style.allows_user_scroll_y(),
-                clips_overflow: self.world.boxes[index].style.clips_overflow(),
+                allows_user_scroll_x: self.world.boxes[index].style.allows_user_scroll_x(),
+                allows_user_scroll_y: self.world.boxes[index].style.allows_user_scroll_y(),
+                clips_overflow: self.world.clips_overflow(id),
             });
         }
-        self.viewport_scroll = self.scroll_extents[self.world.root.index()].applied_offset;
+
+        let scrollport = LayoutRect::new(
+            0.0,
+            0.0,
+            self.viewport.css_width as f32,
+            self.viewport.css_height as f32,
+        );
+        let overflow = self.document_scrollable_overflow();
+        let scroll_size = LayoutSize::new(
+            scrollport
+                .width
+                .max((overflow.right() - scrollport.x).max(0.0)),
+            scrollport
+                .height
+                .max((overflow.bottom() - scrollport.y).max(0.0)),
+        );
+        let horizontal_range = (scroll_size.width - scrollport.width).max(0.0);
+        let vertical_range = (scroll_size.height - scrollport.height).max(0.0);
+        let (minimum_offset, maximum_offset) =
+            if self.world.boxes[self.world.root.index()].style.direction()
+                == crate::style::InlineDirection::Rtl
+            {
+                (
+                    LayoutPoint::new(-horizontal_range, 0.0),
+                    LayoutPoint::new(0.0, vertical_range),
+                )
+            } else {
+                (
+                    LayoutPoint::ZERO,
+                    LayoutPoint::new(horizontal_range, vertical_range),
+                )
+            };
+        let requested = finite_point(self.world.viewport_scroll_offset);
+        let applied_offset = LayoutPoint::new(
+            requested.x.clamp(minimum_offset.x, maximum_offset.x),
+            requested.y.clamp(minimum_offset.y, maximum_offset.y),
+        );
+        self.viewport_scroll = applied_offset;
+        self.viewport_scroll_extent = Some(LayoutScrollExtent {
+            scrollport,
+            scrollable_overflow: overflow,
+            scroll_size,
+            applied_offset,
+            minimum_offset,
+            maximum_offset,
+            is_scroll_container: true,
+            allows_user_scroll_x: self.world.viewport_allows_user_scroll_x(),
+            allows_user_scroll_y: self.world.viewport_allows_user_scroll_y(),
+            clips_overflow: true,
+        });
     }
 
     fn build_coordinate_spaces(&mut self) -> Result<(), LayoutError> {
@@ -692,17 +731,16 @@ where
         self.boxes[index].clip_chain = box_clip;
         self.background_clips[index] = box_clip;
 
-        let child_clip =
-            if id != self.world.root && self.world.boxes[index].clips_descendant_paint() {
-                Some(self.push_clip(
-                    box_clip,
-                    Some(LayoutOutputBoxId::from_index(index)),
-                    self.boxes[index].coordinate_space,
-                    self.boxes[index].padding_box,
-                ))
-            } else {
-                box_clip
-            };
+        let child_clip = if id != self.world.root && self.world.clips_descendant_paint(id) {
+            Some(self.push_clip(
+                box_clip,
+                Some(LayoutOutputBoxId::from_index(index)),
+                self.boxes[index].coordinate_space,
+                self.boxes[index].padding_box,
+            ))
+        } else {
+            box_clip
+        };
         self.content_clips[index] = child_clip;
         for child in self.world.boxes[index].children.clone() {
             self.assign_box_clip_metadata(child, child_clip, viewport_clip);
@@ -745,11 +783,11 @@ where
         id
     }
 
-    pub(crate) fn document_content_size(&self) -> LayoutSize {
+    fn document_scrollable_overflow(&self) -> LayoutRect {
         let root = self.world.root.index();
         let root_layout = self.world.boxes[root].final_layout.location;
         let layout_translation = LayoutTransform2D::translation(root_layout.x, root_layout.y);
-        let overflow = layout_translation
+        layout_translation
             .concatenate(self.resolved_transforms[root].transform)
             .map_rect(self.overflow[root])
             .bounding_rect()
@@ -757,11 +795,14 @@ where
                 layout_translation
                     .map_rect(self.boxes[root].margin_box)
                     .bounding_rect(),
-            );
-        LayoutSize::new(
-            (self.viewport.css_width as f32).max(overflow.right().max(0.0)),
-            (self.viewport.css_height as f32).max(overflow.bottom().max(0.0)),
-        )
+            )
+    }
+
+    pub(crate) fn document_content_size(&self) -> LayoutSize {
+        self.viewport_scroll_extent
+            .as_ref()
+            .expect("scrollable overflow resolves before document content size")
+            .scroll_size
     }
 
     fn into_frozen_tree(self, content_size: LayoutSize) -> FrozenLayoutTree<N> {
@@ -801,6 +842,11 @@ where
             self.viewport,
             self.viewport_scroll,
             content_size,
+            self.world.document_element,
+            self.world.document_body,
+            self.world.document_scrolling_element(),
+            self.viewport_scroll_extent
+                .expect("scrollable overflow resolves before freezing the layout tree"),
             root_box,
             boxes,
             self.fragments,

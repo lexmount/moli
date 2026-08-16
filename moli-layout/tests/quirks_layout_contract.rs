@@ -18,6 +18,7 @@ struct Node {
 
 struct Source {
     mode: LayoutDocumentMode,
+    document_body: Option<usize>,
     nodes: Vec<Node>,
 }
 
@@ -31,6 +32,10 @@ impl LayoutSource for Source {
 
     fn document_mode(&self) -> LayoutDocumentMode {
         self.mode
+    }
+
+    fn document_body(&self) -> Option<Self::NodeId> {
+        self.document_body
     }
 
     fn flat_parent(&self, node: Self::NodeId) -> Option<Self::NodeId> {
@@ -135,7 +140,11 @@ fn document(
         styles.0.insert(2, child);
     }
     build_layout_pass(
-        &Source { mode, nodes },
+        &Source {
+            mode,
+            document_body: Some(1),
+            nodes,
+        },
         &mut styles,
         &mut DocumentLayoutServices::new(),
         LayoutPassRequest::new(LayoutViewport::new(800, 600, 1.0), LayoutFlushReason::Test),
@@ -320,6 +329,7 @@ fn nested_body_named_element_is_not_the_document_body() {
     let output = build_layout_pass(
         &Source {
             mode: LayoutDocumentMode::Quirks,
+            document_body: None,
             nodes,
         },
         &mut styles,
@@ -400,4 +410,50 @@ fn potentially_scrollable_quirks_body_keeps_its_physical_scroll_box() {
     assert_close(metrics.offset_size.height, 584.0);
     assert_close(metrics.client_size.height, 600.0);
     assert_close(metrics.scroll_size.height, 584.0);
+}
+
+#[test]
+fn root_clip_keeps_body_overflow_physical_and_removes_the_quirks_scrolling_element() {
+    let root = resolved(Style {
+        overflow: Point {
+            x: Overflow::Clip,
+            y: Overflow::Clip,
+        },
+        ..Style::default()
+    });
+    let mut body = body_taffy_style();
+    body.overflow = Point {
+        x: Overflow::Scroll,
+        y: Overflow::Scroll,
+    };
+    let output = document(LayoutDocumentMode::Quirks, root, resolved(body), None);
+
+    assert_eq!(output.document_scrolling_element, None);
+    let body_metrics = output.element_metrics_for_source(1).unwrap();
+    assert!(body_metrics.is_scroll_container);
+    assert_close(body_metrics.scroll_size.height, 584.0);
+}
+
+#[test]
+fn body_clip_propagates_to_the_viewport_and_remains_the_quirks_scrolling_element() {
+    let mut body = body_taffy_style();
+    body.overflow = Point {
+        x: Overflow::Clip,
+        y: Overflow::Clip,
+    };
+    let output = document(
+        LayoutDocumentMode::Quirks,
+        resolved(Style::default()),
+        resolved(body),
+        None,
+    );
+
+    assert_eq!(output.document_scrolling_element, Some(1));
+    let body_box = output.source_output(1).unwrap().principal_box.unwrap();
+    let physical_extent = output.scroll_extent(body_box).unwrap();
+    assert!(!physical_extent.is_scroll_container);
+    assert!(!physical_extent.clips_overflow);
+    let body_metrics = output.element_metrics_for_source(1).unwrap();
+    assert!(body_metrics.is_scroll_container);
+    assert_close(body_metrics.scroll_size.height, 600.0);
 }

@@ -54,6 +54,31 @@ where
         self.element_metrics_for_source_with_offset_parent_filter(source, |_| true)
     }
 
+    pub(super) fn viewport_scroll_metrics_for_source(
+        &self,
+        source: N,
+    ) -> Option<LayoutElementMetrics<N>> {
+        let mut metrics = self.element_metrics_for_source(source)?;
+        let extent = &self.viewport_scroll_extent;
+        metrics.client_size = LayoutSize::new(
+            self.viewport.css_width as f32,
+            self.viewport.css_height as f32,
+        );
+        metrics.scroll_size = extent.scroll_size;
+        metrics.scroll_offset = extent.applied_offset;
+        metrics.minimum_scroll_offset = extent.minimum_offset;
+        metrics.maximum_scroll_offset = extent.maximum_offset;
+        metrics.scrollport = LayoutTransform2D::IDENTITY.map_rect(extent.scrollport);
+        metrics.scrollable_overflow =
+            LayoutTransform2D::translation(-self.viewport_scroll.x, -self.viewport_scroll.y)
+                .map_rect(extent.scrollable_overflow);
+        metrics.is_scroll_container = true;
+        metrics.allows_user_scroll_x = extent.allows_user_scroll_x;
+        metrics.allows_user_scroll_y = extent.allows_user_scroll_y;
+        metrics.clips_overflow = true;
+        Some(metrics)
+    }
+
     /// Resolves CSSOM View element metrics while allowing the renderer to hide
     /// flat-tree ancestors that do not belong to the queried element's
     /// ancestor tree scopes.
@@ -71,7 +96,12 @@ where
         let output = self.source_output(source)?;
         let box_id = output.principal_box?;
         let geometry = self.box_geometry(box_id)?;
-        let extent = self.scroll_extent(box_id)?;
+        let uses_viewport_scroll = self.document_scrolling_element == Some(source);
+        let extent = if uses_viewport_scroll {
+            &self.viewport_scroll_extent
+        } else {
+            self.scroll_extent(box_id)?
+        };
         let coordinate_space = self.coordinate_space(geometry.coordinate_space)?;
         let offset_parent_id = self.offset_parent_box(box_id, &mut offset_parent_is_exposed);
         let offset_parent = offset_parent_id.and_then(|id| {
@@ -113,13 +143,22 @@ where
         } else {
             LayoutSize::new(geometry.padding_box.width, geometry.padding_box.height)
         };
-        let scroll_size = if box_id == self.root_box {
-            LayoutSize::new(
-                extent.scroll_size.width.max(self.content_size.width),
-                extent.scroll_size.height.max(self.content_size.height),
+        let (scrollport, scrollable_overflow) = if uses_viewport_scroll {
+            let content_to_viewport =
+                LayoutTransform2D::translation(-self.viewport_scroll.x, -self.viewport_scroll.y);
+            (
+                LayoutTransform2D::IDENTITY.map_rect(extent.scrollport),
+                content_to_viewport.map_rect(extent.scrollable_overflow),
             )
         } else {
-            extent.scroll_size
+            (
+                coordinate_space
+                    .local_to_viewport
+                    .map_rect(extent.scrollport),
+                coordinate_space
+                    .local_to_viewport
+                    .map_rect(extent.scrollable_overflow),
+            )
         };
         Some(LayoutElementMetrics {
             offset_parent,
@@ -134,16 +173,12 @@ where
                 geometry.padding_box.x - geometry.border_box.x,
                 geometry.padding_box.y - geometry.border_box.y,
             ),
-            scroll_size,
+            scroll_size: extent.scroll_size,
             scroll_offset: extent.applied_offset,
             minimum_scroll_offset: extent.minimum_offset,
             maximum_scroll_offset: extent.maximum_offset,
-            scrollport: coordinate_space
-                .local_to_viewport
-                .map_rect(extent.scrollport),
-            scrollable_overflow: coordinate_space
-                .local_to_viewport
-                .map_rect(extent.scrollable_overflow),
+            scrollport,
+            scrollable_overflow,
             is_scroll_container: extent.is_scroll_container,
             allows_user_scroll_x: extent.allows_user_scroll_x,
             allows_user_scroll_y: extent.allows_user_scroll_y,

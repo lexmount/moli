@@ -116,7 +116,13 @@ where
             // `display:none`.
             root.source = None;
         }
-        let mut world = LayoutWorld::new(root, self.source.document_mode());
+        let mut world = LayoutWorld::new(
+            root,
+            source_root,
+            self.source.document_body(),
+            self.source.document_mode(),
+            self.source.viewport_scroll_offset(),
+        );
         let root_box = world.root();
         if root_generates_principal_box {
             world.map_source(source_root, root_box);
