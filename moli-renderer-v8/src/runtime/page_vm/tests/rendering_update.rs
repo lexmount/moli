@@ -2569,6 +2569,51 @@ document.body.innerHTML = `<div class=row><div class=item id=ask><i class=icon><
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn elements_from_point_filters_html_text_hits_from_the_penetrating_list() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/elements-from-point-negative-margin.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = '<style>html,body{margin:0}</style>';
+document.body.innerHTML = `<div id=outer style="background:yellow">
+  <div id=inner style="width:100px;height:100px;margin-bottom:-100px;background:lime"></div>
+  Hello
+</div>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(200, 120, 1.0))?
+            .expect("negative-margin hit-test fixture must retain a layout root");
+
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                r#"const rect = document.getElementById('outer').getBoundingClientRect();
+const x = rect.left + 1;
+const y = rect.top + 1;
+[
+  document.elementFromPoint(x, y)?.id,
+  document.elementsFromPoint(x, y).map(element => element.id || element.localName).join(',')
+].join('|')"#,
+            )?,
+            "outer|inner,outer,body,html",
+            "single and penetrating hit tests must apply their distinct text-node policies",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("negative-margin elementsFromPoint fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn stylesheet_lifecycle_registers_only_the_current_documents_data_web_fonts() {
     run_page_vm_async_test(async move {
         let loader =
