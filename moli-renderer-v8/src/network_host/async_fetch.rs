@@ -488,6 +488,11 @@ pub(crate) fn spawn_async_subresource_fetch(
     request_headers: Vec<(String, String)>,
     request_body: Option<String>,
 ) {
+    let parkable_image_manager = matches!(
+        request.browser_request_metadata(),
+        Some(BrowserRequestMetadata::Image)
+    )
+    .then(|| loader.parkable_image_manager(&task_runner));
     task_runner.spawn(async move {
         let preflight_observer =
             CorsPreflightNetworkObserver::new(completion_tx.clone(), network_context);
@@ -506,6 +511,7 @@ pub(crate) fn spawn_async_subresource_fetch(
             )
         ) && request.follow_redirects
             && request.request_mode != RequestMode::NoCors;
+        let can_collect_image_body = parkable_image_manager.is_some() && request.follow_redirects;
         if moli_trace::cdp_runtime_trace_enabled() {
             tracing::info!(
                 target: "moli_cdp_nav_timing",
@@ -518,8 +524,39 @@ pub(crate) fn spawn_async_subresource_fetch(
                 auth_requires_buffered_transport,
                 requires_manual_preflight_redirects,
                 can_stream_subresource_body,
+                can_collect_image_body,
                 stage = "async_subresource_transport_selected",
             );
+        }
+        if !auth_requires_buffered_transport && can_collect_image_body {
+            let result = fetch_browser_image_into_parkable(
+                &loader,
+                request,
+                cancel_handle,
+                preflight_request_headers,
+                Some(&preflight_observer),
+                parkable_image_manager
+                    .expect("an image transport selection must retain its parkable manager"),
+            )
+            .await;
+            let (result, parkable_image) = match result {
+                Ok((response, image)) => (Ok(response), Some(image)),
+                Err(error) => (Err(error), None),
+            };
+            let _ = completion_tx.send_async_subresource(AsyncSubresourceFetchCompletion {
+                internal_id,
+                request_url,
+                request_method,
+                request_headers,
+                request_body,
+                response_status_text: None,
+                skip_fetch_security_validation: false,
+                response_filter: None,
+                network_error_text: None,
+                parkable_image,
+                result,
+            });
+            return;
         }
         if auth_requires_buffered_transport || !can_stream_subresource_body {
             let result = fetch_browser_subresource_with_preflight_headers_and_observer(
@@ -547,6 +584,7 @@ pub(crate) fn spawn_async_subresource_fetch(
                 skip_fetch_security_validation: false,
                 response_filter: None,
                 network_error_text: None,
+                parkable_image: None,
                 result,
             });
             return;
@@ -581,10 +619,82 @@ pub(crate) fn spawn_async_subresource_fetch(
                 skip_fetch_security_validation: false,
                 response_filter: None,
                 network_error_text: None,
+                parkable_image: None,
                 result: Err(error),
             });
         }
     });
+}
+
+async fn fetch_browser_image_into_parkable(
+    loader: &ResourceRequestClient,
+    request: Request,
+    cancel_handle: Option<FetchCancelHandle>,
+    preflight_request_headers: Vec<(String, String)>,
+    preflight_observer: Option<&CorsPreflightNetworkObserver>,
+    manager: moli_parkable_image::ParkableImageManager,
+) -> Result<
+    (
+        crate::protocol_types::NavigationResponse,
+        moli_parkable_image::ParkableImage,
+    ),
+    String,
+> {
+    let requires_manual_preflight_redirects =
+        browser_request_needs_manual_preflight_redirects(&request, &preflight_request_headers);
+    let observed = if requires_manual_preflight_redirects {
+        fetch_browser_subresource_raw_stream_with_manual_preflight_redirects(
+            loader,
+            request,
+            cancel_handle,
+            preflight_request_headers,
+            preflight_observer,
+        )
+        .await?
+    } else {
+        fetch_browser_subresource_raw_stream_with_preflight_headers_and_observer(
+            loader,
+            request,
+            cancel_handle,
+            preflight_request_headers,
+            preflight_observer,
+        )
+        .await?
+    };
+    collect_image_response_into_parkable(observed, manager).await
+}
+
+pub(crate) async fn collect_image_response_into_parkable(
+    observed: NetworkFetchResult<StreamingRawResponse>,
+    manager: moli_parkable_image::ParkableImageManager,
+) -> Result<
+    (
+        crate::protocol_types::NavigationResponse,
+        moli_parkable_image::ParkableImage,
+    ),
+    String,
+> {
+    let (mut response, request_observation) = observed.into_parts();
+    let head = response.head();
+    let encoded = manager.create(0);
+    while let Some(bytes) = response.next_chunk().await {
+        encoded
+            .append(&bytes)
+            .map_err(|error| format!("failed to append image response bytes: {error:?}"))?;
+    }
+    response.finish().await.map_err(format_network_error)?;
+    encoded
+        .freeze()
+        .map_err(|error| format!("failed to freeze image response bytes: {error:?}"))?;
+    let response = crate::protocol_types::NavigationResponse::from_head_and_body(
+        head,
+        String::new(),
+        Vec::new(),
+    )
+    .with_network_request_headers(
+        request_observation.map(|observation| observation.into_headers()),
+    );
+    Ok((response, encoded))
 }
 
 async fn fetch_browser_subresource_streaming_with_preflight_headers(
@@ -1186,6 +1296,88 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
         anyhow::bail!("timed out waiting for async subresource event")
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn image_body_is_received_directly_into_one_frozen_parkable_image() -> Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let request = read_http_request_text(&mut stream).await.unwrap();
+            assert!(request.starts_with("GET /image.png HTTP/1.1"));
+            stream
+                .write_all(
+                    concat!(
+                        "HTTP/1.1 200 OK\r\n",
+                        "Content-Type: image/png\r\n",
+                        "Content-Length: 9\r\n",
+                        "Connection: close\r\n",
+                        "\r\n",
+                        "first"
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            tokio::task::yield_now().await;
+            stream.write_all(b"tail").await.unwrap();
+        });
+
+        let mut queue = RendererResourceCompletionTestHarness::new();
+        let loader_owner = ResourceRequestClient::new(&FetchConfig::default())?;
+        let loader = loader_owner.handle();
+        let request_url = Url::parse(&format!("http://{addr}/image.png"))?;
+        let document_url = Url::parse(&format!("http://{addr}/page"))?;
+        let request = Request::get(request_url.as_str())?
+            .with_initiator_url(&document_url)
+            .with_request_origin(moli_url::WebOrigin::from_url(&document_url))
+            .with_request_mode(RequestMode::NoCors)
+            .with_redirect_mode(RequestRedirectMode::Follow)
+            .with_browser_request_metadata(BrowserRequestMetadata::Image);
+
+        spawn_async_subresource_fetch(
+            crate::network::RendererResourceTaskRunner::from_current_tokio()?,
+            queue.sender(),
+            loader,
+            request,
+            Some(FetchCancelHandle::new()),
+            Vec::new(),
+            75,
+            AsyncSubresourceNetworkContext {
+                frame_id: None,
+                request_origin: moli_url::WebOrigin::from_url(&document_url),
+                document_url,
+                resource_type: SubresourceResourceType::Image,
+                policy_context: Default::default(),
+            },
+            request_url,
+            "GET".to_owned(),
+            Vec::new(),
+            None,
+        );
+
+        let AsyncSubresourceFetchEvent::Completion(completion) =
+            next_async_subresource_event(&mut queue).await?
+        else {
+            anyhow::bail!("image transport must emit one buffered terminal completion");
+        };
+        assert_eq!(completion.internal_id, 75);
+        let response = completion
+            .result
+            .as_ref()
+            .map_err(|error| anyhow::anyhow!(error.clone()))?;
+        assert_eq!(response.status, 200);
+        assert!(response.body_bytes().is_empty());
+        let encoded = completion
+            .parkable_image
+            .as_ref()
+            .expect("image completion must carry its encoded backing");
+        assert!(encoded.is_frozen());
+        assert_eq!(encoded.snapshot()?.as_ref(), b"firsttail");
+
+        server.await?;
+        Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread")]

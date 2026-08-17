@@ -47,6 +47,7 @@ fn failed_fetch_completion(internal_id: u64, request_url: &Url) -> AsyncSubresou
         skip_fetch_security_validation: false,
         response_filter: None,
         network_error_text: Some("typed test failure".to_owned()),
+        parkable_image: None,
         result: Err("typed test failure".to_owned()),
     }))
 }

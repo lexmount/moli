@@ -2365,6 +2365,7 @@ async fn child_navigation_retires_local_window_owned_xhr() {
         skip_fetch_security_validation: false,
         response_filter: None,
         network_error_text: None,
+        parkable_image: None,
         result: Err("stale retired XHR completion".to_owned()),
     })
     .expect("late completion for retired XHR should be harmless");
@@ -2815,6 +2816,7 @@ fn main_document_open_fetch_redirect_uses_source_document_csp_report_context() {
         skip_fetch_security_validation: true,
         response_filter: None,
         network_error_text: None,
+        parkable_image: None,
         result: Ok(redirected_fetch_response(&request_url, final_url)),
     })
     .expect("source-owned Fetch redirect should complete in the preserved LocalWindow");
@@ -2982,6 +2984,7 @@ async fn child_navigation_aborts_fetch_and_detaches_keepalive() {
         skip_fetch_security_validation: false,
         response_filter: None,
         network_error_text: None,
+        parkable_image: None,
         result: Err("stale retired Fetch completion".to_owned()),
     })
     .expect("late ordinary Fetch completion should be harmless");
@@ -2997,6 +3000,7 @@ async fn child_navigation_aborts_fetch_and_detaches_keepalive() {
         skip_fetch_security_validation: false,
         response_filter: None,
         network_error_text: None,
+        parkable_image: None,
         result: Ok(crate::types::NavigationResponse::from_text_body(
             final_url,
             200,
@@ -3141,6 +3145,7 @@ async fn detached_keepalive_redirect_reports_source_document_csp_without_v8() {
         skip_fetch_security_validation: true,
         response_filter: None,
         network_error_text: None,
+        parkable_image: None,
         result: Ok(redirected_fetch_response(
             &report_only_request,
             report_only_final,
@@ -3158,6 +3163,7 @@ async fn detached_keepalive_redirect_reports_source_document_csp_without_v8() {
         skip_fetch_security_validation: true,
         response_filter: None,
         network_error_text: None,
+        parkable_image: None,
         result: Ok(redirected_fetch_response(&enforce_request, enforce_final)),
     })
     .expect("detached enforcing keepalive should fail without entering V8");
@@ -3449,6 +3455,7 @@ fn main_document_open_preserves_accepted_beacon_without_rebind() {
         skip_fetch_security_validation: false,
         response_filter: None,
         network_error_text: None,
+        parkable_image: None,
         result: Ok(crate::types::NavigationResponse::from_text_body(
             request_url,
             204,
@@ -3712,6 +3719,7 @@ fn main_document_open_preserves_accepted_csp_report_but_rejects_stale_owner_reus
         skip_fetch_security_validation: false,
         response_filter: None,
         network_error_text: None,
+        parkable_image: None,
         result: Ok(crate::types::NavigationResponse::from_text_body(
             report_url,
             204,
@@ -12762,6 +12770,7 @@ async fn main_image_source_restart_cancels_exact_request_and_drops_stale_termina
         skip_fetch_security_validation: false,
         response_filter: None,
         network_error_text: None,
+        parkable_image: None,
         result: Err("stale cancelled image completion".to_owned()),
     })
     .expect("stale cancelled image completion should be harmless");
@@ -13431,6 +13440,7 @@ async fn main_media_source_restart_cancels_exact_network_request_and_stale_termi
         skip_fetch_security_validation: false,
         response_filter: None,
         network_error_text: None,
+        parkable_image: None,
         result: Err("stale cancelled media completion".to_owned()),
     })
     .expect("stale cancelled media completion should be harmless");
