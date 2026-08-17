@@ -313,6 +313,7 @@ pub struct LayoutBox<N> {
 pub(crate) struct ViewportLayoutState {
     pub(crate) children: Vec<LayoutBoxId>,
     pub(crate) style: Style<Atom>,
+    pub(crate) writing_mode: taffy::WritingMode,
     pub(crate) cache: Cache,
     pub(crate) unrounded_layout: Layout,
     pub(crate) final_layout: Layout,
@@ -323,6 +324,7 @@ impl Default for ViewportLayoutState {
         Self {
             children: Vec::new(),
             style: Style::default(),
+            writing_mode: taffy::WritingMode::HorizontalTb,
             cache: Cache::new(),
             unrounded_layout: Layout::with_order(0),
             final_layout: Layout::with_order(0),
@@ -432,6 +434,7 @@ where
     pub(crate) display_contents_mapping: HashMap<N, Vec<LayoutBoxId>>,
     pub(crate) root: LayoutBoxId,
     pub(crate) document_element: N,
+    pub(crate) root_is_document_element: bool,
     pub(crate) document_body: Option<N>,
     pub(crate) document_mode: crate::LayoutDocumentMode,
     pub(crate) viewport_scroll_offset: crate::LayoutPoint,
@@ -447,6 +450,7 @@ where
     pub(crate) fn new(
         root: LayoutBox<N>,
         document_element: N,
+        root_is_document_element: bool,
         document_body: Option<N>,
         document_mode: crate::LayoutDocumentMode,
         viewport_scroll_offset: crate::LayoutPoint,
@@ -457,6 +461,7 @@ where
             display_contents_mapping: HashMap::new(),
             root: LayoutBoxId::from_index(0),
             document_element,
+            root_is_document_element,
             document_body,
             document_mode,
             viewport_scroll_offset,
@@ -472,6 +477,56 @@ where
     pub(crate) fn is_document_body(&self, id: LayoutBoxId) -> bool {
         self.document_body
             .is_some_and(|body| self.boxes[id.index()].source == Some(body))
+    }
+
+    /// Resolve the writing direction propagated to the layout viewport.
+    ///
+    /// Blink's `StyleResolver::PropagateStyleToViewport()` selects the body
+    /// style when both the document element and body permit propagation, and
+    /// otherwise retains the document-element style. The viewport remains a
+    /// separate layout object; only its logical coordinate system is copied.
+    pub(crate) fn propagate_viewport_writing_direction(&mut self) -> taffy::WritingDirection {
+        let root_has_layout_object =
+            self.source_mapping.get(&self.document_element) == Some(&self.root);
+        if !self.root_is_document_element || !root_has_layout_object {
+            return taffy::WritingDirection::default();
+        }
+        let body = self
+            .document_body
+            .and_then(|source| self.source_mapping.get(&source))
+            .copied();
+        let uses_body = body.is_some_and(|body| {
+            !self.boxes[self.root.index()].applies_any_containment()
+                && !self.boxes[body.index()].applies_any_containment()
+        });
+        let style_source = body.filter(|_| uses_body).unwrap_or(self.root);
+        let writing_direction = self.boxes[style_source.index()].style.writing_direction();
+        if uses_body {
+            // Blink's HTMLHtmlElement::LayoutStyleForElement() gives the root
+            // LayoutObject a body-derived used writing direction without
+            // changing the root element's CSSOM computed style. LayoutWorld
+            // styles are pass-local, so this is the corresponding ownership
+            // boundary in Moli.
+            self.boxes[self.root.index()]
+                .style
+                .use_layout_writing_direction(writing_direction);
+            for layout_box in &mut self.boxes {
+                let is_direct_root_text =
+                    layout_box.kind.is_text() && layout_box.structural_parent == Some(self.root);
+                let is_root_owned_anonymous = layout_box.source.is_none()
+                    && layout_box.owner == Some(self.document_element)
+                    && layout_box.pseudo.is_none();
+                if is_direct_root_text || is_root_owned_anonymous {
+                    // Direct text consumes the root LayoutObject's used style;
+                    // element children and pseudo-elements continue to inherit
+                    // the root element's unmodified computed style.
+                    layout_box
+                        .style
+                        .use_layout_writing_direction(writing_direction);
+                }
+            }
+        }
+        writing_direction
     }
 
     /// Whether this box's overflow is propagated to the layout viewport.

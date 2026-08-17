@@ -116,6 +116,14 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
         self.root
     }
 
+    fn root_is_document_element(&self) -> bool {
+        self.document.and_then(|document| {
+            self.host()
+                .dom()
+                .document_element_handle_for_document(document)
+        }) == Some(self.root)
+    }
+
     fn document_mode(&self) -> LayoutDocumentMode {
         match self
             .document
