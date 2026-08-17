@@ -113,6 +113,12 @@ jobs:
           uv sync --project moli-webdriver-smoke --locked
           npm ci --prefix moli-cdp-smoke
 
+      - name: Test CDP smoke diagnostics
+        run: >-
+          uv run --project moli-cdp-smoke --no-sync
+          python -m unittest discover
+          --start-directory moli-cdp-smoke/tests
+
       - name: Build moli
         id: build_moli
         run: cargo build --release -p moli

@@ -94,6 +94,16 @@ Covered well:
   asynchronous request cancellation, and suppression of asynchronous events and
   timers while a synchronous request owns the main thread.
 - The focused `layout-screenshot` group drives a real raw WebSocket session through target creation/attachment, fixed viewport, lifecycle-gated navigation, DevTools-style PNG capture (`quality: 100`), paint/layout mutations, page clips, `captureBeyondViewport`, and the Chromium DevTools node-screenshot chain (`DOM.getBoxModel` + `Page.getLayoutMetrics` + page clip). It also covers Moli's uncached 1 FPS JPEG screencast: initial-frame delivery, 400x300 scaling, metadata/session routing, ACK backpressure, minimum cadence, mutation freshness, stop cleanup, and a separately restarted default-Mock boundary without `--layout`. The screenshot surface sequence can also run against Chromium as a coarse reference; the fixed-1-FPS and default-Mock branches are Moli-only.
+- The default raw `action-window` group holds Moli's on-demand input policy at
+  the public CDP boundary. Three acknowledged `Input.dispatchMouseEvent`
+  wheel commands remain delayed until one fixed one-second deadline, preserve
+  event order, defer their microtask checkpoint, and publish one derived
+  IntersectionObserver transition. `Page.captureScreenshot` must flush pending
+  wheel work before paint and retire that window so later input receives a
+  fresh deadline. A wheel handler that calls `document.open()` must also stop
+  the remainder of its batch from entering the replacement Document. These are
+  Moli scheduling contracts rather than Chromium-compatibility claims; the
+  group records a non-applicable result when pointed at Chromium.
 - The focused `dom-hit-test` group drives `DOM.getNodeForLocation` through the real layout hit index and requires the same option-aware topmost node, backend node id, and frame id shape from Moli and Chromium.
 - Node creation stack capture retains at most the newest 1,024 traces per Inspector session; focused renderer tests cover FIFO eviction, shared payloads, document replacement, and session detach while the wire smoke retains enable/disable/session semantics and verifies that `document.open()` preserves capture for replacement-document nodes.
 - Optional chrome-remote-interface 0.34.0 and cdp-use 1.4.5 coverage for verified browser/page sessions, multiple targets, local/session storage ownership, history traversal, child-frame isolated worlds, Fetch fulfillment with page-session event routing, complete Network terminals, and the declared position-click boundary.
@@ -223,6 +233,8 @@ Runner layout:
 - `groups/error_document.py`: failed main-document transport error Document identity, lifecycle, realm replacement, recovery, and multi-target isolation.
 - `groups/dom_parser_mutations.py`: cross-engine raw-CDP parser-tail mutation publication and commit/DCL DOM binding barriers.
 - `groups/layout_screenshot.py`: raw current-viewport PNG, DevTools parameter compatibility, paint/layout mutation freshness, uncached 1 FPS JPEG screencast/ACK behavior, and Moli default-Mock restart boundary.
+- `groups/action_window.py`: raw wheel admission/deadline batching, screenshot
+  flush/reset, derived-effect coalescing, and exact-Document retirement.
 - `groups/pdf.py`: raw `Page.printToPDF` base64 and `ReturnAsStream` transport, `IO.read`, pagination, page ranges, orientation, PDF structure, and Chromium-shaped validation errors.
 - `groups/dom_snapshot.py`: raw CDP `document.open()` replacement identity and
   `DOMSnapshot.captureSnapshot` freshness workflows, intended to run unchanged
@@ -280,6 +292,7 @@ Run a focused subset while developing a CDP area:
 uv run moli-cdp-smoke --group protocol --group network
 uv run moli-cdp-smoke --group multi-client
 uv run moli-cdp-smoke --group layout-screenshot
+uv run moli-cdp-smoke --group action-window
 uv run moli-cdp-smoke --group pdf
 uv run moli-cdp-smoke --group agent-episode
 uv run moli-cdp-smoke --group fetch-runtime-teardown

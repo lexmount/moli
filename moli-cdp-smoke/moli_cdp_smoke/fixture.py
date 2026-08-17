@@ -176,6 +176,69 @@ LAYOUT_SCREENSHOT_FIXTURE = (
     / "layout-screenshot-poc.html"
 ).read_text(encoding="utf-8")
 
+ACTION_WINDOW_DEADLINE_FIXTURE = """<!doctype html>
+<style>
+html, body { margin: 0; }
+body { height: 1200px; }
+#target { position: absolute; top: 250px; width: 20px; height: 20px; }
+</style>
+<div id="target"></div>
+<script>
+globalThis.__actionWindowWheelLog = [];
+globalThis.__actionWindowIoLog = [];
+addEventListener("wheel", event => {
+  __actionWindowWheelLog.push("event:" + event.deltaY);
+  Promise.resolve().then(() => {
+    __actionWindowWheelLog.push("microtask:" + event.deltaY);
+  });
+}, { capture: true });
+globalThis.__actionWindowObserver = new IntersectionObserver(entries => {
+  const entry = entries.find(candidate => candidate.target.id === "target");
+  if (!entry) return;
+  __actionWindowIoLog.push(entry.isIntersecting);
+  if (__actionWindowIoLog.length === 2 && entry.isIntersecting) {
+    fetch("/action-window-witness/entered?source=deadline");
+  }
+});
+__actionWindowObserver.observe(document.getElementById("target"));
+</script>
+"""
+
+ACTION_WINDOW_CAPTURE_FIXTURE = """<!doctype html>
+<style>
+html, body { margin: 0; background: white; }
+body { height: 1200px; }
+#witness { position: fixed; inset: 0; background: white; }
+</style>
+<div id="witness"></div>
+<script>
+globalThis.__actionWindowCaptureDeltas = [];
+addEventListener("wheel", event => {
+  __actionWindowCaptureDeltas.push(event.deltaY);
+  document.getElementById("witness").style.background =
+    __actionWindowCaptureDeltas.length === 1 ? "rgb(255, 0, 0)" : "rgb(0, 255, 0)";
+  fetch("/action-window-witness/entered?source=capture&delta=" + event.deltaY);
+}, { capture: true });
+</script>
+"""
+
+ACTION_WINDOW_REPLACEMENT_FIXTURE = """<!doctype html>
+<style>html, body { margin: 0; } body { height: 1200px; }</style>
+<script>
+globalThis.__actionWindowRetiredDeltas = [];
+globalThis.__actionWindowReplacementDeltas = [];
+document.addEventListener("wheel", event => {
+  __actionWindowRetiredDeltas.push(event.deltaY);
+  document.open();
+  document.write("<!doctype html><body style='height:1200px'>replacement</body>");
+  document.close();
+  document.addEventListener("wheel", replacementEvent => {
+    __actionWindowReplacementDeltas.push(replacementEvent.deltaY);
+  }, { capture: true });
+}, { capture: true, once: true });
+</script>
+"""
+
 LDM0_TOP_DOM_WHITESPACE_FIXTURE = """<!doctype html>
 <html>
     <head>
@@ -491,6 +554,23 @@ class FixtureServer:
                     count = outer._increment_request_count(route)
                     self._send_text(f"entered-{count}")
                     return
+                if route == "/action-window-witness/reset":
+                    outer.reset_request_count("/action-window-witness/entered")
+                    self._send_json({"count": 0})
+                    return
+                if route == "/action-window-witness/status":
+                    self._send_json(
+                        {
+                            "count": outer.request_count(
+                                "/action-window-witness/entered"
+                            )
+                        }
+                    )
+                    return
+                if route == "/action-window-witness/entered":
+                    count = outer._increment_request_count(route)
+                    self._send_json({"count": count})
+                    return
                 if route == "/chromium-network-redirect-before-reset":
                     outer._increment_request_count(route)
                     self.send_response(HTTPStatus.FOUND)
@@ -548,6 +628,12 @@ class FixtureServer:
                     self._send_html("<!doctype html><main>plain ok</main>")
                 elif route == "/layout-screenshot-poc":
                     self._send_html(LAYOUT_SCREENSHOT_FIXTURE)
+                elif route == "/action-window-deadline":
+                    self._send_html(ACTION_WINDOW_DEADLINE_FIXTURE)
+                elif route == "/action-window-capture":
+                    self._send_html(ACTION_WINDOW_CAPTURE_FIXTURE)
+                elif route == "/action-window-replacement":
+                    self._send_html(ACTION_WINDOW_REPLACEMENT_FIXTURE)
                 elif route == "/agent-episode-smoke":
                     self._send_html(
                         "<!doctype html><style>input,button{display:block;width:220px;height:32px}</style>"

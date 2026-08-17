@@ -17,6 +17,7 @@ from playwright.async_api import async_playwright
 from .assertions import record
 from .config import clear_current_process_proxy_env, reserve_port
 from .fixture import FixtureServer
+from .groups.action_window import run_action_window_group
 from .groups.agent_browser import run_agent_browser_group
 from .groups.agent_episode import run_agent_episode_group
 from .groups.browser_semantics import run_browser_semantics_group, run_target_semantics_group
@@ -84,6 +85,12 @@ RAW_GROUPS: tuple[SmokeGroup, ...] = (
         "raw",
         run_inspector_routing_group,
         default=False,
+    ),
+    SmokeGroup(
+        "action-window",
+        "Moli raw-CDP wheel batching, screenshot flush/reset, and exact-Document retirement contracts.",
+        "raw",
+        run_action_window_group,
     ),
     SmokeGroup(
         "url-policy",
