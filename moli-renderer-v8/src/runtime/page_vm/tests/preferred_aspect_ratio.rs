@@ -1,6 +1,70 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
+async fn screenshot_preserves_definite_replaced_axes_across_ratio_constraints() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/replaced-ratio-constraints.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0}
+svg{display:block;aspect-ratio:2/1}
+#width-derived-max-height{width:200px;height:auto;max-height:60px}
+#height-derived-max-width{width:auto;height:90px;max-width:100px}
+#both-definite{width:200px;height:80px;max-height:60px}
+#width-own-maximum{width:200px;height:auto;max-width:100px}
+#independent-minimum{width:200px;height:auto;max-width:100px;min-height:80px}
+</style>`;
+document.body.innerHTML = `
+<svg id=width-derived-max-height viewBox="0 0 200 100"></svg>
+<svg id=height-derived-max-width viewBox="0 0 200 100"></svg>
+<svg id=both-definite viewBox="0 0 200 100"></svg>
+<svg id=width-own-maximum viewBox="0 0 200 100"></svg>
+<svg id=independent-minimum viewBox="0 0 200 100"></svg>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(400, 400, 1.0))?
+            .expect("replaced ratio constraint screenshot layout");
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries(['width-derived-max-height','height-derived-max-width','both-definite','width-own-maximum','independent-minimum'].map(id=>{const r=document.getElementById(id).getBoundingClientRect();return [id,[r.width,r.height]]})))"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        for (id, expected) in [
+            ("width-derived-max-height", [200.0, 60.0]),
+            ("height-derived-max-width", [100.0, 90.0]),
+            ("both-definite", [200.0, 60.0]),
+            ("width-own-maximum", [100.0, 50.0]),
+            ("independent-minimum", [100.0, 80.0]),
+        ] {
+            let actual = geometry[id]
+                .as_array()
+                .unwrap_or_else(|| panic!("missing geometry for {id}: {geometry}"));
+            for (axis, expected) in expected.into_iter().enumerate() {
+                let actual = actual[axis].as_f64().expect("numeric geometry") as f32;
+                assert!(
+                    (actual - expected).abs() <= 0.05,
+                    "{id}[{axis}]: expected {expected}, got {actual}; geometry={geometry}"
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("replaced ratio constraint fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_uses_the_content_box_for_auto_preferred_aspect_ratios() {
     run_page_vm_async_test(async move {
         let loader =
