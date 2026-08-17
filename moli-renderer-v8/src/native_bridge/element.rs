@@ -335,7 +335,7 @@ pub(crate) use forms::{
     text_control_set_selection_range_internal,
     text_control_set_selection_range_with_direction_internal, text_control_value,
 };
-use rendered_state::node_check_visibility_callback;
+use rendered_state::{node_check_visibility_callback, node_current_css_zoom_getter_function};
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(name = "HTMLFormElement", enumerable)]
@@ -921,6 +921,12 @@ struct ExtendedElementPrototypeMethodsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(name = "Element")]
 struct ElementGeometryPrototypeDeclaration {
+    #[webapi(
+        accessor_property = "currentCSSZoom",
+        enumerable,
+        getter = node_current_css_zoom_getter_function
+    )]
+    current_css_zoom: (),
     #[webapi(
         accessor_property = "clientWidth",
         enumerable,

@@ -1,5 +1,84 @@
 use super::*;
 
+#[test]
+fn element_current_css_zoom_observes_fresh_effective_style_for_rendered_boxes() {
+    let mut vm = new_parsed_test_vm(
+        "https://element-current-css-zoom.test/",
+        r#"<!doctype html><html><body>
+          <div id="unzoomed"><div id="unzoomed-child"></div></div>
+          <div id="outer" style="zoom: 2">
+            <div id="inner" style="zoom: 2">
+              <div id="rendered-child"></div>
+              <div id="non-rendered-child" style="display: none"></div>
+            </div>
+          </div>
+          <div id="hidden-ancestor" style="display: none; zoom: 3">
+            <div id="hidden-descendant" style="zoom: 2"></div>
+          </div>
+        </body></html>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const get = id => document.getElementById(id);
+  const initial = [
+    get('unzoomed').currentCSSZoom,
+    get('outer').currentCSSZoom,
+    get('inner').currentCSSZoom,
+    get('rendered-child').currentCSSZoom,
+    get('non-rendered-child').currentCSSZoom,
+    get('hidden-descendant').currentCSSZoom
+  ];
+  get('unzoomed').style.zoom = 2;
+  const updated = [
+    get('unzoomed').currentCSSZoom,
+    get('unzoomed-child').currentCSSZoom
+  ];
+  get('outer').style.display = 'none';
+  const suppressed = [
+    get('outer').currentCSSZoom,
+    get('inner').currentCSSZoom,
+    get('rendered-child').currentCSSZoom
+  ];
+  const detached = document.createElement('div');
+  detached.style.zoom = 4;
+  const descriptor = Object.getOwnPropertyDescriptor(
+    Element.prototype,
+    'currentCSSZoom'
+  );
+  let incompatible = 'none';
+  try {
+    descriptor.get.call({});
+  } catch (error) {
+    incompatible = error.name;
+  }
+  return JSON.stringify({
+    initial,
+    updated,
+    suppressed,
+    detached: detached.currentCSSZoom,
+    shape: [
+      typeof descriptor.get,
+      descriptor.get.length,
+      descriptor.enumerable,
+      descriptor.configurable,
+      Object.hasOwn(get('outer'), 'currentCSSZoom')
+    ],
+    incompatible
+  });
+})()
+"#,
+        )
+        .expect("Element.currentCSSZoom should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"initial":[1,2,4,4,1,1],"updated":[2,2],"suppressed":[1,1,1],"detached":1,"shape":["function",0,true,true,false],"incompatible":"TypeError"}"#
+    );
+}
+
 fn inspector_active_child_window_scope_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     _args: v8::FunctionCallbackArguments<'s>,

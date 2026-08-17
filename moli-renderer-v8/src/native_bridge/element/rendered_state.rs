@@ -13,8 +13,9 @@ use crate::{
 
 use super::{
     super::node::{
-        node_runtime_and_handle_from_args_or_detached, require_element_method_receiver,
-        throw_incompatible_method_receiver,
+        node_is_element, node_runtime_and_handle_from_args_or_detached,
+        node_runtime_and_handle_from_object_or_detached, require_element_method_receiver,
+        throw_incompatible_getter_receiver, throw_incompatible_method_receiver,
     },
     styles::ComputedStyleReadScope,
 };
@@ -33,9 +34,10 @@ pub(super) enum ElementContentVisibility {
     Auto,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct ElementRenderedStyle {
     pub(super) display: ComputedDisplayKind,
+    effective_zoom: f32,
     pub(super) visibility_visible: bool,
     pub(super) content_visibility: ElementContentVisibility,
     pub(super) content_visibility_applicable: bool,
@@ -49,10 +51,14 @@ impl ElementRenderedStyle {
     pub(super) fn read_in_scope(scope: &mut ComputedStyleReadScope<'_>, handle: DomHandle) -> Self {
         let runtime = scope.runtime();
         let style = scope.read(handle);
+        let effective_zoom = style
+            .computed_values()
+            .map_or(1.0, |values| values.effective_zoom.value());
         let content_visibility = inline_content_visibility(runtime, handle);
         if let Some(facts) = style.rendered_style_facts() {
             return Self {
                 display: facts.display,
+                effective_zoom,
                 visibility_visible: facts.visibility_visible,
                 content_visibility,
                 content_visibility_applicable: facts.content_visibility_applicable,
@@ -66,6 +72,7 @@ impl ElementRenderedStyle {
         let display = computed_display_kind(&display_value);
         Self {
             display,
+            effective_zoom,
             visibility_visible: style.property("visibility") == "visible",
             content_visibility,
             content_visibility_applicable: fallback_content_visibility_applicable(&display_value),
@@ -307,6 +314,19 @@ impl ElementRenderedState {
         self.path.first().and_then(|entry| entry.style.as_ref())
     }
 
+    /// Returns the cumulative CSS zoom of the target's generated box.
+    ///
+    /// CSSOM View exposes `1` when the element has no associated box. Reading
+    /// the value from this style-observation path keeps it synchronous without
+    /// coupling the API to a retained screenshot geometry snapshot.
+    fn current_css_zoom(&self) -> f64 {
+        if self.box_state() != ElementBoxState::Box {
+            return 1.0;
+        }
+        self.target_style()
+            .map_or(1.0, |style| f64::from(style.effective_zoom))
+    }
+
     fn has_zero_opacity(&self) -> bool {
         self.path
             .iter()
@@ -456,6 +476,29 @@ pub(super) fn node_check_visibility_callback<'s>(
     // still parsed so its Web IDL behavior matches Chromium.
     let _ = options.content_visibility_auto;
     rv.set_bool(true);
+}
+
+pub(super) fn node_current_css_zoom_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Ok((runtime_ptr, handle)) =
+        node_runtime_and_handle_from_object_or_detached(scope, args.this())
+    else {
+        throw_incompatible_getter_receiver(scope, "Element", "currentCSSZoom");
+        rv.set(v8::Number::new(scope, 1.0).into());
+        return;
+    };
+    let runtime = unsafe { &*runtime_ptr };
+    if !node_is_element(runtime, handle) {
+        throw_incompatible_getter_receiver(scope, "Element", "currentCSSZoom");
+        rv.set(v8::Number::new(scope, 1.0).into());
+        return;
+    }
+
+    let zoom = ElementRenderedState::read(runtime, handle).current_css_zoom();
+    rv.set(v8::Number::new(scope, zoom).into());
 }
 
 fn computed_opacity_is_zero(value: &str) -> bool {
