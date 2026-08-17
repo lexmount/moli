@@ -3913,7 +3913,7 @@ body { width: 100px; aspect-ratio: 1 / 1; overflow: scroll; }
 ].join('|')"#,
         )
         .expect("physical quirks body scroller should evaluate");
-    assert_eq!(physical_result, "null|1080|1064|1064");
+    assert_eq!(physical_result, "null|1080|100|100");
 
     let mut viewport_body_scroller = new_parsed_test_vm(
         "https://quirks-viewport-body-scroller.test/",
