@@ -77,6 +77,7 @@ fn normalized_family_name(name: &str) -> String {
     name.chars().flat_map(char::to_lowercase).collect()
 }
 
+#[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
 fn explicit_substitution_prefix<'a>(
     requested: &'a [String],
     default_families: &[String],

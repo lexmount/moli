@@ -15,6 +15,10 @@ use crate::BrowserProfilePaths;
 #[derive(Debug)]
 pub struct BrowserProfileLock {
     path: PathBuf,
+    /// Held only on Unix, where the file descriptor keeps the advisory `flock`
+    /// alive for the lifetime of the guard. On non-Unix platforms the lock is
+    /// the file's existence on disk, so no handle needs to be retained.
+    #[cfg(unix)]
     file: File,
     remove_on_drop: bool,
 }
@@ -55,6 +59,7 @@ pub fn acquire_profile_lock(paths: &BrowserProfilePaths) -> Result<BrowserProfil
 
     Ok(BrowserProfileLock {
         path: paths.lock_path.clone(),
+        #[cfg(unix)]
         file,
         remove_on_drop,
     })
