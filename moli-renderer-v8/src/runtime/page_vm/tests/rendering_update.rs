@@ -5829,6 +5829,57 @@ document.body.innerHTML = `
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn screenshot_uses_wrapped_column_intrinsic_block_size_for_flex_auto_minimum() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/flex-wrapped-column-auto-minimum.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0}
+#outer{display:flex;flex-direction:column}
+#wrapped{display:flex;flex-direction:column;flex-wrap:wrap;flex:1 0 0px;height:500px}
+.item{flex:1 0 0px;width:100px;background:green}
+.content{height:50px}
+</style>`;
+document.body.innerHTML = `
+<div id=outer>
+  <div id=wrapped>
+    <div id=first class=item><div class=content></div></div>
+    <div id=second class=item><div class=content></div></div>
+  </div>
+</div>`;
+"installed"
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0))?
+            .expect("wrapped column fixture should retain a root");
+
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                r#"["outer", "wrapped", "first", "second"]
+  .flatMap(id => {
+    const rect = document.getElementById(id).getBoundingClientRect();
+    return [rect.x, rect.y, rect.width, rect.height];
+  }).join("|")"#,
+            )?,
+            "0|0|800|100|0|0|800|100|0|0|100|50|0|50|100|50",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("wrapped column auto-minimum fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_preserves_intrinsic_flex_basis_sizing_functions() {
     run_page_vm_async_test(async move {
         let loader =
