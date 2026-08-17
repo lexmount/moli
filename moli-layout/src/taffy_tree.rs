@@ -301,7 +301,11 @@ where
     // children to Taffy. Keep the source/paint tree untouched.
     for parent_index in 0..world.boxes.len() {
         let display = world.boxes[parent_index].style.display();
-        if !display.is_flex_container() && !display.is_grid_container() {
+        if !world.boxes[parent_index]
+            .style
+            .uses_flex_formatting_context()
+            && !display.is_grid_container()
+        {
             continue;
         }
         let mut children = std::mem::take(&mut world.boxes[parent_index].layout_children);
@@ -492,6 +496,13 @@ where
         let Some(control) = world.boxes[content.index()].layout_parent else {
             continue;
         };
+        // Replaced controls do not run a child formatting algorithm, so their
+        // browser-generated label is positioned after the atomic box has been
+        // sized. Content-bearing controls such as menu-list selects own a real
+        // formatting context and have already laid this child out normally.
+        if !world.boxes[control.index()].is_replaced() {
+            continue;
+        }
         let control_layout = world.boxes[control.index()].unrounded_layout;
         let content_size = Size {
             width: (control_layout.size.width
@@ -948,6 +959,24 @@ where
         !self.is_viewport_taffy_node(node_id) && LayoutBoxId::from_taffy(node_id) == self.root
     }
 
+    fn should_stretch_auto_inline_size_in_block_container(&self, node_id: NodeId) -> bool {
+        if self.is_viewport_taffy_node(node_id) {
+            return true;
+        }
+        !matches!(
+            self.boxes[LayoutBoxId::from_taffy(node_id).index()]
+                .element_semantics
+                .as_ref()
+                .map(|semantics| semantics.category),
+            Some(crate::LayoutElementCategory::FormControl(
+                crate::LayoutFormControlKind::Button
+                    | crate::LayoutFormControlKind::Input(_)
+                    | crate::LayoutFormControlKind::Select
+                    | crate::LayoutFormControlKind::TextArea
+            ))
+        )
+    }
+
     fn prepare_child_layout_input(&self, node_id: NodeId, inputs: LayoutInput) -> LayoutInput {
         let writing_mode = self.get_writing_mode(node_id);
         let mut inputs = inputs.for_child_writing_mode(writing_mode, self.layout_environment);
@@ -1315,6 +1344,46 @@ where
                 == Display::None
     }
 
+    /// Measure a native layout object's browser-provided intrinsic content at
+    /// the same boundary used for an ordinary descendant-based contribution.
+    ///
+    /// Blink's `CalculateMinMaxSizesIgnoringChildren` takes this path for
+    /// controls such as menu-list selects. Running the value through Taffy's
+    /// leaf sizing pipeline is important: the value itself is a content-box
+    /// size, while decorations, authored constraints, and preferred-ratio
+    /// transfer remain generic box-sizing operations.
+    fn compute_default_intrinsic_content_layout(
+        &mut self,
+        id: LayoutBoxId,
+        inputs: LayoutInput,
+    ) -> Option<LayoutOutput> {
+        let layout_box = &self.boxes[id.index()];
+        if layout_box.is_replaced() {
+            return None;
+        }
+        let intrinsic = layout_box.default_intrinsic_content_size;
+        let covers_request = match inputs.axis {
+            taffy::RequestedAxis::Horizontal => intrinsic.width.is_some(),
+            taffy::RequestedAxis::Vertical => intrinsic.height.is_some(),
+            taffy::RequestedAxis::Both => intrinsic.width.is_some() && intrinsic.height.is_some(),
+        };
+        if !covers_request {
+            return None;
+        }
+        let style = layout_box.style.taffy.clone();
+        Some(compute_leaf_layout_with_tree(
+            self,
+            id.to_taffy(),
+            inputs,
+            &style,
+            resolve_stylo_calc_value,
+            move |_, known_dimensions, _| Size {
+                width: known_dimensions.width.or(intrinsic.width).unwrap_or(0.0),
+                height: known_dimensions.height.or(intrinsic.height).unwrap_or(0.0),
+            },
+        ))
+    }
+
     fn compute_child_layout_uncached(
         &mut self,
         node_id: NodeId,
@@ -1325,8 +1394,15 @@ where
         let layout_box = &self.boxes[id.index()];
         let kind = layout_box.kind;
         let display = layout_box.style.display();
+        let uses_flex_formatting_context = layout_box.style.uses_flex_formatting_context();
         let inline_formatting_context = layout_box.inline_formatting_context;
         let is_replaced = layout_box.is_replaced();
+
+        if inputs.sizing_mode == SizingMode::ContentSize
+            && let Some(output) = self.compute_default_intrinsic_content_layout(id, inputs)
+        {
+            return output;
+        }
 
         if is_replaced {
             return self.compute_leaf(id, inputs);
@@ -1342,7 +1418,7 @@ where
         // display cannot be recovered from the kind. Dispatch their formatting
         // context exactly like a principal box. Table remains the explicit
         // conservative block fallback until its dedicated numeric phase.
-        if display.is_flex_container() {
+        if uses_flex_formatting_context {
             return compute_flexbox_layout(self, node_id, inputs);
         }
         if display.is_grid_container() {
@@ -1410,6 +1486,11 @@ where
         inputs: LayoutInput,
     ) -> IntrinsicSizeResult {
         let id = LayoutBoxId::from_taffy(node_id);
+        if inputs.sizing_purpose == SizingPurpose::IntrinsicContribution
+            && let Some(output) = self.compute_default_intrinsic_content_layout(id, inputs)
+        {
+            return output.into_intrinsic_size_result();
+        }
         if self.boxes[id.index()].inline_formatting_context {
             let result = self.compute_inline_formatting_context(id, inputs, None);
             let mut intrinsic = result.output.into_intrinsic_size_result();
@@ -1947,6 +2028,12 @@ where
             inputs.sizing_purpose == SizingPurpose::IntrinsicContribution;
         let shrink_to_fit = !has_definite_inline_size
             && (is_floated
+                // The parent formatting context has already selected the
+                // CSS fit-content behavior for this auto inline size (for
+                // example a native control in ordinary block layout). The
+                // IFC must clamp its min/max-content widths to the supplied
+                // slot instead of treating that finite slot as a used width.
+                || inputs.inline_auto_behavior == AutoSizeBehavior::FitContent
                 // A content-based block parent can probe this IFC with a
                 // finite available inline size while its own content inline
                 // size is still unknown. That is an intrinsic contribution, so clamp the

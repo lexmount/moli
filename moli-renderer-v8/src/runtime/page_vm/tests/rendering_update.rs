@@ -4527,6 +4527,72 @@ html,body{{margin:0;padding:0}}
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn native_button_auto_inline_size_uses_the_parent_formatting_context() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        loader.set_optional_resource_fetch_mask(
+            crate::protocol_types::OptionalResourceFetchMask::FONT,
+        );
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/button-auto-inline-size.html")?,
+        );
+        let font = base64::engine::general_purpose::STANDARD.encode(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../moli-layout/tests/fixtures/moli-ahem.ttf"
+        )));
+        let css = format!(
+            r#"
+@font-face{{font-family:MoliAhem;src:url(data:font/ttf;base64,{font}) format('truetype')}}
+html,body{{margin:0;padding:0}}
+.control{{margin:0;padding:0;border:0;font-family:MoliAhem;font-size:20px;line-height:20px;font-weight:400}}
+.wide{{width:300px}}
+.column{{display:flex;flex-direction:column;width:100px}}
+"#
+        );
+        page_vm.vm_mut().eval(&format!(
+            "document.head.innerHTML='<style id=fixture></style>';document.getElementById('fixture').textContent={};document.body.innerHTML={};'installed'",
+            serde_json::to_string(&css)?,
+            serde_json::to_string(
+                "<button id=inline class=control>BBBB</button><div class=wide><button id=block class=control style='display:block'>BBBB</button></div><div class=column><button id=flex class=control>BBBB</button></div>"
+            )?,
+        ))?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(360, 100, 1.0))?
+            .ok_or_else(|| anyhow::anyhow!("button auto-inline fixture lost its layout root"))?;
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries(['inline','block','flex'].map(id=>{const e=document.getElementById(id),r=e.getBoundingClientRect();return [id,{width:r.width,height:r.height,display:getComputedStyle(e).display}]})))"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        let width = |id: &str| {
+            geometry[id]["width"]
+                .as_f64()
+                .unwrap_or_else(|| panic!("missing numeric width for {id}: {geometry}"))
+                as f32
+        };
+        assert_eq!(geometry["inline"]["display"], "inline-block");
+        assert_eq!(geometry["block"]["display"], "block");
+        assert_eq!(geometry["flex"]["display"], "block");
+        assert!(
+            (width("block") - width("inline")).abs() <= 0.05 && width("block") < 300.0,
+            "a block-context button must keep its native intrinsic inline size: {geometry}"
+        );
+        assert!(
+            (width("flex") - 100.0).abs() <= 0.05,
+            "the block-parent exception must not disable flex cross-axis stretch: {geometry}"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("button auto-inline fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn color_emoji_web_font_rasterizes_cbdt_png() {
     run_page_vm_async_test(async move {
         let loader =

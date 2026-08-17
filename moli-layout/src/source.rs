@@ -142,6 +142,19 @@ pub enum LayoutFormControlKind {
     Meter,
 }
 
+/// Used native presentation selected for an HTML `<select>` element.
+///
+/// This is layout-object state, not a CSS `display` value. Chromium creates a
+/// flexible menu-list object for popup selects and a block-flow object for
+/// in-page list boxes while both retain their observable `inline-block`
+/// display.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum LayoutSelectPresentation {
+    #[default]
+    MenuList,
+    ListBox,
+}
+
 impl LayoutFormControlKind {
     const fn debug_name(self) -> &'static str {
         match self {
@@ -358,6 +371,28 @@ impl Default for LayoutFormControlData {
     }
 }
 
+impl LayoutFormControlData {
+    /// Resolve HTML's menu-list/listbox split from normalized `multiple` and
+    /// `size` state.
+    ///
+    /// A multiple select defaults to a listbox, except for the explicit
+    /// `size=1` popup form. A non-multiple select becomes a listbox only when
+    /// its positive display size is greater than one.
+    pub const fn select_presentation(&self) -> LayoutSelectPresentation {
+        if self.multiple {
+            if matches!(self.size, Some(1)) {
+                LayoutSelectPresentation::MenuList
+            } else {
+                LayoutSelectPresentation::ListBox
+            }
+        } else if matches!(self.size, Some(size) if size > 1) {
+            LayoutSelectPresentation::ListBox
+        } else {
+            LayoutSelectPresentation::MenuList
+        }
+    }
+}
+
 /// Optional typed HTML metadata retained beside element classification.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct LayoutElementMetadata {
@@ -428,6 +463,19 @@ impl LayoutElementSemantics {
 
     pub const fn image_fallback(&self) -> Option<&LayoutImageFallbackContent> {
         self.content.image_fallback()
+    }
+
+    pub(crate) fn select_presentation(&self) -> Option<LayoutSelectPresentation> {
+        if self.category != LayoutElementCategory::FormControl(LayoutFormControlKind::Select) {
+            return None;
+        }
+        Some(
+            self.metadata
+                .form_control
+                .as_ref()
+                .map(LayoutFormControlData::select_presentation)
+                .unwrap_or_default(),
+        )
     }
 
     pub(crate) fn is_html_element(&self, local_name: &str) -> bool {
