@@ -104,7 +104,7 @@ pub(crate) fn start_stylesheet_subresource_fetch(
     };
 
     if let Some(response) = local_url_response(&request_url) {
-        let response: crate::protocol_types::NavigationResponse = response.into();
+        let mut response: crate::protocol_types::NavigationResponse = response.into();
         let encoded = (resource_kind == StylesheetLoadBlockingResourceKind::Image).then(|| {
             let manager = host
                 .document_resource_loader_for_owner(binding.owner())
@@ -115,10 +115,15 @@ pub(crate) fn start_stylesheet_subresource_fetch(
                         loader.request_client().parkable_image_manager(&runner)
                     },
                 );
-            manager.from_frozen_bytes(response.clone_body_bytes())
+            manager.from_frozen_bytes(response.take_body_bytes())
         });
         if let Some(identity) = css_image.as_ref() {
-            let descriptor = image_response_descriptor(&response);
+            let descriptor = crate::network_host::image_response_descriptor_from_parkable(
+                &response,
+                encoded
+                    .as_ref()
+                    .expect("a local CSS image must have parkable bytes"),
+            );
             let _ = host.complete_stylesheet_css_image_response(
                 identity,
                 descriptor,
@@ -278,6 +283,7 @@ pub(crate) fn start_stylesheet_subresource_fetch(
                     skip_fetch_security_validation: false,
                     response_filter: None,
                     network_error_text: None,
+                    parkable_image: None,
                     result: Err("service worker stylesheet subresource dispatch failed".to_owned()),
                 },
             );

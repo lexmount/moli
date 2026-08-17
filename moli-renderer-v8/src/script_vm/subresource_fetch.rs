@@ -276,12 +276,13 @@ impl ImageSubresourceTerminal<'_> {
         request_url: &url::Url,
     ) -> crate::context_bootstrap::ResourcePerformanceEntry {
         match self {
-            Self::Response { response, .. } => {
-                crate::context_bootstrap::ResourcePerformanceEntry::from_network_response(
+            Self::Response { response, encoded } => {
+                crate::context_bootstrap::ResourcePerformanceEntry::from_network_response_with_body_size(
                     request_url.as_str(),
                     "img",
                     None,
                     response,
+                    encoded.len(),
                 )
             }
             Self::Failure => {
@@ -306,7 +307,8 @@ fn apply_image_subresource_terminal(
 ) {
     let (accepted, followup) = match &terminal {
         ImageSubresourceTerminal::Response { response, encoded } => {
-            let descriptor = crate::network_host::image_response_descriptor(response);
+            let descriptor =
+                crate::network_host::image_response_descriptor_from_parkable(response, encoded);
             let completion = context_host
                 .borrow_mut()
                 .complete_pending_image_load_network_response_if_matches(
@@ -1574,6 +1576,7 @@ impl ScriptVm {
                 skip_fetch_security_validation: true,
                 response_filter: Default::default(),
                 network_error_text: None,
+                parkable_image: None,
                 result: Err("service worker csp report fetch dispatch failed".to_owned()),
             });
         Ok(None)
@@ -3473,6 +3476,35 @@ impl ScriptVm {
 
     fn resolve_pending_subresource_fetch_body(
         &mut self,
+        pending: PendingSubresourceFetchState,
+        request_url: Url,
+        request_method: String,
+        request_headers: Vec<(String, String)>,
+        request_body: Option<String>,
+        response_status_text: Option<String>,
+        skip_fetch_security_validation: bool,
+        response_filter: Option<AsyncSubresourceFetchResponseFilter>,
+        network_error_text: Option<String>,
+        result: std::result::Result<crate::protocol_types::NavigationResponse, String>,
+    ) -> Result<AsyncSubresourceFetchBodyActivity> {
+        self.resolve_pending_subresource_fetch_body_with_parkable_image(
+            pending,
+            request_url,
+            request_method,
+            request_headers,
+            request_body,
+            response_status_text,
+            skip_fetch_security_validation,
+            response_filter,
+            network_error_text,
+            None,
+            result,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn resolve_pending_subresource_fetch_body_with_parkable_image(
+        &mut self,
         mut pending: PendingSubresourceFetchState,
         request_url: Url,
         request_method: String,
@@ -3482,6 +3514,7 @@ impl ScriptVm {
         skip_fetch_security_validation: bool,
         response_filter: Option<AsyncSubresourceFetchResponseFilter>,
         network_error_text: Option<String>,
+        supplied_parkable_image: Option<moli_parkable_image::ParkableImage>,
         result: std::result::Result<crate::protocol_types::NavigationResponse, String>,
     ) -> Result<AsyncSubresourceFetchBodyActivity> {
         let trace_started = moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
@@ -3594,11 +3627,22 @@ impl ScriptVm {
                         | SubresourceResourceType::Video
                         | SubresourceResourceType::Xhr
                 ) {
+                    let supplied_snapshot = supplied_parkable_image
+                        .as_ref()
+                        .map(|image| {
+                            image.snapshot().map_err(|error| {
+                                format!("failed to read image response bytes: {error}")
+                            })
+                        })
+                        .transpose()?;
+                    let response_body = supplied_snapshot
+                        .as_ref()
+                        .map_or_else(|| response.body_bytes(), AsRef::as_ref);
                     let validation = crate::network_host::validate_fetch_response_security_policy_with_body_classified(
                         &pending.info.document_url,
                         &response.final_url,
                         &response.headers,
-                        response.body_bytes(),
+                        response_body,
                         pending.request_mode,
                         pending.credentials_mode,
                         pending.policy_context,
@@ -3623,7 +3667,7 @@ impl ScriptVm {
 
             let request_initiator_type = pending.continuation.request_initiator_type();
             match result {
-                Ok(response) => {
+                Ok(mut response) => {
                     let response_status = response.status;
                     let parkable_image = (!opaque_response_blocked
                         && pending.info.resource_type == SubresourceResourceType::Image)
@@ -3636,13 +3680,13 @@ impl ScriptVm {
                                 }
                                 _ => None,
                             };
-                            existing.unwrap_or_else(|| {
+                            supplied_parkable_image.clone().or(existing).unwrap_or_else(|| {
                                 let runner = pending.load.task_runner();
                                 pending
                                     .load
                                     .request_client()
                                     .parkable_image_manager(&runner)
-                                    .from_frozen_bytes(response.clone_body_bytes())
+                                    .from_frozen_bytes(response.take_body_bytes())
                             })
                         });
                     let request_cookie_report = response
@@ -3825,10 +3869,12 @@ impl ScriptVm {
                             css_image,
                         } => {
                             if let Some(identity) = css_image.as_ref() {
-                                let descriptor =
-                                    crate::network_host::image_response_descriptor(
-                                        &observable_response,
-                                    );
+                                let descriptor = crate::network_host::image_response_descriptor_from_parkable(
+                                    &observable_response,
+                                    parkable_image
+                                        .as_ref()
+                                        .expect("a CSS image response must be parkable"),
+                                );
                                 let _ = context_host
                                     .borrow_mut()
                                     .complete_stylesheet_css_image_response(
@@ -4058,6 +4104,7 @@ impl ScriptVm {
                 skip_fetch_security_validation: false,
                 response_filter: None,
                 network_error_text: None,
+                parkable_image: None,
                 result,
             });
         });
@@ -4326,7 +4373,7 @@ impl ScriptVm {
             trace_fields,
             trace_started,
         );
-        let activity = self.resolve_pending_subresource_fetch_body(
+        let activity = self.resolve_pending_subresource_fetch_body_with_parkable_image(
             pending,
             completion.request_url,
             completion.request_method,
@@ -4336,6 +4383,7 @@ impl ScriptVm {
             completion.skip_fetch_security_validation,
             completion.response_filter,
             completion.network_error_text,
+            completion.parkable_image,
             completion.result,
         )?;
         trace_async_subresource_stage(

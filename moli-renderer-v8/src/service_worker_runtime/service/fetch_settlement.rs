@@ -664,6 +664,7 @@ impl ServiceWorkerRuntimeService {
                 skip_fetch_security_validation: true,
                 response_filter,
                 network_error_text: None,
+                parkable_image: None,
                 result: Ok(navigation_response),
             });
     }
@@ -717,6 +718,7 @@ impl ServiceWorkerRuntimeService {
                 skip_fetch_security_validation: false,
                 response_filter: None,
                 network_error_text,
+                parkable_image: None,
                 result: Err(message),
             });
     }

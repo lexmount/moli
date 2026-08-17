@@ -207,6 +207,7 @@ pub(crate) fn start_text_track_resource_fetch(
                     skip_fetch_security_validation: false,
                     response_filter: None,
                     network_error_text: None,
+                    parkable_image: None,
                     result: Err("service worker text-track fetch dispatch failed".to_owned()),
                 },
             );

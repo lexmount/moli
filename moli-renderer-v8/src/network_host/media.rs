@@ -196,6 +196,7 @@ pub(crate) fn start_media_element_resource_fetch(
                     skip_fetch_security_validation: false,
                     response_filter: None,
                     network_error_text: None,
+                    parkable_image: None,
                     result: Err("service worker media fetch dispatch failed".to_owned()),
                 },
             );

@@ -589,6 +589,7 @@ pub(super) struct AsyncSubresourceFetchCompletion {
     pub(super) skip_fetch_security_validation: bool,
     pub(super) response_filter: Option<AsyncSubresourceFetchResponseFilter>,
     pub(super) network_error_text: Option<String>,
+    pub(super) parkable_image: Option<moli_parkable_image::ParkableImage>,
     pub(super) result: std::result::Result<NavigationResponse, String>,
 }
 

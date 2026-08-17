@@ -69,6 +69,7 @@ struct ScannedImagePreloadLoadState {
 
 pub(crate) struct ScannedImagePreloadOutcome {
     network_result: SharedNavigationResponseResult,
+    encoded: Option<moli_parkable_image::ParkableImage>,
     _resource: Option<Arc<ReadyImageResource>>,
     _retained_body_permit: Option<ScannedImagePreloadBodyPermit>,
 }
@@ -78,10 +79,8 @@ impl ScannedImagePreloadOutcome {
         &self.network_result
     }
 
-    pub(super) fn encoded(&self) -> Option<moli_parkable_image::ParkableImage> {
-        self._resource
-            .as_ref()
-            .and_then(|resource| resource.encoded.clone())
+    pub(crate) fn encoded(&self) -> Option<moli_parkable_image::ParkableImage> {
+        self.encoded.clone()
     }
 }
 
@@ -263,18 +262,14 @@ impl SharedScannedImagePreloadLoad {
     pub(crate) fn finish_network_result(
         &self,
         runner: RendererResourceTaskRunner,
-        manager: moli_parkable_image::ParkableImageManager,
         network_result: SharedNavigationResponseResult,
+        encoded: Option<moli_parkable_image::ParkableImage>,
         response_is_decode_eligible: bool,
     ) {
         if self.try_outcome().is_some() {
             return;
         }
-        let encoded_bytes = network_result
-            .as_ref()
-            .as_ref()
-            .map(|response| response.body_bytes().len())
-            .unwrap_or(0);
+        let encoded_bytes = encoded.as_ref().map_or(0, |encoded| encoded.len());
         let retained_body_permit = if encoded_bytes == 0 {
             None
         } else {
@@ -296,33 +291,37 @@ impl SharedScannedImagePreloadLoad {
                     .as_ref()
                     .as_ref()
                     .ok()
-                    .and_then(crate::network_host::image_response_descriptor)
+                    .zip(encoded.as_ref())
+                    .and_then(|(response, encoded)| {
+                        crate::network_host::image_response_descriptor_from_parkable(
+                            response, encoded,
+                        )
+                    })
             })
             .flatten();
         let Some(descriptor) = descriptor else {
             self.finish(ScannedImagePreloadOutcome {
                 network_result,
+                encoded,
                 _resource: None,
                 _retained_body_permit: retained_body_permit,
             });
             return;
         };
-        let encoded = manager.from_frozen_bytes(
-            network_result
-                .as_ref()
-                .as_ref()
-                .expect("a decoded preload descriptor requires a response")
-                .clone_body_bytes(),
-        );
+        let encoded = encoded.expect("a decoded preload descriptor requires encoded bytes");
         let load = self.clone();
-        let completion_state = Arc::new(Mutex::new(Some((network_result, retained_body_permit))));
+        let completion_state = Arc::new(Mutex::new(Some((
+            network_result,
+            encoded.clone(),
+            retained_body_permit,
+        ))));
         let completion_state_for_decode = completion_state.clone();
         let result = self.inner.decode.submit_preload(
             runner,
             descriptor.decode_metadata,
             encoded,
             move |decode_result| {
-                let Some((network_result, retained_body_permit)) =
+                let Some((network_result, encoded, retained_body_permit)) =
                     completion_state_for_decode.lock().take()
                 else {
                     return;
@@ -348,6 +347,7 @@ impl SharedScannedImagePreloadLoad {
                             .insert(load.inner.identity.request_key.clone(), &resource);
                         load.finish(ScannedImagePreloadOutcome {
                             network_result,
+                            encoded: Some(encoded),
                             _resource: Some(resource),
                             _retained_body_permit: retained_body_permit,
                         });
@@ -362,6 +362,7 @@ impl SharedScannedImagePreloadLoad {
                         );
                         load.finish(ScannedImagePreloadOutcome {
                             network_result,
+                            encoded: Some(encoded),
                             _resource: None,
                             _retained_body_permit: retained_body_permit,
                         });
@@ -370,12 +371,13 @@ impl SharedScannedImagePreloadLoad {
             },
         );
         if result.is_err() {
-            let (network_result, retained_body_permit) = completion_state
+            let (network_result, encoded, retained_body_permit) = completion_state
                 .lock()
                 .take()
                 .expect("rejected preload decode must retain its completion state");
             self.finish(ScannedImagePreloadOutcome {
                 network_result,
+                encoded: Some(encoded),
                 _resource: None,
                 _retained_body_permit: retained_body_permit,
             });
@@ -514,8 +516,8 @@ mod tests {
 
         claimed.finish_network_result(
             RendererResourceTaskRunner::for_test(),
-            moli_parkable_image::ParkableImageManager::default(),
             Arc::new(Err("network failed".to_owned())),
+            None,
             false,
         );
         let outcome = claimed
@@ -569,16 +571,13 @@ mod tests {
             vec![("Content-Type".to_owned(), "image/png".to_owned())],
             String::new(),
         );
-        let response = crate::protocol_types::NavigationResponse::from_head_and_body(
-            response.head(),
-            String::from_utf8_lossy(&encoded.bytes).into_owned(),
-            encoded.bytes,
-        );
+        let encoded =
+            moli_parkable_image::ParkableImageManager::default().from_frozen_bytes(encoded.bytes);
 
         load.finish_network_result(
             RendererResourceTaskRunner::for_test(),
-            moli_parkable_image::ParkableImageManager::default(),
             Arc::new(Ok(response)),
+            Some(encoded),
             true,
         );
         let outcome = tokio::time::timeout(std::time::Duration::from_secs(2), load.wait_outcome())
@@ -643,16 +642,13 @@ mod tests {
             vec![("Content-Type".to_owned(), "image/png".to_owned())],
             String::new(),
         );
-        let response = crate::protocol_types::NavigationResponse::from_head_and_body(
-            response.head(),
-            String::new(),
-            body_bytes,
-        );
+        let encoded =
+            moli_parkable_image::ParkableImageManager::default().from_frozen_bytes(body_bytes);
 
         load.finish_network_result(
             RendererResourceTaskRunner::for_test(),
-            moli_parkable_image::ParkableImageManager::default(),
             Arc::new(Ok(response)),
+            Some(encoded),
             false,
         );
         let outcome = load

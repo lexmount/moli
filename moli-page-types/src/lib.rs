@@ -347,6 +347,20 @@ impl NavigationResponse {
         self.body_bytes().to_vec()
     }
 
+    /// Moves the complete materialized payload out of this response.
+    ///
+    /// The response head remains usable and the response body becomes empty.
+    /// This is intended for handing large payloads to an owning backing store
+    /// without briefly retaining both the response buffer and a clone.
+    pub fn take_body_bytes(&mut self) -> Vec<u8> {
+        std::mem::replace(
+            &mut self.body,
+            ResponseBody::materialized_text(String::new(), Vec::new()),
+        )
+        .try_into_materialized_bytes()
+        .expect("NavigationResponse body should remain materialized")
+    }
+
     pub fn materialized_body(&self) -> ResponseBody {
         self.body
             .clone_materialized()
@@ -3976,6 +3990,30 @@ mod tests {
         assert_eq!(body.diagnostic_text(), "hello world");
         assert_eq!(body.clone_body_bytes(), b"hello world");
         assert_eq!(pool.diagnostics().disk_footprint_bytes, 0);
+    }
+
+    #[test]
+    fn navigation_response_body_can_move_into_an_external_backing_without_cloning() {
+        let mut response = NavigationResponse::from_head_and_body(
+            ResponseHead {
+                final_url: test_url("/image.png"),
+                status: 200,
+                headers: vec![("Content-Type".to_owned(), "image/png".to_owned())],
+                request_cookie_report: None,
+                cookie_set_reports: Vec::new(),
+                redirected: false,
+                redirect_chain: Vec::new(),
+                from_cache: false,
+                negotiated_http_version: None,
+            },
+            String::new(),
+            b"encoded-image".to_vec(),
+        );
+
+        assert_eq!(response.take_body_bytes(), b"encoded-image");
+        assert!(response.body_bytes().is_empty());
+        assert_eq!(response.status, 200);
+        assert_eq!(response.final_url, test_url("/image.png"));
     }
 
     #[test]
