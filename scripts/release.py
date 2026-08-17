@@ -153,7 +153,14 @@ def strip_and_sign(binary: Path, target: str) -> tuple[int, int]:
 
 
 def binary_reported_version(binary: Path) -> str:
-    return run_checked([str(binary), "version"], capture_output=True).stdout.strip()
+    output = run_checked([str(binary), "--version"], capture_output=True).stdout.strip()
+    program, separator, version = output.partition(" ")
+    if program != "moli" or separator != " " or not version or " " in version:
+        raise ReleaseError(
+            "unexpected output from packaged binary `--version`: "
+            f"{output or '<empty>'}"
+        )
+    return version
 
 
 def copy_release_materials(package_dir: Path) -> None:
