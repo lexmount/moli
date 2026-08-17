@@ -158,6 +158,7 @@ mod service_worker;
 mod service_worker_client_message;
 mod service_worker_internal;
 mod shared_worker_client_event;
+mod sideways_writing_mode;
 mod storage_event_delivery;
 mod stylesheet_task;
 mod table_block_sizing;
