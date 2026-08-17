@@ -30,6 +30,10 @@ impl LayoutSource for Source {
         0
     }
 
+    fn root_is_document_element(&self) -> bool {
+        true
+    }
+
     fn document_mode(&self) -> LayoutDocumentMode {
         self.mode
     }
@@ -157,6 +161,60 @@ fn assert_close(actual: f32, expected: f32) {
         (actual - expected).abs() <= 0.01,
         "expected {expected}, got {actual}"
     );
+}
+
+fn empty_body_style(writing_mode: taffy::WritingMode) -> ResolvedLayoutStyle {
+    resolved(Style {
+        margin: Rect {
+            left: length(8.0),
+            right: length(8.0),
+            top: length(8.0),
+            bottom: length(8.0),
+        },
+        ..Style::default()
+    })
+    .with_writing_mode(writing_mode)
+}
+
+#[test]
+fn document_viewport_uses_root_or_propagated_body_writing_mode() {
+    for (name, root_writing_mode) in [
+        ("root", taffy::WritingMode::VerticalLr),
+        ("body", taffy::WritingMode::HorizontalTb),
+    ] {
+        let output = document(
+            LayoutDocumentMode::NoQuirks,
+            resolved(Style::default()).with_writing_mode(root_writing_mode),
+            empty_body_style(taffy::WritingMode::VerticalLr),
+            None,
+        );
+        let html = output
+            .box_model_for_source(0)
+            .unwrap()
+            .border
+            .bounding_rect();
+        let body = output
+            .box_model_for_source(1)
+            .unwrap()
+            .border
+            .bounding_rect();
+
+        assert_close(html.x, 0.0);
+        assert_close(html.y, 0.0);
+        assert_close(html.height, 600.0);
+        assert_close(body.y, 8.0);
+        assert_close(body.width, 0.0);
+        assert_close(body.height, 584.0);
+        assert_eq!(
+            output
+                .element_metrics_for_source(0)
+                .unwrap()
+                .client_size
+                .height,
+            600.0,
+            "{name} writing mode must establish the viewport's logical inline axis"
+        );
+    }
 }
 
 #[test]

@@ -59,6 +59,7 @@ pub(crate) fn compute_world_layout<N>(world: &mut LayoutWorld<N>, viewport: Pain
 where
     N: Copy + Debug + Eq + Hash,
 {
+    let viewport_writing_direction = world.propagate_viewport_writing_direction();
     world.layout_environment = taffy::LayoutEnvironment {
         initial_containing_block_size: Size {
             width: Some(viewport.css_width as f32),
@@ -80,8 +81,10 @@ where
     world.viewport_layout.cache.clear();
     world.viewport_layout.unrounded_layout = Layout::with_order(0);
     world.viewport_layout.final_layout = Layout::with_order(0);
+    world.viewport_layout.writing_mode = viewport_writing_direction.mode;
     world.viewport_layout.style = Style {
         display: Display::Block,
+        direction: viewport_writing_direction.direction,
         size: Size {
             width: Dimension::length(viewport.css_width as f32),
             height: Dimension::length(viewport.css_height as f32),
@@ -925,7 +928,7 @@ where
 
     fn get_writing_mode(&self, node_id: NodeId) -> taffy::WritingMode {
         if self.is_viewport_taffy_node(node_id) {
-            taffy::WritingMode::HorizontalTb
+            self.viewport_layout.writing_mode
         } else {
             self.boxes[LayoutBoxId::from_taffy(node_id).index()]
                 .style
