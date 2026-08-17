@@ -22,7 +22,7 @@ use super::{
     storage_scope_for_window_execution_context, store_request_error,
     sync_transaction_object_store_names_from_database, throw_type_error, transaction_db_key,
     transaction_handle_from_value, unregister_open_database_connection,
-    unregister_readwrite_transaction, v8_string, v8str, validate_storage_bucket_indexed_db_context,
+    unregister_readwrite_transaction, v8_string, v8str, validate_storage_bucket_scope,
     with_indexed_db_manager,
 };
 

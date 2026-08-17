@@ -1247,13 +1247,9 @@ pub(in crate::context_bootstrap) fn storage_bucket_indexed_db_getter_callback<'s
         rv.set_undefined();
         return;
     };
-    let context = IndexedDbStorageBucketContext {
-        identity: handle.identity.clone(),
-    };
-    let value =
-        scoped_storage_bucket_indexed_db_factory(scope, &handle.indexed_db_storage_key, &context)
-            .map(Into::into)
-            .unwrap_or_else(|| v8::undefined(scope).into());
+    let value = scoped_storage_bucket_indexed_db_factory(scope, &handle.identity)
+        .map(Into::into)
+        .unwrap_or_else(|| v8::undefined(scope).into());
     rv.set(value);
 }
 

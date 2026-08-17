@@ -40,7 +40,7 @@ use super::{
     storage_bucket_quota_check_for_object_store, storage_bucket_quota_check_for_transaction,
     take_indexed_db_operations_waiting_for_start, take_indexed_db_task_by_id, transaction_db_key,
     transaction_handle_from_value, unregister_blocked_database_context,
-    unregister_readwrite_transaction, v8_string, v8str, validate_storage_bucket_indexed_db_context,
+    unregister_readwrite_transaction, v8_string, v8str, validate_storage_bucket_scope,
     with_indexed_db_manager,
 };
 use crate::util::enqueue_host_microtask;

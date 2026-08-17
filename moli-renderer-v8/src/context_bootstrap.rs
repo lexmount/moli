@@ -258,7 +258,6 @@ pub(crate) use self::image_data::{
     ImageDataClonePayload, build_image_data_object_from_clone_payload,
     image_data_clone_payload_from_object, is_image_data_object,
 };
-pub(in crate::context_bootstrap) use self::indexed_db::IndexedDbStorageBucketContext;
 pub(crate) use self::indexed_db::{
     IndexedDbTaskId, discard_indexed_db_task_by_id, flush_blocked_indexed_db_requests,
     flush_indexed_db_task_by_id, flush_next_indexed_db_task, indexed_db_has_pending_tasks,

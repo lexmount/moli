@@ -38,7 +38,6 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_factory_delete_database_call
     };
     let _ = ensure_indexed_db_runtime_state(scope);
     let origin = storage_scope.storage_key().to_owned();
-    let bucket_context = storage_scope.bucket_context().cloned();
     let request_storage_scope = storage_scope.clone();
     let Some(request) =
         create_open_request_object(scope, args.this(), owner, request_storage_scope)
@@ -46,9 +45,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_factory_delete_database_call
         rv.set_undefined();
         return;
     };
-    if let Some(context) = bucket_context.as_ref()
-        && let Err(error) = validate_storage_bucket_indexed_db_context(scope, context)
-    {
+    if let Err(error) = validate_storage_bucket_scope(scope, &storage_scope) {
         let error = request_error_object(scope, &error);
         store_request_error(scope, request, error);
         rv.set(request.into());

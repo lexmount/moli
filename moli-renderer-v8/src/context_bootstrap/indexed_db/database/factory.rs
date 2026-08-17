@@ -47,13 +47,13 @@ fn idb_factory_effective_storage_scope<'s>(
         })
         .or_else(|| {
             owner.execution_context().and_then(|execution_context| {
-                storage_scope_for_window_execution_context(scope, execution_context, None)
+                storage_scope_for_window_execution_context(scope, execution_context)
             })
         })
         .or_else(|| {
             context_host_ptr_from_global_bridge(scope)
                 .is_none()
-                .then(|| current_storage_scope(scope, None))
+                .then(|| current_storage_scope(scope))
                 .flatten()
         })?;
     origin_allows_indexed_db(storage_scope.storage_key()).then_some(storage_scope)

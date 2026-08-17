@@ -12,9 +12,7 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_open_request<'s>(
 ) {
     let database_name = name.clone();
     let storage_key = storage_scope.storage_key().to_owned();
-    if let Some(context) = storage_scope.bucket_context()
-        && let Err(error) = validate_storage_bucket_indexed_db_context(scope, context)
-    {
+    if let Err(error) = validate_storage_bucket_scope(scope, &storage_scope) {
         let error = request_error_object(scope, &error);
         store_request_error(scope, request, error);
         return;

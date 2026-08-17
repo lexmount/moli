@@ -1,4 +1,5 @@
 use super::*;
+use moli_storage_service::StorageBucketIdentity;
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -79,7 +80,7 @@ impl IndexedDbExecutionOwner {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct IndexedDbStorageScope {
     storage_key: String,
-    bucket_context: Option<IndexedDbStorageBucketContext>,
+    bucket_identity: Option<StorageBucketIdentity>,
     browser_context_id: String,
     profile_partition_id: String,
 }
@@ -87,24 +88,28 @@ pub(super) struct IndexedDbStorageScope {
 impl IndexedDbStorageScope {
     pub(super) fn new(
         storage_key: impl Into<String>,
-        bucket_context: Option<IndexedDbStorageBucketContext>,
         browser_context_id: impl Into<String>,
         profile_partition_id: impl Into<String>,
     ) -> Self {
         Self {
             storage_key: storage_key.into(),
-            bucket_context,
+            bucket_identity: None,
             browser_context_id: browser_context_id.into(),
             profile_partition_id: profile_partition_id.into(),
         }
+    }
+
+    pub(super) fn with_bucket_identity(mut self, identity: StorageBucketIdentity) -> Self {
+        self.bucket_identity = Some(identity);
+        self
     }
 
     pub(super) fn storage_key(&self) -> &str {
         &self.storage_key
     }
 
-    pub(super) fn bucket_context(&self) -> Option<&IndexedDbStorageBucketContext> {
-        self.bucket_context.as_ref()
+    pub(super) fn bucket_identity(&self) -> Option<&StorageBucketIdentity> {
+        self.bucket_identity.as_ref()
     }
 
     pub(super) fn browser_context_id(&self) -> &str {
@@ -2011,7 +2016,6 @@ mod tests {
 
         let scope = IndexedDbStorageScope::new(
             "storage-key:v1;origin=https://example.test",
-            None,
             "browser-context:test",
             "profile-partition:test",
         );
@@ -2053,7 +2057,6 @@ mod tests {
         let mut table = IndexedDbRuntimeStateTable::default();
         let storage_scope = IndexedDbStorageScope::new(
             "storage-key:v1;origin=https://task.example",
-            None,
             "browser-context:task",
             "profile-partition:task",
         );

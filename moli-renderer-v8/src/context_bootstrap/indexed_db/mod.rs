@@ -19,6 +19,7 @@ mod operation_state;
 mod runtime;
 mod slots;
 mod state;
+mod storage_bucket;
 mod stores;
 mod tasks;
 mod typed_state;
@@ -32,6 +33,10 @@ use self::event_target::*;
 use self::operation_state::*;
 use self::runtime::*;
 use self::slots::*;
+use self::storage_bucket::{
+    storage_bucket_quota_check_for_object_store, storage_bucket_quota_check_for_transaction,
+    validate_storage_bucket_scope,
+};
 use self::stores::*;
 use self::tasks::*;
 use self::typed_state::*;
@@ -66,14 +71,13 @@ pub(crate) use self::install::install_worker_indexed_db_runtime_state;
 pub(super) use self::install::{
     ensure_indexed_db_runtime_state, install_indexed_db_template_bindings, window_indexed_db_getter,
 };
-pub(in crate::context_bootstrap) use self::runtime::scoped_storage_bucket_indexed_db_factory;
 pub use self::state::{
     SharedIndexedDbManager, WeakIndexedDbManager, clear_indexed_db_origin,
     clear_indexed_db_origins_with_prefix, downgrade_indexed_db_manager,
     indexed_db_origin_usage_bytes, indexed_db_origins_with_prefix_usage_bytes,
     new_indexed_db_manager,
 };
-pub(in crate::context_bootstrap) use self::types::IndexedDbStorageBucketContext;
+pub(in crate::context_bootstrap) use self::storage_bucket::scoped_storage_bucket_indexed_db_factory;
 pub use moli_indexeddb::{
     IndexedDbQuotaCheck, Key, ObjectStoreOptions, OpenOptions, TransactionMode,
 };

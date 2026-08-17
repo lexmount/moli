@@ -2,7 +2,6 @@ use super::*;
 
 pub(in crate::context_bootstrap::indexed_db) fn current_storage_scope(
     scope: &mut v8::PinScope<'_, '_>,
-    bucket_context: Option<IndexedDbStorageBucketContext>,
 ) -> Option<IndexedDbStorageScope> {
     if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
         let active_child_handle = crate::native_bridge::active_child_window_handle(scope);
@@ -14,7 +13,6 @@ pub(in crate::context_bootstrap::indexed_db) fn current_storage_scope(
         let identity = host.browser_context_runtime().storage_partition_identity();
         return Some(IndexedDbStorageScope::new(
             storage_key,
-            bucket_context,
             identity.browser_context_id(),
             identity.profile_partition_id(),
         ));
@@ -23,7 +21,6 @@ pub(in crate::context_bootstrap::indexed_db) fn current_storage_scope(
     let identity = crate::worker::worker_storage_partition_identity(scope)?;
     Some(IndexedDbStorageScope::new(
         storage_key,
-        bucket_context,
         identity.browser_context_id(),
         identity.profile_partition_id(),
     ))
@@ -32,7 +29,6 @@ pub(in crate::context_bootstrap::indexed_db) fn current_storage_scope(
 pub(in crate::context_bootstrap::indexed_db) fn storage_scope_for_window_execution_context(
     scope: &mut v8::PinScope<'_, '_>,
     execution_context: crate::native_bridge::WindowExecutionContextIdentity,
-    bucket_context: Option<IndexedDbStorageBucketContext>,
 ) -> Option<IndexedDbStorageScope> {
     let host_ptr = context_host_ptr_from_global_bridge(scope)?;
     let host = unsafe { &mut *host_ptr };
@@ -51,7 +47,6 @@ pub(in crate::context_bootstrap::indexed_db) fn storage_scope_for_window_executi
     let identity = host.browser_context_runtime().storage_partition_identity();
     Some(IndexedDbStorageScope::new(
         storage_context.storage_key().serialized_storage_key(),
-        bucket_context,
         identity.browser_context_id(),
         identity.profile_partition_id(),
     ))
@@ -60,14 +55,12 @@ pub(in crate::context_bootstrap::indexed_db) fn storage_scope_for_window_executi
 pub(in crate::context_bootstrap::indexed_db) fn storage_scope_for_current_partition(
     scope: &mut v8::PinScope<'_, '_>,
     storage_key: impl Into<String>,
-    bucket_context: Option<IndexedDbStorageBucketContext>,
 ) -> Option<IndexedDbStorageScope> {
     if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
         let host = unsafe { &mut *host_ptr };
         let identity = host.browser_context_runtime().storage_partition_identity();
         return Some(IndexedDbStorageScope::new(
             storage_key,
-            bucket_context,
             identity.browser_context_id(),
             identity.profile_partition_id(),
         ));
@@ -75,7 +68,6 @@ pub(in crate::context_bootstrap::indexed_db) fn storage_scope_for_current_partit
     let identity = crate::worker::worker_storage_partition_identity(scope)?;
     Some(IndexedDbStorageScope::new(
         storage_key,
-        bucket_context,
         identity.browser_context_id(),
         identity.profile_partition_id(),
     ))

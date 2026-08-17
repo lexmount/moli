@@ -257,8 +257,15 @@ pub(crate) fn scoped_indexed_db_factory<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     storage_key: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let storage_scope = storage_scope_for_current_partition(scope, storage_key)?;
+    build_scoped_indexed_db_factory(scope, storage_scope)
+}
+
+pub(super) fn build_scoped_indexed_db_factory<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    storage_scope: IndexedDbStorageScope,
+) -> Option<v8::Local<'s, v8::Object>> {
     let factory = build_indexed_db_factory_object(scope)?;
-    let storage_scope = storage_scope_for_current_partition(scope, storage_key, None)?;
     register_indexed_db_wrapper(
         scope,
         factory,
@@ -277,7 +284,7 @@ pub(crate) fn bind_indexed_db_factory_to_window_execution_context<'s>(
         return false;
     }
     let storage_scope = indexed_db_typed_storage_scope(scope, factory)
-        .or_else(|| storage_scope_for_window_execution_context(scope, execution_context, None));
+        .or_else(|| storage_scope_for_window_execution_context(scope, execution_context));
     register_indexed_db_wrapper_with_owner(
         scope,
         factory,
@@ -286,23 +293,6 @@ pub(crate) fn bind_indexed_db_factory_to_window_execution_context<'s>(
         storage_scope,
     );
     true
-}
-
-pub(in crate::context_bootstrap) fn scoped_storage_bucket_indexed_db_factory<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    storage_key: &str,
-    context: &IndexedDbStorageBucketContext,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let factory = scoped_indexed_db_factory(scope, storage_key)?;
-    let storage_scope =
-        storage_scope_for_current_partition(scope, storage_key, Some(context.clone()))?;
-    register_indexed_db_wrapper(
-        scope,
-        factory,
-        IndexedDbWrapperKind::Factory,
-        Some(storage_scope),
-    );
-    Some(factory)
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn indexed_db_factory_storage_scope<'s>(
@@ -335,12 +325,12 @@ fn build_indexed_db_factory_object<'s>(
     let storage_scope = owner
         .execution_context()
         .and_then(|execution_context| {
-            storage_scope_for_window_execution_context(scope, execution_context, None)
+            storage_scope_for_window_execution_context(scope, execution_context)
         })
         .or_else(|| {
             context_host_ptr_from_global_bridge(scope)
                 .is_none()
-                .then(|| current_storage_scope(scope, None))
+                .then(|| current_storage_scope(scope))
                 .flatten()
         });
     register_indexed_db_wrapper_with_owner(
