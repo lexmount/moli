@@ -234,6 +234,32 @@ Getestet wurden 192 öffentliche URLs großer chinesischer und internationaler W
 | PSS-Spitzenwert | 102.46 MiB | 348.82 MiB |
 | Maximale Prozesse / Threads | 1 / 24 | 11 / 123 |
 
+### Lexbench-Headless-Browser (Treiber-Stack-Kompatibilität)
+
+[Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) misst die Laufzeitoberfläche, auf die sich Automatisierungs-Ökosysteme tatsächlich stützen: 1.928 Aufgaben über 13 reale Treiber-Stacks (rohes CDP, Playwright, Puppeteer, Selenium über Molis nativen WebDriver, chromedp, rod, chromiumoxide, ferrum, pydoll und weitere) plus semantische Korrektheit der Web-Plattform, mit zweistufiger Identitätsprüfung, damit kein Kandidatenergebnis stillschweigend von Chrome stammen kann.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-four-engine-overview-dark.png">
+  <img alt="Erfolgsquote von vier Headless-Browsern über 1.928 Aufgaben: Chrome 99,9 %, Moli 80,7 %, Lightpanda 43,8 %, Obscura 39,5 %" src="../assets/lexbench-four-engine-overview-light.png" width="100%">
+</picture>
+
+Run `four_engine_full_20260812` · seed `official20260709` · k=3 ·
+`--score-mode independent --chrome-baseline best_effort`:
+
+| Engine | Binärdatei | Aufgaben bestanden | L2-Semantik |
+| --- | --- | ---: | ---: |
+| Chrome for Testing | 151.0.7922.47 `3b0be9872ea9` | 1,926 / 1,928 (99.90%) | 192 / 192 |
+| **Moli** | **0.1.1 `74e08f8d3eb6`** | **1,556 / 1,928 (80.71%)** | **183 / 192** |
+| Lightpanda | 1.0.0-dev.321 `70f5ab69b0ce` | 845 / 1,928 (43.83%) | 132 / 192 |
+| Obscura | 0.1.11 `42c7eac0f635` | 762 / 1,928 (39.52%) | 84 / 192 |
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-efficiency-map-dark.png">
+  <img alt="Aufgaben-Erfolgsquote gegen den Median des Spitzenspeichers pro Aufgabe: Chrome bei 99,9 % und 697 MiB, Moli bei 80,7 % und 92 MiB, Lightpanda bei 43,8 % und 34 MiB, Obscura bei 39,5 % und 39 MiB" src="../assets/lexbench-efficiency-map-light.png" width="100%">
+</picture>
+
+Die A/B-kalibrierte Ressourcenmessung (gleicher Bench, `jobs=1 k=5`, cgroup-v2-CPU und Prozessbaum-PSS über die Schnittmenge der von allen vier Engines bestandenen Aufgaben, Beobachtereffekt unter 0,9 % je Engine) ergibt für **Moli im Median 100,6 ms CPU und 92 MiB Spitzenspeicher pro Aufgabe gegenüber 687 ms und 697 MiB bei Chrome** – rund 1/7 der CPU und 1/7,5 des Speichers bei 80,7 % bestandener Aufgabenfläche. Die vollständigen Berichte liegen im Bench-Repository unter [`docs/reports/`](https://github.com/lexmount/Lexbench-Headless-Browser/tree/main/docs/reports).
+
 Ein vollständiger Lauf der aktuellen WPT-Auswahl zur Überprüfung von Molis Funktionsumfang als Agenten-Browser verzeichnete **1,612 Millionen bestandene Tests**.
 
 ## Projektumfang

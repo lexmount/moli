@@ -233,6 +233,32 @@ Moli 是一个独立的浏览器内核，而不是对 Chromium 的封装。它�
 | PSS 峰值 | 102.46 MiB | 348.82 MiB |
 | 进程数 / 线程数峰值 | 1 / 24 | 11 / 123 |
 
+### Lexbench-Headless-Browser（driver 栈兼容性）
+
+[Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) 测量的是自动化生态真正依赖的运行时表面：1,928 道任务覆盖 13 个真实 driver 栈（裸 CDP、Playwright、Puppeteer、经 Moli 原生 WebDriver 的 Selenium、chromedp、rod、chromiumoxide、ferrum、pydoll 等），外加 Web 平台语义正确性；每次尝试都要过双重身份校验，候选引擎的成绩不可能悄悄来自 Chrome。
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-four-engine-overview-dark.png">
+  <img alt="四个无头浏览器在 1,928 道任务上的成功率：Chrome 99.9%、Moli 80.7%、Lightpanda 43.8%、Obscura 39.5%" src="../assets/lexbench-four-engine-overview-light.png" width="100%">
+</picture>
+
+Run `four_engine_full_20260812` · seed `official20260709` · k=3 ·
+`--score-mode independent --chrome-baseline best_effort`:
+
+| 引擎 | 二进制 | 任务通过 | L2 语义 |
+| --- | --- | ---: | ---: |
+| Chrome for Testing | 151.0.7922.47 `3b0be9872ea9` | 1,926 / 1,928 (99.90%) | 192 / 192 |
+| **Moli** | **0.1.1 `74e08f8d3eb6`** | **1,556 / 1,928 (80.71%)** | **183 / 192** |
+| Lightpanda | 1.0.0-dev.321 `70f5ab69b0ce` | 845 / 1,928 (43.83%) | 132 / 192 |
+| Obscura | 0.1.11 `42c7eac0f635` | 762 / 1,928 (39.52%) | 84 / 192 |
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-efficiency-map-dark.png">
+  <img alt="任务成功率与单题内存峰值中位数的关系：Chrome 99.9%、697 MiB，Moli 80.7%、92 MiB，Lightpanda 43.8%、34 MiB，Obscura 39.5%、39 MiB" src="../assets/lexbench-efficiency-map-light.png" width="100%">
+</picture>
+
+资源侧由 A/B 校准的配套测量给出（同一 bench，`jobs=1 k=5`，cgroup-v2 CPU 与进程树 PSS，只统计四个引擎共同通过的任务交集，观测干扰每个引擎低于 0.9%）：**Moli 单题 CPU 中位数 100.6 ms、内存峰值 92 MiB，Chrome 为 687 ms 与 697 MiB**——约 1/7 的 CPU 和 1/7.5 的内存，同时通过 80.7% 的任务面。完整报告见 bench 仓库的 [`docs/reports/`](https://github.com/lexmount/Lexbench-Headless-Browser/tree/main/docs/reports)。
+
 在目前用于验证 Moli 智能体浏览器功能范围的 WPT 测试集合中，一次完整测试运行记录了 **161.2 万项通过测试**。
 
 ## 项目范围
