@@ -567,8 +567,10 @@ pub struct ReplacedMetrics {
     /// when the decoded resource has a concrete default object size.
     pub intrinsic_width: Option<f32>,
     pub intrinsic_height: Option<f32>,
-    /// Resource-specific concrete fallback for missing natural axes. When
-    /// absent, the element category supplies its HTML/CSS default.
+    /// Category-specific CSS default natural size for missing natural axes.
+    /// This is distinct from a resource's concrete object size, which may
+    /// already have applied its intrinsic ratio to the default object box.
+    /// When absent, the element category supplies its HTML/CSS default.
     pub default_object_size: Option<ReplacedObjectSize>,
     pub intrinsic_ratio: Option<f32>,
 }

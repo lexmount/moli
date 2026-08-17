@@ -11,7 +11,7 @@ use moli_layout::{
 use crate::{
     document_runtime::DomHandle,
     dom::native::{DomHost, Node},
-    native_bridge::{ImageResourceStatus, JsContextHost},
+    native_bridge::{ImageNaturalSizing, ImageResourceStatus, JsContextHost},
 };
 
 pub(super) struct NativeLayoutSourceView<'a> {
@@ -86,6 +86,23 @@ fn image_layout_uses_fallback(
     status: Option<ImageResourceStatus>,
 ) -> bool {
     !has_selected_source || status == Some(ImageResourceStatus::Failed)
+}
+
+const READY_IMAGE_DEFAULT_OBJECT_SIZE: ReplacedObjectSize = ReplacedObjectSize::new(300.0, 150.0);
+
+fn image_replaced_metrics(natural: Option<ImageNaturalSizing>) -> ReplacedMetrics {
+    let Some(natural) = natural else {
+        return ReplacedMetrics::default();
+    };
+    ReplacedMetrics {
+        intrinsic_width: natural.width,
+        intrinsic_height: natural.height,
+        // A ready image uses the CSS default natural size when its resource
+        // has no natural axes. The decoded concrete surface may already have
+        // fitted its ratio into that box and is not a CSS natural dimension.
+        default_object_size: Some(READY_IMAGE_DEFAULT_OBJECT_SIZE),
+        intrinsic_ratio: natural.ratio,
+    }
 }
 
 impl LayoutSource for NativeLayoutSourceView<'_> {
@@ -232,15 +249,9 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
                     .then_some(intrinsic_width / intrinsic_height),
             });
         }
-        let natural = self.runtime.image_resource_natural_sizing(node);
-        Some(ReplacedMetrics {
-            intrinsic_width: natural.and_then(|sizing| sizing.width),
-            intrinsic_height: natural.and_then(|sizing| sizing.height),
-            default_object_size: natural.map(|sizing| {
-                ReplacedObjectSize::new(sizing.concrete_width, sizing.concrete_height)
-            }),
-            intrinsic_ratio: natural.and_then(|sizing| sizing.ratio),
-        })
+        Some(image_replaced_metrics(
+            self.runtime.image_resource_natural_sizing(node),
+        ))
     }
 
     fn replaced_image(
@@ -763,14 +774,15 @@ fn canvas_dimension_attribute(host: &DomHost, node: DomHandle, name: &str, defau
 mod tests {
     use super::{
         html_element_semantics, html_input_control_kind, image_layout_uses_fallback,
-        layout_element_semantics, layout_element_semantics_for_source, native_flat_children,
-        native_flat_parent,
+        image_replaced_metrics, layout_element_semantics, layout_element_semantics_for_source,
+        native_flat_children, native_flat_parent,
     };
     use crate::dom::native::{DomHost, NativeDom};
-    use crate::native_bridge::ImageResourceStatus;
+    use crate::native_bridge::{ImageNaturalSizing, ImageResourceStatus};
     use moli_layout::{
         LayoutElementCategory, LayoutElementContent, LayoutFormControlKind, LayoutInputControlKind,
-        LayoutListRole, LayoutNamespace, LayoutReplacedKind, LayoutTableRole,
+        LayoutListRole, LayoutNamespace, LayoutReplacedKind, LayoutTableRole, ReplacedMetrics,
+        ReplacedObjectSize,
     };
 
     fn test_host() -> DomHost {
@@ -880,6 +892,25 @@ mod tests {
             Some(ImageResourceStatus::Ready)
         ));
         assert!(!image_layout_uses_fallback(true, None));
+    }
+
+    #[test]
+    fn ready_image_metrics_preserve_natural_axis_provenance() {
+        let metrics = image_replaced_metrics(Some(ImageNaturalSizing {
+            width: None,
+            height: None,
+            ratio: Some(1.0),
+        }));
+        assert_eq!(
+            metrics,
+            ReplacedMetrics {
+                intrinsic_width: None,
+                intrinsic_height: None,
+                default_object_size: Some(ReplacedObjectSize::new(300.0, 150.0)),
+                intrinsic_ratio: Some(1.0),
+            }
+        );
+        assert_eq!(image_replaced_metrics(None), ReplacedMetrics::default());
     }
 
     #[test]

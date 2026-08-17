@@ -6,8 +6,8 @@ mod child_window_surface;
 mod collections;
 mod context_host;
 pub(crate) use context_host::{
-    JsContextHost, JsContextHostPageTaskCapabilities, PostParseAutofocusAdmission,
-    ServiceWorkerWindowOwner,
+    ImageNaturalSizing, JsContextHost, JsContextHostPageTaskCapabilities,
+    PostParseAutofocusAdmission, ServiceWorkerWindowOwner,
 };
 pub(crate) mod document;
 pub(crate) mod element;
