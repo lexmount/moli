@@ -350,7 +350,6 @@ enum OpfsCompletionSink {
     Page(crate::page_task_queue::RendererPageOpfsTaskProducer),
     Worker {
         task_id: u64,
-        generation: u64,
         sender: tokio::sync::mpsc::UnboundedSender<crate::worker::WorkerOpfsCompletion>,
     },
 }
@@ -359,23 +358,15 @@ impl OpfsCompletionSink {
     /// Consume the exact terminal capability.
     ///
     /// A Page capability already contains its task identity. Worker identity
-    /// stays local to the Worker transport because that queue still performs
-    /// its own generation authorization.
+    /// stays local to the Worker transport and is valid for that worker state's
+    /// lifetime.
     fn send(self, result: OpfsTaskResult) {
         match self {
             Self::Page(sender) => {
                 let _ = sender.send(result);
             }
-            Self::Worker {
-                task_id,
-                generation,
-                sender,
-            } => {
-                let _ = sender.send(crate::worker::WorkerOpfsCompletion {
-                    task_id,
-                    generation,
-                    result,
-                });
+            Self::Worker { task_id, sender } => {
+                let _ = sender.send(crate::worker::WorkerOpfsCompletion { task_id, result });
             }
         }
     }
@@ -407,16 +398,11 @@ impl RegisteredOpfsTask {
 
     fn worker(
         task_id: u64,
-        generation: u64,
         sender: tokio::sync::mpsc::UnboundedSender<crate::worker::WorkerOpfsCompletion>,
     ) -> Self {
         Self {
             cancellation: RegisteredOpfsTaskCancellation::Worker { task_id },
-            completion: OpfsCompletionSink::Worker {
-                task_id,
-                generation,
-                sender,
-            },
+            completion: OpfsCompletionSink::Worker { task_id, sender },
         }
     }
 
@@ -443,9 +429,9 @@ fn register_opfs_task<'s>(
             )?;
         return Some(RegisteredOpfsTask::page(task_id, sender));
     }
-    let (task_id, generation, sender) =
+    let (task_id, sender) =
         crate::worker::register_worker_opfs_task(scope, resolver, locator, handle_access)?;
-    Some(RegisteredOpfsTask::worker(task_id, generation, sender))
+    Some(RegisteredOpfsTask::worker(task_id, sender))
 }
 
 fn register_opfs_iterator_task<'s>(
@@ -470,7 +456,7 @@ fn register_opfs_iterator_task<'s>(
             )?;
         return Some(RegisteredOpfsTask::page(task_id, sender));
     }
-    let (task_id, generation, sender) = crate::worker::register_worker_opfs_iterator_task(
+    let (task_id, sender) = crate::worker::register_worker_opfs_iterator_task(
         scope,
         locator,
         registry,
@@ -478,7 +464,7 @@ fn register_opfs_iterator_task<'s>(
         v8::Global::new(scope, iterator),
         handle_access,
     )?;
-    Some(RegisteredOpfsTask::worker(task_id, generation, sender))
+    Some(RegisteredOpfsTask::worker(task_id, sender))
 }
 
 fn register_opfs_move_task<'s>(
@@ -504,7 +490,7 @@ fn register_opfs_move_task<'s>(
                 )?;
         return Some(RegisteredOpfsTask::page(task_id, sender));
     }
-    let (task_id, generation, sender) = crate::worker::register_worker_opfs_move_task(
+    let (task_id, sender) = crate::worker::register_worker_opfs_move_task(
         scope,
         resolver,
         handle,
@@ -512,7 +498,7 @@ fn register_opfs_move_task<'s>(
         locator,
         handle_access,
     )?;
-    Some(RegisteredOpfsTask::worker(task_id, generation, sender))
+    Some(RegisteredOpfsTask::worker(task_id, sender))
 }
 
 fn current_opfs_handle_registry(scope: &mut v8::PinScope<'_, '_>) -> Option<OpfsHandleRegistry> {

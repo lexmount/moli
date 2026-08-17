@@ -11,7 +11,6 @@ pub(crate) enum WebCryptoCompletionSink {
     Page(crate::page_task_queue::RendererPageWebCryptoTaskProducer),
     Worker {
         task_id: u64,
-        generation: u64,
         tx: tokio::sync::mpsc::UnboundedSender<crate::worker::WorkerWebCryptoCompletion>,
     },
 }
@@ -23,16 +22,8 @@ impl WebCryptoCompletionSink {
             WebCryptoCompletionSink::Page(producer) => {
                 let _ = producer.send(result);
             }
-            WebCryptoCompletionSink::Worker {
-                task_id,
-                generation,
-                tx,
-            } => {
-                let _ = tx.send(crate::worker::WorkerWebCryptoCompletion {
-                    task_id,
-                    generation,
-                    result,
-                });
+            WebCryptoCompletionSink::Worker { task_id, tx } => {
+                let _ = tx.send(crate::worker::WorkerWebCryptoCompletion { task_id, result });
             }
         }
     }
@@ -57,13 +48,12 @@ pub(crate) fn register_webcrypto_task<'s>(
             unsafe { &mut *host_ptr }.register_pending_webcrypto_task(scope, promise.resolver())?;
         return Some((handle, WebCryptoCompletionSink::Page(producer)));
     }
-    let (task_id, generation, completion_tx) =
+    let (task_id, completion_tx) =
         crate::worker::register_worker_webcrypto_task(scope, promise.resolver())?;
     Some((
         handle,
         WebCryptoCompletionSink::Worker {
             task_id,
-            generation,
             tx: completion_tx,
         },
     ))

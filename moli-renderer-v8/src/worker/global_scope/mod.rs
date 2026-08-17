@@ -1037,10 +1037,9 @@ pub(super) enum PendingServiceWorkerClientQueryType {
 }
 
 /// A WebCrypto primitive dispatched off the worker event loop to the blocking
-/// pool. The worker owns the resolver; completion is matched back by `task_id`
-/// and dropped if the worker generation advanced (navigation/`close()` reset).
+/// pool. The worker owns the resolver and matches the completion back by the
+/// task id allocated for this worker lifetime.
 pub(super) struct PendingWorkerWebCryptoTask {
-    pub(super) generation: u64,
     pub(super) resolver: v8::Global<v8::PromiseResolver>,
 }
 
@@ -1049,12 +1048,10 @@ pub(super) struct PendingWorkerWebCryptoTask {
 /// page-side typed producer captures its exact Page/Window owner.
 pub(crate) struct WorkerWebCryptoCompletion {
     pub(crate) task_id: u64,
-    pub(crate) generation: u64,
     pub(crate) result: Result<WebCryptoTaskResult, WebCryptoRejection>,
 }
 
 pub(super) struct PendingWorkerOpfsTask {
-    pub(super) generation: u64,
     pub(super) locator: moli_storage_service::StorageBucketLocator,
     pub(super) handle_access: Option<crate::opfs_owner_tasks::OpfsHandleAccessContext>,
     pub(super) settlement: crate::opfs_owner_tasks::OpfsTaskSettlement,
@@ -1086,7 +1083,6 @@ impl WorkerOpfsOwnerState {
 
 pub(crate) struct WorkerOpfsCompletion {
     pub(crate) task_id: u64,
-    pub(crate) generation: u64,
     pub(crate) result: OpfsTaskResult,
 }
 
@@ -1597,15 +1593,8 @@ pub(crate) struct WorkerGlobalState {
     pub(super) pending_webcrypto: HashMap<u64, PendingWorkerWebCryptoTask>,
     /// Worker WebCrypto task id counter (never zero so 0 can mean "unset").
     pub(super) next_webcrypto_task_id: u64,
-    /// Worker WebCrypto generation; bumping it invalidates in-flight completions.
-    /// Workers have no in-place context reset (terminate/`close()` drops the
-    /// whole state and tears down the isolate), so this is currently constant.
-    /// It mirrors the page-side generation guard and would let a future in-place
-    /// worker reset drop stale blocking-task completions without a code change.
-    pub(super) webcrypto_generation: u64,
     /// OPFS completions routed from the partition-owned storage IO sequence.
     pub(super) opfs_completion_tx: mpsc::UnboundedSender<WorkerOpfsCompletion>,
-    pub(super) opfs_generation: u64,
     pub(super) opfs_owner_state: Option<WorkerOpfsOwnerState>,
     /// In-flight Service Worker `periodicsync` events keyed by runtime event id.
     pub(super) pending_service_worker_periodic_sync_events:
@@ -1715,18 +1704,14 @@ impl WorkerGlobalState {
     pub(super) fn register_pending_webcrypto_task(
         &mut self,
         resolver: v8::Global<v8::PromiseResolver>,
-    ) -> (u64, u64, mpsc::UnboundedSender<WorkerWebCryptoCompletion>) {
+    ) -> (u64, mpsc::UnboundedSender<WorkerWebCryptoCompletion>) {
         let task_id = self.next_webcrypto_task_id;
-        self.next_webcrypto_task_id = self.next_webcrypto_task_id.wrapping_add(1).max(1);
-        let generation = self.webcrypto_generation;
-        self.pending_webcrypto.insert(
-            task_id,
-            PendingWorkerWebCryptoTask {
-                generation,
-                resolver,
-            },
-        );
-        (task_id, generation, self.webcrypto_completion_tx.clone())
+        self.next_webcrypto_task_id = task_id
+            .checked_add(1)
+            .expect("worker WebCrypto task id exhausted");
+        self.pending_webcrypto
+            .insert(task_id, PendingWorkerWebCryptoTask { resolver });
+        (task_id, self.webcrypto_completion_tx.clone())
     }
 
     pub(super) fn take_pending_webcrypto_task(
@@ -1741,23 +1726,23 @@ impl WorkerGlobalState {
         locator: moli_storage_service::StorageBucketLocator,
         handle_access: Option<crate::opfs_owner_tasks::OpfsHandleAccessContext>,
         settlement: crate::opfs_owner_tasks::OpfsTaskSettlement,
-    ) -> (u64, u64, mpsc::UnboundedSender<WorkerOpfsCompletion>) {
+    ) -> (u64, mpsc::UnboundedSender<WorkerOpfsCompletion>) {
         let state = self
             .opfs_owner_state
             .get_or_insert_with(WorkerOpfsOwnerState::default);
         let task_id = state.next_task_id;
-        state.next_task_id = state.next_task_id.wrapping_add(1).max(1);
-        let generation = self.opfs_generation;
+        state.next_task_id = task_id
+            .checked_add(1)
+            .expect("worker OPFS task id exhausted");
         state.pending_tasks.insert(
             task_id,
             PendingWorkerOpfsTask {
-                generation,
                 locator,
                 handle_access,
                 settlement,
             },
         );
-        (task_id, generation, self.opfs_completion_tx.clone())
+        (task_id, self.opfs_completion_tx.clone())
     }
 
     pub(super) fn take_pending_opfs_task(&mut self, task_id: u64) -> Option<PendingWorkerOpfsTask> {
@@ -2138,7 +2123,7 @@ impl WorkerGlobalState {
 pub(crate) fn register_worker_webcrypto_task(
     scope: &mut v8::PinScope<'_, '_>,
     resolver: v8::Local<'_, v8::PromiseResolver>,
-) -> Option<(u64, u64, mpsc::UnboundedSender<WorkerWebCryptoCompletion>)> {
+) -> Option<(u64, mpsc::UnboundedSender<WorkerWebCryptoCompletion>)> {
     let state = get_worker_state(scope)?;
     let resolver = v8::Global::new(scope, resolver);
     let mut state = state.borrow_mut();
@@ -2150,7 +2135,7 @@ pub(crate) fn register_worker_opfs_task(
     resolver: v8::Local<'_, v8::PromiseResolver>,
     locator: moli_storage_service::StorageBucketLocator,
     handle_access: Option<crate::opfs_owner_tasks::OpfsHandleAccessContext>,
-) -> Option<(u64, u64, mpsc::UnboundedSender<WorkerOpfsCompletion>)> {
+) -> Option<(u64, mpsc::UnboundedSender<WorkerOpfsCompletion>)> {
     let state = get_worker_state(scope)?;
     let resolver = v8::Global::new(scope, resolver);
     let mut state = state.borrow_mut();
@@ -2168,7 +2153,7 @@ pub(crate) fn register_worker_opfs_iterator_task(
     iterator_id: u32,
     keep_alive: v8::Global<v8::Object>,
     handle_access: Option<crate::opfs_owner_tasks::OpfsHandleAccessContext>,
-) -> Option<(u64, u64, mpsc::UnboundedSender<WorkerOpfsCompletion>)> {
+) -> Option<(u64, mpsc::UnboundedSender<WorkerOpfsCompletion>)> {
     let state = get_worker_state(scope)?;
     let mut state = state.borrow_mut();
     Some(state.register_pending_opfs_task(
@@ -2189,7 +2174,7 @@ pub(crate) fn register_worker_opfs_move_task(
     mutation: crate::opfs_owner_tasks::OpfsHandleMutationGuard,
     locator: moli_storage_service::StorageBucketLocator,
     handle_access: Option<crate::opfs_owner_tasks::OpfsHandleAccessContext>,
-) -> Option<(u64, u64, mpsc::UnboundedSender<WorkerOpfsCompletion>)> {
+) -> Option<(u64, mpsc::UnboundedSender<WorkerOpfsCompletion>)> {
     let state = get_worker_state(scope)?;
     let mut state = state.borrow_mut();
     Some(state.register_pending_opfs_task(
@@ -2262,8 +2247,8 @@ pub(crate) fn cancel_worker_opfs_task(scope: &mut v8::PinScope<'_, '_>, task_id:
 }
 
 /// Settle a worker WebCrypto promise once its blocking task reports back on the
-/// worker event loop. Stale completions (generation advanced by a worker reset)
-/// are dropped without touching the resolver.
+/// worker event loop. Terminating a worker drops this state and its completion
+/// receiver together, so a separate reset generation is unnecessary.
 pub(super) fn drain_worker_webcrypto_completion(
     scope: &mut v8::PinScope<'_, '_>,
     state: &Rc<RefCell<WorkerGlobalState>>,
@@ -2271,15 +2256,9 @@ pub(super) fn drain_worker_webcrypto_completion(
 ) {
     let pending = {
         let mut state = state.borrow_mut();
-        let current_generation = state.webcrypto_generation;
         let Some(pending) = state.take_pending_webcrypto_task(completion.task_id) else {
             return;
         };
-        if pending.generation != completion.generation
-            || completion.generation != current_generation
-        {
-            return;
-        }
         pending
     };
     let resolver = v8::Local::new(scope, &pending.resolver);
@@ -2297,15 +2276,9 @@ pub(super) fn drain_worker_opfs_completion(
 ) {
     let pending = {
         let mut state = state.borrow_mut();
-        let current_generation = state.opfs_generation;
         let Some(pending) = state.take_pending_opfs_task(completion.task_id) else {
             return;
         };
-        if pending.generation != completion.generation
-            || completion.generation != current_generation
-        {
-            return;
-        }
         pending
     };
     let handle_access = pending.handle_access;
