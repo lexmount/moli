@@ -187,3 +187,52 @@ document.body.innerHTML = ['lr','rl'].flatMap(mode => ['auto','min','max'].map(s
     .await
     .expect("atomic intrinsic block-sizing fixture should run");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_remeasures_flex_fit_content_cross_size_after_flexing() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/flex-fit-content-cross-size.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0}
+.container{display:flex;width:100px;align-items:start}
+.item{flex:none;font-size:0;line-height:0}
+#preferred{height:fit-content}
+#minimum{height:0;min-height:fit-content}
+.chunk{display:inline-block;width:120px;height:10px;vertical-align:top}
+</style>`;
+const item = id => `<div class=container><div id=${id} class=item><span class=chunk></span><wbr><span class=chunk></span></div></div>`;
+document.body.innerHTML = item('preferred') + item('minimum');
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(400, 200, 1.0))?
+            .expect("flex fit-content cross-size screenshot layout");
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries(['preferred','minimum'].map(id=>{const r=document.getElementById(id).getBoundingClientRect();return [id,[r.width,r.height]]})))"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        assert_eq!(
+            geometry,
+            serde_json::json!({
+                "preferred": [240, 10],
+                "minimum": [240, 10],
+            }),
+            "content-based cross sizes must use the flexed 240px main size",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("flex fit-content cross-size fixture should run");
+}
