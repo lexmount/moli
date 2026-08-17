@@ -1,8 +1,8 @@
 use std::{thread, time::Duration, time::Instant};
 
 use moli_action_window::{
-    ActionBarrier, ActionBatch, ActionBatchCause, ActionWindow, ActionWindowConfig, ClickAction,
-    MouseButton, PlannedAction, Point, ScrollAction, WindowAction,
+    ActionBarrier, ActionBatch, ActionBatchCause, ActionWindow, ClickAction, MouseButton,
+    PlannedAction, Point, ScrollAction, WindowAction,
 };
 
 const PAGE: &str = "page-1/document-1";
@@ -209,40 +209,31 @@ fn mixed_actions_preserve_surviving_order_and_apply_observers_once() {
 }
 
 #[test]
-fn capacity_batch_executes_before_later_pending_actions() {
+fn sustained_high_volume_stays_in_one_batch_until_deadline() {
     let base = Instant::now();
-    let config = ActionWindowConfig::new(Duration::from_secs(1), 2).expect("valid config");
-    let mut queue = ActionWindow::<&'static str, HostCommand>::new(config);
+    let mut queue = ActionWindow::<&'static str, HostCommand>::new();
     let mut page = FakePage::default();
-    queue.push(PAGE, scroll(10.0), base);
-    queue.push(PAGE, scroll(20.0), at(base, 100));
-
+    for _ in 0..5_000 {
+        let admission = queue.push(PAGE, scroll(1.0), base);
+        assert!(admission.ready_batch().is_none());
+    }
     let admission = queue.push(
         PAGE,
-        WindowAction::Ordered(HostCommand::Marker("after-capacity")),
-        at(base, 200),
+        WindowAction::Ordered(HostCommand::Marker("after-scrolls")),
+        at(base, 999),
     );
-    page.apply(
-        admission
-            .into_ready_batch()
-            .expect("capacity must release first batch"),
-    );
-    assert_eq!(page.scroll_offset, 30.0);
-    assert_eq!(page.render_commits, 1);
+    assert!(admission.ready_batch().is_none());
+    assert_eq!(queue.next_deadline(), Some(at(base, 1_000)));
+    assert_eq!(page.render_commits, 0);
     assert!(page.ordered_log.is_empty());
 
-    let frame = page.capture(&mut queue, ActionBarrier::Screenshot, at(base, 300));
+    page.apply(queue.take_due(at(base, 1_000)).expect("deadline batch"));
 
-    assert_eq!(page.ordered_log, vec![("after-capacity", 30.0)]);
-    assert_eq!(page.render_commits, 2);
-    assert_eq!(frame.render_commit, 2);
-    assert_eq!(
-        page.applied_causes,
-        vec![
-            ActionBatchCause::Capacity,
-            ActionBatchCause::Barrier(ActionBarrier::Screenshot)
-        ]
-    );
+    assert_eq!(page.scroll_offset, 100.0);
+    assert_eq!(page.ordered_log, vec![("after-scrolls", 100.0)]);
+    assert_eq!(page.observer_samples, vec![100.0]);
+    assert_eq!(page.render_commits, 1);
+    assert_eq!(page.applied_causes, vec![ActionBatchCause::Deadline]);
 }
 
 #[test]
@@ -270,8 +261,7 @@ fn late_input_returns_due_batch_before_opening_new_window() {
 
 #[test]
 fn real_timer_driver_uses_public_deadline_and_releases_one_batch() {
-    let config = ActionWindowConfig::new(Duration::from_millis(20), 16).expect("valid config");
-    let mut queue = ActionWindow::<&'static str, HostCommand>::new(config);
+    let mut queue = ActionWindow::<&'static str, HostCommand>::new();
     let mut page = FakePage::default();
     let started_at = Instant::now();
     queue.push(PAGE, scroll(4.0), started_at);

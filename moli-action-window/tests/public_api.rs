@@ -1,38 +1,23 @@
 use std::time::{Duration, Instant};
 
 use moli_action_window::{
-    ActionBarrier, ActionBatchCause, ActionCompaction, ActionWindow, ActionWindowConfig,
-    ActionWindowConfigError, AdmissionState, ClickAction, InputModifiers, MouseButton,
-    PlannedAction, Point, ScrollAction, ScrollDeltaMode, WindowAction,
+    ActionBarrier, ActionBatchCause, ActionCompaction, ActionWindow, AdmissionState, ClickAction,
+    InputModifiers, MouseButton, PlannedAction, Point, ScrollAction, ScrollDeltaMode, WindowAction,
 };
 
 #[test]
 fn default_public_surface_starts_idle_with_one_second_policy() {
-    let window = ActionWindow::<String>::default();
+    let base = Instant::now();
+    let mut window = ActionWindow::<String>::default();
 
     assert!(window.is_idle());
     assert_eq!(window.next_deadline(), None);
-    assert_eq!(window.config().duration(), Duration::from_secs(1));
-    assert_eq!(window.config().max_retained_actions(), 4_096);
-}
-
-#[test]
-fn invalid_config_errors_are_stable_and_actionable() {
-    let zero_duration =
-        ActionWindowConfig::new(Duration::ZERO, 1).expect_err("zero duration must be rejected");
-    let zero_capacity = ActionWindowConfig::new(Duration::from_secs(1), 0)
-        .expect_err("zero capacity must be rejected");
-
-    assert_eq!(zero_duration, ActionWindowConfigError::ZeroDuration);
-    assert_eq!(
-        zero_duration.to_string(),
-        "action window duration must be non-zero"
+    let admission = window.push(
+        "document".to_owned(),
+        WindowAction::Scroll(ScrollAction::pixels(Point::default(), 0.0, 1.0)),
+        base,
     );
-    assert_eq!(zero_capacity, ActionWindowConfigError::ZeroCapacity);
-    assert_eq!(
-        zero_capacity.to_string(),
-        "action window capacity must be non-zero"
-    );
+    assert_eq!(admission.deadline(), base + Duration::from_secs(1));
 }
 
 #[test]
@@ -62,25 +47,24 @@ fn public_api_accepts_owned_scope_and_non_clone_ordered_payload() {
 }
 
 #[test]
-fn admission_can_be_consumed_to_execute_capacity_batch() {
+fn late_admission_can_be_consumed_to_execute_deadline_batch() {
     let base = Instant::now();
-    let config = ActionWindowConfig::new(Duration::from_secs(1), 1).expect("valid config");
-    let mut window = ActionWindow::<u8, &'static str>::new(config);
+    let mut window = ActionWindow::<u8, &'static str>::new();
     window.push(1, WindowAction::Ordered("first"), base);
 
     let admission = window.push(
         1,
         WindowAction::Ordered("second"),
-        base + Duration::from_millis(10),
+        base + Duration::from_secs(1),
     );
 
     assert_eq!(admission.state(), AdmissionState::Rotated);
     assert_eq!(admission.batch_id().get(), 2);
     let ready = admission
         .into_ready_batch()
-        .expect("capacity rotation must return the first batch");
+        .expect("deadline rotation must return the first batch");
     assert_eq!(ready.id().get(), 1);
-    assert_eq!(ready.cause(), ActionBatchCause::Capacity);
+    assert_eq!(ready.cause(), ActionBatchCause::Deadline);
     assert_eq!(ready.admitted_action_count(), 1);
     assert_eq!(ready.retained_action_count(), 1);
 }
@@ -167,10 +151,9 @@ fn canceling_unknown_scope_is_a_noop_and_preserves_deadline() {
 }
 
 #[test]
-fn click_replacement_reports_public_compaction_without_capacity_rotation() {
+fn click_replacement_reports_public_compaction_without_rotation() {
     let base = Instant::now();
-    let config = ActionWindowConfig::new(Duration::from_secs(1), 1).expect("valid config");
-    let mut window = ActionWindow::<u8, ()>::new(config);
+    let mut window = ActionWindow::<u8, ()>::new();
     window.push(
         1,
         WindowAction::Click(ClickAction::new(Point::new(1.0, 1.0), MouseButton::Left, 1)),

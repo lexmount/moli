@@ -1,9 +1,8 @@
 use std::time::{Duration, Instant};
 
 use crate::{
-    ActionBarrier, ActionBatchCause, ActionCompaction, ActionWindow, ActionWindowConfig,
-    ActionWindowConfigError, AdmissionState, ClickAction, InputModifiers, MouseButton,
-    PlannedAction, Point, ScrollAction, WindowAction,
+    ActionBarrier, ActionBatchCause, ActionCompaction, ActionWindow, AdmissionState, ClickAction,
+    InputModifiers, MouseButton, PlannedAction, Point, ScrollAction, WindowAction,
 };
 
 const SCOPE_A: u8 = 1;
@@ -40,26 +39,13 @@ fn scroll_deltas(action: &PlannedAction<u8, &'static str>) -> Vec<f64> {
 }
 
 #[test]
-fn default_config_is_a_one_second_bounded_window() {
-    let config = ActionWindowConfig::default();
-    assert_eq!(config.duration(), Duration::from_secs(1));
-    assert_eq!(config.max_retained_actions(), 4_096);
-}
+fn new_constructor_uses_the_fixed_one_second_window() {
+    let base = Instant::now();
+    let mut window = ActionWindow::<u8, &'static str>::new();
 
-#[test]
-fn config_rejects_zero_duration() {
-    assert_eq!(
-        ActionWindowConfig::new(Duration::ZERO, 1),
-        Err(ActionWindowConfigError::ZeroDuration)
-    );
-}
+    let admission = window.push(SCOPE_A, scroll(1.0), base);
 
-#[test]
-fn config_rejects_zero_capacity() {
-    assert_eq!(
-        ActionWindowConfig::new(Duration::from_secs(1), 0),
-        Err(ActionWindowConfigError::ZeroCapacity)
-    );
+    assert_eq!(admission.deadline(), base + Duration::from_secs(1));
 }
 
 #[test]
@@ -397,28 +383,34 @@ fn modifiers_are_a_composable_bit_set() {
 }
 
 #[test]
-fn capacity_releases_old_batch_and_starts_new_window() {
+fn large_action_count_stays_in_same_window_until_deadline() {
     let base = Instant::now();
-    let config = ActionWindowConfig::new(Duration::from_secs(1), 2).expect("valid config");
-    let mut window = ActionWindow::<u8, &'static str>::new(config);
-    window.push(SCOPE_A, scroll(10.0), base);
-    window.push(SCOPE_A, scroll(20.0), at(base, 100));
+    let mut window = ActionWindow::<u8, &'static str>::new();
+    for index in 0..10_000 {
+        let admission = window.push(SCOPE_A, scroll(index as f64), base);
+        assert_eq!(
+            admission.state(),
+            if index == 0 {
+                AdmissionState::Opened
+            } else {
+                AdmissionState::Joined
+            }
+        );
+        assert!(admission.ready_batch().is_none());
+        assert_eq!(admission.deadline(), at(base, 1_000));
+    }
 
-    let admission = window.push(SCOPE_A, scroll(30.0), at(base, 200));
-    let ready = admission.ready_batch().expect("capacity batch");
-
-    assert_eq!(admission.state(), AdmissionState::Rotated);
-    assert_eq!(ready.cause(), ActionBatchCause::Capacity);
-    assert_eq!(ready.retained_action_count(), 2);
-    assert_eq!(admission.deadline(), at(base, 1_200));
-    assert_eq!(window.pending_retained_action_count(), 1);
+    let batch = window.take_due(at(base, 1_000)).expect("deadline batch");
+    assert_eq!(batch.cause(), ActionBatchCause::Deadline);
+    assert_eq!(batch.admitted_action_count(), 10_000);
+    assert_eq!(batch.retained_action_count(), 10_000);
+    assert_eq!(batch.planned_action_count(), 1);
 }
 
 #[test]
-fn click_replacement_is_allowed_at_capacity() {
+fn click_replacement_never_rotates_window() {
     let base = Instant::now();
-    let config = ActionWindowConfig::new(Duration::from_secs(1), 1).expect("valid config");
-    let mut window = ActionWindow::<u8, &'static str>::new(config);
+    let mut window = ActionWindow::<u8, &'static str>::new();
     window.push(SCOPE_A, click(10.0), base);
 
     let admission = window.push(SCOPE_A, click(20.0), at(base, 100));
@@ -431,10 +423,9 @@ fn click_replacement_is_allowed_at_capacity() {
 }
 
 #[test]
-fn deadline_rotation_takes_precedence_over_capacity_rotation() {
+fn deadline_is_the_only_automatic_rotation_cause() {
     let base = Instant::now();
-    let config = ActionWindowConfig::new(Duration::from_secs(1), 1).expect("valid config");
-    let mut window = ActionWindow::<u8, &'static str>::new(config);
+    let mut window = ActionWindow::<u8, &'static str>::new();
     window.push(SCOPE_A, scroll(10.0), base);
 
     let admission = window.push(SCOPE_A, scroll(20.0), at(base, 1_000));

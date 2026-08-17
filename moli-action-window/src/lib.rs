@@ -20,10 +20,7 @@ pub use batch::{
     ActionBarrier, ActionBatch, ActionBatchCause, ActionBatchId, ActionSequence, PlannedAction,
     ScheduledAction, ScrollRun,
 };
-pub use window::{
-    ActionAdmission, ActionCompaction, ActionWindow, ActionWindowConfig, ActionWindowConfigError,
-    AdmissionState,
-};
+pub use window::{ActionAdmission, ActionCompaction, ActionWindow, AdmissionState};
 
 #[cfg(test)]
 mod tests;

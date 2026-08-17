@@ -1,75 +1,11 @@
-use std::{
-    error::Error,
-    fmt,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use crate::{
     ActionBarrier, ActionBatch, ActionBatchCause, ActionBatchId, ActionSequence, PlannedAction,
     ScheduledAction, ScrollRun, WindowAction,
 };
 
-const DEFAULT_MAX_RETAINED_ACTIONS: usize = 4_096;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ActionWindowConfig {
-    duration: Duration,
-    max_retained_actions: usize,
-}
-
-impl ActionWindowConfig {
-    pub fn new(
-        duration: Duration,
-        max_retained_actions: usize,
-    ) -> Result<Self, ActionWindowConfigError> {
-        if duration.is_zero() {
-            return Err(ActionWindowConfigError::ZeroDuration);
-        }
-        if max_retained_actions == 0 {
-            return Err(ActionWindowConfigError::ZeroCapacity);
-        }
-        Ok(Self {
-            duration,
-            max_retained_actions,
-        })
-    }
-
-    #[must_use]
-    pub const fn duration(self) -> Duration {
-        self.duration
-    }
-
-    #[must_use]
-    pub const fn max_retained_actions(self) -> usize {
-        self.max_retained_actions
-    }
-}
-
-impl Default for ActionWindowConfig {
-    fn default() -> Self {
-        Self {
-            duration: Duration::from_secs(1),
-            max_retained_actions: DEFAULT_MAX_RETAINED_ACTIONS,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ActionWindowConfigError {
-    ZeroDuration,
-    ZeroCapacity,
-}
-
-impl fmt::Display for ActionWindowConfigError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ZeroDuration => formatter.write_str("action window duration must be non-zero"),
-            Self::ZeroCapacity => formatter.write_str("action window capacity must be non-zero"),
-        }
-    }
-}
-
-impl Error for ActionWindowConfigError {}
+const ACTION_WINDOW_DURATION: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ActionCompaction {
@@ -87,8 +23,8 @@ pub enum AdmissionState {
 
 /// Result of admitting an action.
 ///
-/// `ready_batch` is present when the previous window reached its deadline or
-/// capacity. The caller must execute it before the newly admitted action.
+/// `ready_batch` is present when the previous window reached its deadline. The
+/// caller must execute it before the newly admitted action.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ActionAdmission<S, O = ()> {
     state: AdmissionState,
@@ -140,19 +76,6 @@ struct PendingWindow<S, O> {
 }
 
 impl<S: PartialEq, O> PendingWindow<S, O> {
-    fn retained_increment(&self, scope: &S, action: &WindowAction<O>) -> usize {
-        match action {
-            WindowAction::Click(_) if self.has_click(scope) => 0,
-            WindowAction::Scroll(_) | WindowAction::Click(_) | WindowAction::Ordered(_) => 1,
-        }
-    }
-
-    fn has_click(&self, scope: &S) -> bool {
-        self.actions.iter().any(|action| {
-            matches!(action, PlannedAction::Click { scope: click_scope, .. } if click_scope == scope)
-        })
-    }
-
     fn admit(
         &mut self,
         scope: S,
@@ -261,9 +184,8 @@ impl<S: PartialEq, O> PendingWindow<S, O> {
     }
 }
 
-/// A timer-independent, one-shot action window.
+/// A timer-independent, fixed one-second, one-shot action window.
 pub struct ActionWindow<S, O = ()> {
-    config: ActionWindowConfig,
     next_batch_id: u64,
     next_sequence: u64,
     open: Option<PendingWindow<S, O>>,
@@ -271,24 +193,18 @@ pub struct ActionWindow<S, O = ()> {
 
 impl<S, O> Default for ActionWindow<S, O> {
     fn default() -> Self {
-        Self::new(ActionWindowConfig::default())
+        Self::new()
     }
 }
 
 impl<S, O> ActionWindow<S, O> {
     #[must_use]
-    pub const fn new(config: ActionWindowConfig) -> Self {
+    pub const fn new() -> Self {
         Self {
-            config,
             next_batch_id: 1,
             next_sequence: 1,
             open: None,
         }
-    }
-
-    #[must_use]
-    pub const fn config(&self) -> ActionWindowConfig {
-        self.config
     }
 
     #[must_use]
@@ -337,23 +253,16 @@ impl<S: PartialEq, O> ActionWindow<S, O> {
         action: WindowAction<O>,
         admitted_at: Instant,
     ) -> ActionAdmission<S, O> {
-        let should_rotate = self.open.as_ref().and_then(|window| {
-            if admitted_at >= window.deadline {
-                Some(ActionBatchCause::Deadline)
-            } else if window.retained_action_count + window.retained_increment(&scope, &action)
-                > self.config.max_retained_actions
-            {
-                Some(ActionBatchCause::Capacity)
-            } else {
-                None
-            }
-        });
+        let should_rotate = self
+            .open
+            .as_ref()
+            .is_some_and(|window| admitted_at >= window.deadline);
 
-        let ready_batch = should_rotate.map(|cause| {
+        let ready_batch = should_rotate.then(|| {
             self.open
                 .take()
                 .expect("rotation requires an open action window")
-                .into_batch(admitted_at, cause)
+                .into_batch(admitted_at, ActionBatchCause::Deadline)
         });
 
         let state = if ready_batch.is_some() {
@@ -421,7 +330,7 @@ impl<S: PartialEq, O> ActionWindow<S, O> {
 
     fn open_window(&mut self, opened_at: Instant) {
         let deadline = opened_at
-            .checked_add(self.config.duration)
+            .checked_add(ACTION_WINDOW_DURATION)
             .expect("action window deadline exceeds Instant's range");
         let id = self.allocate_batch_id();
         self.open = Some(PendingWindow {

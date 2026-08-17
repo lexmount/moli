@@ -4,9 +4,13 @@
 timer or depending on a renderer.
 
 The first action opens a one-shot window. Its deadline is fixed at
-`first_action_time + window_duration`; later actions join that window without
-moving the deadline. Once a batch is taken, the queue becomes idle and no new
-deadline exists until another action arrives.
+`first_action_time + 1 second`; later actions join that window without moving
+the deadline. Once a batch is taken, the queue becomes idle and no new deadline
+exists until another action arrives.
+
+There is no action-count or memory-capacity cutoff. A window is released only
+by its deadline or an explicit read/synchronization barrier; admitting more
+actions never rejects input or triggers an early batch.
 
 Screenshot, screencast, and other read barriers call `flush` before reading
 rendered state. This immediately returns the current batch and cancels its old
@@ -49,13 +53,13 @@ and be admitted in event-loop order.
 ## Test layers
 
 - Unit tests pin every state transition, deadline edge, compaction rule,
-  counter, cancellation, and capacity behavior with a virtual clock.
+  counter, cancellation, and high-volume behavior with a virtual clock.
 - Public API tests compile the crate as an external consumer, including owned
   scopes, non-`Clone` payloads, consuming batches, all mouse buttons, and
   scroll metadata.
 - Model tests compare the implementation with an independent flat reference
   compactor for all 9,331 mixed sequences up to five actions, plus a
-  deterministic 1,000-action capacity stream.
+  deterministic 1,000-action uninterrupted stream.
 - End-to-end host tests model Page execution, one observer/render commit per
   batch, screenshot and screencast barriers, stale timer wakes, late input,
-  capacity rotation, and a real timer armed from `next_deadline`.
+  sustained high-volume input, and a real timer armed from `next_deadline`.

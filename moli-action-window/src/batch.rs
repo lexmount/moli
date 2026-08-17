@@ -35,7 +35,6 @@ impl ActionSequence {
 pub enum ActionBatchCause {
     Deadline,
     Barrier(ActionBarrier),
-    Capacity,
 }
 
 /// A read or synchronization operation that requires pending actions first.

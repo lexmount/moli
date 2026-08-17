@@ -1,8 +1,8 @@
 use std::time::{Duration, Instant};
 
 use moli_action_window::{
-    ActionBarrier, ActionBatch, ActionBatchCause, ActionWindow, ActionWindowConfig, ClickAction,
-    MouseButton, PlannedAction, Point, ScrollAction, WindowAction,
+    ActionBarrier, ActionBatch, ActionBatchCause, ActionWindow, ClickAction, MouseButton,
+    PlannedAction, Point, ScrollAction, WindowAction,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -198,14 +198,10 @@ fn exhaustive_sequences_up_to_five_actions_match_reference_compactor() {
 }
 
 #[test]
-fn capacity_rotation_matches_independent_reference_across_long_mixed_stream() {
+fn long_mixed_stream_never_rotates_before_deadline_and_matches_reference() {
     let base = Instant::now();
-    let capacity = 7;
-    let config = ActionWindowConfig::new(Duration::from_secs(60), capacity).expect("valid config");
-    let mut window = ActionWindow::<u8, u64>::new(config);
+    let mut window = ActionWindow::<u8, u64>::new();
     let mut reference = Vec::new();
-    let mut admitted_in_window = 0;
-    let mut emitted_batches = 0;
 
     let mut random = 0x4d59_5df4_d0f3_3173_u64;
     for index in 0..1_000_u64 {
@@ -215,27 +211,10 @@ fn capacity_rotation_matches_independent_reference_across_long_mixed_stream() {
         let choice = CHOICES[(random as usize) % CHOICES.len()];
         let marker = index + 1;
         let (scope, action, kind) = action_for(choice, marker);
-        let replaces_click = matches!(kind, FlatKind::Click(_))
-            && reference.iter().any(|existing: &FlatAction| {
-                existing.scope == scope && matches!(existing.kind, FlatKind::Click(_))
-            });
-        let should_rotate = reference.len() + usize::from(!replaces_click) > capacity;
 
         let admission = window.push(scope, action, base + Duration::from_micros(index));
-
-        if should_rotate {
-            let ready = admission
-                .ready_batch()
-                .expect("reference capacity rotation must produce a batch");
-            assert_eq!(ready.cause(), ActionBatchCause::Capacity);
-            assert_matches_reference(ready, &reference, admitted_in_window);
-            assert!(ready.retained_action_count() <= capacity);
-            reference.clear();
-            admitted_in_window = 0;
-            emitted_batches += 1;
-        } else {
-            assert!(admission.ready_batch().is_none());
-        }
+        assert!(admission.ready_batch().is_none());
+        assert_eq!(admission.deadline(), base + Duration::from_secs(1));
 
         reference_admit(
             &mut reference,
@@ -245,21 +224,23 @@ fn capacity_rotation_matches_independent_reference_across_long_mixed_stream() {
                 kind,
             },
         );
-        admitted_in_window += 1;
     }
 
+    assert!(window.take_due(base + Duration::from_millis(999)).is_none());
     let final_batch = window
-        .flush(ActionBarrier::Explicit, base + Duration::from_secs(1))
+        .flush(ActionBarrier::Explicit, base + Duration::from_millis(999))
         .expect("stream should leave a final batch");
-    assert_matches_reference(&final_batch, &reference, admitted_in_window);
-    assert!(emitted_batches > 100, "stream must exercise many rotations");
+    assert_eq!(
+        final_batch.cause(),
+        ActionBatchCause::Barrier(ActionBarrier::Explicit)
+    );
+    assert_matches_reference(&final_batch, &reference, 1_000);
 }
 
 #[test]
-fn every_retained_sequence_is_globally_unique_across_deadline_barrier_and_capacity_batches() {
+fn every_retained_sequence_is_globally_unique_across_deadline_and_barrier_batches() {
     let base = Instant::now();
-    let config = ActionWindowConfig::new(Duration::from_millis(10), 3).expect("valid config");
-    let mut window = ActionWindow::<u8, u64>::new(config);
+    let mut window = ActionWindow::<u8, u64>::new();
     let mut emitted_sequences = Vec::new();
     let mut causes = Vec::new();
 
@@ -273,23 +254,15 @@ fn every_retained_sequence_is_globally_unique_across_deadline_barrier_and_capaci
         assert!(admission.ready_batch().is_none());
     }
 
-    // The fourth retained action crosses capacity before the deadline.
+    // Additional retained actions remain in the same fixed window.
     let (scope, action, _) = action_for(Choice::Scroll(1), 4);
-    let capacity_batch = window
-        .push(scope, action, base + Duration::from_millis(4))
-        .into_ready_batch()
-        .expect("fourth action must rotate the capacity-three window");
-    causes.push(capacity_batch.cause());
-    emitted_sequences.extend(
-        flatten(&capacity_batch)
-            .into_iter()
-            .map(|action| action.sequence),
-    );
+    let admission = window.push(scope, action, base + Duration::from_millis(4));
+    assert!(admission.ready_batch().is_none());
 
-    // This action arrives after the replacement window's fixed 14ms deadline.
+    // This action arrives at the original window's fixed 1001ms deadline.
     let (scope, action, _) = action_for(Choice::Click(0), 5);
     let deadline_batch = window
-        .push(scope, action, base + Duration::from_millis(15))
+        .push(scope, action, base + Duration::from_millis(1_001))
         .into_ready_batch()
         .expect("late action must rotate the deadline batch");
     causes.push(deadline_batch.cause());
@@ -300,9 +273,12 @@ fn every_retained_sequence_is_globally_unique_across_deadline_barrier_and_capaci
     );
 
     let (scope, action, _) = action_for(Choice::Ordered(0), 6);
-    window.push(scope, action, base + Duration::from_millis(16));
+    window.push(scope, action, base + Duration::from_millis(1_002));
     let barrier_batch = window
-        .flush(ActionBarrier::Screenshot, base + Duration::from_millis(17))
+        .flush(
+            ActionBarrier::Screenshot,
+            base + Duration::from_millis(1_003),
+        )
         .expect("barrier must release final window");
     causes.push(barrier_batch.cause());
     emitted_sequences.extend(
@@ -319,7 +295,6 @@ fn every_retained_sequence_is_globally_unique_across_deadline_barrier_and_capaci
     assert_eq!(
         causes,
         vec![
-            ActionBatchCause::Capacity,
             ActionBatchCause::Deadline,
             ActionBatchCause::Barrier(ActionBarrier::Screenshot),
         ]
