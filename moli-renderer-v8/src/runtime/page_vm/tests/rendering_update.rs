@@ -5879,6 +5879,53 @@ document.body.innerHTML = `
     .expect("wrapped column auto-minimum fixture should run");
 }
 
+/// Regression for WPT css/css-flexbox/flexbox-min-height-auto-002a.html.
+///
+/// A replaced item's definite inline size controls its intrinsic contribution
+/// to a shrink-to-fit column flex container. Its larger authored block size
+/// must not transfer back through the intrinsic ratio and widen the container.
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_uses_replaced_width_for_a_column_flex_intrinsic_contribution() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/flex-replaced-inline-contribution.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0}
+#container{display:flex;flex-direction:column;float:left;height:1px}
+#item{box-sizing:content-box;width:30px;height:100px;border:2px solid purple}
+</style>`;
+document.body.innerHTML = `<div id=container><canvas id=item width=16 height=16></canvas></div>`;
+"installed"
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(200, 100, 1.0))?
+            .expect("replaced intrinsic-contribution fixture should retain a root");
+
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                r#"["container", "item"].flatMap(id => {
+  const rect = document.getElementById(id).getBoundingClientRect();
+  return [rect.x, rect.y, rect.width, rect.height];
+}).join("|")"#,
+            )?,
+            "0|0|34|1|0|0|34|34",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("replaced intrinsic-contribution fixture should run");
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn screenshot_preserves_intrinsic_flex_basis_sizing_functions() {
     run_page_vm_async_test(async move {
