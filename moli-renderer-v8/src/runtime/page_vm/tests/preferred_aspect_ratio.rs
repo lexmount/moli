@@ -1,6 +1,95 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
+async fn screenshot_matches_replaced_percentage_intrinsic_contributions() {
+    // Extends css/css-sizing/svg-intrinsic-size-006.html with the corresponding
+    // min-content and calc() contribution cases.
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/replaced-percentage-intrinsic-contributions.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0}
+.outer{display:block;line-height:0}
+.max{width:max-content}
+.min{width:min-content}
+svg{display:block}
+.ratio{aspect-ratio:1/1}
+.percent{width:10%}
+.calc{width:calc(10% + 20px)}
+</style>`;
+document.body.innerHTML = `
+  <div id=max-auto-ratio class="outer max"><svg viewBox="0 0 1 1"></svg></div>
+  <div id=max-authored-ratio class="outer max"><svg class=ratio></svg></div>
+  <div id=max-auto-default class="outer max"><svg></svg></div>
+  <div id=max-percent class="outer max"><svg class="percent ratio" viewBox="0 0 1 1"></svg></div>
+  <div id=max-attribute-percent class="outer max"><svg width="10%" viewBox="0 0 1 1"></svg></div>
+  <div id=max-percent-authored-ratio class="outer max"><svg class="percent ratio"></svg></div>
+  <div id=max-attribute-percent-authored-ratio class="outer max"><svg class=ratio width="10%"></svg></div>
+  <div id=min-percent class="outer min"><svg class="percent ratio" viewBox="0 0 1 1"></svg></div>
+  <div id=max-calc class="outer max"><svg class="calc ratio" viewBox="0 0 1 1"></svg></div>
+  <div id=min-calc class="outer min"><svg class="calc ratio" viewBox="0 0 1 1"></svg></div>
+  <div id=max-fixed class="outer max"><svg class=ratio style="width:100px" viewBox="0 0 1 1"></svg></div>
+  <div id=min-minimum class="outer min"><svg class="percent ratio" style="min-width:50px" viewBox="0 0 1 1"></svg></div>
+  <div id=min-maximum class="outer min"><svg class=ratio style="width:100px;max-width:50%" viewBox="0 0 1 1"></svg></div>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0))?
+            .expect("replaced percentage intrinsic contribution screenshot layout");
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries([...document.querySelectorAll('.outer')].map(outer=>{const child=outer.firstElementChild,o=outer.getBoundingClientRect(),c=child.getBoundingClientRect();return [outer.id,[o.width,o.height,c.width,c.height]]})))"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        for (id, expected) in [
+            ("max-auto-ratio", [0.0, 0.0, 0.0, 0.0]),
+            ("max-authored-ratio", [0.0, 0.0, 0.0, 0.0]),
+            ("max-auto-default", [300.0, 150.0, 300.0, 150.0]),
+            ("max-percent", [300.0, 30.0, 30.0, 30.0]),
+            ("max-attribute-percent", [300.0, 30.0, 30.0, 30.0]),
+            (
+                "max-percent-authored-ratio",
+                [300.0, 30.0, 30.0, 30.0],
+            ),
+            (
+                "max-attribute-percent-authored-ratio",
+                [300.0, 30.0, 30.0, 30.0],
+            ),
+            ("min-percent", [0.0, 0.0, 0.0, 0.0]),
+            ("max-calc", [300.0, 50.0, 50.0, 50.0]),
+            ("min-calc", [0.0, 20.0, 20.0, 20.0]),
+            ("max-fixed", [100.0, 100.0, 100.0, 100.0]),
+            ("min-minimum", [50.0, 50.0, 50.0, 50.0]),
+            ("min-maximum", [0.0, 0.0, 0.0, 0.0]),
+        ] {
+            let actual = geometry[id]
+                .as_array()
+                .unwrap_or_else(|| panic!("missing geometry for {id}: {geometry}"));
+            for (axis, expected) in expected.into_iter().enumerate() {
+                let actual = actual[axis].as_f64().expect("numeric geometry") as f32;
+                assert!(
+                    (actual - expected).abs() <= 0.05,
+                    "{id}[{axis}]: expected {expected}, got {actual}; geometry={geometry}"
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("replaced percentage intrinsic contribution fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_preserves_definite_replaced_axes_across_ratio_constraints() {
     run_page_vm_async_test(async move {
         let loader =
