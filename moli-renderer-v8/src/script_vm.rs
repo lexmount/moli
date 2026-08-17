@@ -930,6 +930,7 @@ pub(super) struct ScriptVm {
     active_touch_point: Option<crate::runtime::RendererTouchPoint>,
     active_touch_points: BTreeMap<i32, ActiveTouchPoint>,
     suppress_compat_mouse_events: bool,
+    active_scrollbar_drag: Option<ActiveScrollbarDrag>,
     active_drag_session: Option<ActiveDragSession>,
     promise_reject_dispatch: PromiseRejectDispatchSlot,
     next_internal_runtime_evaluate_call_id: i32,
@@ -1010,6 +1011,14 @@ pub(super) struct ActiveTouchPoint {
 pub(super) struct ActiveDragSession {
     pub data_transfer: v8::Global<v8::Object>,
     pub drop_allowed: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct ActiveScrollbarDrag {
+    pub source: DomHandle,
+    pub scrollbar: moli_layout::LayoutScrollbarGeometry,
+    pub pointer_origin: f32,
+    pub viewport_to_local: moli_layout::LayoutTransform2D,
 }
 
 struct PageRuntimeObservableContext {
@@ -2306,6 +2315,7 @@ impl ScriptVmDefaultWorldBootstrap {
             active_touch_point: None,
             active_touch_points: BTreeMap::new(),
             suppress_compat_mouse_events: false,
+            active_scrollbar_drag: None,
             active_drag_session: None,
             promise_reject_dispatch,
             next_internal_runtime_evaluate_call_id: 1,

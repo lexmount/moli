@@ -6,6 +6,7 @@ mod geometry;
 mod image;
 mod inline_boxes;
 mod mask;
+mod scrollbar;
 mod table;
 mod text;
 
@@ -19,6 +20,7 @@ use geometry::{BoxAreas, BoxModelBox, canonical_shape, inset_radii};
 use image::project_replaced_image;
 use inline_boxes::project_inline_box_fragments;
 use mask::{CssMaskPlan, inspect_css_mask, project_css_mask};
+use scrollbar::project_scrollbars;
 use style::values::generics::image::GenericImage;
 use table::project_collapsed_table_borders;
 use text::{TextClipMaskScope, project_text, project_text_clip_mask};
@@ -298,6 +300,14 @@ where
                 pop_clips(clip_count, &mut snapshot);
             }
             PaintOrderEvent::BoxOutline(id) => {
+                if id != projection.world.root || capture.paint_root_scrollbars {
+                    let scrollbar_clip = (id != projection.world.root)
+                        .then_some(projection.background_clips[id.index()])
+                        .flatten();
+                    let clip_count = push_clip_chain(projection, scrollbar_clip, &mut snapshot);
+                    project_scrollbars(projection, id, &mut snapshot);
+                    pop_clips(clip_count, &mut snapshot);
+                }
                 let clip_count = push_clip_chain(
                     projection,
                     projection.background_clips[id.index()],

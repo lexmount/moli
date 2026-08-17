@@ -442,7 +442,7 @@ frame.style.cssText = 'position:absolute;left:20px;top:10px;display:block;box-si
 document.body.appendChild(frame);
 
 const child = frame.contentDocument;
-child.documentElement.style.cssText = 'margin:0;padding:0;background:rgb(0,255,255)';
+child.documentElement.style.cssText = 'margin:0;padding:0;background:rgb(0,255,255);scrollbar-width:none';
 child.body.style.cssText = 'position:relative;margin:0;padding:0;width:200px;height:120px';
 
 const viewportSized = child.createElement('div');
@@ -473,7 +473,7 @@ const nested = child.createElement('iframe');
 nested.style.cssText = 'position:absolute;left:10px;top:35px;display:block;box-sizing:border-box;width:40px;height:20px;margin:0;border:2px solid rgb(0,0,255);padding:2px;background:rgb(255,255,0)';
 child.body.appendChild(nested);
 const nestedDocument = nested.contentDocument;
-nestedDocument.documentElement.style.cssText = 'margin:0;padding:0;background:rgb(255,0,255)';
+nestedDocument.documentElement.style.cssText = 'margin:0;padding:0;background:rgb(255,0,255);scrollbar-width:none';
 nestedDocument.body.style.cssText = 'position:relative;margin:0;padding:0;width:80px;height:40px';
 const nestedViewportSized = nestedDocument.createElement('div');
 nestedViewportSized.style.cssText = 'width:50vw;height:100vh;background:rgb(0,0,0)';

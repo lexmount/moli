@@ -24,6 +24,13 @@ pub struct PaintCaptureRequest {
     pub region: PaintCaptureRegion,
     /// Whether CSS background colors and images are included in paint.
     pub include_backgrounds: bool,
+    /// Whether compositor-owned viewport controls are included in this capture.
+    ///
+    /// A bounded CDP clip can still capture the live viewport surface, while a
+    /// capture-beyond-viewport clip paints page content only. Keep that
+    /// distinction outside [`PaintCaptureRegion`], because both use the same
+    /// document-coordinate raster rectangle.
+    pub include_viewport_controls: bool,
     /// Maximum encoded image width in device pixels.
     pub max_width: Option<u32>,
     /// Maximum encoded image height in device pixels.
@@ -36,6 +43,7 @@ impl PaintCaptureRequest {
         Self {
             region: PaintCaptureRegion::Viewport,
             include_backgrounds: true,
+            include_viewport_controls: true,
             max_width: None,
             max_height: None,
         }
@@ -46,6 +54,7 @@ impl PaintCaptureRequest {
         Self {
             region: PaintCaptureRegion::Viewport,
             include_backgrounds: true,
+            include_viewport_controls: true,
             max_width,
             max_height,
         }
@@ -56,6 +65,7 @@ impl PaintCaptureRequest {
         Self {
             region: PaintCaptureRegion::FullDocument,
             include_backgrounds: true,
+            include_viewport_controls: false,
             max_width: None,
             max_height: None,
         }
@@ -66,6 +76,7 @@ impl PaintCaptureRequest {
         Self {
             region: PaintCaptureRegion::PageClip { rect, scale },
             include_backgrounds: true,
+            include_viewport_controls: false,
             max_width: None,
             max_height: None,
         }
@@ -110,6 +121,10 @@ pub(crate) struct ResolvedPaintCapture {
     pub(crate) viewport_to_surface: LayoutTransform2D,
     pub(crate) surface: PaintCaptureSurface,
     pub(crate) include_backgrounds: bool,
+    /// Viewport captures include the root viewport's native controls. Full
+    /// document and page-clip captures paint page content only, matching
+    /// Chromium's compositor capture behavior.
+    pub(crate) paint_root_scrollbars: bool,
 }
 
 impl PaintCaptureRequest {
@@ -120,6 +135,7 @@ impl PaintCaptureRequest {
         content_size: LayoutSize,
     ) -> Result<ResolvedPaintCapture, LayoutError> {
         validate_viewport(viewport)?;
+        let paint_root_scrollbars = self.include_viewport_controls;
         let (viewport_rect, capture_scale) = match self.region {
             PaintCaptureRegion::Viewport => (
                 LayoutRect::new(
@@ -184,6 +200,7 @@ impl PaintCaptureRequest {
                 device_scale,
             ),
             include_backgrounds: self.include_backgrounds,
+            paint_root_scrollbars,
         })
     }
 }
@@ -271,6 +288,7 @@ mod tests {
                 .map_point(LayoutPoint::new(-10.0, -25.0)),
             LayoutPoint::ZERO
         );
+        assert!(!capture.paint_root_scrollbars);
     }
 
     #[test]
@@ -281,6 +299,7 @@ mod tests {
                 scale: 1.5,
             },
             include_backgrounds: true,
+            include_viewport_controls: false,
             max_width: Some(500),
             max_height: Some(200),
         }
@@ -296,6 +315,20 @@ mod tests {
             LayoutRect::new(100.0, 200.0, 200.0, 100.0)
         );
         assert_eq!(capture.surface, PaintCaptureSurface::new(200.0, 100.0, 2.0));
+        assert!(!capture.paint_root_scrollbars);
+    }
+
+    #[test]
+    fn viewport_capture_includes_root_scrollbars() {
+        let capture = PaintCaptureRequest::viewport()
+            .resolve(
+                LayoutViewport::new(800, 600, 1.0),
+                LayoutPoint::ZERO,
+                LayoutSize::new(1200.0, 900.0),
+            )
+            .expect("viewport capture");
+
+        assert!(capture.paint_root_scrollbars);
     }
 
     #[test]

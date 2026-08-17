@@ -121,21 +121,26 @@ where
             })
             .unwrap_or(geometry.layout_origin_in_document);
         let client_size = if is_root {
+            // CSSOM defines root client dimensions from the viewport and only
+            // subtracts an actually-present viewport scrollbar. Stable empty
+            // gutters still reduce root layout/scrollWidth, but not
+            // documentElement.clientWidth/clientHeight.
             LayoutSize::new(
-                self.viewport.css_width as f32,
-                self.viewport.css_height as f32,
+                (self.viewport.css_width as f32
+                    - extent
+                        .vertical_scrollbar
+                        .map_or(0.0, |scrollbar| scrollbar.frame.width))
+                .max(0.0),
+                (self.viewport.css_height as f32
+                    - extent
+                        .horizontal_scrollbar
+                        .map_or(0.0, |scrollbar| scrollbar.frame.height))
+                .max(0.0),
             )
         } else {
-            LayoutSize::new(geometry.padding_box.width, geometry.padding_box.height)
+            LayoutSize::new(extent.scrollport.width, extent.scrollport.height)
         };
-        let scroll_size = if is_root {
-            LayoutSize::new(
-                extent.scroll_size.width.max(self.content_size.width),
-                extent.scroll_size.height.max(self.content_size.height),
-            )
-        } else {
-            extent.scroll_size
-        };
+        let scroll_size = extent.scroll_size;
         Some(LayoutElementMetrics {
             offset_parent,
             offset_position: LayoutPoint::new(
@@ -146,16 +151,28 @@ where
             content_size: LayoutSize::new(geometry.content_box.width, geometry.content_box.height),
             client_size,
             client_border: LayoutPoint::new(
-                geometry.padding_box.x - geometry.border_box.x,
-                geometry.padding_box.y - geometry.border_box.y,
+                if is_root {
+                    0.0
+                } else {
+                    extent.scrollport.x - geometry.border_box.x
+                },
+                if is_root {
+                    0.0
+                } else {
+                    extent.scrollport.y - geometry.border_box.y
+                },
             ),
             scroll_size,
             scroll_offset: extent.applied_offset,
             minimum_scroll_offset: extent.minimum_offset,
             maximum_scroll_offset: extent.maximum_offset,
-            scrollport: coordinate_space
-                .local_to_viewport
-                .map_rect(extent.scrollport),
+            scrollport: if is_root {
+                LayoutTransform2D::IDENTITY.map_rect(extent.scrollport)
+            } else {
+                coordinate_space
+                    .local_to_viewport
+                    .map_rect(extent.scrollport)
+            },
             scrollable_overflow: coordinate_space
                 .local_to_viewport
                 .map_rect(extent.scrollable_overflow),

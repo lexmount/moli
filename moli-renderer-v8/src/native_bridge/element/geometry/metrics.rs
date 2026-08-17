@@ -158,7 +158,7 @@ fn set_node_scroll_position(
     left: f64,
     top: f64,
     queue_observable_effects: bool,
-) {
+) -> bool {
     let (changed, document) = {
         let runtime = unsafe { &mut *runtime_ptr };
         let document = runtime.dom_host().owner_document_handle(handle);
@@ -167,7 +167,7 @@ fn set_node_scroll_position(
             .node_mut(handle)
             .and_then(|node| node.data_mut().as_element_mut())
         else {
-            return;
+            return false;
         };
         (
             element.set_scroll_left(left) | element.set_scroll_top(top),
@@ -176,6 +176,44 @@ fn set_node_scroll_position(
     };
     if changed && queue_observable_effects {
         queue_scroll_observable_effects(scope, runtime_ptr, document, false);
+    }
+    changed
+}
+
+pub(crate) fn perform_scrollbar_scroll_default_action(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    source: DomHandle,
+    axis: moli_layout::LayoutScrollbarAxis,
+    target: f64,
+) -> bool {
+    let (current_x, current_y) = node_scroll_position(unsafe { &*runtime_ptr }, source);
+    let (target_x, target_y) = match axis {
+        moli_layout::LayoutScrollbarAxis::Horizontal => (target, current_y),
+        moli_layout::LayoutScrollbarAxis::Vertical => (current_x, target),
+    };
+    let document = unsafe { &*runtime_ptr }
+        .dom_host()
+        .owner_document_handle(source);
+    let is_document_scroller = document.is_some_and(|document| {
+        unsafe { &*runtime_ptr }
+            .dom_host()
+            .dom()
+            .document_element_handle_for_document(document)
+            == Some(source)
+    });
+    if is_document_scroller {
+        apply_observable_window_scroll(
+            scope,
+            runtime_ptr,
+            source,
+            target_x,
+            target_y,
+            current_x,
+            current_y,
+        )
+    } else {
+        set_node_scroll_position(scope, runtime_ptr, source, target_x, target_y, true)
     }
 }
 

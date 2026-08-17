@@ -4,8 +4,10 @@ use moli_layout::{
     DocumentLayoutServices, LayoutDisplay, LayoutElementCategory, LayoutElementSemantics,
     LayoutError, LayoutFlushReason, LayoutFragmentKind, LayoutNamespace, LayoutPassRequest,
     LayoutPassResult, LayoutPoint, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutRect,
+    LayoutScrollbarColors, LayoutScrollbarGutter, LayoutScrollbarPart, LayoutScrollbarWidth,
     LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutTransform2D, LayoutViewport,
-    PaintColor, ResolvedLayoutStyle, build_layout_pass,
+    PaintBrush, PaintCaptureRequest, PaintColor, PaintFragment, PaintShape, ResolvedLayoutStyle,
+    build_layout_pass,
 };
 use style::Atom;
 use taffy::{
@@ -154,6 +156,474 @@ fn assert_rect(actual: LayoutRect, expected: LayoutRect) {
     assert_close(actual.y, expected.y);
     assert_close(actual.width, expected.width);
     assert_close(actual.height, expected.height);
+}
+
+#[test]
+fn classic_scrollbars_share_layout_paint_and_hit_test_geometry() {
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("scroller", vec![2]),
+        Node::element("oversized-content", Vec::new()),
+    ]);
+    let mut styles = Styles::default();
+    styles
+        .0
+        .insert(0, fixed_size(LayoutDisplay::Block, 320.0, 240.0));
+    let scroller = Style {
+        size: Size {
+            width: length(200.0),
+            height: length(100.0),
+        },
+        overflow: Point {
+            x: Overflow::Scroll,
+            y: Overflow::Scroll,
+        },
+        ..Style::default()
+    };
+    let mut scroller = resolved(LayoutDisplay::Block, scroller);
+    let thumb = PaintColor::new(1.0, 0.0, 0.0, 1.0);
+    let track = PaintColor::new(0.0, 0.0, 1.0, 1.0);
+    scroller.set_scrollbar_style(
+        LayoutScrollbarWidth::Auto,
+        moli_layout::LayoutScrollbarGutter::Auto,
+        Some(LayoutScrollbarColors::new(thumb, track)),
+    );
+    styles.0.insert(1, scroller);
+    styles
+        .0
+        .insert(2, fixed_size(LayoutDisplay::Block, 400.0, 300.0));
+
+    let output = build_with_request(
+        &source,
+        &mut styles,
+        LayoutPassRequest::with_paint(LayoutViewport::new(320, 240, 1.0), LayoutFlushReason::Test),
+    );
+    let metrics = output.element_metrics_for_source(1).unwrap();
+    assert_eq!(
+        metrics.client_size,
+        moli_layout::LayoutSize::new(185.0, 85.0)
+    );
+    assert_eq!(
+        metrics.scroll_size,
+        moli_layout::LayoutSize::new(400.0, 300.0)
+    );
+    assert_eq!(
+        metrics.maximum_scroll_offset,
+        LayoutPoint::new(215.0, 215.0)
+    );
+
+    let box_id = output.source_output(1).unwrap().principal_box.unwrap();
+    let extent = output.scroll_extent(box_id).unwrap();
+    let horizontal = extent.horizontal_scrollbar.expect("horizontal control");
+    let vertical = extent.vertical_scrollbar.expect("vertical control");
+    assert_rect(horizontal.frame, LayoutRect::new(0.0, 85.0, 185.0, 15.0));
+    assert_rect(vertical.frame, LayoutRect::new(185.0, 0.0, 15.0, 85.0));
+    assert_rect(horizontal.track, LayoutRect::new(18.0, 85.0, 149.0, 15.0));
+    assert_rect(horizontal.thumb, LayoutRect::new(18.0, 85.0, 69.0, 15.0));
+    assert_rect(
+        horizontal.painted_thumb,
+        LayoutRect::new(18.0, 88.0, 69.0, 9.0),
+    );
+    assert_rect(vertical.track, LayoutRect::new(185.0, 18.0, 15.0, 49.0));
+    assert_rect(vertical.thumb, LayoutRect::new(185.0, 18.0, 15.0, 17.0));
+    assert_rect(
+        vertical.painted_thumb,
+        LayoutRect::new(188.0, 18.0, 9.0, 17.0),
+    );
+    assert_rect(
+        extent.scrollbar_corner.expect("two-axis corner"),
+        LayoutRect::new(185.0, 85.0, 15.0, 15.0),
+    );
+    let hit = output
+        .scrollbar_hit_test(LayoutPoint::new(190.0, 30.0))
+        .expect("thumb should use the frozen paint geometry");
+    assert_eq!(hit.source, 1);
+    assert_eq!(hit.part, LayoutScrollbarPart::Thumb);
+
+    let snapshot = output.paint_snapshot().expect("paint request");
+    assert!(snapshot.fragments.iter().any(|fragment| matches!(
+        fragment,
+        PaintFragment::Fill {
+            shape: PaintShape::RoundedRect { .. },
+            brush: PaintBrush::Solid(color),
+            ..
+        } if *color == thumb
+    )));
+    assert_eq!(
+        snapshot
+            .fragments
+            .iter()
+            .filter(|fragment| matches!(
+                fragment,
+                PaintFragment::Fill {
+                    shape: PaintShape::Path(_),
+                    brush: PaintBrush::Solid(color),
+                    ..
+                } if *color == thumb
+            ))
+            .count(),
+        4,
+        "each axis paints Chromium's back and forward arrow glyphs"
+    );
+    assert!(snapshot.fragments.iter().any(|fragment| matches!(
+        fragment,
+        PaintFragment::Fill {
+            brush: PaintBrush::Solid(color),
+            ..
+        } if *color == track
+    )));
+}
+
+#[test]
+fn non_viewport_captures_omit_only_the_root_scrollbars() {
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("oversized-content", Vec::new()),
+    ]);
+    let mut styles = Styles::default();
+    let mut root = fixed_size(LayoutDisplay::Block, 320.0, 240.0);
+    let thumb = PaintColor::new(1.0, 0.0, 0.0, 1.0);
+    let track = PaintColor::new(0.0, 0.0, 1.0, 1.0);
+    root.set_scrollbar_style(
+        LayoutScrollbarWidth::Auto,
+        LayoutScrollbarGutter::Auto,
+        Some(LayoutScrollbarColors::new(thumb, track)),
+    );
+    styles.0.insert(0, root);
+    styles
+        .0
+        .insert(1, fixed_size(LayoutDisplay::Block, 640.0, 480.0));
+
+    let scrollbar_fill_count = |snapshot: &moli_layout::PaintSnapshot| {
+        snapshot
+            .fragments
+            .iter()
+            .filter(|fragment| {
+                matches!(
+                    fragment,
+                    PaintFragment::Fill {
+                        brush: PaintBrush::Solid(color),
+                        ..
+                    } if *color == thumb || *color == track
+                )
+            })
+            .count()
+    };
+    let viewport = build_with_request(
+        &source,
+        &mut styles,
+        LayoutPassRequest::with_paint(LayoutViewport::new(320, 240, 1.0), LayoutFlushReason::Test),
+    );
+    assert!(
+        scrollbar_fill_count(viewport.paint_snapshot().expect("viewport paint")) >= 4,
+        "the viewport capture includes both root controls"
+    );
+
+    for capture in [
+        PaintCaptureRequest::full_document(),
+        PaintCaptureRequest::page_clip(LayoutRect::new(0.0, 0.0, 320.0, 240.0), 1.0),
+    ] {
+        let output = build_with_request(
+            &source,
+            &mut styles,
+            LayoutPassRequest::with_capture(
+                LayoutViewport::new(320, 240, 1.0),
+                LayoutFlushReason::Test,
+                capture,
+            ),
+        );
+        assert_eq!(
+            scrollbar_fill_count(output.paint_snapshot().expect("non-viewport paint")),
+            0,
+            "full-document and page-clip captures omit root viewport controls"
+        );
+    }
+}
+
+#[test]
+fn auto_scrollbar_feedback_reveals_the_perpendicular_axis() {
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("scroller", vec![2]),
+        Node::element("content", Vec::new()),
+    ]);
+    let mut styles = Styles::default();
+    styles
+        .0
+        .insert(0, fixed_size(LayoutDisplay::Block, 320.0, 240.0));
+    // Synthetic Taffy `Scroll` maps to CSS `auto` at this adapter boundary.
+    let scroller = Style {
+        size: Size {
+            width: length(200.0),
+            height: length(100.0),
+        },
+        overflow: Point {
+            x: Overflow::Scroll,
+            y: Overflow::Scroll,
+        },
+        ..Style::default()
+    };
+    styles.0.insert(1, resolved(LayoutDisplay::Block, scroller));
+    styles
+        .0
+        .insert(2, fixed_size(LayoutDisplay::Block, 200.0, 200.0));
+
+    let output = build(&source, &mut styles);
+    let metrics = output.element_metrics_for_source(1).unwrap();
+    assert_eq!(
+        metrics.client_size,
+        moli_layout::LayoutSize::new(185.0, 85.0)
+    );
+    assert_eq!(
+        metrics.scroll_size,
+        moli_layout::LayoutSize::new(200.0, 200.0)
+    );
+    let box_id = output.source_output(1).unwrap().principal_box.unwrap();
+    let extent = output.scroll_extent(box_id).unwrap();
+    assert!(extent.horizontal_scrollbar.is_some());
+    assert!(extent.vertical_scrollbar.is_some());
+}
+
+#[test]
+fn thin_and_hidden_scrollbars_match_chromium_client_geometry() {
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("scroller", vec![2]),
+        Node::element("content", Vec::new()),
+    ]);
+    for (width, expected_client, has_controls) in [
+        (LayoutScrollbarWidth::Auto, (185.0, 85.0), true),
+        (LayoutScrollbarWidth::Thin, (190.0, 90.0), true),
+        (LayoutScrollbarWidth::None, (200.0, 100.0), false),
+    ] {
+        let mut styles = Styles::default();
+        styles
+            .0
+            .insert(0, fixed_size(LayoutDisplay::Block, 320.0, 240.0));
+        let style = Style {
+            size: Size {
+                width: length(200.0),
+                height: length(100.0),
+            },
+            overflow: Point {
+                x: Overflow::Scroll,
+                y: Overflow::Scroll,
+            },
+            ..Style::default()
+        };
+        let mut style = resolved(LayoutDisplay::Block, style);
+        style.set_scrollbar_style(width, moli_layout::LayoutScrollbarGutter::Auto, None);
+        styles.0.insert(1, style);
+        styles
+            .0
+            .insert(2, fixed_size(LayoutDisplay::Block, 400.0, 300.0));
+
+        let output = build(&source, &mut styles);
+        let metrics = output.element_metrics_for_source(1).unwrap();
+        assert_eq!(
+            metrics.client_size,
+            moli_layout::LayoutSize::new(expected_client.0, expected_client.1)
+        );
+        let box_id = output.source_output(1).unwrap().principal_box.unwrap();
+        let extent = output.scroll_extent(box_id).unwrap();
+        assert_eq!(extent.horizontal_scrollbar.is_some(), has_controls);
+        assert_eq!(extent.vertical_scrollbar.is_some(), has_controls);
+    }
+}
+
+#[test]
+fn stable_both_edges_reserves_and_offsets_both_chromium_gutters() {
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("scroller", vec![2]),
+        Node::element("auto-width-child", Vec::new()),
+    ]);
+    let mut styles = Styles::default();
+    styles
+        .0
+        .insert(0, fixed_size(LayoutDisplay::Block, 320.0, 240.0));
+    let scroller = Style {
+        size: Size {
+            width: length(200.0),
+            height: length(100.0),
+        },
+        overflow: Point {
+            x: Overflow::Visible,
+            y: Overflow::Scroll,
+        },
+        ..Style::default()
+    };
+    let mut scroller = resolved(LayoutDisplay::Block, scroller);
+    scroller.set_scrollbar_style(
+        LayoutScrollbarWidth::Auto,
+        LayoutScrollbarGutter::StableBothEdges,
+        None,
+    );
+    styles.0.insert(1, scroller);
+    let mut child = Style::default();
+    child.size.height = length(200.0);
+    styles.0.insert(2, resolved(LayoutDisplay::Block, child));
+
+    let output = build(&source, &mut styles);
+    let metrics = output.element_metrics_for_source(1).unwrap();
+    assert_eq!(metrics.client_size.width, 170.0);
+    assert_eq!(metrics.client_border.x, 15.0);
+    let child_id = output.source_output(2).unwrap().principal_box.unwrap();
+    let child_geometry = output.box_geometry(child_id).unwrap();
+    assert_eq!(child_geometry.border_box.width, 170.0);
+    assert_eq!(child_geometry.layout_origin_in_document.x, 15.0);
+
+    let scroller_id = output.source_output(1).unwrap().principal_box.unwrap();
+    let vertical = output
+        .scroll_extent(scroller_id)
+        .unwrap()
+        .vertical_scrollbar
+        .expect("overflowing content keeps the end-edge control");
+    assert_rect(vertical.frame, LayoutRect::new(185.0, 0.0, 15.0, 100.0));
+}
+
+#[test]
+fn root_stable_gutters_are_reserved_by_the_initial_containing_block_once() {
+    for (content_height, expected_client_width) in [(20.0, 320.0), (480.0, 305.0)] {
+        let source = Source(vec![
+            Node::element("root", vec![1]),
+            Node::element("auto-width-child", Vec::new()),
+        ]);
+        let mut styles = Styles::default();
+        let mut root = Style {
+            overflow: Point {
+                x: Overflow::Visible,
+                // Synthetic Taffy `Scroll` maps to CSS `auto` at this adapter boundary.
+                y: Overflow::Scroll,
+            },
+            ..Style::default()
+        };
+        root.size.height = length(240.0);
+        let mut root = resolved(LayoutDisplay::Block, root);
+        root.set_scrollbar_style(
+            LayoutScrollbarWidth::Auto,
+            LayoutScrollbarGutter::StableBothEdges,
+            None,
+        );
+        styles.0.insert(0, root);
+        let mut child = Style::default();
+        child.size.height = length(content_height);
+        styles.0.insert(1, resolved(LayoutDisplay::Block, child));
+
+        let output = build(&source, &mut styles);
+        let root_metrics = output.element_metrics_for_source(0).unwrap();
+        assert_eq!(root_metrics.client_size.width, expected_client_width);
+        assert_eq!(root_metrics.scroll_size.width, 290.0);
+        let root_id = output.source_output(0).unwrap().principal_box.unwrap();
+        let root_geometry = output.box_geometry(root_id).unwrap();
+        assert_rect(
+            root_geometry.border_box,
+            LayoutRect::new(0.0, 0.0, 290.0, 240.0),
+        );
+        assert_eq!(root_geometry.layout_origin_in_document.x, 15.0);
+        let child_id = output.source_output(1).unwrap().principal_box.unwrap();
+        let child_geometry = output.box_geometry(child_id).unwrap();
+        assert_eq!(child_geometry.border_box.width, 290.0);
+        assert_eq!(child_geometry.layout_origin_in_document.x, 15.0);
+    }
+}
+
+#[test]
+fn scrollbar_hit_test_honors_the_same_ancestor_clip_as_paint() {
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("clipper", vec![2]),
+        Node::element("scroller", vec![3]),
+        Node::element("oversized-content", Vec::new()),
+    ]);
+    let mut styles = Styles::default();
+    styles
+        .0
+        .insert(0, fixed_size(LayoutDisplay::Block, 320.0, 240.0));
+    let clipper = Style {
+        size: Size {
+            width: length(50.0),
+            height: length(50.0),
+        },
+        overflow: Point {
+            x: Overflow::Hidden,
+            y: Overflow::Hidden,
+        },
+        ..Style::default()
+    };
+    styles.0.insert(1, resolved(LayoutDisplay::Block, clipper));
+    let scroller = Style {
+        size: Size {
+            width: length(200.0),
+            height: length(100.0),
+        },
+        overflow: Point {
+            x: Overflow::Scroll,
+            y: Overflow::Scroll,
+        },
+        ..Style::default()
+    };
+    styles.0.insert(2, resolved(LayoutDisplay::Block, scroller));
+    styles
+        .0
+        .insert(3, fixed_size(LayoutDisplay::Block, 400.0, 300.0));
+
+    let output = build(&source, &mut styles);
+    let scroller_id = output.source_output(2).unwrap().principal_box.unwrap();
+    assert!(
+        output
+            .scroll_extent(scroller_id)
+            .unwrap()
+            .vertical_scrollbar
+            .is_some()
+    );
+    assert_eq!(
+        output.scrollbar_hit_test(LayoutPoint::new(190.0, 30.0)),
+        None,
+        "a control clipped out of paint must not intercept input"
+    );
+}
+
+#[test]
+fn non_invertible_descendant_does_not_hide_a_valid_root_scrollbar_hit() {
+    let source = Source(vec![
+        Node::element("root", vec![1, 3]),
+        Node::element("singular-scroller", vec![2]),
+        Node::element("nested-content", Vec::new()),
+        Node::element("root-overflow", Vec::new()),
+    ]);
+    let mut styles = Styles::default();
+    styles
+        .0
+        .insert(0, fixed_size(LayoutDisplay::Block, 320.0, 240.0));
+    let scroller = Style {
+        size: Size {
+            width: length(200.0),
+            height: length(100.0),
+        },
+        overflow: Point {
+            x: Overflow::Scroll,
+            y: Overflow::Scroll,
+        },
+        ..Style::default()
+    };
+    styles.0.insert(
+        1,
+        resolved(LayoutDisplay::Block, scroller)
+            .with_2d_transform(LayoutTransform2D::scale(0.0, 0.0)),
+    );
+    styles
+        .0
+        .insert(2, fixed_size(LayoutDisplay::Block, 400.0, 300.0));
+    styles
+        .0
+        .insert(3, fixed_size(LayoutDisplay::Block, 500.0, 500.0));
+
+    let output = build(&source, &mut styles);
+    let hit = output
+        .scrollbar_hit_test(LayoutPoint::new(310.0, 100.0))
+        .expect("root scrollbar remains hittable past a singular candidate");
+    assert_eq!(hit.source, 0);
 }
 
 #[test]
@@ -416,11 +886,11 @@ fn initial_containing_block_absolute_box_expands_root_scrollable_overflow() {
     assert_eq!(root_metrics.scroll_size.height, 450.0);
     assert_rect(
         root_metrics.scrollport.bounding_rect(),
-        LayoutRect::new(0.0, 0.0, 320.0, 240.0),
+        LayoutRect::new(0.0, 0.0, 305.0, 225.0),
     );
     assert_eq!(
         root_metrics.maximum_scroll_offset,
-        LayoutPoint::new(230.0, 210.0)
+        LayoutPoint::new(245.0, 225.0)
     );
 }
 

@@ -304,6 +304,12 @@ pub struct LayoutScrollExtent {
     pub allows_user_scroll_x: bool,
     pub allows_user_scroll_y: bool,
     pub clips_overflow: bool,
+    /// Classic scrollbar controls. Geometry is canonical and consumed by both
+    /// paint and input hit testing.
+    pub horizontal_scrollbar: Option<crate::LayoutScrollbarGeometry>,
+    pub vertical_scrollbar: Option<crate::LayoutScrollbarGeometry>,
+    pub scrollbar_corner: Option<LayoutRect>,
+    pub scrollbar_colors: Option<crate::LayoutScrollbarColors>,
 }
 
 /// Geometry retained for one tree-local box.

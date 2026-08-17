@@ -10,8 +10,9 @@ use crate::{
     LayoutBoxGeometry, LayoutBoxId, LayoutClipChainId, LayoutClipNode, LayoutCoordinateSpaceId,
     LayoutError, LayoutFlushReason, LayoutFragment, LayoutFragmentBoxModel, LayoutFragmentId,
     LayoutFragmentKind, LayoutOutputBoxId, LayoutPassMetrics, LayoutPassResult, LayoutPoint,
-    LayoutRect, LayoutScrollExtent, LayoutSize, LayoutTransform2D, LayoutViewport, LayoutWorld,
-    PaintCaptureRequest, PaintDiagnostic, PaintDiagnosticSeverity,
+    LayoutRect, LayoutScrollExtent, LayoutScrollbarAxis, LayoutScrollbarGeometry, LayoutSize,
+    LayoutTransform2D, LayoutViewport, LayoutWorld, PaintCaptureRequest, PaintDiagnostic,
+    PaintDiagnosticSeverity,
 };
 
 pub(crate) fn finish_layout_pass<N>(
@@ -79,6 +80,31 @@ where
         metrics,
         paint_snapshot,
     ))
+}
+
+/// Samples overflow from the same projection that will freeze scroll extents.
+/// This keeps `overflow:auto` discovery correct for positioned descendants,
+/// transforms, and nested clips without maintaining a second approximation.
+pub(crate) fn overflowing_axes<N>(
+    world: &LayoutWorld<N>,
+    viewport: LayoutViewport,
+) -> Vec<(bool, bool)>
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    let mut projection = OutputProjection::new(world, viewport);
+    projection.build_local_box_geometry();
+    projection.resolve_scrollable_overflow();
+    projection
+        .scroll_extents
+        .into_iter()
+        .map(|extent| {
+            (
+                extent.maximum_offset.x - extent.minimum_offset.x > f32::EPSILON,
+                extent.maximum_offset.y - extent.minimum_offset.y > f32::EPSILON,
+            )
+        })
+        .collect()
 }
 
 /// Blink-like linear paint space for one projected coordinate space.
@@ -235,6 +261,7 @@ where
                 ));
             }
             let id = LayoutOutputBoxId::from_index(index);
+            let is_root = index == self.world.root.index();
             let layout = layout_box.final_layout;
             let border_box = LayoutRect::new(
                 0.0,
@@ -249,13 +276,27 @@ where
                 layout.border.bottom,
                 layout.border.left,
             );
-            let content_box = inset_rect(
+            let vertical_gutter = layout_box
+                .style
+                .scrollbar_gutter_thickness(LayoutScrollbarAxis::Vertical);
+            let vertical_leading_gutter = layout_box
+                .style
+                .scrollbar_leading_gutter_thickness(LayoutScrollbarAxis::Vertical, is_root);
+            let horizontal_gutter = layout_box
+                .style
+                .scrollbar_gutter_thickness(LayoutScrollbarAxis::Horizontal);
+            let mut content_box = inset_rect(
                 padding_box,
                 layout.padding.top,
                 layout.padding.right,
                 layout.padding.bottom,
                 layout.padding.left,
             );
+            if !is_root {
+                content_box.width = (content_box.width - vertical_gutter).max(0.0);
+                content_box.height = (content_box.height - horizontal_gutter).max(0.0);
+                content_box.x += vertical_leading_gutter;
+            }
             let margin_box = outset_rect(
                 border_box,
                 layout.margin.top,
@@ -277,21 +318,48 @@ where
                     PaintDiagnosticSeverity::Warning,
                 ));
             }
-            // Scrollable overflow starts at the padding box. The box's own border is visual
-            // geometry, not descendant content that can be reached by scrolling. Taffy's
-            // `content_size` is measured from the padding-box origin and already includes the
-            // end padding, so keep that coordinate space when projecting its extent.
-            let mut overflow = padding_box;
-            let content_extent = LayoutRect::new(
-                padding_box.x,
-                padding_box.y,
-                padding_box.width.max(layout.content_size.width).max(0.0),
-                padding_box.height.max(layout.content_size.height).max(0.0),
+            let local_scrollport = scrollport_for_box(
+                is_root,
+                self.viewport,
+                padding_box,
+                vertical_gutter,
+                vertical_leading_gutter,
+                horizontal_gutter,
             );
-            overflow = overflow.union(content_extent);
+            // Scrollable overflow starts at the padding-derived scrollport. A
+            // box's own border is visual geometry, not reachable descendant
+            // content, while starting after reserved gutters keeps a
+            // perpendicular scrollbar from manufacturing overflow on its own.
+            // Taffy's content_size is expressed from the padding edge and
+            // equals CSSOM scrollWidth/scrollHeight when it is larger than the
+            // client area.
+            let mut overflow = LayoutRect::new(
+                local_scrollport.x,
+                local_scrollport.y,
+                local_scrollport
+                    .width
+                    .max(layout.content_size.width)
+                    .max(0.0),
+                local_scrollport
+                    .height
+                    .max(layout.content_size.height)
+                    .max(0.0),
+            );
+            if is_root {
+                // The synthetic viewport has already removed root gutters,
+                // so the root's own used padding box can safely contribute
+                // without manufacturing perpendicular overflow.
+                overflow = overflow.union(padding_box);
+            }
             if let Some(context) = layout_box.inline_layout.as_ref() {
                 let origin = LayoutPoint::new(
-                    layout.border.left + layout.padding.left,
+                    layout.border.left
+                        + layout.padding.left
+                        + if is_root {
+                            0.0
+                        } else {
+                            vertical_leading_gutter
+                        },
                     layout.border.top + layout.padding.top,
                 );
                 for line in &context.fragments.lines {
@@ -397,23 +465,43 @@ where
             let geometry = &self.boxes[index];
             let overflow = self.scrollable_overflow[index];
             let is_root = index == self.world.root.index();
+            let vertical_gutter = self.world.boxes[index]
+                .style
+                .scrollbar_gutter_thickness(LayoutScrollbarAxis::Vertical);
+            let vertical_leading_gutter = self.world.boxes[index]
+                .style
+                .scrollbar_leading_gutter_thickness(LayoutScrollbarAxis::Vertical, is_root);
+            let horizontal_gutter = self.world.boxes[index]
+                .style
+                .scrollbar_gutter_thickness(LayoutScrollbarAxis::Horizontal);
+            let scrollbar_thickness = self.world.boxes[index].style.scrollbar_control_thickness();
+            let rtl =
+                self.world.boxes[index].style.direction() == crate::style::InlineDirection::Rtl;
+            let local_scrollport = scrollport_for_box(
+                is_root,
+                self.viewport,
+                geometry.padding_box,
+                vertical_gutter,
+                vertical_leading_gutter,
+                horizontal_gutter,
+            );
             let scrollport = if is_root {
                 LayoutRect::new(
+                    vertical_leading_gutter,
                     0.0,
-                    0.0,
-                    self.viewport.css_width as f32,
-                    self.viewport.css_height as f32,
+                    local_scrollport.width,
+                    local_scrollport.height,
                 )
             } else {
-                geometry.padding_box
+                local_scrollport
             };
             let scroll_size = LayoutSize::new(
-                scrollport
+                local_scrollport
                     .width
-                    .max((overflow.right() - scrollport.x).max(0.0)),
-                scrollport
+                    .max((overflow.right() - local_scrollport.x).max(0.0)),
+                local_scrollport
                     .height
-                    .max((overflow.bottom() - scrollport.y).max(0.0)),
+                    .max((overflow.bottom() - local_scrollport.y).max(0.0)),
             );
             let horizontal_range = (scroll_size.width - scrollport.width).max(0.0);
             let vertical_range = (scroll_size.height - scrollport.height).max(0.0);
@@ -443,6 +531,69 @@ where
             } else {
                 LayoutPoint::ZERO
             };
+            let horizontal_scrollbar = self.world.boxes[index]
+                .style
+                .has_scrollbar(
+                    LayoutScrollbarAxis::Horizontal,
+                    is_root,
+                    horizontal_range > f32::EPSILON,
+                )
+                .then(|| {
+                    let frame = LayoutRect::new(
+                        scrollport.x,
+                        scrollport.bottom(),
+                        scrollport.width,
+                        horizontal_gutter,
+                    );
+                    LayoutScrollbarGeometry::new(
+                        LayoutScrollbarAxis::Horizontal,
+                        frame,
+                        minimum_offset.x,
+                        maximum_offset.x,
+                        applied.x,
+                        scrollport.width,
+                        scroll_size.width,
+                    )
+                })
+                .filter(|bar| bar.frame.width > 0.0 && bar.frame.height > 0.0);
+            let vertical_scrollbar = self.world.boxes[index]
+                .style
+                .has_scrollbar(
+                    LayoutScrollbarAxis::Vertical,
+                    is_root,
+                    vertical_range > f32::EPSILON,
+                )
+                .then(|| {
+                    let x = if rtl && !is_root {
+                        scrollport.x - scrollbar_thickness
+                    } else {
+                        scrollport.right()
+                    };
+                    let frame =
+                        LayoutRect::new(x, scrollport.y, scrollbar_thickness, scrollport.height);
+                    LayoutScrollbarGeometry::new(
+                        LayoutScrollbarAxis::Vertical,
+                        frame,
+                        minimum_offset.y,
+                        maximum_offset.y,
+                        applied.y,
+                        scrollport.height,
+                        scroll_size.height,
+                    )
+                })
+                .filter(|bar| bar.frame.width > 0.0 && bar.frame.height > 0.0);
+            let scrollbar_corner = (vertical_gutter > 0.0 && horizontal_gutter > 0.0).then(|| {
+                LayoutRect::new(
+                    if rtl && !is_root {
+                        scrollport.x - scrollbar_thickness
+                    } else {
+                        scrollport.right()
+                    },
+                    scrollport.bottom(),
+                    scrollbar_thickness,
+                    horizontal_gutter,
+                )
+            });
             self.scroll_extents.push(LayoutScrollExtent {
                 scrollport,
                 scrollable_overflow: overflow,
@@ -451,11 +602,27 @@ where
                 minimum_offset,
                 maximum_offset,
                 is_scroll_container,
-                allows_user_scroll_x: is_root
-                    || self.world.boxes[index].style.allows_user_scroll_x(),
-                allows_user_scroll_y: is_root
-                    || self.world.boxes[index].style.allows_user_scroll_y(),
+                allows_user_scroll_x: self.world.boxes[index].style.allows_user_scroll_x()
+                    || (is_root
+                        && matches!(
+                            self.world.boxes[index]
+                                .style
+                                .overflow_mode(LayoutScrollbarAxis::Horizontal),
+                            crate::style::LayoutOverflowMode::Visible
+                        )),
+                allows_user_scroll_y: self.world.boxes[index].style.allows_user_scroll_y()
+                    || (is_root
+                        && matches!(
+                            self.world.boxes[index]
+                                .style
+                                .overflow_mode(LayoutScrollbarAxis::Vertical),
+                            crate::style::LayoutOverflowMode::Visible
+                        )),
                 clips_overflow: self.world.boxes[index].style.clips_overflow(),
+                horizontal_scrollbar,
+                vertical_scrollbar,
+                scrollbar_corner,
+                scrollbar_colors: self.world.boxes[index].style.scrollbar_colors(),
             });
         }
         self.viewport_scroll = self.scroll_extents[self.world.root.index()].applied_offset;
@@ -527,8 +694,15 @@ where
                 continue;
             };
             let layout = layout_box.final_layout;
+            let vertical_leading_gutter = if index == self.world.root.index() {
+                0.0
+            } else {
+                layout_box
+                    .style
+                    .scrollbar_leading_gutter_thickness(LayoutScrollbarAxis::Vertical, false)
+            };
             let content_origin = LayoutPoint::new(
-                layout.border.left + layout.padding.left,
+                layout.border.left + layout.padding.left + vertical_leading_gutter,
                 layout.border.top + layout.padding.top,
             );
             for line in &context.fragments.lines {
@@ -605,12 +779,7 @@ where
             None,
             None,
             viewport_space,
-            LayoutRect::new(
-                0.0,
-                0.0,
-                self.viewport.css_width as f32,
-                self.viewport.css_height as f32,
-            ),
+            self.scroll_extents[self.world.root.index()].scrollport,
         );
         self.assign_box_clip_metadata(self.world.root, Some(viewport_clip), viewport_clip);
         self.paint_events = build_paint_order(self.world);
@@ -672,7 +841,7 @@ where
                     box_clip,
                     Some(LayoutOutputBoxId::from_index(index)),
                     self.boxes[index].coordinate_space,
-                    self.boxes[index].padding_box,
+                    self.scroll_extents[index].scrollport,
                 ))
             } else {
                 box_clip
@@ -1035,6 +1204,29 @@ fn finite_point(point: LayoutPoint) -> LayoutPoint {
     )
 }
 
+fn scrollport_for_box(
+    is_root: bool,
+    viewport: LayoutViewport,
+    padding_box: LayoutRect,
+    vertical_gutter: f32,
+    vertical_leading_gutter: f32,
+    horizontal_gutter: f32,
+) -> LayoutRect {
+    if is_root {
+        return LayoutRect::new(
+            0.0,
+            0.0,
+            (viewport.css_width as f32 - vertical_gutter).max(0.0),
+            (viewport.css_height as f32 - horizontal_gutter).max(0.0),
+        );
+    }
+    let mut scrollport = padding_box;
+    scrollport.width = (scrollport.width - vertical_gutter).max(0.0);
+    scrollport.height = (scrollport.height - horizontal_gutter).max(0.0);
+    scrollport.x += vertical_leading_gutter;
+    scrollport
+}
+
 fn inline_fragment_box_model<N>(
     world: &LayoutWorld<N>,
     owner_index: usize,
@@ -1045,8 +1237,15 @@ where
 {
     let owner = &world.boxes[owner_index];
     let owner_layout = owner.final_layout;
+    let vertical_leading_gutter = if owner_index == world.root.index() {
+        0.0
+    } else {
+        owner
+            .style
+            .scrollbar_leading_gutter_thickness(LayoutScrollbarAxis::Vertical, false)
+    };
     let content_origin = LayoutPoint::new(
-        owner_layout.border.left + owner_layout.padding.left,
+        owner_layout.border.left + owner_layout.padding.left + vertical_leading_gutter,
         owner_layout.border.top + owner_layout.padding.top,
     );
     let containing_width = (owner_layout.size.width
@@ -1054,7 +1253,14 @@ where
         - owner_layout.border.right
         - owner_layout.padding.left
         - owner_layout.padding.right)
-        .max(0.0);
+        - if owner_index == world.root.index() {
+            0.0
+        } else {
+            owner
+                .style
+                .scrollbar_gutter_thickness(LayoutScrollbarAxis::Vertical)
+        };
+    let containing_width = containing_width.max(0.0);
     let inline_box = &world.boxes[fragment.box_id.index()];
     let style = &inline_box.style;
     let padding = style.taffy.padding.resolve_or_zero(

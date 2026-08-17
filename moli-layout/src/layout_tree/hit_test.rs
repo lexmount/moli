@@ -6,6 +6,7 @@ use super::{
     model::{
         LayoutBoxModel, LayoutClipChainId, LayoutCoordinateSpaceId, LayoutFragmentId,
         LayoutFragmentKind, LayoutOutputBoxId, LayoutPoint, LayoutQuad, LayoutRect,
+        LayoutTransform2D,
     },
     tree::FrozenLayoutTree,
 };
@@ -86,6 +87,70 @@ where
             }
         }
         hits
+    }
+
+    /// Resolves a native classic-scrollbar control before ordinary DOM hit
+    /// testing. Scrollbar controls are user-agent chrome and do not dispatch a
+    /// pointer/mouse target into the scrolled content.
+    pub fn scrollbar_hit_test(
+        &self,
+        viewport_point: LayoutPoint,
+    ) -> Option<crate::LayoutScrollbarHit<N>> {
+        let mut candidates = self
+            .boxes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, layout_box)| {
+                if !layout_box.visible || !layout_box.pointer_events {
+                    return None;
+                }
+                let source = layout_box.geometry_source.or(layout_box.hit_source)?;
+                let paint_order = layout_box
+                    .fragments
+                    .iter()
+                    .filter_map(|id| self.fragment(*id)?.paint_order)
+                    .max()
+                    .unwrap_or(0);
+                Some((std::cmp::Reverse(paint_order), index, source))
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_by_key(|candidate| candidate.0);
+
+        for (_, index, source) in candidates {
+            let layout_box = &self.boxes[index];
+            let is_root = layout_box.id == self.root_box;
+            if !is_root && !self.point_passes_clip_chain(viewport_point, layout_box.clip_chain) {
+                continue;
+            }
+            let local_to_viewport = if is_root {
+                LayoutTransform2D::IDENTITY
+            } else {
+                layout_box.coordinate_space.local_to_viewport
+            };
+            let Some(viewport_to_local) = local_to_viewport.inverse() else {
+                continue;
+            };
+            let local_point = viewport_to_local.map_point(viewport_point);
+            for scrollbar in [
+                layout_box.scroll_extent.vertical_scrollbar,
+                layout_box.scroll_extent.horizontal_scrollbar,
+            ] {
+                let Some(scrollbar) = scrollbar else {
+                    continue;
+                };
+                let Some(part) = scrollbar.part_at(local_point) else {
+                    continue;
+                };
+                return Some(crate::LayoutScrollbarHit {
+                    source,
+                    scrollbar,
+                    part,
+                    local_point,
+                    viewport_to_local,
+                });
+            }
+        }
+        None
     }
 
     pub fn caret_position(&self, viewport_point: LayoutPoint) -> Option<LayoutCaretPosition<N>> {

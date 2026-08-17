@@ -1,8 +1,12 @@
 use crate::{
-    DocumentLayoutServices, LayoutError, LayoutFlushReason, LayoutPassResult, LayoutSource,
-    LayoutStyleResolver, LayoutViewport, PaintCaptureRequest, PaintSnapshot, PaintViewport,
-    build_layout_world, form::prepare_form_controls, inline::prepare_inline_contexts,
-    list::prepare_list_markers, projection::finish_layout_pass, taffy_tree::compute_world_layout,
+    DocumentLayoutServices, LayoutError, LayoutFlushReason, LayoutPassResult, LayoutScrollbarAxis,
+    LayoutSource, LayoutStyleResolver, LayoutViewport, PaintCaptureRequest, PaintSnapshot,
+    PaintViewport, build_layout_world,
+    form::prepare_form_controls,
+    inline::prepare_inline_contexts,
+    list::prepare_list_markers,
+    projection::{finish_layout_pass, overflowing_axes},
+    taffy_tree::compute_world_layout,
 };
 use std::collections::HashMap;
 use std::time::Instant;
@@ -168,7 +172,7 @@ where
     prepare_list_markers(&mut world);
     prepare_form_controls(&mut world);
     prepare_inline_contexts(&mut world, services);
-    compute_world_layout(&mut world, request.viewport);
+    compute_world_layout_with_scrollbars(&mut world, request.viewport);
     let mut embedded_frames = HashMap::new();
     if request.requests_paint() {
         for index in 0..world.boxes.len() {
@@ -215,6 +219,79 @@ where
         request.paint_capture,
         &mut embedded_frames,
     )
+}
+
+/// Resolves `overflow:auto` with the same monotonic feedback loop used by
+/// classic browser scrollbars: lay out without an automatic gutter, reveal
+/// every axis that overflows, then repeat because one gutter can make the
+/// perpendicular axis overflow. Each axis changes at most once.
+fn compute_world_layout_with_scrollbars<N>(
+    world: &mut crate::LayoutWorld<N>,
+    viewport: LayoutViewport,
+) where
+    N: Copy + std::fmt::Debug + Eq + std::hash::Hash,
+{
+    let root = world.root.index();
+    for (index, layout_box) in world.boxes.iter_mut().enumerate() {
+        layout_box.style.prepare_scrollbar_layout(index == root);
+    }
+
+    loop {
+        compute_world_layout(world, viewport);
+        let overflow = overflowing_axes(world, viewport);
+        let mut changed = false;
+        for (index, ((overflow_x, overflow_y), layout_box)) in
+            overflow.into_iter().zip(world.boxes.iter_mut()).enumerate()
+        {
+            let is_root = index == root;
+            changed |= layout_box.style.reveal_auto_scrollbar(
+                LayoutScrollbarAxis::Horizontal,
+                is_root,
+                overflow_x,
+            );
+            changed |= layout_box.style.reveal_auto_scrollbar(
+                LayoutScrollbarAxis::Vertical,
+                is_root,
+                overflow_y,
+            );
+        }
+        if !changed {
+            break;
+        }
+    }
+    offset_leading_scrollbar_gutter_children(world);
+}
+
+/// Taffy's scalar scrollbar reservation shrinks the available inline size but
+/// always leaves its origin at zero. Move direct numeric children into a
+/// physical leading gutter (RTL classic bars and `both-edges`) after the final
+/// layout, preserving all of Taffy's percentage and flex/grid sizing work.
+fn offset_leading_scrollbar_gutter_children<N>(world: &mut crate::LayoutWorld<N>)
+where
+    N: Copy + std::fmt::Debug + Eq + std::hash::Hash,
+{
+    let root = world.root;
+    let offsets = world
+        .boxes
+        .iter()
+        .map(|layout_box| {
+            layout_box.layout_parent.map_or(0.0, |parent| {
+                if parent == root {
+                    // The synthetic initial containing block already places
+                    // the root and its descendants after a root leading
+                    // gutter.
+                    0.0
+                } else {
+                    world.boxes[parent.index()]
+                        .style
+                        .scrollbar_leading_gutter_thickness(LayoutScrollbarAxis::Vertical, false)
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    for (layout_box, offset) in world.boxes.iter_mut().zip(offsets) {
+        layout_box.final_layout.location.x += offset;
+    }
 }
 
 fn css_viewport_dimension(value: f32) -> u32 {

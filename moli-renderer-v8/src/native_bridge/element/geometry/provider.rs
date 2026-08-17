@@ -4,7 +4,7 @@ use moli_layout::{
     LayoutAnswers, LayoutBoxModel, LayoutCaretPosition, LayoutDocumentMetrics,
     LayoutElementMetrics, LayoutError, LayoutFlushReason, LayoutHit, LayoutIntersectionGeometry,
     LayoutPassMetrics, LayoutPoint, LayoutQuad, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch,
-    LayoutScrollContainerMetrics, LayoutScrollIntoViewGeometry, LayoutSize,
+    LayoutScrollContainerMetrics, LayoutScrollIntoViewGeometry, LayoutScrollbarHit, LayoutSize,
 };
 
 use super::layout::{
@@ -297,6 +297,27 @@ pub(crate) fn observable_input_hit_test(
     point: LayoutPoint,
 ) -> Result<Option<DomHandle>, LayoutError> {
     observable_deep_hit_test(runtime, document, point, false)
+}
+
+pub(crate) fn observable_scrollbar_hit_test(
+    runtime: &JsContextHost,
+    document: DomHandle,
+    point: LayoutPoint,
+) -> Result<Option<LayoutScrollbarHit<DomHandle>>, LayoutError> {
+    if !runtime.layout_policy().uses_real_layout() {
+        return Ok(None);
+    }
+    // Publish a current tree through the normal on-demand layout boundary;
+    // the control hit itself deliberately does not become another query model.
+    let _ = observable_geometry_batch(
+        runtime,
+        document,
+        LayoutFlushReason::HitTest,
+        &LayoutQueryBatch::new(vec![LayoutQuery::DocumentMetrics]),
+    )?;
+    Ok(runtime
+        .with_latest_layout_tree_for_document(document, |tree| tree.scrollbar_hit_test(point))
+        .flatten())
 }
 
 pub(crate) fn observable_deep_hit_test(

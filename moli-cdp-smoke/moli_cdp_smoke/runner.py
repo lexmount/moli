@@ -21,6 +21,7 @@ from .groups.action_window import run_action_window_group
 from .groups.agent_browser import run_agent_browser_group
 from .groups.agent_episode import run_agent_episode_group
 from .groups.browser_semantics import run_browser_semantics_group, run_target_semantics_group
+from .groups.classic_scrollbar import run_classic_scrollbar_group
 from .groups.cdp_use import run_cdp_use_group
 from .groups.chrome_remote_interface import run_chrome_remote_interface_group
 from .groups.chromium_cdp import run_chromium_cdp_group, run_computed_style_group
@@ -155,6 +156,12 @@ RAW_GROUPS: tuple[SmokeGroup, ...] = (
 )
 
 PAGE_GROUPS: tuple[SmokeGroup, ...] = (
+    SmokeGroup(
+        "classic-scrollbar",
+        "Cross-engine classic scrollbar layout, paint, and raw CDP thumb dragging.",
+        "page",
+        run_classic_scrollbar_group,
+    ),
     SmokeGroup(
         "xhr-sync-semantics",
         "Cross-engine Chromium/WPT synchronous XHR events, restrictions, failures, reset, and CDP Network projection.",

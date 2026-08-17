@@ -8,7 +8,7 @@ use super::inspector::{
     current_selection_range, current_selection_state, is_space_key, key_target_info,
     option_is_disabled, radio_group_members,
 };
-use super::{ActiveDragSession, ActiveTouchPoint, ScriptVm};
+use super::{ActiveDragSession, ActiveScrollbarDrag, ActiveTouchPoint, ScriptVm};
 use crate::document_runtime::DomHandle;
 use crate::dom::native::{Node, SelectedFile};
 use crate::native_bridge::PointerCaptureDispatchEvent;
@@ -22,10 +22,10 @@ use crate::native_bridge::element::{
     construct_pointer_event_with_related_target_and_modifiers, construct_simple_event,
     construct_touch_event, construct_touch_event_with_points, construct_wheel_event,
     contenteditable_editing_host, dispatch_public_event, observable_input_hit_test,
-    perform_drop_default_action, perform_mouse_focus_default_action,
-    perform_wheel_scroll_default_action, replace_contenteditable_selection,
-    replace_text_control_selection, select_contenteditable_contents,
-    text_control_set_selection_range_internal,
+    observable_scrollbar_hit_test, perform_drop_default_action, perform_mouse_focus_default_action,
+    perform_scrollbar_scroll_default_action, perform_wheel_scroll_default_action,
+    replace_contenteditable_selection, replace_text_control_selection,
+    select_contenteditable_contents, text_control_set_selection_range_internal,
     text_control_set_selection_range_with_direction_internal, text_control_value, update_focus,
 };
 use crate::runtime::{
@@ -473,6 +473,12 @@ impl ScriptVm {
             }
         }
         let buttons = buttons.unwrap_or(self.pressed_mouse_buttons);
+
+        if let Some(outcome) =
+            self.dispatch_native_scrollbar_mouse_event(x, y, event_name, button, buttons)?
+        {
+            return Ok(outcome);
+        }
 
         let hit_handle = observable_input_hit_test(
             &self._context_host.borrow(),
@@ -930,6 +936,104 @@ impl ScriptVm {
         });
         self.suppress_compat_mouse_events = suppress_compat_mouse_events;
         result
+    }
+
+    fn dispatch_native_scrollbar_mouse_event(
+        &mut self,
+        x: f64,
+        y: f64,
+        event_name: &str,
+        button: i32,
+        buttons: i32,
+    ) -> Result<Option<RendererInputDispatchOutcome>> {
+        if let Some(drag) = self.active_scrollbar_drag {
+            match event_name {
+                "mousemove" if buttons & 1 != 0 => {
+                    let local = drag
+                        .viewport_to_local
+                        .map_point(moli_layout::LayoutPoint::new(x as f32, y as f32));
+                    let coordinate = match drag.scrollbar.axis {
+                        moli_layout::LayoutScrollbarAxis::Horizontal => local.x,
+                        moli_layout::LayoutScrollbarAxis::Vertical => local.y,
+                    };
+                    let target = (drag.scrollbar.current_offset
+                        + (coordinate - drag.pointer_origin) * drag.scrollbar.drag_ratio())
+                    .clamp(drag.scrollbar.minimum_offset, drag.scrollbar.maximum_offset);
+                    self.with_default_context_scope(|scope, runtime_ptr| {
+                        perform_scrollbar_scroll_default_action(
+                            scope,
+                            runtime_ptr,
+                            drag.source,
+                            drag.scrollbar.axis,
+                            f64::from(target),
+                        );
+                        Ok(())
+                    })?;
+                    return Ok(Some(input_dispatch_outcome(true)));
+                }
+                "mouseup" if button == 0 => {
+                    self.active_scrollbar_drag = None;
+                    return Ok(Some(input_dispatch_outcome(true)));
+                }
+                "mousemove" => {
+                    self.active_scrollbar_drag = None;
+                }
+                _ => return Ok(Some(input_dispatch_outcome(true))),
+            }
+        }
+
+        if !matches!(event_name, "mousedown" | "mouseup" | "mousemove") {
+            return Ok(None);
+        }
+        let document = self.document_runtime.document_handle();
+        let Some(hit) = observable_scrollbar_hit_test(
+            &self._context_host.borrow(),
+            document,
+            moli_layout::LayoutPoint::new(x as f32, y as f32),
+        )?
+        else {
+            return Ok(None);
+        };
+        if event_name == "mousedown" && button == 0 {
+            match hit.part {
+                moli_layout::LayoutScrollbarPart::Thumb => {
+                    self.active_scrollbar_drag = Some(ActiveScrollbarDrag {
+                        source: hit.source,
+                        scrollbar: hit.scrollbar,
+                        pointer_origin: hit.scrollbar.local_axis_coordinate(hit.local_point),
+                        viewport_to_local: hit.viewport_to_local,
+                    });
+                }
+                part => {
+                    let target = match part {
+                        moli_layout::LayoutScrollbarPart::BackButton => {
+                            hit.scrollbar.line_target(false)
+                        }
+                        moli_layout::LayoutScrollbarPart::ForwardButton => {
+                            hit.scrollbar.line_target(true)
+                        }
+                        moli_layout::LayoutScrollbarPart::BackTrack => {
+                            hit.scrollbar.page_target(false)
+                        }
+                        moli_layout::LayoutScrollbarPart::ForwardTrack => {
+                            hit.scrollbar.page_target(true)
+                        }
+                        moli_layout::LayoutScrollbarPart::Thumb => unreachable!(),
+                    };
+                    self.with_default_context_scope(|scope, runtime_ptr| {
+                        perform_scrollbar_scroll_default_action(
+                            scope,
+                            runtime_ptr,
+                            hit.source,
+                            hit.scrollbar.axis,
+                            f64::from(target),
+                        );
+                        Ok(())
+                    })?;
+                }
+            }
+        }
+        Ok(Some(input_dispatch_outcome(true)))
     }
 
     pub(crate) fn dispatch_touch_event_at_point(

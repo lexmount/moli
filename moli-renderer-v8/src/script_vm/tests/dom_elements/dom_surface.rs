@@ -419,6 +419,391 @@ fn wheel_default_action_scrolls_the_innermost_container_then_chains_to_the_root(
 }
 
 #[test]
+fn classic_scrollbar_metrics_and_thumb_drag_match_chromium_without_dom_mouse_events() {
+    let mut vm = new_storage_test_vm("https://classic-scrollbar-input.test/");
+    vm.eval(
+        r#"
+        (() => {
+          if (!document.documentElement) {
+            document.appendChild(document.createElement("html"));
+          }
+          if (!document.body) {
+            document.documentElement.appendChild(document.createElement("body"));
+          }
+          document.documentElement.style.margin = "0";
+          document.body.style.margin = "0";
+          document.body.innerHTML = `
+            <div id="scroller" style="width:200px;height:100px;overflow:auto">
+              <div style="width:400px;height:300px"></div>
+            </div>
+            <div id="thin" style="width:200px;height:100px;overflow:scroll;scrollbar-width:thin">
+              <div style="width:400px;height:300px"></div>
+            </div>
+            <div id="none" style="width:200px;height:100px;overflow:scroll;scrollbar-width:none">
+              <div style="width:400px;height:300px"></div>
+            </div>
+            <div id="stable" style="width:200px;height:100px;overflow:auto;scrollbar-gutter:stable">
+              <div style="height:20px"></div>
+            </div>
+            <div id="both" style="width:200px;height:100px;overflow:auto;scrollbar-gutter:stable both-edges">
+              <div style="height:20px"></div>
+            </div>
+            <div id="feedback" style="width:200px;height:100px;overflow:auto">
+              <div style="width:200px;height:200px"></div>
+            </div>
+            <div id="rtl" style="width:200px;height:100px;overflow:auto;direction:rtl;scrollbar-color:red blue">
+              <div style="width:400px;height:300px"></div>
+            </div>`;
+          window.__scrollbarDomEvents = [];
+          for (const name of ["pointerdown", "pointermove", "pointerup", "mousedown", "mousemove", "mouseup", "click"]) {
+            document.addEventListener(name, () => window.__scrollbarDomEvents.push(name), true);
+          }
+        })()
+        "#,
+    )
+    .expect("scrollbar fixture should initialize");
+    refresh_layout_for_test(&mut vm);
+
+    assert_eq!(
+        vm.eval(
+            r#"JSON.stringify([
+              scroller.clientWidth, scroller.clientHeight,
+              thin.clientWidth, thin.clientHeight,
+              none.clientWidth, none.clientHeight,
+              scroller.scrollWidth, scroller.scrollHeight,
+              stable.clientWidth, stable.clientLeft, stable.firstElementChild.offsetWidth,
+              Math.round(stable.firstElementChild.getBoundingClientRect().left),
+              both.clientWidth, both.clientLeft, both.firstElementChild.offsetWidth,
+              Math.round(both.firstElementChild.getBoundingClientRect().left),
+              feedback.clientWidth, feedback.clientHeight,
+              rtl.clientWidth, rtl.clientLeft, rtl.scrollWidth, rtl.scrollLeft
+            ])"#,
+        )
+        .expect("classic scrollbar metrics should evaluate"),
+        "[185,85,190,90,200,100,400,300,185,0,185,0,170,15,170,15,185,85,185,15,400,0]"
+    );
+
+    vm.dispatch_mouse_event_at_point(190.0, 30.0, "mousedown", 0, Some(1), 0.0, 0.0)
+        .expect("vertical thumb press should dispatch");
+    vm.dispatch_mouse_event_at_point(190.0, 50.0, "mousemove", -1, Some(1), 0.0, 0.0)
+        .expect("vertical thumb drag should dispatch");
+    vm.dispatch_mouse_event_at_point(190.0, 50.0, "mouseup", 0, Some(0), 0.0, 0.0)
+        .expect("vertical thumb release should dispatch");
+
+    vm.dispatch_mouse_event_at_point(50.0, 90.0, "mousedown", 0, Some(1), 0.0, 0.0)
+        .expect("horizontal thumb press should dispatch");
+    vm.dispatch_mouse_event_at_point(90.0, 90.0, "mousemove", -1, Some(1), 0.0, 0.0)
+        .expect("horizontal thumb drag should dispatch");
+    vm.dispatch_mouse_event_at_point(90.0, 90.0, "mouseup", 0, Some(0), 0.0, 0.0)
+        .expect("horizontal thumb release should dispatch");
+
+    let before_controls = vm
+        .eval("scroller.scrollTop")
+        .expect("pre-control scrollTop should evaluate")
+        .parse::<f64>()
+        .expect("pre-control scrollTop should be numeric");
+    vm.dispatch_mouse_event_at_point(190.0, 5.0, "mousedown", 0, Some(1), 0.0, 0.0)
+        .expect("back button press should dispatch");
+    vm.dispatch_mouse_event_at_point(190.0, 5.0, "mouseup", 0, Some(0), 0.0, 0.0)
+        .expect("back button release should dispatch");
+    let after_back = vm
+        .eval("scroller.scrollTop")
+        .expect("back-button scrollTop should evaluate")
+        .parse::<f64>()
+        .expect("back-button scrollTop should be numeric");
+    assert!((after_back - (before_controls - 40.0)).abs() < 0.01);
+
+    vm.dispatch_mouse_event_at_point(190.0, 80.0, "mousedown", 0, Some(1), 0.0, 0.0)
+        .expect("forward button press should dispatch");
+    vm.dispatch_mouse_event_at_point(190.0, 80.0, "mouseup", 0, Some(0), 0.0, 0.0)
+        .expect("forward button release should dispatch");
+    let after_forward = vm
+        .eval("scroller.scrollTop")
+        .expect("forward-button scrollTop should evaluate")
+        .parse::<f64>()
+        .expect("forward-button scrollTop should be numeric");
+    assert!((after_forward - before_controls).abs() < 0.01);
+
+    vm.dispatch_mouse_event_at_point(190.0, 60.0, "mousedown", 0, Some(1), 0.0, 0.0)
+        .expect("forward track press should dispatch");
+    vm.dispatch_mouse_event_at_point(190.0, 60.0, "mouseup", 0, Some(0), 0.0, 0.0)
+        .expect("forward track release should dispatch");
+    let after_track = vm
+        .eval("scroller.scrollTop")
+        .expect("track scrollTop should evaluate")
+        .parse::<f64>()
+        .expect("track scrollTop should be numeric");
+    assert!((after_track - (before_controls + 85.0 * 0.875)).abs() < 0.01);
+
+    let result = vm
+        .eval(
+            r#"JSON.stringify({
+              left: scroller.scrollLeft,
+              top: scroller.scrollTop,
+              events: window.__scrollbarDomEvents
+            })"#,
+        )
+        .expect("post-drag scroll state should evaluate");
+    let result: serde_json::Value = serde_json::from_str(&result).expect("scroll result JSON");
+    assert!(result["left"].as_f64().is_some_and(|value| value > 50.0));
+    assert!(result["top"].as_f64().is_some_and(|value| value > 100.0));
+    assert_eq!(result["events"], serde_json::json!([]));
+}
+
+#[test]
+fn root_classic_scrollbars_stay_viewport_fixed_and_drive_window_scroll() {
+    let mut vm = new_storage_test_vm("https://root-classic-scrollbar.test/");
+    vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+        inner_width: 800,
+        inner_height: 600,
+        outer_width: 800,
+        outer_height: 600,
+        device_pixel_ratio: 1.0,
+        screen_width: 1920,
+        screen_height: 1080,
+        screen_avail_width: 1920,
+        screen_avail_height: 1040,
+    }))
+    .expect("root scrollbar viewport surface should update");
+    vm.eval(
+        r#"
+        (() => {
+          if (!document.documentElement) {
+            document.appendChild(document.createElement("html"));
+          }
+          if (!document.body) {
+            document.documentElement.appendChild(document.createElement("body"));
+          }
+          document.documentElement.style.margin = "0";
+          document.body.style.margin = "0";
+          document.body.innerHTML = '<div style="width:1600px;height:1200px"></div>';
+          window.__rootScrollbarDomEvents = [];
+          for (const name of ["pointerdown", "pointermove", "pointerup", "mousedown", "mousemove", "mouseup", "click"]) {
+            document.addEventListener(name, () => __rootScrollbarDomEvents.push(name), true);
+          }
+        })()
+        "#,
+    )
+    .expect("root scrollbar fixture should initialize");
+    refresh_layout_for_test(&mut vm);
+    assert_eq!(
+        vm.eval(
+            "JSON.stringify([document.documentElement.clientWidth, document.documentElement.clientHeight, document.documentElement.scrollWidth, document.documentElement.scrollHeight])"
+        )
+        .expect("root scrollbar metrics should evaluate"),
+        "[785,585,1600,1200]"
+    );
+
+    let horizontal_hit = crate::native_bridge::element::observable_scrollbar_hit_test(
+        &vm._context_host.borrow(),
+        vm.document_runtime.document_handle(),
+        moli_layout::LayoutPoint::new(30.0, 590.0),
+    )
+    .expect("root horizontal scrollbar hit test should succeed");
+    assert!(
+        horizontal_hit.is_some_and(|hit| {
+            hit.scrollbar.axis == moli_layout::LayoutScrollbarAxis::Horizontal
+                && hit.part == moli_layout::LayoutScrollbarPart::Thumb
+        }),
+        "root horizontal thumb should own its viewport-fixed coordinates: {horizontal_hit:?}"
+    );
+
+    vm.dispatch_mouse_event_at_point(790.0, 30.0, "mousedown", 0, Some(1), 0.0, 0.0)
+        .expect("root vertical thumb press should dispatch");
+    vm.dispatch_mouse_event_at_point(790.0, 100.0, "mousemove", -1, Some(1), 0.0, 0.0)
+        .expect("root vertical thumb drag should dispatch");
+    vm.dispatch_mouse_event_at_point(790.0, 100.0, "mouseup", 0, Some(0), 0.0, 0.0)
+        .expect("root vertical thumb release should dispatch");
+    let horizontal_hit_after_vertical_drag =
+        crate::native_bridge::element::observable_scrollbar_hit_test(
+            &vm._context_host.borrow(),
+            vm.document_runtime.document_handle(),
+            moli_layout::LayoutPoint::new(30.0, 590.0),
+        )
+        .expect("post-scroll root horizontal scrollbar hit test should succeed");
+    let root_extent_after_vertical_drag = vm
+        ._context_host
+        .borrow()
+        .with_latest_layout_tree_for_document(vm.document_runtime.document_handle(), |tree| {
+            tree.scroll_extent(tree.root_box).cloned()
+        })
+        .flatten();
+    assert!(
+        horizontal_hit_after_vertical_drag.is_some_and(|hit| {
+            hit.scrollbar.axis == moli_layout::LayoutScrollbarAxis::Horizontal
+                && hit.part == moli_layout::LayoutScrollbarPart::Thumb
+        }),
+        "root horizontal thumb should stay viewport-fixed after vertical scrolling: hit={horizontal_hit_after_vertical_drag:?}, extent={root_extent_after_vertical_drag:?}"
+    );
+    vm.dispatch_mouse_event_at_point(30.0, 590.0, "mousedown", 0, Some(1), 0.0, 0.0)
+        .expect("root horizontal thumb press should dispatch");
+    vm.dispatch_mouse_event_at_point(100.0, 590.0, "mousemove", -1, Some(1), 0.0, 0.0)
+        .expect("root horizontal thumb drag should dispatch");
+    vm.dispatch_mouse_event_at_point(100.0, 590.0, "mouseup", 0, Some(0), 0.0, 0.0)
+        .expect("root horizontal thumb release should dispatch");
+
+    let result = vm
+        .eval("JSON.stringify([window.scrollX, window.scrollY, __rootScrollbarDomEvents])")
+        .expect("root post-drag state should evaluate");
+    let result: serde_json::Value = serde_json::from_str(&result).expect("root scroll JSON");
+    assert!(
+        result[0].as_f64().is_some_and(|value| value > 100.0),
+        "root horizontal thumb drag should advance scrollX: {result}"
+    );
+    assert!(
+        result[1].as_f64().is_some_and(|value| value > 100.0),
+        "root vertical thumb drag should advance scrollY: {result}"
+    );
+    assert_eq!(result[2], serde_json::json!([]));
+}
+
+#[test]
+fn root_scrollbar_gutters_size_the_initial_containing_block_once() {
+    let mut vm = new_storage_test_vm("https://root-scrollbar-containing-block.test/");
+    vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+        inner_width: 800,
+        inner_height: 600,
+        outer_width: 800,
+        outer_height: 600,
+        device_pixel_ratio: 1.0,
+        screen_width: 1920,
+        screen_height: 1080,
+        screen_avail_width: 1920,
+        screen_avail_height: 1040,
+    }))
+    .expect("root gutter viewport surface should update");
+    vm.eval(
+        r#"
+        (() => {
+          if (!document.documentElement) {
+            document.appendChild(document.createElement("html"));
+          }
+          if (!document.body) {
+            document.documentElement.appendChild(document.createElement("body"));
+          }
+          document.documentElement.style.cssText = "margin:0;height:100%";
+          document.body.style.cssText = "margin:0;height:100%";
+          document.body.innerHTML = `
+            <div id="wide" style="width:1600px;height:50%"></div>
+            <div id="fixed" style="position:fixed;right:0;bottom:0;width:10px;height:10px"></div>`;
+        })()
+        "#,
+    )
+    .expect("percentage root overflow fixture should initialize");
+    refresh_layout_for_test(&mut vm);
+
+    assert_eq!(
+        vm.eval(
+            r#"
+            JSON.stringify((() => {
+              const html = document.documentElement.getBoundingClientRect();
+              const body = document.body.getBoundingClientRect();
+              const wideRect = wide.getBoundingClientRect();
+              const fixedRect = fixed.getBoundingClientRect();
+              return [
+                document.documentElement.clientWidth,
+                document.documentElement.clientHeight,
+                document.documentElement.scrollWidth,
+                document.documentElement.scrollHeight,
+                html.x, html.width, html.height,
+                body.x, body.width, body.height,
+                wideRect.width, wideRect.height,
+                fixedRect.x, fixedRect.y
+              ];
+            })())
+            "#,
+        )
+        .expect("percentage root overflow metrics should evaluate"),
+        "[800,585,1600,585,0,800,585,0,800,585,1600,292.5,790,575]"
+    );
+
+    vm.eval(
+        r#"
+        document.documentElement.style.cssText =
+          "margin:0;height:100%;overflow:auto;scrollbar-gutter:stable both-edges";
+        document.body.style.cssText = "margin:0;height:100%";
+        document.body.innerHTML = '<div id="content"></div>';
+        "#,
+    )
+    .expect("stable root gutter fixture should initialize");
+    refresh_layout_for_test(&mut vm);
+    assert_eq!(
+        vm.eval(
+            r#"
+            JSON.stringify((() => {
+              const html = document.documentElement.getBoundingClientRect();
+              const body = document.body.getBoundingClientRect();
+              return [
+                document.documentElement.clientWidth,
+                document.documentElement.clientHeight,
+                document.documentElement.scrollWidth,
+                document.documentElement.scrollHeight,
+                html.x, html.width, body.x, body.width
+              ];
+            })())
+            "#,
+        )
+        .expect("empty stable root gutter metrics should evaluate"),
+        "[800,600,770,600,15,770,15,770]"
+    );
+
+    vm.eval("content.style.height = '1200px'")
+        .expect("stable root fixture should overflow vertically");
+    refresh_layout_for_test(&mut vm);
+    assert_eq!(
+        vm.eval(
+            r#"
+            JSON.stringify((() => {
+              const html = document.documentElement.getBoundingClientRect();
+              const body = document.body.getBoundingClientRect();
+              return [
+                document.documentElement.clientWidth,
+                document.documentElement.clientHeight,
+                document.documentElement.scrollWidth,
+                document.documentElement.scrollHeight,
+                html.x, html.width, body.x, body.width
+              ];
+            })())
+            "#,
+        )
+        .expect("overflowing stable root gutter metrics should evaluate"),
+        "[785,600,770,1200,15,770,15,770]"
+    );
+
+    vm.eval(
+        r#"
+        document.documentElement.style.cssText =
+          "margin:0;height:100%;overflow:auto;direction:rtl";
+        document.body.style.cssText = "margin:0;height:100%";
+        content.style.height = "1200px";
+        "#,
+    )
+    .expect("RTL root scrollbar fixture should initialize");
+    refresh_layout_for_test(&mut vm);
+    let right = crate::native_bridge::element::observable_scrollbar_hit_test(
+        &vm._context_host.borrow(),
+        vm.document_runtime.document_handle(),
+        moli_layout::LayoutPoint::new(790.0, 30.0),
+    )
+    .expect("RTL root right-edge hit test should succeed");
+    assert!(
+        right.is_some_and(|hit| {
+            hit.scrollbar.axis == moli_layout::LayoutScrollbarAxis::Vertical
+        })
+    );
+    let left = crate::native_bridge::element::observable_scrollbar_hit_test(
+        &vm._context_host.borrow(),
+        vm.document_runtime.document_handle(),
+        moli_layout::LayoutPoint::new(5.0, 30.0),
+    )
+    .expect("RTL root left-edge hit test should succeed");
+    assert_eq!(
+        left, None,
+        "the root viewport scrollbar stays physical-right"
+    );
+}
+
+#[test]
 fn dom_core_prototype_accessors_brand_check_live_and_detached_receivers() {
     let mut vm = new_storage_test_vm("https://example.com/");
 

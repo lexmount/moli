@@ -13,7 +13,8 @@ use taffy::{
 };
 
 use crate::{
-    LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic, LayoutWorld, PaintRect, PaintViewport,
+    LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic, LayoutScrollbarAxis, LayoutWorld,
+    PaintRect, PaintViewport,
     form::form_control_context,
     inline::{
         InlineFormattingContext, InlineFragments, InlineLinePlacement, InlineObjectRole,
@@ -48,8 +49,14 @@ where
     world.viewport_layout.cache.clear();
     world.viewport_layout.unrounded_layout = Layout::with_order(0);
     world.viewport_layout.final_layout = Layout::with_order(0);
+    let root_style = &world.boxes[world.root.index()].style;
+    let vertical_gutter = root_style.scrollbar_gutter_thickness(LayoutScrollbarAxis::Vertical);
+    let vertical_leading_gutter =
+        root_style.scrollbar_leading_gutter_thickness(LayoutScrollbarAxis::Vertical, true);
+    let horizontal_gutter = root_style.scrollbar_gutter_thickness(LayoutScrollbarAxis::Horizontal);
     world.viewport_layout.style = Style {
         display: Display::Block,
+        box_sizing: BoxSizing::BorderBox,
         size: Size {
             width: Dimension::length(viewport.css_width as f32),
             height: Dimension::length(viewport.css_height as f32),
@@ -61,6 +68,19 @@ where
         max_size: Size {
             width: Dimension::length(viewport.css_width as f32),
             height: Dimension::length(viewport.css_height as f32),
+        },
+        // The synthetic viewport is the initial containing block. Model UA
+        // scrollbar gutters as its non-painted border: in-flow root content
+        // and fixed-position descendants then share the same inner rectangle.
+        // Padding would be wrong here because an absolute/fixed containing
+        // block is its padding box and would still extend underneath the bars.
+        border: taffy::Rect {
+            left: taffy::LengthPercentage::length(vertical_leading_gutter),
+            right: taffy::LengthPercentage::length(
+                (vertical_gutter - vertical_leading_gutter).max(0.0),
+            ),
+            top: taffy::LengthPercentage::length(0.0),
+            bottom: taffy::LengthPercentage::length(horizontal_gutter),
         },
         ..Style::default()
     };

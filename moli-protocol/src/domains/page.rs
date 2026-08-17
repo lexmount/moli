@@ -6673,13 +6673,18 @@ fn start_devtools_capture_screenshot_command(
     };
     let region = match command.clip.as_ref() {
         Some(DevToolsCaptureScreenshotClip::Box(clip)) => {
-            RendererScreenshotRegion::PageClip(RendererScreenshotClip {
+            let clip = RendererScreenshotClip {
                 x: clip.x,
                 y: clip.y,
                 width: clip.width,
                 height: clip.height,
                 scale: clip.scale,
-            })
+            };
+            if command.capture_beyond_viewport {
+                RendererScreenshotRegion::PageClip(clip)
+            } else {
+                RendererScreenshotRegion::ViewportClip(clip)
+            }
         }
         Some(DevToolsCaptureScreenshotClip::Element(_)) => {
             return PageCommandTaskStep::Complete(CommandOutputPlan::from_devtools_error(

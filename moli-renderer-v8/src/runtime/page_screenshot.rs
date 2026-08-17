@@ -32,6 +32,10 @@ pub struct RendererScreenshotClip {
 pub enum RendererScreenshotRegion {
     Viewport,
     FullDocument,
+    /// A document-coordinate clip of the live viewport compositor surface.
+    /// Root viewport controls remain present, matching CDP when
+    /// `captureBeyondViewport` is false.
+    ViewportClip(RendererScreenshotClip),
     PageClip(RendererScreenshotClip),
 }
 
@@ -154,18 +158,25 @@ impl PageVm {
 
 impl RendererCaptureScreenshotRequest {
     fn paint_capture_request(&self) -> anyhow::Result<PaintCaptureRequest> {
+        let include_viewport_controls = matches!(
+            self.region,
+            RendererScreenshotRegion::Viewport | RendererScreenshotRegion::ViewportClip(_)
+        );
         let region = match self.region {
             RendererScreenshotRegion::Viewport => moli_layout::PaintCaptureRegion::Viewport,
             RendererScreenshotRegion::FullDocument => moli_layout::PaintCaptureRegion::FullDocument,
-            RendererScreenshotRegion::PageClip(clip) => moli_layout::PaintCaptureRegion::PageClip {
-                rect: LayoutRect::new(
-                    finite_f32("clip x", clip.x)?,
-                    finite_f32("clip y", clip.y)?,
-                    finite_f32("clip width", clip.width)?,
-                    finite_f32("clip height", clip.height)?,
-                ),
-                scale: finite_f32("clip scale", clip.scale)?,
-            },
+            RendererScreenshotRegion::ViewportClip(clip)
+            | RendererScreenshotRegion::PageClip(clip) => {
+                moli_layout::PaintCaptureRegion::PageClip {
+                    rect: LayoutRect::new(
+                        finite_f32("clip x", clip.x)?,
+                        finite_f32("clip y", clip.y)?,
+                        finite_f32("clip width", clip.width)?,
+                        finite_f32("clip height", clip.height)?,
+                    ),
+                    scale: finite_f32("clip scale", clip.scale)?,
+                }
+            }
         };
         Ok(PaintCaptureRequest {
             region,
@@ -175,6 +186,7 @@ impl RendererCaptureScreenshotRequest {
                     true
                 }
             },
+            include_viewport_controls,
             max_width: self.max_width,
             max_height: self.max_height,
         })

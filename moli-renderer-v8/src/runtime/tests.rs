@@ -380,7 +380,7 @@ async fn capture_screenshot_uses_current_root_computed_background_and_viewport()
         &runtime,
         &loader,
         url,
-        "<!doctype html><style>html { background-color: rgb(255, 0, 0) }</style>",
+        "<!doctype html><style>html { background-color: rgb(255, 0, 0); scrollbar-width: none }</style>",
     )
     .await;
     let viewport = crate::protocol_types::ViewportSurface {
@@ -870,6 +870,96 @@ async fn capture_screenshot_clip_and_full_document_keep_the_live_layout_viewport
     .await;
     assert_eq!((clip.width, clip.height), (20, 20));
     assert_eq!(decoded_png_pixel(&clip.bytes, 10, 10), [0, 255, 0, 255]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn bounded_viewport_clip_keeps_root_controls_while_page_clip_omits_them() {
+    let runtime = initialize_layout_test_runtime();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
+        .expect("default resource request client");
+    let url = url::Url::parse("https://example.test/viewport-control-capture").unwrap();
+    let page = create_test_html_page(
+        &runtime,
+        &loader,
+        url,
+        concat!(
+            "<!doctype html><style>",
+            "html,body{margin:0}",
+            "html{scrollbar-color:rgb(255,0,0) rgb(0,0,255)}",
+            "#content{width:200px;height:200px}",
+            "</style><div id='content'></div>",
+        ),
+    )
+    .await;
+    let viewport = crate::protocol_types::ViewportSurface {
+        inner_width: 100,
+        inner_height: 100,
+        outer_width: 100,
+        outer_height: 100,
+        device_pixel_ratio: 1.0,
+        screen_width: 100,
+        screen_height: 100,
+        screen_avail_width: 100,
+        screen_avail_height: 100,
+    };
+    page.run_async_command(RendererPageCommand::SetViewportSurface(Some(viewport)))
+        .await
+        .expect("viewport should update");
+    let clip = super::RendererScreenshotClip {
+        x: 0.0,
+        y: 0.0,
+        width: 100.0,
+        height: 100.0,
+        scale: 1.0,
+    };
+
+    let viewport_clip = capture_screenshot_with_request(
+        &page,
+        super::RendererCaptureScreenshotRequest {
+            purpose: super::RendererScreenshotPurpose::Screenshot,
+            format: super::RendererScreenshotFormat::Png,
+            quality: 100,
+            region: super::RendererScreenshotRegion::ViewportClip(clip),
+            optimize_for_speed: false,
+            max_width: None,
+            max_height: None,
+        },
+    )
+    .await;
+    assert_eq!(
+        decoded_png_pixel(&viewport_clip.bytes, 95, 30),
+        [255, 0, 0, 255],
+        "a bounded live-viewport capture includes its fixed root thumb"
+    );
+    assert_eq!(
+        decoded_png_pixel(&viewport_clip.bytes, 92, 8),
+        [255, 0, 0, 255],
+        "the root control paints Chromium's up-arrow glyph"
+    );
+    assert_eq!(
+        decoded_png_pixel(&viewport_clip.bytes, 87, 8),
+        [0, 0, 255, 255],
+        "the arrow remains centered inside its author-colored button"
+    );
+
+    let page_clip = capture_screenshot_with_request(
+        &page,
+        super::RendererCaptureScreenshotRequest {
+            purpose: super::RendererScreenshotPurpose::Screenshot,
+            format: super::RendererScreenshotFormat::Png,
+            quality: 100,
+            region: super::RendererScreenshotRegion::PageClip(clip),
+            optimize_for_speed: false,
+            max_width: None,
+            max_height: None,
+        },
+    )
+    .await;
+    assert_eq!(
+        decoded_png_pixel(&page_clip.bytes, 95, 30),
+        [255, 255, 255, 255],
+        "a capture-beyond-viewport page clip omits compositor controls"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -12580,6 +12670,7 @@ async fn screenshot_and_screencast_flush_pending_wheel_actions_before_paint() {
         r#"<!doctype html>
 <style>
 html, body { margin: 0; background: white; }
+html { scrollbar-width: none; }
 body { height: 1200px; }
 #witness { position: fixed; inset: 0; background: white; }
 </style>

@@ -561,6 +561,7 @@ html, body, main { display: block; margin: 0 }
             let mut page_vm = parse_phase_one_html_into_page_vm_for_test(
                 r#"<!doctype html><html><head><style>
 html, body { display: block; margin: 0; padding: 0 }
+html { scrollbar-width: none }
 body { background: rgb(0, 0, 255) }
 #grid { display: grid; width: 400px; height: 200px; gap: 20px 10px;
   grid-template-columns: 100px 1fr; grid-template-rows: 50px 1fr; grid-auto-rows: 30px }

@@ -5827,7 +5827,7 @@ async fn root_client_metrics_track_window_surface_profile() -> Result<()> {
     assert_eq!(
         snapshot,
         Some(
-            r#"{"innerWidth":1920,"innerHeight":1080,"documentElementClientWidth":1920,"documentElementClientHeight":1080,"bodyClientWidth":1904,"bodyClientHeight":19,"documentElementRectWidth":1920,"documentElementRectHeight":19}"#
+            r#"{"innerWidth":1920,"innerHeight":1080,"documentElementClientWidth":1920,"documentElementClientHeight":1080,"bodyClientWidth":1904,"bodyClientHeight":19,"documentElementRectWidth":1920,"documentElementRectHeight":35}"#
         )
     );
 

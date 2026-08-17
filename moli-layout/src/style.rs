@@ -14,6 +14,7 @@ use style::{
     },
     properties::ComputedValues,
     properties::generated::longhands::position::computed_value::T as StyloPosition,
+    properties::generated::longhands::scrollbar_width::computed_value::T as StyloScrollbarWidth,
     properties::generated::longhands::{
         direction::computed_value::T as StyloDirection,
         unicode_bidi::computed_value::T as StyloUnicodeBidi,
@@ -36,6 +37,7 @@ use style::{
             length::{GenericMaxSize, GenericSize},
             position::PreferredRatio,
             transform::{Rotate, Scale, Translate},
+            ui::GenericScrollbarColor,
         },
         specified::box_::{DisplayInside, DisplayOutside},
         specified::{
@@ -47,9 +49,10 @@ use style::{
 use taffy::{BoxSizing, Display as TaffyDisplay, Position as TaffyPosition, Size, Style};
 
 use crate::{
-    LayoutPoint, LayoutRect, LayoutTransform2D, PaintBlendMode, PaintBorderColors,
-    PaintBorderStyle, PaintBorderStyles, PaintBoxShadow, PaintColor, PaintCornerRadii,
-    PaintCornerRadius, PaintEdgeSizes, PaintFragment,
+    LayoutPoint, LayoutRect, LayoutScrollbarAxis, LayoutScrollbarColors, LayoutScrollbarGutter,
+    LayoutScrollbarWidth, LayoutTransform2D, PaintBlendMode, PaintBorderColors, PaintBorderStyle,
+    PaintBorderStyles, PaintBoxShadow, PaintColor, PaintCornerRadii, PaintCornerRadius,
+    PaintEdgeSizes, PaintFragment,
 };
 
 /// Marker families implemented by the Phase 4 list formatter.
@@ -123,6 +126,47 @@ pub(crate) enum InlineDirection {
     #[default]
     Ltr,
     Rtl,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum LayoutOverflowMode {
+    #[default]
+    Visible,
+    Clip,
+    Hidden,
+    Auto,
+    Scroll,
+}
+
+impl LayoutOverflowMode {
+    fn from_stylo(value: Overflow) -> Self {
+        match value {
+            Overflow::Visible => Self::Visible,
+            Overflow::Clip => Self::Clip,
+            Overflow::Hidden => Self::Hidden,
+            Overflow::Auto => Self::Auto,
+            Overflow::Scroll => Self::Scroll,
+        }
+    }
+
+    fn from_taffy(value: taffy::Overflow) -> Self {
+        match value {
+            taffy::Overflow::Visible => Self::Visible,
+            taffy::Overflow::Clip => Self::Clip,
+            taffy::Overflow::Hidden => Self::Hidden,
+            // Synthetic tests historically used Taffy's `Scroll` as CSS
+            // `auto`, because the adapter previously had zero-width bars.
+            taffy::Overflow::Scroll => Self::Auto,
+        }
+    }
+
+    const fn creates_scroll_container(self) -> bool {
+        matches!(self, Self::Hidden | Self::Auto | Self::Scroll)
+    }
+
+    const fn allows_user_scroll(self) -> bool {
+        matches!(self, Self::Auto | Self::Scroll)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -417,6 +461,13 @@ pub struct ResolvedLayoutStyle {
     vertical_align: InlineVerticalAlign,
     text_projection_deferred: bool,
     overflow_clips: bool,
+    overflow_x: LayoutOverflowMode,
+    overflow_y: LayoutOverflowMode,
+    scrollbar_width: LayoutScrollbarWidth,
+    scrollbar_gutter: LayoutScrollbarGutter,
+    scrollbar_colors: Option<LayoutScrollbarColors>,
+    revealed_scrollbar_x: bool,
+    revealed_scrollbar_y: bool,
     out_of_flow: bool,
     position: LayoutPosition,
     sticky_inset: taffy::Rect<taffy::LengthPercentageAuto>,
@@ -564,6 +615,32 @@ impl ResolvedLayoutStyle {
             || text_transform_value.intersects(TextTransform::FULL_SIZE_KANA)
             || vertical_align_deferred;
         let overflow_clips = stylo_overflow_clips(&computed);
+        let overflow_x = LayoutOverflowMode::from_stylo(computed.clone_overflow_x());
+        let overflow_y = LayoutOverflowMode::from_stylo(computed.clone_overflow_y());
+        let scrollbar_width = match computed.clone_scrollbar_width() {
+            StyloScrollbarWidth::Auto => LayoutScrollbarWidth::Auto,
+            StyloScrollbarWidth::Thin => LayoutScrollbarWidth::Thin,
+            StyloScrollbarWidth::None => LayoutScrollbarWidth::None,
+        };
+        let computed_gutter = computed.clone_scrollbar_gutter();
+        let scrollbar_gutter =
+            if computed_gutter.contains(style::values::computed::ScrollbarGutter::BOTH_EDGES) {
+                LayoutScrollbarGutter::StableBothEdges
+            } else if computed_gutter.contains(style::values::computed::ScrollbarGutter::STABLE) {
+                LayoutScrollbarGutter::Stable
+            } else {
+                LayoutScrollbarGutter::Auto
+            };
+        let scrollbar_colors = match computed.clone_scrollbar_color() {
+            GenericScrollbarColor::Auto => None,
+            GenericScrollbarColor::Colors { thumb, track } => {
+                let current = computed.clone_color();
+                Some(LayoutScrollbarColors::new(
+                    absolute_paint_color(thumb.resolve_to_absolute(&current)),
+                    absolute_paint_color(track.resolve_to_absolute(&current)),
+                ))
+            }
+        };
         let stylo_position = computed.clone_position();
         let position = match stylo_position {
             StyloPosition::Static => LayoutPosition::Static,
@@ -752,6 +829,13 @@ impl ResolvedLayoutStyle {
             vertical_align,
             text_projection_deferred,
             overflow_clips,
+            overflow_x,
+            overflow_y,
+            scrollbar_width,
+            scrollbar_gutter,
+            scrollbar_colors,
+            revealed_scrollbar_x: false,
+            revealed_scrollbar_y: false,
             out_of_flow,
             position,
             sticky_inset,
@@ -791,6 +875,8 @@ impl ResolvedLayoutStyle {
         taffy.item_is_table = matches!(display, LayoutDisplay::Table | LayoutDisplay::InlineTable);
         let overflow_clips = taffy.overflow.x != taffy::Overflow::Visible
             || taffy.overflow.y != taffy::Overflow::Visible;
+        let overflow_x = LayoutOverflowMode::from_taffy(taffy.overflow.x);
+        let overflow_y = LayoutOverflowMode::from_taffy(taffy.overflow.y);
         let out_of_flow = taffy.position == TaffyPosition::Absolute;
         let position = if out_of_flow {
             LayoutPosition::Absolute
@@ -818,6 +904,13 @@ impl ResolvedLayoutStyle {
             vertical_align: InlineVerticalAlign::default(),
             text_projection_deferred: false,
             overflow_clips,
+            overflow_x,
+            overflow_y,
+            scrollbar_width: LayoutScrollbarWidth::Auto,
+            scrollbar_gutter: LayoutScrollbarGutter::Auto,
+            scrollbar_colors: None,
+            revealed_scrollbar_x: false,
+            revealed_scrollbar_y: false,
             out_of_flow,
             position,
             sticky_inset,
@@ -875,6 +968,19 @@ impl ResolvedLayoutStyle {
         self.line_height = line_height;
         self.include_used_font_metrics = false;
         self
+    }
+
+    /// Supplies the CSS scrollbar properties not yet exposed through Stylo's
+    /// typed standalone embedding API.
+    pub fn set_scrollbar_style(
+        &mut self,
+        width: LayoutScrollbarWidth,
+        gutter: LayoutScrollbarGutter,
+        colors: Option<LayoutScrollbarColors>,
+    ) {
+        self.scrollbar_width = width;
+        self.scrollbar_gutter = gutter;
+        self.scrollbar_colors = colors;
     }
 
     /// Overrides the alignment keyword for a synthetic inline style.
@@ -1491,17 +1597,192 @@ impl ResolvedLayoutStyle {
     pub(crate) fn establishes_scroll_container(&self) -> bool {
         // `overflow: clip` clips paint but deliberately does not create the
         // scrolling mechanism that selects a sticky scrollport.
-        [self.taffy.overflow.x, self.taffy.overflow.y]
+        [self.overflow_x, self.overflow_y]
             .into_iter()
-            .any(|overflow| matches!(overflow, taffy::Overflow::Hidden | taffy::Overflow::Scroll))
+            .any(LayoutOverflowMode::creates_scroll_container)
     }
 
     pub(crate) fn allows_user_scroll_x(&self) -> bool {
-        self.taffy.overflow.x == taffy::Overflow::Scroll
+        self.overflow_x.allows_user_scroll()
     }
 
     pub(crate) fn allows_user_scroll_y(&self) -> bool {
-        self.taffy.overflow.y == taffy::Overflow::Scroll
+        self.overflow_y.allows_user_scroll()
+    }
+
+    pub(crate) fn prepare_scrollbar_layout(&mut self, is_root: bool) {
+        self.revealed_scrollbar_x = self.overflow_x == LayoutOverflowMode::Scroll;
+        self.revealed_scrollbar_y = self.overflow_y == LayoutOverflowMode::Scroll;
+        let both_edge_gutter = self.reserves_both_edge_vertical_gutter();
+        self.taffy.scrollbar_width =
+            self.scrollbar_width.thickness() * if both_edge_gutter { 2.0 } else { 1.0 };
+        self.taffy.overflow.x =
+            self.initial_taffy_overflow(LayoutScrollbarAxis::Horizontal, is_root);
+        self.taffy.overflow.y = self.initial_taffy_overflow(LayoutScrollbarAxis::Vertical, is_root);
+        // Taffy's scrollbar width is scalar. For `both-edges` it represents
+        // the two vertical gutters together, so it must not also be used as a
+        // double-height horizontal scrollbar. Horizontal reservation remains
+        // part of Moli's projection feedback below, as it already is for the
+        // root scrolling element.
+        if both_edge_gutter && self.revealed_scrollbar_x {
+            self.taffy.overflow.x = taffy::Overflow::Hidden;
+        }
+        // In horizontal writing modes a stable gutter is reserved on the
+        // inline end whenever vertical overflow could create a scrollbar.
+        if !is_root
+            && !matches!(self.scrollbar_gutter, LayoutScrollbarGutter::Auto)
+            && self.overflow_y.creates_scroll_container()
+            && self.scrollbar_width != LayoutScrollbarWidth::None
+        {
+            self.taffy.overflow.y = taffy::Overflow::Scroll;
+        }
+    }
+
+    fn initial_taffy_overflow(&self, axis: LayoutScrollbarAxis, is_root: bool) -> taffy::Overflow {
+        let mode = self.overflow_mode(axis);
+        // The root scrollbar belongs to the initial containing block. Its
+        // gutter is reserved on Moli's synthetic viewport node so percentage
+        // sizing and fixed positioning see the reduced layout viewport without
+        // making the root element reserve the same gutter a second time.
+        if is_root {
+            return match mode {
+                LayoutOverflowMode::Clip => taffy::Overflow::Clip,
+                LayoutOverflowMode::Visible
+                | LayoutOverflowMode::Hidden
+                | LayoutOverflowMode::Auto
+                | LayoutOverflowMode::Scroll => taffy::Overflow::Hidden,
+            };
+        }
+        match mode {
+            LayoutOverflowMode::Visible => taffy::Overflow::Visible,
+            LayoutOverflowMode::Clip => taffy::Overflow::Clip,
+            LayoutOverflowMode::Hidden | LayoutOverflowMode::Auto => taffy::Overflow::Hidden,
+            LayoutOverflowMode::Scroll => taffy::Overflow::Scroll,
+        }
+    }
+
+    pub(crate) fn reveal_auto_scrollbar(
+        &mut self,
+        axis: LayoutScrollbarAxis,
+        is_root: bool,
+        overflowing: bool,
+    ) -> bool {
+        if !overflowing || self.scrollbar_width == LayoutScrollbarWidth::None {
+            return false;
+        }
+        let mode = self.overflow_mode(axis);
+        if !(matches!(mode, LayoutOverflowMode::Auto)
+            || is_root && matches!(mode, LayoutOverflowMode::Visible))
+        {
+            return false;
+        }
+        let revealed = match axis {
+            LayoutScrollbarAxis::Horizontal => &mut self.revealed_scrollbar_x,
+            LayoutScrollbarAxis::Vertical => &mut self.revealed_scrollbar_y,
+        };
+        if *revealed {
+            return false;
+        }
+        *revealed = true;
+        if !(is_root
+            || axis == LayoutScrollbarAxis::Horizontal && self.reserves_both_edge_vertical_gutter())
+        {
+            match axis {
+                LayoutScrollbarAxis::Horizontal => {
+                    self.taffy.overflow.x = taffy::Overflow::Scroll;
+                }
+                LayoutScrollbarAxis::Vertical => {
+                    self.taffy.overflow.y = taffy::Overflow::Scroll;
+                }
+            }
+        }
+        true
+    }
+
+    pub(crate) fn has_scrollbar(
+        &self,
+        axis: LayoutScrollbarAxis,
+        is_root: bool,
+        overflowing: bool,
+    ) -> bool {
+        if self.scrollbar_width == LayoutScrollbarWidth::None {
+            return false;
+        }
+        match self.overflow_mode(axis) {
+            LayoutOverflowMode::Scroll => true,
+            LayoutOverflowMode::Auto => overflowing,
+            LayoutOverflowMode::Visible if is_root => overflowing,
+            LayoutOverflowMode::Visible | LayoutOverflowMode::Clip | LayoutOverflowMode::Hidden => {
+                false
+            }
+        }
+    }
+
+    pub(crate) fn overflow_mode(&self, axis: LayoutScrollbarAxis) -> LayoutOverflowMode {
+        match axis {
+            LayoutScrollbarAxis::Horizontal => self.overflow_x,
+            LayoutScrollbarAxis::Vertical => self.overflow_y,
+        }
+    }
+
+    pub(crate) const fn scrollbar_colors(&self) -> Option<LayoutScrollbarColors> {
+        self.scrollbar_colors
+    }
+
+    pub(crate) fn scrollbar_control_thickness(&self) -> f32 {
+        self.scrollbar_width.thickness()
+    }
+
+    pub(crate) fn scrollbar_gutter_thickness(&self, axis: LayoutScrollbarAxis) -> f32 {
+        if self.scrollbar_width == LayoutScrollbarWidth::None {
+            return 0.0;
+        }
+        let revealed = match axis {
+            LayoutScrollbarAxis::Horizontal => self.revealed_scrollbar_x,
+            LayoutScrollbarAxis::Vertical => self.revealed_scrollbar_y,
+        };
+        let stable_vertical = axis == LayoutScrollbarAxis::Vertical
+            && !matches!(self.scrollbar_gutter, LayoutScrollbarGutter::Auto)
+            && self.overflow_y.creates_scroll_container();
+        if revealed || stable_vertical {
+            let thickness = self.scrollbar_width.thickness();
+            if axis == LayoutScrollbarAxis::Vertical && self.reserves_both_edge_vertical_gutter() {
+                thickness * 2.0
+            } else {
+                thickness
+            }
+        } else {
+            0.0
+        }
+    }
+
+    /// Physical gutter before the scrollport. Classic vertical scrollbars are
+    /// on the left in RTL, while `both-edges` adds the matching left gutter in
+    /// LTR as well.
+    pub(crate) fn scrollbar_leading_gutter_thickness(
+        &self,
+        axis: LayoutScrollbarAxis,
+        is_root: bool,
+    ) -> f32 {
+        if axis != LayoutScrollbarAxis::Vertical || self.scrollbar_gutter_thickness(axis) == 0.0 {
+            return 0.0;
+        }
+        // Chromium keeps the viewport scrollbar on the physical right even
+        // when the root element is RTL. `both-edges` still reserves its
+        // matching gutter on the physical left.
+        if self.reserves_both_edge_vertical_gutter()
+            || (!is_root && self.direction == InlineDirection::Rtl)
+        {
+            self.scrollbar_width.thickness()
+        } else {
+            0.0
+        }
+    }
+
+    fn reserves_both_edge_vertical_gutter(&self) -> bool {
+        self.scrollbar_gutter == LayoutScrollbarGutter::StableBothEdges
+            && self.overflow_y.creates_scroll_container()
+            && self.scrollbar_width != LayoutScrollbarWidth::None
     }
 
     pub(crate) fn text_leaf_from(parent: &Self) -> Self {
@@ -1528,6 +1809,13 @@ impl ResolvedLayoutStyle {
             vertical_align: parent.vertical_align,
             text_projection_deferred: parent.text_projection_deferred,
             overflow_clips: false,
+            overflow_x: LayoutOverflowMode::Visible,
+            overflow_y: LayoutOverflowMode::Visible,
+            scrollbar_width: parent.scrollbar_width,
+            scrollbar_gutter: LayoutScrollbarGutter::Auto,
+            scrollbar_colors: parent.scrollbar_colors,
+            revealed_scrollbar_x: false,
+            revealed_scrollbar_y: false,
             out_of_flow: false,
             position: LayoutPosition::Static,
             sticky_inset: taffy::Rect {
@@ -1586,6 +1874,13 @@ impl ResolvedLayoutStyle {
             vertical_align: parent.vertical_align,
             text_projection_deferred: parent.text_projection_deferred,
             overflow_clips: false,
+            overflow_x: LayoutOverflowMode::Visible,
+            overflow_y: LayoutOverflowMode::Visible,
+            scrollbar_width: parent.scrollbar_width,
+            scrollbar_gutter: LayoutScrollbarGutter::Auto,
+            scrollbar_colors: parent.scrollbar_colors,
+            revealed_scrollbar_x: false,
+            revealed_scrollbar_y: false,
             out_of_flow: false,
             position: LayoutPosition::Static,
             sticky_inset: taffy::Rect {

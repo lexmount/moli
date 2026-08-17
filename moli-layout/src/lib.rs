@@ -26,6 +26,7 @@ mod pass;
 mod positioned;
 mod projection;
 mod replaced;
+mod scrollbar;
 mod snapshot;
 mod source;
 mod stacking;
@@ -61,6 +62,10 @@ pub use normalize_source::{
 pub use pass::{
     EmbeddedFrameRenderer, LayoutPassRequest, ScreenshotLayoutRequest, build_layout_pass,
     build_layout_pass_with_embedded_frames, build_screenshot_snapshot,
+};
+pub use scrollbar::{
+    LayoutScrollbarAxis, LayoutScrollbarColors, LayoutScrollbarGeometry, LayoutScrollbarGutter,
+    LayoutScrollbarHit, LayoutScrollbarPart, LayoutScrollbarWidth,
 };
 pub use snapshot::{
     PaintBlendMode, PaintBorderColors, PaintBorderStyle, PaintBorderStyles, PaintBoxShadow,
