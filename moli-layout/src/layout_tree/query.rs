@@ -44,8 +44,9 @@ pub struct LayoutDocumentScrollMetrics<N> {
 
 /// CSSOM View and observer metrics for one source element.
 ///
-/// Transformed quads use viewport CSS pixels. Offset and size fields retain
-/// the untransformed layout values required by offset/client/scroll APIs.
+/// Transformed quads use viewport CSS pixels and therefore include CSS
+/// `zoom`. Offset, size, and scroll fields are untransformed and have the
+/// queried box's absolute zoom removed, as required by CSSOM View.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutElementMetrics<N> {
     pub offset_parent: Option<N>,

@@ -328,6 +328,7 @@ where
             let (layout_x, layout_y) = self.world.global_layout_origin(layout_box_id);
             self.boxes.push(LayoutBoxGeometry {
                 id,
+                effective_zoom: layout_box.style.effective_zoom(),
                 structural_parent: layout_box
                     .structural_parent
                     .map(|parent| LayoutOutputBoxId::from_index(parent.index())),

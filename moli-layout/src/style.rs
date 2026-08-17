@@ -1024,6 +1024,19 @@ impl ResolvedLayoutStyle {
         self.writing_mode
     }
 
+    /// Returns the accumulated CSS `zoom` applied to layout lengths.
+    ///
+    /// Stylo stores absolute lengths in effective-zoomed layout units. Paint
+    /// and client rects consume those units directly, while CSSOM integer box
+    /// metrics remove the queried object's effective zoom at the publication
+    /// boundary. Synthetic styles have no Stylo value and therefore use the
+    /// initial factor.
+    pub(crate) fn effective_zoom(&self) -> f32 {
+        self.computed
+            .as_ref()
+            .map_or(1.0, |computed| computed.effective_zoom.value())
+    }
+
     /// Override only the writing direction consumed by layout.
     ///
     /// HTML may propagate the body's writing mode and direction to the root
