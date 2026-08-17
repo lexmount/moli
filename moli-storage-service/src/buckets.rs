@@ -54,14 +54,14 @@ struct MemoryStorageBucketBackend {
     origins: BTreeMap<String, BTreeMap<String, StorageBucketMetadata>>,
     pending_deletions: Vec<StorageBucketIdentity>,
     next_bucket_id: u64,
-    next_generation: u64,
 }
 
-/// Exact persistent identity captured when a named bucket is revoked.
+/// Exact persistent identity of one materialized storage-bucket record.
 ///
-/// The record is safe to carry outside the bucket metadata mutex. It lets the
-/// partition clear every backend without deriving identity from a reusable web
-/// name.
+/// The record is safe to carry outside the bucket metadata mutex. A web-visible
+/// name can be reused after deletion, but the persistent bucket id cannot, so
+/// asynchronous handles and deletion cleanup can both authorize work against
+/// the exact record they captured.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StorageBucketIdentity {
@@ -71,7 +71,7 @@ pub struct StorageBucketIdentity {
 }
 
 impl StorageBucketIdentity {
-    fn new(storage_key: &str, name: &str, bucket_id: StorageBucketId) -> Self {
+    pub fn new(storage_key: &str, name: &str, bucket_id: StorageBucketId) -> Self {
         Self {
             storage_key: storage_key.to_owned(),
             name: name.to_owned(),
@@ -124,8 +124,6 @@ struct StorageBucketMetadata {
     cache_instance_ref_counts: BTreeMap<StorageBucketCacheId, u64>,
     #[serde(skip)]
     next_cache_instance_id: u64,
-    #[serde(skip)]
-    generation: u64,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -635,6 +633,28 @@ impl Default for StorageBucketRegistry {
 }
 
 impl StorageBucketRegistry {
+    fn metadata_for_identity(
+        &self,
+        identity: &StorageBucketIdentity,
+    ) -> Option<&StorageBucketMetadata> {
+        self.memory()
+            .origins
+            .get(identity.storage_key())
+            .and_then(|buckets| buckets.get(identity.name()))
+            .filter(|metadata| metadata.bucket_id == Some(identity.bucket_id()))
+    }
+
+    fn metadata_for_identity_mut(
+        &mut self,
+        identity: &StorageBucketIdentity,
+    ) -> Option<&mut StorageBucketMetadata> {
+        self.memory_mut()
+            .origins
+            .get_mut(identity.storage_key())
+            .and_then(|buckets| buckets.get_mut(identity.name()))
+            .filter(|metadata| metadata.bucket_id == Some(identity.bucket_id()))
+    }
+
     pub fn storage_service(&self) -> SharedStorageService {
         self.storage_service.clone()
     }
@@ -709,7 +729,7 @@ impl StorageBucketRegistry {
         }
     }
 
-    pub fn open_bucket(&mut self, origin: &str, name: &str) -> Result<u64> {
+    pub fn open_bucket(&mut self, origin: &str, name: &str) -> Result<StorageBucketIdentity> {
         self.open_bucket_with_expires(origin, name, None)
     }
 
@@ -718,7 +738,7 @@ impl StorageBucketRegistry {
         origin: &str,
         name: &str,
         expires: Option<f64>,
-    ) -> Result<u64> {
+    ) -> Result<StorageBucketIdentity> {
         self.open_bucket_with_options(origin, name, expires, None, None, None)
     }
 
@@ -730,7 +750,7 @@ impl StorageBucketRegistry {
         durability: Option<StorageBucketDurability>,
         quota: Option<u64>,
         persisted: Option<bool>,
-    ) -> Result<u64> {
+    ) -> Result<StorageBucketIdentity> {
         if self
             .memory()
             .pending_deletions
@@ -749,7 +769,6 @@ impl StorageBucketRegistry {
             Some(bucket_id) => bucket_id,
             None => memory.allocate_bucket_id()?,
         };
-        let mut next_generation = memory.next_generation.max(1);
         let metadata = memory
             .origins
             .entry(origin.to_owned())
@@ -757,10 +776,6 @@ impl StorageBucketRegistry {
             .entry(name.to_owned())
             .or_default();
         metadata.bucket_id.get_or_insert(bucket_id);
-        if metadata.generation == 0 {
-            metadata.generation = next_generation;
-            next_generation = next_generation.saturating_add(1).max(1);
-        }
         if let Some(expires) = expires {
             metadata.expires = Some(expires);
         }
@@ -773,10 +788,9 @@ impl StorageBucketRegistry {
         if let Some(persisted) = persisted {
             metadata.persisted = persisted;
         }
-        let generation = metadata.generation;
-        memory.next_generation = next_generation;
+        let identity = StorageBucketIdentity::new(origin, name, bucket_id);
         self.flush()?;
-        Ok(generation)
+        Ok(identity)
     }
 
     pub fn keys(&self, origin: &str) -> Vec<String> {
@@ -811,19 +825,12 @@ impl StorageBucketRegistry {
             .map(|bucket_id| StorageBucketLocator::named(storage_key, bucket_id))
     }
 
-    pub fn bucket_locator_if_current(
+    pub fn bucket_locator_for_identity(
         &self,
-        storage_key: &str,
-        name: &str,
-        generation: u64,
+        identity: &StorageBucketIdentity,
     ) -> Option<StorageBucketLocator> {
-        self.memory()
-            .origins
-            .get(storage_key)
-            .and_then(|buckets| buckets.get(name))
-            .filter(|metadata| metadata.generation == generation)
-            .and_then(|metadata| metadata.bucket_id)
-            .map(|bucket_id| StorageBucketLocator::named(storage_key, bucket_id))
+        self.metadata_for_identity(identity)
+            .map(|_| identity.locator())
     }
 
     pub fn keys_for_origin_areas(&self, origin: &str) -> Vec<(String, Vec<String>)> {
@@ -1105,71 +1112,41 @@ impl StorageBucketRegistry {
             .map(|metadata| metadata.persisted)
     }
 
-    pub fn bucket_is_current(&self, origin: &str, name: &str, generation: u64) -> bool {
-        self.memory()
-            .origins
-            .get(origin)
-            .and_then(|buckets| buckets.get(name))
-            .is_some_and(|metadata| metadata.generation == generation)
+    pub fn bucket_identity_is_live(&self, identity: &StorageBucketIdentity) -> bool {
+        self.metadata_for_identity(identity).is_some()
     }
 
-    pub fn bucket_expires_if_current(
+    pub fn bucket_expires_for_identity(
         &self,
-        origin: &str,
-        name: &str,
-        generation: u64,
+        identity: &StorageBucketIdentity,
     ) -> Option<Option<f64>> {
-        self.memory()
-            .origins
-            .get(origin)
-            .and_then(|buckets| buckets.get(name))
-            .filter(|metadata| metadata.generation == generation)
+        self.metadata_for_identity(identity)
             .map(|metadata| metadata.expires)
     }
 
-    pub fn bucket_durability_if_current(
+    pub fn bucket_durability_for_identity(
         &self,
-        origin: &str,
-        name: &str,
-        generation: u64,
+        identity: &StorageBucketIdentity,
     ) -> Option<StorageBucketDurability> {
-        self.memory()
-            .origins
-            .get(origin)
-            .and_then(|buckets| buckets.get(name))
-            .filter(|metadata| metadata.generation == generation)
+        self.metadata_for_identity(identity)
             .map(|metadata| metadata.durability)
     }
 
-    pub fn bucket_quota_if_current(
+    pub fn bucket_quota_for_identity(
         &self,
-        origin: &str,
-        name: &str,
-        generation: u64,
+        identity: &StorageBucketIdentity,
     ) -> Option<Option<u64>> {
-        self.memory()
-            .origins
-            .get(origin)
-            .and_then(|buckets| buckets.get(name))
-            .filter(|metadata| metadata.generation == generation)
+        self.metadata_for_identity(identity)
             .map(|metadata| metadata.quota)
     }
 
-    pub fn open_cache_if_current(
+    pub fn open_cache_for_identity(
         &mut self,
-        origin: &str,
-        name: &str,
-        generation: u64,
+        identity: &StorageBucketIdentity,
         cache_name: &str,
     ) -> Result<bool> {
         let opened = {
-            let Some(metadata) = self
-                .memory_mut()
-                .origins
-                .get_mut(origin)
-                .and_then(|buckets| buckets.get_mut(name))
-                .filter(|metadata| metadata.generation == generation)
-            else {
+            let Some(metadata) = self.metadata_for_identity_mut(identity) else {
                 return Ok(false);
             };
             metadata
@@ -1182,21 +1159,13 @@ impl StorageBucketRegistry {
         Ok(opened)
     }
 
-    pub fn open_cache_handle_if_current(
+    pub fn open_cache_handle_for_identity(
         &mut self,
-        origin: &str,
-        name: &str,
-        generation: u64,
+        identity: &StorageBucketIdentity,
         cache_name: &str,
     ) -> Result<Option<StorageBucketCacheId>> {
         let cache_id = {
-            let Some(metadata) = self
-                .memory_mut()
-                .origins
-                .get_mut(origin)
-                .and_then(|buckets| buckets.get_mut(name))
-                .filter(|metadata| metadata.generation == generation)
-            else {
+            let Some(metadata) = self.metadata_for_identity_mut(identity) else {
                 return Ok(None);
             };
             metadata
@@ -1226,20 +1195,12 @@ impl StorageBucketRegistry {
         Ok(Some(cache_id))
     }
 
-    pub fn release_cache_handle_if_current(
+    pub fn release_cache_handle_for_identity(
         &mut self,
-        origin: &str,
-        name: &str,
-        generation: u64,
+        identity: &StorageBucketIdentity,
         cache_id: StorageBucketCacheId,
     ) {
-        let Some(metadata) = self
-            .memory_mut()
-            .origins
-            .get_mut(origin)
-            .and_then(|buckets| buckets.get_mut(name))
-            .filter(|metadata| metadata.generation == generation)
-        else {
+        let Some(metadata) = self.metadata_for_identity_mut(identity) else {
             return;
         };
         let Some(refs) = metadata.cache_instance_ref_counts.get_mut(&cache_id) else {
@@ -1253,72 +1214,54 @@ impl StorageBucketRegistry {
         metadata.detached_cache_storage.remove(&cache_id);
     }
 
-    pub fn cache_names_if_current(
+    pub fn cache_names_for_identity(
         &self,
-        origin: &str,
-        name: &str,
-        generation: u64,
+        identity: &StorageBucketIdentity,
     ) -> Option<Vec<String>> {
-        self.memory()
-            .origins
-            .get(origin)
-            .and_then(|buckets| buckets.get(name))
-            .filter(|metadata| metadata.generation == generation)
+        self.metadata_for_identity(identity)
             .map(|metadata| metadata.cache_storage.keys().cloned().collect())
     }
 
-    pub fn delete_cache_if_current(
+    pub fn delete_cache_for_identity(
         &mut self,
-        origin: &str,
-        name: &str,
-        generation: u64,
+        identity: &StorageBucketIdentity,
         cache_name: &str,
     ) -> Result<Option<bool>> {
-        let deleted = self
-            .memory_mut()
-            .origins
-            .get_mut(origin)
-            .and_then(|buckets| buckets.get_mut(name))
-            .filter(|metadata| metadata.generation == generation)
-            .map(|metadata| {
-                let Some(entries) = metadata.cache_storage.remove(cache_name) else {
-                    metadata.cache_instance_ids.remove(cache_name);
-                    return false;
-                };
-                let cache_id = metadata.cache_instance_ids.remove(cache_name);
-                if let Some(cache_id) = cache_id
-                    && metadata
-                        .cache_instance_ref_counts
-                        .get(&cache_id)
-                        .copied()
-                        .unwrap_or(0)
-                        != 0
-                {
-                    metadata.detached_cache_storage.insert(cache_id, entries);
-                }
-                true
-            });
+        let deleted = self.metadata_for_identity_mut(identity).map(|metadata| {
+            let Some(entries) = metadata.cache_storage.remove(cache_name) else {
+                metadata.cache_instance_ids.remove(cache_name);
+                return false;
+            };
+            let cache_id = metadata.cache_instance_ids.remove(cache_name);
+            if let Some(cache_id) = cache_id
+                && metadata
+                    .cache_instance_ref_counts
+                    .get(&cache_id)
+                    .copied()
+                    .unwrap_or(0)
+                    != 0
+            {
+                metadata.detached_cache_storage.insert(cache_id, entries);
+            }
+            true
+        });
         if deleted.is_some() {
             self.flush()?;
         }
         Ok(deleted)
     }
 
-    pub fn put_cache_entry_if_current(
+    pub fn put_cache_entry_for_identity(
         &mut self,
-        origin: &str,
-        name: &str,
-        generation: u64,
+        identity: &StorageBucketIdentity,
         cache_name: &str,
         request_key: &str,
         response: StorageBucketCachedResponse,
         usage_bytes: u64,
         non_cache_usage_bytes: u64,
     ) -> Result<StorageBucketCachePutOutcome> {
-        self.put_cache_entry_with_request_if_current(
-            origin,
-            name,
-            generation,
+        self.put_cache_entry_with_request_for_identity(
+            identity,
             cache_name,
             request_key,
             StorageBucketCachedRequest::default(),
@@ -1329,11 +1272,9 @@ impl StorageBucketRegistry {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn put_cache_entry_with_request_if_current(
+    pub fn put_cache_entry_with_request_for_identity(
         &mut self,
-        origin: &str,
-        name: &str,
-        generation: u64,
+        identity: &StorageBucketIdentity,
         cache_name: &str,
         request_key: &str,
         request: StorageBucketCachedRequest,
@@ -1341,10 +1282,8 @@ impl StorageBucketRegistry {
         usage_bytes: u64,
         non_cache_usage_bytes: u64,
     ) -> Result<StorageBucketCachePutOutcome> {
-        self.put_cache_entry_with_request_for_selector_if_current(
-            origin,
-            name,
-            generation,
+        self.put_cache_entry_with_request_for_selector_and_identity(
+            identity,
             StorageBucketCacheSelector::Named(cache_name),
             request_key,
             request,
@@ -1355,11 +1294,9 @@ impl StorageBucketRegistry {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn put_cache_entry_with_request_for_handle_if_current(
+    pub fn put_cache_entry_with_request_for_handle_and_identity(
         &mut self,
-        origin: &str,
-        name: &str,
-        generation: u64,
+        identity: &StorageBucketIdentity,
         cache_name: &str,
         cache_id: StorageBucketCacheId,
         request_key: &str,
@@ -1368,10 +1305,8 @@ impl StorageBucketRegistry {
         usage_bytes: u64,
         non_cache_usage_bytes: u64,
     ) -> Result<StorageBucketCachePutOutcome> {
-        self.put_cache_entry_with_request_for_selector_if_current(
-            origin,
-            name,
-            generation,
+        self.put_cache_entry_with_request_for_selector_and_identity(
+            identity,
             StorageBucketCacheSelector::Handle {
                 cache_name,
                 cache_id,
@@ -1385,11 +1320,9 @@ impl StorageBucketRegistry {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn put_cache_entry_with_request_for_selector_if_current(
+    fn put_cache_entry_with_request_for_selector_and_identity(
         &mut self,
-        origin: &str,
-        name: &str,
-        generation: u64,
+        identity: &StorageBucketIdentity,
         cache_selector: StorageBucketCacheSelector<'_>,
         request_key: &str,
         request: StorageBucketCachedRequest,
@@ -1398,13 +1331,7 @@ impl StorageBucketRegistry {
         non_cache_usage_bytes: u64,
     ) -> Result<StorageBucketCachePutOutcome> {
         let outcome = {
-            let Some(metadata) = self
-                .memory_mut()
-                .origins
-                .get_mut(origin)
-                .and_then(|buckets| buckets.get_mut(name))
-                .filter(|metadata| metadata.generation == generation)
-            else {
+            let Some(metadata) = self.metadata_for_identity_mut(identity) else {
                 return Ok(StorageBucketCachePutOutcome::Stale);
             };
             if let StorageBucketCacheSelector::Named(cache_name) = cache_selector {
@@ -1463,11 +1390,9 @@ impl StorageBucketRegistry {
         Ok(outcome)
     }
 
-    pub fn match_cache_entry_if_current(
+    pub fn match_cache_entry_for_identity(
         &self,
-        origin: &str,
-        name: &str,
-        generation: u64,
+        identity: &StorageBucketIdentity,
         cache_name: &str,
         request_key: &str,
     ) -> Option<Option<StorageBucketCachedResponse>> {
@@ -1479,40 +1404,32 @@ impl StorageBucketRegistry {
             ignore_method: false,
             ignore_vary: false,
         };
-        self.match_cache_entries_if_current(origin, name, generation, cache_name, &query)
+        self.match_cache_entries_for_identity(identity, cache_name, &query)
             .map(|matches| matches.into_iter().next().map(|entry| entry.response))
     }
 
-    pub fn match_cache_entries_if_current(
+    pub fn match_cache_entries_for_identity(
         &self,
-        origin: &str,
-        name: &str,
-        generation: u64,
+        identity: &StorageBucketIdentity,
         cache_name: &str,
         query: &StorageBucketCacheQuery,
     ) -> Option<Vec<StorageBucketCacheMatch>> {
-        self.match_cache_entries_for_selector_if_current(
-            origin,
-            name,
-            generation,
+        self.match_cache_entries_for_selector_and_identity(
+            identity,
             StorageBucketCacheSelector::Named(cache_name),
             query,
         )
     }
 
-    pub fn match_cache_entries_for_handle_if_current(
+    pub fn match_cache_entries_for_handle_and_identity(
         &self,
-        origin: &str,
-        name: &str,
-        generation: u64,
+        identity: &StorageBucketIdentity,
         cache_name: &str,
         cache_id: StorageBucketCacheId,
         query: &StorageBucketCacheQuery,
     ) -> Option<Vec<StorageBucketCacheMatch>> {
-        self.match_cache_entries_for_selector_if_current(
-            origin,
-            name,
-            generation,
+        self.match_cache_entries_for_selector_and_identity(
+            identity,
             StorageBucketCacheSelector::Handle {
                 cache_name,
                 cache_id,
@@ -1521,20 +1438,13 @@ impl StorageBucketRegistry {
         )
     }
 
-    fn match_cache_entries_for_selector_if_current(
+    fn match_cache_entries_for_selector_and_identity(
         &self,
-        origin: &str,
-        name: &str,
-        generation: u64,
+        identity: &StorageBucketIdentity,
         cache_selector: StorageBucketCacheSelector<'_>,
         query: &StorageBucketCacheQuery,
     ) -> Option<Vec<StorageBucketCacheMatch>> {
-        let metadata = self
-            .memory()
-            .origins
-            .get(origin)
-            .and_then(|buckets| buckets.get(name))
-            .filter(|metadata| metadata.generation == generation)?;
+        let metadata = self.metadata_for_identity(identity)?;
         let mut matches = cache_entries_for_selector(metadata, cache_selector)?
             .iter()
             .filter(|(request_url, entry)| cache_entry_matches_query(request_url, entry, query))
@@ -1553,33 +1463,25 @@ impl StorageBucketRegistry {
         Some(matches.into_iter().map(|(_, entry)| entry).collect())
     }
 
-    pub fn cache_entries_if_current(
+    pub fn cache_entries_for_identity(
         &self,
-        origin: &str,
-        name: &str,
-        generation: u64,
+        identity: &StorageBucketIdentity,
         cache_name: &str,
     ) -> Option<Vec<StorageBucketCacheMatch>> {
-        self.cache_entries_for_selector_if_current(
-            origin,
-            name,
-            generation,
+        self.cache_entries_for_selector_and_identity(
+            identity,
             StorageBucketCacheSelector::Named(cache_name),
         )
     }
 
-    pub fn cache_entries_for_handle_if_current(
+    pub fn cache_entries_for_handle_and_identity(
         &self,
-        origin: &str,
-        name: &str,
-        generation: u64,
+        identity: &StorageBucketIdentity,
         cache_name: &str,
         cache_id: StorageBucketCacheId,
     ) -> Option<Vec<StorageBucketCacheMatch>> {
-        self.cache_entries_for_selector_if_current(
-            origin,
-            name,
-            generation,
+        self.cache_entries_for_selector_and_identity(
+            identity,
             StorageBucketCacheSelector::Handle {
                 cache_name,
                 cache_id,
@@ -1587,19 +1489,12 @@ impl StorageBucketRegistry {
         )
     }
 
-    fn cache_entries_for_selector_if_current(
+    fn cache_entries_for_selector_and_identity(
         &self,
-        origin: &str,
-        name: &str,
-        generation: u64,
+        identity: &StorageBucketIdentity,
         cache_selector: StorageBucketCacheSelector<'_>,
     ) -> Option<Vec<StorageBucketCacheMatch>> {
-        let metadata = self
-            .memory()
-            .origins
-            .get(origin)
-            .and_then(|buckets| buckets.get(name))
-            .filter(|metadata| metadata.generation == generation)?;
+        let metadata = self.metadata_for_identity(identity)?;
         let mut entries = cache_entries_for_selector(metadata, cache_selector)?
             .iter()
             .map(|(request_url, entry)| {
@@ -1617,19 +1512,12 @@ impl StorageBucketRegistry {
         Some(entries.into_iter().map(|(_, entry)| entry).collect())
     }
 
-    pub fn cache_request_keys_if_current(
+    pub fn cache_request_keys_for_identity(
         &self,
-        origin: &str,
-        name: &str,
-        generation: u64,
+        identity: &StorageBucketIdentity,
         cache_name: &str,
     ) -> Option<Vec<String>> {
-        let metadata = self
-            .memory()
-            .origins
-            .get(origin)
-            .and_then(|buckets| buckets.get(name))
-            .filter(|metadata| metadata.generation == generation)?;
+        let metadata = self.metadata_for_identity(identity)?;
         let mut keys = metadata
             .cache_storage
             .get(cache_name)
@@ -1641,11 +1529,9 @@ impl StorageBucketRegistry {
         Some(keys.into_iter().map(|(_, key)| key).collect())
     }
 
-    pub fn delete_cache_entry_if_current(
+    pub fn delete_cache_entry_for_identity(
         &mut self,
-        origin: &str,
-        name: &str,
-        generation: u64,
+        identity: &StorageBucketIdentity,
         cache_name: &str,
         request_key: &str,
     ) -> Result<Option<bool>> {
@@ -1657,39 +1543,31 @@ impl StorageBucketRegistry {
             ignore_method: false,
             ignore_vary: false,
         };
-        self.delete_cache_entries_if_current(origin, name, generation, cache_name, &query)
+        self.delete_cache_entries_for_identity(identity, cache_name, &query)
     }
 
-    pub fn delete_cache_entries_if_current(
+    pub fn delete_cache_entries_for_identity(
         &mut self,
-        origin: &str,
-        name: &str,
-        generation: u64,
+        identity: &StorageBucketIdentity,
         cache_name: &str,
         query: &StorageBucketCacheQuery,
     ) -> Result<Option<bool>> {
-        self.delete_cache_entries_for_selector_if_current(
-            origin,
-            name,
-            generation,
+        self.delete_cache_entries_for_selector_and_identity(
+            identity,
             StorageBucketCacheSelector::Named(cache_name),
             query,
         )
     }
 
-    pub fn delete_cache_entries_for_handle_if_current(
+    pub fn delete_cache_entries_for_handle_and_identity(
         &mut self,
-        origin: &str,
-        name: &str,
-        generation: u64,
+        identity: &StorageBucketIdentity,
         cache_name: &str,
         cache_id: StorageBucketCacheId,
         query: &StorageBucketCacheQuery,
     ) -> Result<Option<bool>> {
-        self.delete_cache_entries_for_selector_if_current(
-            origin,
-            name,
-            generation,
+        self.delete_cache_entries_for_selector_and_identity(
+            identity,
             StorageBucketCacheSelector::Handle {
                 cache_name,
                 cache_id,
@@ -1698,22 +1576,14 @@ impl StorageBucketRegistry {
         )
     }
 
-    fn delete_cache_entries_for_selector_if_current(
+    fn delete_cache_entries_for_selector_and_identity(
         &mut self,
-        origin: &str,
-        name: &str,
-        generation: u64,
+        identity: &StorageBucketIdentity,
         cache_selector: StorageBucketCacheSelector<'_>,
         query: &StorageBucketCacheQuery,
     ) -> Result<Option<bool>> {
         let deleted = {
-            let Some(metadata) = self
-                .memory_mut()
-                .origins
-                .get_mut(origin)
-                .and_then(|buckets| buckets.get_mut(name))
-                .filter(|metadata| metadata.generation == generation)
-            else {
+            let Some(metadata) = self.metadata_for_identity_mut(identity) else {
                 return Ok(None);
             };
             let Some(entries) = cache_entries_for_selector_mut(metadata, cache_selector) else {
@@ -1736,12 +1606,8 @@ impl StorageBucketRegistry {
         Ok(Some(deleted))
     }
 
-    pub fn cache_usage_if_current(&self, origin: &str, name: &str, generation: u64) -> Option<u64> {
-        self.memory()
-            .origins
-            .get(origin)
-            .and_then(|buckets| buckets.get(name))
-            .filter(|metadata| metadata.generation == generation)
+    pub fn cache_usage_for_identity(&self, identity: &StorageBucketIdentity) -> Option<u64> {
+        self.metadata_for_identity(identity)
             .map(bucket_cache_storage_usage)
     }
 
@@ -1769,17 +1635,8 @@ impl StorageBucketRegistry {
             .fold(0u64, |total, usage| total.saturating_add(usage))
     }
 
-    pub fn bucket_persisted_if_current(
-        &self,
-        origin: &str,
-        name: &str,
-        generation: u64,
-    ) -> Option<bool> {
-        self.memory()
-            .origins
-            .get(origin)
-            .and_then(|buckets| buckets.get(name))
-            .filter(|metadata| metadata.generation == generation)
+    pub fn bucket_persisted_for_identity(&self, identity: &StorageBucketIdentity) -> Option<bool> {
+        self.metadata_for_identity(identity)
             .map(|metadata| metadata.persisted)
     }
 
@@ -1796,20 +1653,12 @@ impl StorageBucketRegistry {
         self.flush()
     }
 
-    pub fn set_bucket_expires_if_current(
+    pub fn set_bucket_expires_for_identity(
         &mut self,
-        origin: &str,
-        name: &str,
-        generation: u64,
+        identity: &StorageBucketIdentity,
         expires: Option<f64>,
     ) -> Result<bool> {
-        let Some(metadata) = self
-            .memory_mut()
-            .origins
-            .get_mut(origin)
-            .and_then(|buckets| buckets.get_mut(name))
-            .filter(|metadata| metadata.generation == generation)
-        else {
+        let Some(metadata) = self.metadata_for_identity_mut(identity) else {
             return Ok(false);
         };
         metadata.expires = expires;
@@ -2343,10 +2192,8 @@ impl JsonStorageBucketBackend {
             origins: json.origins,
             pending_deletions: json.pending_deletions,
             next_bucket_id: json.next_bucket_id,
-            next_generation: 0,
         };
         let mut identity_migrated = memory.assign_missing_bucket_ids()?;
-        memory.assign_missing_generations();
         let mut backend = Self {
             path: path.to_path_buf(),
             cache_storage_root,
@@ -2363,7 +2210,6 @@ impl JsonStorageBucketBackend {
         };
         if implicit_default_migrated {
             identity_migrated |= backend.memory.assign_missing_bucket_ids()?;
-            backend.memory.assign_missing_generations();
         }
         let mut indexed_db_identity_migrated = false;
         if !backend.indexed_db_keys_use_bucket_ids
@@ -2404,7 +2250,6 @@ impl JsonStorageBucketBackend {
             );
         }
         memory.assign_missing_bucket_ids()?;
-        memory.assign_missing_generations();
         let mut backend = Self {
             path: path.to_path_buf(),
             cache_storage_root,
@@ -2415,7 +2260,6 @@ impl JsonStorageBucketBackend {
         backend.load_cache_storage()?;
         backend.migrate_legacy_implicit_default_cache_storage();
         backend.memory.assign_missing_bucket_ids()?;
-        backend.memory.assign_missing_generations();
         backend.save()?;
         Ok(backend)
     }
@@ -2742,23 +2586,6 @@ impl MemoryStorageBucketBackend {
         }
         Ok(changed)
     }
-
-    fn assign_missing_generations(&mut self) {
-        let mut next_generation = self.next_generation.max(1);
-        for metadata in self
-            .origins
-            .values_mut()
-            .flat_map(|buckets| buckets.values_mut())
-        {
-            if metadata.generation == 0 {
-                metadata.generation = next_generation;
-                next_generation = next_generation.saturating_add(1).max(1);
-            } else {
-                next_generation = next_generation.max(metadata.generation.saturating_add(1));
-            }
-        }
-        self.next_generation = next_generation;
-    }
 }
 
 fn storage_buckets_json_version(bytes: &[u8], path: &Path) -> Result<u32> {
@@ -2882,11 +2709,11 @@ mod tests {
         let mut store = StorageBucketRegistry::default();
         let storage_key = "https://a.test";
 
-        let implicit_generation =
+        let implicit_identity =
             store.open_bucket(storage_key, IMPLICIT_DEFAULT_BUCKET_INTERNAL_NAME)?;
-        let named_generation = store.open_bucket(storage_key, "default")?;
+        let named_identity = store.open_bucket(storage_key, "default")?;
 
-        assert_ne!(implicit_generation, named_generation);
+        assert_ne!(implicit_identity, named_identity);
         assert_eq!(store.keys(storage_key), vec!["default"]);
         assert_ne!(
             store.bucket_id(storage_key, IMPLICIT_DEFAULT_BUCKET_INTERNAL_NAME),
@@ -2979,7 +2806,7 @@ mod tests {
                 &indexed_db_manager,
             );
         let storage_key = "storage-key:v1;origin=https://quota.test";
-        let generation = store.lock().open_bucket_with_options(
+        let identity = store.lock().open_bucket_with_options(
             storage_key,
             "bucket",
             None,
@@ -2993,10 +2820,8 @@ mod tests {
             .expect("opened bucket should have a locator");
         let cache_usage = 37;
         assert_eq!(
-            store.lock().put_cache_entry_if_current(
-                storage_key,
-                "bucket",
-                generation,
+            store.lock().put_cache_entry_for_identity(
+                &identity,
                 "cache",
                 "request",
                 StorageBucketCachedResponse {
@@ -3067,15 +2892,13 @@ mod tests {
             "storage-key:v1;origin=https://default-quota.test;",
             "top-level-site=https://default-quota.test"
         );
-        let generation = store
+        let identity = store
             .lock()
             .open_bucket(storage_key, IMPLICIT_DEFAULT_BUCKET_INTERNAL_NAME)?;
         let cache_usage = 41;
         assert_eq!(
-            store.lock().put_cache_entry_if_current(
-                storage_key,
-                IMPLICIT_DEFAULT_BUCKET_INTERNAL_NAME,
-                generation,
+            store.lock().put_cache_entry_for_identity(
+                &identity,
                 "cache",
                 "request",
                 StorageBucketCachedResponse {
@@ -3157,17 +2980,12 @@ mod tests {
                 &indexed_db_manager,
             );
         let storage_key = "storage-key:v1;origin=https://delete.test";
-        let generation = store.lock().open_bucket(storage_key, "same-name-bucket")?;
-        let old_identity = store
-            .lock()
-            .bucket_identity(storage_key, "same-name-bucket")
-            .expect("opened bucket should have an identity");
-        assert!(store.lock().open_cache_if_current(
-            storage_key,
-            "same-name-bucket",
-            generation,
-            "old-cache",
-        )?);
+        let old_identity = store.lock().open_bucket(storage_key, "same-name-bucket")?;
+        assert!(
+            store
+                .lock()
+                .open_cache_for_identity(&old_identity, "old-cache")?
+        );
         seed_indexed_db_record(&indexed_db_manager, &old_identity.indexed_db_storage_key())?;
         let old_key = StorageService::opfs_bucket_key(&old_identity.locator())?;
         let old_root = storage_service.ensure_opfs_root(&old_identity.locator())?;
@@ -3189,11 +3007,7 @@ mod tests {
         );
         assert_eq!(storage_service.opfs_usage(&old_identity.locator())?, 0);
 
-        let replacement_generation = store.lock().open_bucket(storage_key, "same-name-bucket")?;
-        let replacement = store
-            .lock()
-            .bucket_identity(storage_key, "same-name-bucket")
-            .expect("replacement bucket should have an identity");
+        let replacement = store.lock().open_bucket(storage_key, "same-name-bucket")?;
         assert_ne!(replacement.bucket_id(), old_identity.bucket_id());
         seed_indexed_db_record(&indexed_db_manager, &replacement.indexed_db_storage_key())?;
         let replacement_key = StorageService::opfs_bucket_key(&replacement.locator())?;
@@ -3214,18 +3028,14 @@ mod tests {
         assert!(indexed_db_usage(&indexed_db_manager, &replacement.indexed_db_storage_key())? > 0);
         assert!(storage_service.opfs_usage(&replacement.locator())? > 0);
         assert_eq!(
-            store.lock().cache_names_if_current(
-                storage_key,
-                "same-name-bucket",
-                replacement_generation,
-            ),
+            store.lock().cache_names_for_identity(&replacement),
             Some(Vec::new())
         );
         Ok(())
     }
 
     #[test]
-    fn memory_storage_bucket_store_invalidates_deleted_bucket_generation() -> Result<()> {
+    fn memory_storage_bucket_store_invalidates_deleted_bucket_identity() -> Result<()> {
         let mut store = StorageBucketRegistry::default();
 
         let first = store.open_bucket("https://a.test", "bucket")?;
@@ -3236,16 +3046,16 @@ mod tests {
         assert_eq!(store.bucket_id("https://a.test", "bucket"), Some(first_id));
         assert_eq!(
             store
-                .bucket_locator_if_current("https://a.test", "bucket", first)
+                .bucket_locator_for_identity(&first)
                 .and_then(|locator| locator.bucket_id()),
             Some(first_id)
         );
-        assert!(store.bucket_is_current("https://a.test", "bucket", first));
+        assert!(store.bucket_identity_is_live(&first));
 
         let cleanup = store
             .delete_bucket("https://a.test", "bucket")?
             .expect("deleted bucket should produce cleanup identity");
-        assert!(!store.bucket_is_current("https://a.test", "bucket", first));
+        assert!(!store.bucket_identity_is_live(&first));
         assert_eq!(store.bucket_locator("https://a.test", "bucket"), None);
         assert!(
             store
@@ -3260,8 +3070,8 @@ mod tests {
         let recreated_id = store.bucket_id("https://a.test", "bucket").unwrap();
         assert_ne!(recreated, first);
         assert_ne!(recreated_id, first_id);
-        assert!(!store.bucket_is_current("https://a.test", "bucket", first));
-        assert!(store.bucket_is_current("https://a.test", "bucket", recreated));
+        assert!(!store.bucket_identity_is_live(&first));
+        assert!(store.bucket_identity_is_live(&recreated));
         Ok(())
     }
 
@@ -3283,8 +3093,8 @@ mod tests {
         );
         assert_eq!(store.keys("https://a.test"), vec!["live"]);
         assert_eq!(store.keys("https://b.test"), vec!["expired"]);
-        assert!(!store.bucket_is_current("https://a.test", "expired", expired));
-        assert!(store.bucket_is_current("https://a.test", "live", live));
+        assert!(!store.bucket_identity_is_live(&expired));
+        assert!(store.bucket_identity_is_live(&live));
 
         assert!(store.finish_bucket_deletion(&cleanups[0])?);
         let recreated = store.open_bucket("https://a.test", "expired")?;
@@ -3310,16 +3120,16 @@ mod tests {
                 .is_some()
         );
         assert_eq!(store.keys("https://a.test"), vec!["live"]);
-        assert!(!store.bucket_is_current("https://a.test", "expired", expired));
-        assert!(store.bucket_is_current("https://a.test", "live", live));
+        assert!(!store.bucket_identity_is_live(&expired));
+        assert!(store.bucket_identity_is_live(&live));
         Ok(())
     }
 
     #[test]
     fn memory_storage_bucket_store_matches_runtime_cache_entries() -> Result<()> {
         let mut store = StorageBucketRegistry::default();
-        let generation = store.open_bucket("https://a.test", "bucket")?;
-        assert!(store.open_cache_if_current("https://a.test", "bucket", generation, "cache")?);
+        let identity = store.open_bucket("https://a.test", "bucket")?;
+        assert!(store.open_cache_for_identity(&identity, "cache")?);
         let response = StorageBucketCachedResponse {
             response_type: "default".to_owned(),
             url: String::new(),
@@ -3331,10 +3141,8 @@ mod tests {
         };
 
         assert_eq!(
-            store.put_cache_entry_if_current(
-                "https://a.test",
-                "bucket",
-                generation,
+            store.put_cache_entry_for_identity(
+                &identity,
                 "cache",
                 "/receipt",
                 response.clone(),
@@ -3345,33 +3153,18 @@ mod tests {
         );
 
         let matched = store
-            .match_cache_entry_if_current(
-                "https://a.test",
-                "bucket",
-                generation,
-                "cache",
-                "/receipt",
-            )
+            .match_cache_entry_for_identity(&identity, "cache", "/receipt")
             .flatten()
             .expect("cache entry should match");
         assert_eq!(matched.status, response.status);
         assert_eq!(matched.status_text, response.status_text);
         assert_eq!(matched.headers, response.headers);
         assert_eq!(matched.body, response.body);
-        assert_eq!(
-            store.cache_usage_if_current("https://a.test", "bucket", generation),
-            Some(42)
-        );
+        assert_eq!(store.cache_usage_for_identity(&identity), Some(42));
         assert_eq!(store.cache_usage_for_origin("https://a.test"), 42);
         assert_eq!(store.cache_usage_for_origin("https://b.test"), 0);
         assert_eq!(
-            store.match_cache_entry_if_current(
-                "https://a.test",
-                "bucket",
-                generation,
-                "cache",
-                "/missing"
-            ),
+            store.match_cache_entry_for_identity(&identity, "cache", "/missing"),
             Some(None)
         );
         Ok(())
@@ -3380,8 +3173,8 @@ mod tests {
     #[test]
     fn memory_storage_bucket_store_normalizes_cache_request_fragments() -> Result<()> {
         let mut store = StorageBucketRegistry::default();
-        let generation = store.open_bucket("https://a.test", "bucket")?;
-        assert!(store.open_cache_if_current("https://a.test", "bucket", generation, "cache")?);
+        let identity = store.open_bucket("https://a.test", "bucket")?;
+        assert!(store.open_cache_for_identity(&identity, "cache")?);
         let first_response = StorageBucketCachedResponse {
             response_type: "default".to_owned(),
             url: String::new(),
@@ -3393,10 +3186,8 @@ mod tests {
         };
 
         assert_eq!(
-            store.put_cache_entry_if_current(
-                "https://a.test",
-                "bucket",
-                generation,
+            store.put_cache_entry_for_identity(
+                &identity,
                 "cache",
                 "https://a.test/entry#put-fragment",
                 first_response.clone(),
@@ -3406,15 +3197,13 @@ mod tests {
             StorageBucketCachePutOutcome::Stored
         );
         assert_eq!(
-            store.cache_request_keys_if_current("https://a.test", "bucket", generation, "cache",),
+            store.cache_request_keys_for_identity(&identity, "cache"),
             Some(vec!["https://a.test/entry#put-fragment".to_owned()])
         );
         assert_eq!(
             store
-                .match_cache_entry_if_current(
-                    "https://a.test",
-                    "bucket",
-                    generation,
+                .match_cache_entry_for_identity(
+                    &identity,
                     "cache",
                     "https://a.test/entry#match-fragment",
                 )
@@ -3422,24 +3211,20 @@ mod tests {
             Some(first_response)
         );
         assert_eq!(
-            store.delete_cache_entry_if_current(
-                "https://a.test",
-                "bucket",
-                generation,
+            store.delete_cache_entry_for_identity(
+                &identity,
                 "cache",
                 "https://a.test/entry#delete-fragment",
             )?,
             Some(true)
         );
         assert_eq!(
-            store.cache_request_keys_if_current("https://a.test", "bucket", generation, "cache",),
+            store.cache_request_keys_for_identity(&identity, "cache"),
             Some(Vec::new())
         );
         assert_eq!(
-            store.delete_cache_entry_if_current(
-                "https://a.test",
-                "bucket",
-                generation,
+            store.delete_cache_entry_for_identity(
+                &identity,
                 "cache",
                 "https://a.test/entry#again",
             )?,
@@ -3456,10 +3241,8 @@ mod tests {
             body: b"replacement".to_vec(),
         };
         assert_eq!(
-            store.put_cache_entry_if_current(
-                "https://a.test",
-                "bucket",
-                generation,
+            store.put_cache_entry_for_identity(
+                &identity,
                 "cache",
                 "https://a.test/replaced#first",
                 replacement_response.clone(),
@@ -3469,10 +3252,8 @@ mod tests {
             StorageBucketCachePutOutcome::Stored
         );
         assert_eq!(
-            store.put_cache_entry_if_current(
-                "https://a.test",
-                "bucket",
-                generation,
+            store.put_cache_entry_for_identity(
+                &identity,
                 "cache",
                 "https://a.test/replaced#second",
                 replacement_response.clone(),
@@ -3482,19 +3263,14 @@ mod tests {
             StorageBucketCachePutOutcome::Stored
         );
         assert_eq!(
-            store.cache_request_keys_if_current("https://a.test", "bucket", generation, "cache",),
+            store.cache_request_keys_for_identity(&identity, "cache"),
             Some(vec!["https://a.test/replaced#second".to_owned()])
         );
-        assert_eq!(
-            store.cache_usage_if_current("https://a.test", "bucket", generation),
-            Some(17)
-        );
+        assert_eq!(store.cache_usage_for_identity(&identity), Some(17));
         assert_eq!(
             store
-                .match_cache_entry_if_current(
-                    "https://a.test",
-                    "bucket",
-                    generation,
+                .match_cache_entry_for_identity(
+                    &identity,
                     "cache",
                     "https://a.test/replaced#query",
                 )
@@ -3507,8 +3283,8 @@ mod tests {
     #[test]
     fn memory_storage_bucket_store_applies_cache_query_options_and_vary() -> Result<()> {
         let mut store = StorageBucketRegistry::default();
-        let generation = store.open_bucket("https://a.test", "bucket")?;
-        assert!(store.open_cache_if_current("https://a.test", "bucket", generation, "cache")?);
+        let identity = store.open_bucket("https://a.test", "bucket")?;
+        assert!(store.open_cache_for_identity(&identity, "cache")?);
         let response = |body: &str, headers: Vec<(String, String)>| StorageBucketCachedResponse {
             response_type: "default".to_owned(),
             url: String::new(),
@@ -3539,10 +3315,8 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                store.put_cache_entry_with_request_if_current(
-                    "https://a.test",
-                    "bucket",
-                    generation,
+                store.put_cache_entry_with_request_for_identity(
+                    &identity,
                     "cache",
                     request_url,
                     request,
@@ -3563,13 +3337,7 @@ mod tests {
             ignore_vary: false,
         };
         let matches = store
-            .match_cache_entries_if_current(
-                "https://a.test",
-                "bucket",
-                generation,
-                "cache",
-                &ignore_search,
-            )
+            .match_cache_entries_for_identity(&identity, "cache", &ignore_search)
             .expect("cache should remain live");
         assert_eq!(matches.len(), 2);
         assert_eq!(matches[0].response.body, b"page-one");
@@ -3584,13 +3352,7 @@ mod tests {
             ignore_vary: false,
         };
         assert_eq!(
-            store.match_cache_entries_if_current(
-                "https://a.test",
-                "bucket",
-                generation,
-                "cache",
-                &vary_miss,
-            ),
+            store.match_cache_entries_for_identity(&identity, "cache", &vary_miss),
             Some(Vec::new())
         );
         let vary_ignored = StorageBucketCacheQuery {
@@ -3599,13 +3361,7 @@ mod tests {
         };
         assert_eq!(
             store
-                .match_cache_entries_if_current(
-                    "https://a.test",
-                    "bucket",
-                    generation,
-                    "cache",
-                    &vary_ignored,
-                )
+                .match_cache_entries_for_identity(&identity, "cache", &vary_ignored)
                 .expect("cache should remain live")[0]
                 .response
                 .body,
@@ -3617,9 +3373,9 @@ mod tests {
     #[test]
     fn deleted_cache_mapping_keeps_live_handle_detached_until_release() -> Result<()> {
         let mut store = StorageBucketRegistry::default();
-        let generation = store.open_bucket("https://a.test", "bucket")?;
+        let identity = store.open_bucket("https://a.test", "bucket")?;
         let cache_id = store
-            .open_cache_handle_if_current("https://a.test", "bucket", generation, "cache")?
+            .open_cache_handle_for_identity(&identity, "cache")?
             .expect("bucket should remain current");
         let response = StorageBucketCachedResponse {
             response_type: "default".to_owned(),
@@ -3631,10 +3387,8 @@ mod tests {
             body: b"before-delete".to_vec(),
         };
         assert_eq!(
-            store.put_cache_entry_with_request_for_handle_if_current(
-                "https://a.test",
-                "bucket",
-                generation,
+            store.put_cache_entry_with_request_for_handle_and_identity(
+                &identity,
                 "cache",
                 cache_id,
                 "https://a.test/entry",
@@ -3646,22 +3400,13 @@ mod tests {
             StorageBucketCachePutOutcome::Stored
         );
         assert_eq!(
-            store.delete_cache_if_current("https://a.test", "bucket", generation, "cache")?,
+            store.delete_cache_for_identity(&identity, "cache")?,
             Some(true)
         );
-        assert_eq!(
-            store.cache_names_if_current("https://a.test", "bucket", generation),
-            Some(Vec::new())
-        );
+        assert_eq!(store.cache_names_for_identity(&identity), Some(Vec::new()));
         assert_eq!(
             store
-                .cache_entries_for_handle_if_current(
-                    "https://a.test",
-                    "bucket",
-                    generation,
-                    "cache",
-                    cache_id,
-                )
+                .cache_entries_for_handle_and_identity(&identity, "cache", cache_id)
                 .expect("detached handle should remain live")[0]
                 .response
                 .body,
@@ -3669,28 +3414,16 @@ mod tests {
         );
 
         let reopened_id = store
-            .open_cache_handle_if_current("https://a.test", "bucket", generation, "cache")?
+            .open_cache_handle_for_identity(&identity, "cache")?
             .expect("bucket should remain current");
         assert_ne!(reopened_id, cache_id);
         assert_eq!(
-            store.cache_entries_for_handle_if_current(
-                "https://a.test",
-                "bucket",
-                generation,
-                "cache",
-                reopened_id,
-            ),
+            store.cache_entries_for_handle_and_identity(&identity, "cache", reopened_id),
             Some(Vec::new())
         );
-        store.release_cache_handle_if_current("https://a.test", "bucket", generation, cache_id);
+        store.release_cache_handle_for_identity(&identity, cache_id);
         assert_eq!(
-            store.cache_entries_for_handle_if_current(
-                "https://a.test",
-                "bucket",
-                generation,
-                "cache",
-                cache_id,
-            ),
+            store.cache_entries_for_handle_and_identity(&identity, "cache", cache_id),
             None
         );
         Ok(())
@@ -3699,7 +3432,7 @@ mod tests {
     #[test]
     fn memory_storage_bucket_store_enforces_cache_quota_without_clobbering_entries() -> Result<()> {
         let mut store = StorageBucketRegistry::default();
-        let generation = store.open_bucket_with_options(
+        let identity = store.open_bucket_with_options(
             "https://a.test",
             "bucket",
             None,
@@ -3707,7 +3440,7 @@ mod tests {
             Some(100),
             None,
         )?;
-        assert!(store.open_cache_if_current("https://a.test", "bucket", generation, "cache")?);
+        assert!(store.open_cache_for_identity(&identity, "cache")?);
         let original = StorageBucketCachedResponse {
             response_type: "default".to_owned(),
             url: String::new(),
@@ -3728,10 +3461,8 @@ mod tests {
         };
 
         assert_eq!(
-            store.put_cache_entry_if_current(
-                "https://a.test",
-                "bucket",
-                generation,
+            store.put_cache_entry_for_identity(
+                &identity,
                 "cache",
                 "/entry",
                 original.clone(),
@@ -3741,10 +3472,8 @@ mod tests {
             StorageBucketCachePutOutcome::Stored
         );
         assert_eq!(
-            store.put_cache_entry_if_current(
-                "https://a.test",
-                "bucket",
-                generation,
+            store.put_cache_entry_for_identity(
+                &identity,
                 "cache",
                 "/too-large",
                 oversized.clone(),
@@ -3757,16 +3486,7 @@ mod tests {
             }
         );
         assert_eq!(
-            store.put_cache_entry_if_current(
-                "https://a.test",
-                "bucket",
-                generation,
-                "cache",
-                "/entry",
-                oversized,
-                60,
-                50,
-            )?,
+            store.put_cache_entry_for_identity(&identity, "cache", "/entry", oversized, 60, 50,)?,
             StorageBucketCachePutOutcome::QuotaExceeded {
                 quota: 100,
                 requested: 110,
@@ -3774,24 +3494,15 @@ mod tests {
         );
 
         let matched = store
-            .match_cache_entry_if_current("https://a.test", "bucket", generation, "cache", "/entry")
+            .match_cache_entry_for_identity(&identity, "cache", "/entry")
             .flatten()
             .expect("original cache entry should remain after quota rejection");
         assert_eq!(matched, original);
         assert_eq!(
-            store.match_cache_entry_if_current(
-                "https://a.test",
-                "bucket",
-                generation,
-                "cache",
-                "/too-large"
-            ),
+            store.match_cache_entry_for_identity(&identity, "cache", "/too-large"),
             Some(None)
         );
-        assert_eq!(
-            store.cache_usage_if_current("https://a.test", "bucket", generation),
-            Some(40)
-        );
+        assert_eq!(store.cache_usage_for_identity(&identity), Some(40));
         Ok(())
     }
 
@@ -3842,12 +3553,10 @@ mod tests {
             let store =
                 new_shared_json_storage_bucket_store_with_cache_root(&temp.path, &cache_root)?;
             let mut store = store.lock();
-            let generation = store.open_bucket("https://a.test", "default")?;
+            let identity = store.open_bucket("https://a.test", "default")?;
             assert_eq!(
-                store.put_cache_entry_if_current(
-                    "https://a.test",
-                    "default",
-                    generation,
+                store.put_cache_entry_for_identity(
+                    &identity,
                     "global-cache",
                     "/entry",
                     StorageBucketCachedResponse {
@@ -3871,30 +3580,18 @@ mod tests {
 
         let store = new_shared_json_storage_bucket_store_with_cache_root(&temp.path, &cache_root)?;
         let store = store.lock();
-        let implicit_generation = store
-            .memory()
-            .origins
-            .get("https://a.test")
-            .and_then(|buckets| buckets.get(IMPLICIT_DEFAULT_BUCKET_INTERNAL_NAME))
-            .map(|metadata| metadata.generation)
+        let implicit_identity = store
+            .bucket_identity("https://a.test", IMPLICIT_DEFAULT_BUCKET_INTERNAL_NAME)
             .expect("migration should create the implicit default bucket");
         assert_eq!(
-            store.cache_names_if_current(
-                "https://a.test",
-                IMPLICIT_DEFAULT_BUCKET_INTERNAL_NAME,
-                implicit_generation,
-            ),
+            store.cache_names_for_identity(&implicit_identity),
             Some(vec!["global-cache".to_owned()])
         );
-        let named_generation = store
-            .memory()
-            .origins
-            .get("https://a.test")
-            .and_then(|buckets| buckets.get("default"))
-            .map(|metadata| metadata.generation)
-            .unwrap();
+        let named_identity = store
+            .bucket_identity("https://a.test", "default")
+            .expect("named default bucket should survive migration");
         assert_eq!(
-            store.cache_names_if_current("https://a.test", "default", named_generation,),
+            store.cache_names_for_identity(&named_identity),
             Some(Vec::new())
         );
         drop(store);
@@ -4082,10 +3779,7 @@ mod tests {
                     storage_service.clone(),
                 )?;
                 let mut store = store.lock();
-                let generation = store.open_bucket(storage_key, "bucket")?;
-                old_identity = store
-                    .bucket_identity(storage_key, "bucket")
-                    .expect("opened bucket should have identity");
+                old_identity = store.open_bucket(storage_key, "bucket")?;
                 seed_indexed_db_record(
                     &indexed_db_manager,
                     &old_identity.indexed_db_storage_key(),
@@ -4097,12 +3791,10 @@ mod tests {
                     .with_opfs(|opfs| opfs.get_file(&bucket_key, &root, "old.txt", true))?;
                 storage_service
                     .with_opfs(|opfs| opfs.write_file(&bucket_key, &file, b"old bucket", None))?;
-                assert!(store.open_cache_if_current(storage_key, "bucket", generation, "cache")?);
+                assert!(store.open_cache_for_identity(&old_identity, "cache")?);
                 assert_eq!(
-                    store.put_cache_entry_if_current(
-                        storage_key,
-                        "bucket",
-                        generation,
+                    store.put_cache_entry_for_identity(
+                        &old_identity,
                         "cache",
                         "/cached.txt",
                         StorageBucketCachedResponse {
@@ -4177,15 +3869,9 @@ mod tests {
             );
             assert_eq!(storage_service.opfs_usage(&old_identity.locator())?, 0);
             assert!(!store.bucket_locator_is_live(&old_identity.locator()));
-            let recreated_generation = store.open_bucket(storage_key, "bucket")?;
-            let recreated = store
-                .bucket_identity(storage_key, "bucket")
-                .expect("same-name bucket should reopen after recovery");
+            let recreated = store.open_bucket(storage_key, "bucket")?;
             assert_ne!(recreated.bucket_id(), old_identity.bucket_id());
-            assert_eq!(
-                store.cache_names_if_current(storage_key, "bucket", recreated_generation,),
-                Some(Vec::new())
-            );
+            assert_eq!(store.cache_names_for_identity(&recreated), Some(Vec::new()));
             assert!(
                 !storage_bucket_cache_bucket_dir(
                     &cache_root,
@@ -4216,18 +3902,11 @@ mod tests {
             let store =
                 new_shared_json_storage_bucket_store_with_cache_root(&temp.path, &cache_root)?;
             let mut store = store.lock();
-            let generation = store.open_bucket("https://a.test", "bucket")?;
-            assert!(store.open_cache_if_current(
-                "https://a.test",
-                "bucket",
-                generation,
-                "cache"
-            )?);
+            let identity = store.open_bucket("https://a.test", "bucket")?;
+            assert!(store.open_cache_for_identity(&identity, "cache")?);
             assert_eq!(
-                store.put_cache_entry_if_current(
-                    "https://a.test",
-                    "bucket",
-                    generation,
+                store.put_cache_entry_for_identity(
+                    &identity,
                     "cache",
                     "/cached.txt",
                     response.clone(),
@@ -4256,39 +3935,27 @@ mod tests {
             let store =
                 new_shared_json_storage_bucket_store_with_cache_root(&temp.path, &cache_root)?;
             let mut store = store.lock();
-            let generation = store.open_bucket("https://a.test", "bucket")?;
+            let identity = store.open_bucket("https://a.test", "bucket")?;
             assert_eq!(
-                store.cache_names_if_current("https://a.test", "bucket", generation),
+                store.cache_names_for_identity(&identity),
                 Some(vec!["cache".to_owned()])
             );
             let matched = store
-                .match_cache_entry_if_current(
-                    "https://a.test",
-                    "bucket",
-                    generation,
-                    "cache",
-                    "/cached.txt",
-                )
+                .match_cache_entry_for_identity(&identity, "cache", "/cached.txt")
                 .flatten()
                 .expect("cache entry should persist across reopen");
             assert_eq!(matched, response);
+            assert_eq!(store.cache_usage_for_identity(&identity), Some(64));
             assert_eq!(
-                store.cache_usage_if_current("https://a.test", "bucket", generation),
-                Some(64)
-            );
-            assert_eq!(
-                store.delete_cache_if_current("https://a.test", "bucket", generation, "cache")?,
+                store.delete_cache_for_identity(&identity, "cache")?,
                 Some(true)
             );
         }
 
         let store = new_shared_json_storage_bucket_store_with_cache_root(&temp.path, &cache_root)?;
         let mut store = store.lock();
-        let generation = store.open_bucket("https://a.test", "bucket")?;
-        assert_eq!(
-            store.cache_names_if_current("https://a.test", "bucket", generation),
-            Some(Vec::new())
-        );
+        let identity = store.open_bucket("https://a.test", "bucket")?;
+        assert_eq!(store.cache_names_for_identity(&identity), Some(Vec::new()));
         Ok(())
     }
 
@@ -4325,18 +3992,11 @@ mod tests {
                 let store =
                     new_shared_json_storage_bucket_store_with_cache_root(&temp.path, &cache_root)?;
                 let mut store = store.lock();
-                let generation = store.open_bucket("https://a.test", "bucket")?;
-                assert!(store.open_cache_if_current(
-                    "https://a.test",
-                    "bucket",
-                    generation,
-                    "cache"
-                )?);
+                let identity = store.open_bucket("https://a.test", "bucket")?;
+                assert!(store.open_cache_for_identity(&identity, "cache")?);
                 assert_eq!(
-                    store.put_cache_entry_if_current(
-                        "https://a.test",
-                        "bucket",
-                        generation,
+                    store.put_cache_entry_for_identity(
+                        &identity,
                         "cache",
                         "/cached.txt",
                         old_response.clone(),
@@ -4351,14 +4011,12 @@ mod tests {
                 let store =
                     new_shared_json_storage_bucket_store_with_cache_root(&temp.path, &cache_root)?;
                 let mut store = store.lock();
-                let generation = store.open_bucket("https://a.test", "bucket")?;
+                let identity = store.open_bucket("https://a.test", "bucket")?;
                 let crash = catch_unwind(AssertUnwindSafe(|| {
                     let _armed = arm(point);
                     store
-                        .put_cache_entry_if_current(
-                            "https://a.test",
-                            "bucket",
-                            generation,
+                        .put_cache_entry_for_identity(
+                            &identity,
                             "cache",
                             "/cached.txt",
                             new_response.clone(),
@@ -4373,15 +4031,9 @@ mod tests {
             let store =
                 new_shared_json_storage_bucket_store_with_cache_root(&temp.path, &cache_root)?;
             let mut store = store.lock();
-            let generation = store.open_bucket("https://a.test", "bucket")?;
+            let identity = store.open_bucket("https://a.test", "bucket")?;
             let matched = store
-                .match_cache_entry_if_current(
-                    "https://a.test",
-                    "bucket",
-                    generation,
-                    "cache",
-                    "/cached.txt",
-                )
+                .match_cache_entry_for_identity(&identity, "cache", "/cached.txt")
                 .flatten()
                 .expect("recovery should leave one committed cache response");
             let expected = if point == CrashPoint::CacheNextDurable {
@@ -4415,18 +4067,11 @@ mod tests {
             let store =
                 new_shared_json_storage_bucket_store_with_cache_root(&temp.path, &cache_root)?;
             let mut store = store.lock();
-            let generation = store.open_bucket("https://a.test", "bucket")?;
-            assert!(store.open_cache_if_current(
-                "https://a.test",
-                "bucket",
-                generation,
-                "cache"
-            )?);
+            let identity = store.open_bucket("https://a.test", "bucket")?;
+            assert!(store.open_cache_for_identity(&identity, "cache")?);
             assert_eq!(
-                store.put_cache_entry_if_current(
-                    "https://a.test",
-                    "bucket",
-                    generation,
+                store.put_cache_entry_for_identity(
+                    &identity,
                     "cache",
                     "/cached.txt",
                     response.clone(),
@@ -4445,15 +4090,9 @@ mod tests {
 
         let store = new_shared_json_storage_bucket_store_with_cache_root(&temp.path, &cache_root)?;
         let mut store = store.lock();
-        let generation = store.open_bucket("https://a.test", "bucket")?;
+        let identity = store.open_bucket("https://a.test", "bucket")?;
         let matched = store
-            .match_cache_entry_if_current(
-                "https://a.test",
-                "bucket",
-                generation,
-                "cache",
-                "/cached.txt",
-            )
+            .match_cache_entry_for_identity(&identity, "cache", "/cached.txt")
             .flatten()
             .expect("completed replacement root should be promoted on reopen");
         assert_eq!(matched, response);
@@ -4480,18 +4119,11 @@ mod tests {
             let store =
                 new_shared_json_storage_bucket_store_with_cache_root(&temp.path, &cache_root)?;
             let mut store = store.lock();
-            let generation = store.open_bucket("https://a.test", "bucket")?;
-            assert!(store.open_cache_if_current(
-                "https://a.test",
-                "bucket",
-                generation,
-                "cache"
-            )?);
+            let identity = store.open_bucket("https://a.test", "bucket")?;
+            assert!(store.open_cache_for_identity(&identity, "cache")?);
             assert_eq!(
-                store.put_cache_entry_if_current(
-                    "https://a.test",
-                    "bucket",
-                    generation,
+                store.put_cache_entry_for_identity(
+                    &identity,
                     "cache",
                     "/cached.txt",
                     response.clone(),
@@ -4510,15 +4142,9 @@ mod tests {
 
         let store = new_shared_json_storage_bucket_store_with_cache_root(&temp.path, &cache_root)?;
         let mut store = store.lock();
-        let generation = store.open_bucket("https://a.test", "bucket")?;
+        let identity = store.open_bucket("https://a.test", "bucket")?;
         let matched = store
-            .match_cache_entry_if_current(
-                "https://a.test",
-                "bucket",
-                generation,
-                "cache",
-                "/cached.txt",
-            )
+            .match_cache_entry_for_identity(&identity, "cache", "/cached.txt")
             .flatten()
             .expect("previous root should be restored on reopen");
         assert_eq!(matched, response);
@@ -4548,28 +4174,21 @@ mod tests {
             let store =
                 new_shared_json_storage_bucket_store_with_cache_root(&temp.path, &cache_root)?;
             let mut store = store.lock();
-            let expired_generation = store.open_bucket_with_expires(
+            let expired_identity = store.open_bucket_with_expires(
                 "https://a.test",
                 "expired",
                 Some(now_ms - 1_000.0),
             )?;
             store.open_bucket_with_expires("https://a.test", "live", Some(now_ms + 60_000.0))?;
-            let sibling_expired_generation = store.open_bucket_with_expires(
+            let sibling_expired_identity = store.open_bucket_with_expires(
                 "https://b.test",
                 "expired",
                 Some(now_ms - 1_000.0),
             )?;
-            assert!(store.open_cache_if_current(
-                "https://a.test",
-                "expired",
-                expired_generation,
-                "cache"
-            )?);
+            assert!(store.open_cache_for_identity(&expired_identity, "cache")?);
             assert_eq!(
-                store.put_cache_entry_if_current(
-                    "https://a.test",
-                    "expired",
-                    expired_generation,
+                store.put_cache_entry_for_identity(
+                    &expired_identity,
                     "cache",
                     "/expired.txt",
                     response,
@@ -4578,12 +4197,7 @@ mod tests {
                 )?,
                 StorageBucketCachePutOutcome::Stored
             );
-            assert!(store.open_cache_if_current(
-                "https://b.test",
-                "expired",
-                sibling_expired_generation,
-                "cache"
-            )?);
+            assert!(store.open_cache_for_identity(&sibling_expired_identity, "cache")?);
             (
                 store
                     .bucket_identity("https://a.test", "expired")
@@ -4944,9 +4558,9 @@ mod tests {
 
         let store = new_shared_json_storage_bucket_store_with_cache_root(&temp.path, &cache_root)?;
         let mut store = store.lock();
-        let generation = store.open_bucket(storage_key, bucket_name)?;
+        let identity = store.open_bucket(storage_key, bucket_name)?;
         let matched = store
-            .match_cache_entry_if_current(storage_key, bucket_name, generation, "cache", "/cached")
+            .match_cache_entry_for_identity(&identity, "cache", "/cached")
             .flatten()
             .expect("legacy CacheStorage path should be recovered");
         assert_eq!(matched, response);

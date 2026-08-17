@@ -1,6 +1,5 @@
 use super::*;
 use moli_browser_profile::BrowserIdentityProfile;
-use moli_storage_service::StorageBucketId;
 use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiObject};
 
 use crate::context_bootstrap::navigator_runtime::{
@@ -15,9 +14,8 @@ use crate::context_bootstrap::storage_buckets::{
     StorageBucketCachePutOutcome, StorageBucketCacheQuery, StorageBucketCachedRequest,
     StorageBucketCachedResponse, StorageBucketDurability, StorageBucketIdentity,
     complete_storage_bucket_deletion_for_context, current_storage_bucket_storage_key,
-    current_storage_bucket_store, storage_bucket_indexed_db_storage_key,
-    storage_bucket_origin_allows_storage, storage_bucket_quota_owner_for_locator,
-    with_storage_bucket_store_entry,
+    current_storage_bucket_store, storage_bucket_origin_allows_storage,
+    storage_bucket_quota_owner_for_locator, with_storage_bucket_store_entry,
 };
 use crate::document_runtime::DomHandle;
 use crate::util::{get_private_value, set_private_value};
@@ -40,7 +38,7 @@ const VIBRATION_PATTERN_LENGTH_MAX: usize = 99;
 const VIBRATION_DURATION_MS_MAX: u32 = 10_000;
 const STORAGE_BUCKET_BRAND_SLOT: &str = "__moliStorageBucketBrand";
 const STORAGE_BUCKET_CACHES_OBJECT_SLOT: &str = "__moliStorageBucketCachesObject";
-const STORAGE_BUCKET_GENERATION_SLOT: &str = "__moliStorageBucketGeneration";
+const STORAGE_BUCKET_ID_SLOT: &str = "__moliStorageBucketId";
 const STORAGE_BUCKET_NAME_SLOT: &str = "__moliStorageBucketName";
 const STORAGE_BUCKET_ORIGIN_SLOT: &str = "__moliStorageBucketOrigin";
 const STORAGE_BUCKET_STORAGE_KEY_SLOT: &str = "__moliStorageBucketStorageKey";
@@ -52,8 +50,7 @@ const GLOBAL_CACHE_STORAGE_SLOT: &str = "__moliGlobalCacheStorage";
 const STORAGE_BUCKET_CACHE_PUT_RESOLVER_SLOT: &str = "__moliStorageBucketCachePutResolver";
 const STORAGE_BUCKET_CACHE_PUT_BUCKET_ORIGIN_SLOT: &str = "__moliStorageBucketCachePutBucketOrigin";
 const STORAGE_BUCKET_CACHE_PUT_BUCKET_NAME_SLOT: &str = "__moliStorageBucketCachePutBucketName";
-const STORAGE_BUCKET_CACHE_PUT_BUCKET_GENERATION_SLOT: &str =
-    "__moliStorageBucketCachePutBucketGeneration";
+const STORAGE_BUCKET_CACHE_PUT_BUCKET_ID_SLOT: &str = "__moliStorageBucketCachePutBucketId";
 const STORAGE_BUCKET_CACHE_PUT_BUCKET_STORAGE_KEY_SLOT: &str =
     "__moliStorageBucketCachePutBucketStorageKey";
 const STORAGE_BUCKET_CACHE_PUT_CACHE_NAME_SLOT: &str = "__moliStorageBucketCachePutCacheName";
@@ -320,10 +317,8 @@ struct StorageBucketObjectDeclaration {
 
 #[derive(Debug)]
 struct StorageBucketHandle {
-    origin: String,
-    storage_key: String,
-    name: String,
-    generation: u64,
+    identity: StorageBucketIdentity,
+    indexed_db_storage_key: String,
 }
 
 #[derive(Debug)]
@@ -360,8 +355,8 @@ struct StorageBucketCachePutPendingDataDeclaration<'scope> {
     #[webapi(slot = STORAGE_BUCKET_CACHE_PUT_BUCKET_NAME_SLOT)]
     bucket_name: String,
 
-    #[webapi(slot = STORAGE_BUCKET_CACHE_PUT_BUCKET_GENERATION_SLOT)]
-    bucket_generation: String,
+    #[webapi(slot = STORAGE_BUCKET_CACHE_PUT_BUCKET_ID_SLOT)]
+    bucket_id: String,
 
     #[webapi(slot = STORAGE_BUCKET_CACHE_PUT_BUCKET_STORAGE_KEY_SLOT)]
     bucket_storage_key: String,
@@ -973,20 +968,16 @@ pub(in crate::context_bootstrap) fn storage_bucket_manager_open_callback<'s>(
         }
     }
     let opened = with_storage_bucket_store_entry(scope, |store| {
-        let generation = store.open_bucket_with_options(
+        store.open_bucket_with_options(
             &storage_key,
             &name,
             options.expires,
             options.durability,
             options.quota,
             options.persisted,
-        )?;
-        let bucket_id = store
-            .bucket_id(&storage_key, &name)
-            .ok_or_else(|| anyhow::anyhow!("opened storage bucket is missing its persistent ID"))?;
-        Ok::<_, anyhow::Error>((generation, bucket_id))
+        )
     });
-    let (generation, bucket_id) = match opened {
+    let identity = match opened {
         Some(Ok(opened)) => opened,
         Some(Err(error)) => {
             reject_type_error(scope, resolver, &error.to_string());
@@ -1001,7 +992,7 @@ pub(in crate::context_bootstrap) fn storage_bucket_manager_open_callback<'s>(
             return;
         }
     };
-    let bucket = build_storage_bucket_object(scope, &storage_key, &name, bucket_id, generation);
+    let bucket = build_storage_bucket_object(scope, identity);
     let _ = resolver.resolve(scope, bucket.into());
 }
 
@@ -1257,13 +1248,12 @@ pub(in crate::context_bootstrap) fn storage_bucket_indexed_db_getter_callback<'s
         return;
     };
     let context = IndexedDbStorageBucketContext {
-        origin: handle.origin.clone(),
-        name: handle.name.clone(),
-        generation: handle.generation,
+        identity: handle.identity.clone(),
     };
-    let value = scoped_storage_bucket_indexed_db_factory(scope, &handle.storage_key, &context)
-        .map(Into::into)
-        .unwrap_or_else(|| v8::undefined(scope).into());
+    let value =
+        scoped_storage_bucket_indexed_db_factory(scope, &handle.indexed_db_storage_key, &context)
+            .map(Into::into)
+            .unwrap_or_else(|| v8::undefined(scope).into());
     rv.set(value);
 }
 
@@ -1312,15 +1302,9 @@ pub(in crate::context_bootstrap) fn global_caches_getter_callback<'s>(
         return;
     }
     let opened = with_storage_bucket_store_entry(scope, |store| {
-        let generation = store.open_bucket(&storage_key, IMPLICIT_DEFAULT_BUCKET_INTERNAL_NAME)?;
-        let bucket_id = store
-            .bucket_id(&storage_key, IMPLICIT_DEFAULT_BUCKET_INTERNAL_NAME)
-            .ok_or_else(|| {
-                anyhow::anyhow!("implicit default storage bucket is missing its persistent ID")
-            })?;
-        Ok::<_, anyhow::Error>((generation, bucket_id))
+        store.open_bucket(&storage_key, IMPLICIT_DEFAULT_BUCKET_INTERNAL_NAME)
     });
-    let (generation, bucket_id) = match opened {
+    let identity = match opened {
         Some(Ok(opened)) => opened,
         Some(Err(_)) | None => {
             rv.set_undefined();
@@ -1328,10 +1312,8 @@ pub(in crate::context_bootstrap) fn global_caches_getter_callback<'s>(
         }
     };
     let handle = StorageBucketHandle {
-        origin: storage_key.clone(),
-        storage_key: storage_bucket_indexed_db_storage_key(&storage_key, bucket_id),
-        name: IMPLICIT_DEFAULT_BUCKET_INTERNAL_NAME.to_owned(),
-        generation,
+        indexed_db_storage_key: identity.indexed_db_storage_key(),
+        identity,
     };
     let cache_storage = build_storage_bucket_cache_storage_object(scope, &handle);
     set_private_value(
@@ -1398,7 +1380,7 @@ fn storage_bucket_persisted_value<'s>(
     method: &'static str,
 ) -> Option<bool> {
     let persisted = with_storage_bucket_store_entry(scope, |store| {
-        store.bucket_persisted_if_current(&handle.origin, &handle.name, handle.generation)
+        store.bucket_persisted_for_identity(&handle.identity)
     });
     match persisted {
         Some(Some(persisted)) => Some(persisted),
@@ -1435,7 +1417,7 @@ pub(in crate::context_bootstrap) fn storage_bucket_estimate_callback<'s>(
     let cache_storage_usage = storage_bucket_cache_storage_usage_bytes(scope, &handle);
     let opfs_owner = with_storage_bucket_store_entry(scope, |store| {
         (
-            store.bucket_locator_if_current(&handle.origin, &handle.name, handle.generation),
+            store.bucket_locator_for_identity(&handle.identity),
             store.storage_service(),
         )
     });
@@ -1464,7 +1446,7 @@ pub(in crate::context_bootstrap) fn storage_bucket_estimate_callback<'s>(
         .saturating_add(cache_storage_usage)
         .saturating_add(opfs_usage);
     let quota = with_storage_bucket_store_entry(scope, |store| {
-        store.bucket_quota_if_current(&handle.origin, &handle.name, handle.generation)
+        store.bucket_quota_for_identity(&handle.identity)
     });
     let quota = match quota {
         Some(Some(quota)) => {
@@ -1514,12 +1496,7 @@ fn storage_bucket_cache_storage_open_callback<'s>(
         return;
     };
     let opened = with_storage_bucket_store_entry(scope, |store| {
-        store.open_cache_handle_if_current(
-            &handle.origin,
-            &handle.name,
-            handle.generation,
-            &cache_name,
-        )
+        store.open_cache_handle_for_identity(&handle.identity, &cache_name)
     });
     match opened {
         Some(Ok(Some(cache_id))) => {
@@ -1575,19 +1552,11 @@ fn storage_bucket_cache_storage_match_callback<'s>(
     let matched = with_storage_bucket_store_entry(scope, |store| {
         let cache_names = match options.cache_name.as_ref() {
             Some(cache_name) => vec![cache_name.clone()],
-            None => {
-                store.cache_names_if_current(&handle.origin, &handle.name, handle.generation)?
-            }
+            None => store.cache_names_for_identity(&handle.identity)?,
         };
         for cache_name in cache_names {
             if let Some(response) = store
-                .match_cache_entries_if_current(
-                    &handle.origin,
-                    &handle.name,
-                    handle.generation,
-                    &cache_name,
-                    &query,
-                )?
+                .match_cache_entries_for_identity(&handle.identity, &cache_name, &query)?
                 .into_iter()
                 .next()
                 .map(|entry| entry.response)
@@ -1641,7 +1610,7 @@ fn storage_bucket_cache_storage_has_callback<'s>(
         return;
     };
     let names = with_storage_bucket_store_entry(scope, |store| {
-        store.cache_names_if_current(&handle.origin, &handle.name, handle.generation)
+        store.cache_names_for_identity(&handle.identity)
     });
     match names {
         Some(Some(names)) => {
@@ -1672,7 +1641,7 @@ fn storage_bucket_cache_storage_keys_callback<'s>(
         return;
     };
     let names = with_storage_bucket_store_entry(scope, |store| {
-        store.cache_names_if_current(&handle.origin, &handle.name, handle.generation)
+        store.cache_names_for_identity(&handle.identity)
     });
     match names {
         Some(Some(names)) => {
@@ -1712,7 +1681,7 @@ fn storage_bucket_cache_storage_delete_callback<'s>(
         return;
     };
     let deleted = with_storage_bucket_store_entry(scope, |store| {
-        store.delete_cache_if_current(&handle.origin, &handle.name, handle.generation, &cache_name)
+        store.delete_cache_for_identity(&handle.identity, &cache_name)
     });
     match deleted {
         Some(Ok(Some(deleted))) => {
@@ -1782,17 +1751,13 @@ fn storage_bucket_cache_put_store_response<'s>(
     response: StorageBucketCachedResponse,
 ) {
     let usage_bytes = cache_entry_usage_bytes(&request, &response);
-    let locator = if handle.bucket.name == IMPLICIT_DEFAULT_BUCKET_INTERNAL_NAME {
+    let locator = if handle.bucket.identity.name() == IMPLICIT_DEFAULT_BUCKET_INTERNAL_NAME {
         Some(moli_storage_service::StorageBucketLocator::default_bucket(
-            &handle.bucket.origin,
+            handle.bucket.identity.storage_key(),
         ))
     } else {
         with_storage_bucket_store_entry(scope, |store| {
-            store.bucket_locator_if_current(
-                &handle.bucket.origin,
-                &handle.bucket.name,
-                handle.bucket.generation,
-            )
+            store.bucket_locator_for_identity(&handle.bucket.identity)
         })
         .flatten()
     };
@@ -1812,10 +1777,8 @@ fn storage_bucket_cache_put_store_response<'s>(
         }
     };
     let stored = with_storage_bucket_store_entry(scope, |store| {
-        store.put_cache_entry_with_request_for_handle_if_current(
-            &handle.bucket.origin,
-            &handle.bucket.name,
-            handle.bucket.generation,
+        store.put_cache_entry_with_request_for_handle_and_identity(
+            &handle.bucket.identity,
             &handle.cache_name,
             handle.cache_id,
             &request.url,
@@ -1859,10 +1822,10 @@ fn storage_bucket_cache_put_pending_body<'s>(
 ) {
     let data = StorageBucketCachePutPendingDataDeclaration {
         resolver,
-        bucket_origin: handle.bucket.origin,
-        bucket_name: handle.bucket.name,
-        bucket_generation: handle.bucket.generation.to_string(),
-        bucket_storage_key: handle.bucket.storage_key,
+        bucket_origin: handle.bucket.identity.storage_key().to_owned(),
+        bucket_name: handle.bucket.identity.name().to_owned(),
+        bucket_id: handle.bucket.identity.bucket_id().get().to_string(),
+        bucket_storage_key: handle.bucket.indexed_db_storage_key,
         cache_name: handle.cache_name,
         cache_id: handle.cache_id.get().to_string(),
         request_key: request.url,
@@ -1997,10 +1960,10 @@ fn storage_bucket_cache_put_pending_data<'s>(
     let bucket_origin =
         data_private_string(scope, data, STORAGE_BUCKET_CACHE_PUT_BUCKET_ORIGIN_SLOT)?;
     let bucket_name = data_private_string(scope, data, STORAGE_BUCKET_CACHE_PUT_BUCKET_NAME_SLOT)?;
-    let bucket_generation =
-        data_private_string(scope, data, STORAGE_BUCKET_CACHE_PUT_BUCKET_GENERATION_SLOT)?
-            .parse::<u64>()
-            .ok()?;
+    let bucket_id = data_private_string(scope, data, STORAGE_BUCKET_CACHE_PUT_BUCKET_ID_SLOT)?
+        .parse::<u64>()
+        .ok()
+        .and_then(moli_storage_service::StorageBucketId::new)?;
     let bucket_storage_key = data_private_string(
         scope,
         data,
@@ -2041,10 +2004,8 @@ fn storage_bucket_cache_put_pending_data<'s>(
     let response_headers =
         serde_json::from_str::<Vec<(String, String)>>(&response_headers_json).unwrap_or_default();
     let bucket = StorageBucketHandle {
-        origin: bucket_origin,
-        storage_key: bucket_storage_key,
-        name: bucket_name,
-        generation: bucket_generation,
+        identity: StorageBucketIdentity::new(&bucket_origin, &bucket_name, bucket_id),
+        indexed_db_storage_key: bucket_storage_key,
     };
     Some(StorageBucketCachePutPendingData {
         resolver,
@@ -2115,10 +2076,8 @@ fn storage_bucket_cache_match_callback<'s>(
     };
     let matched = with_storage_bucket_store_entry(scope, |store| {
         store
-            .match_cache_entries_for_handle_if_current(
-                &handle.bucket.origin,
-                &handle.bucket.name,
-                handle.bucket.generation,
+            .match_cache_entries_for_handle_and_identity(
+                &handle.bucket.identity,
                 &handle.cache_name,
                 handle.cache_id,
                 &query,
@@ -2171,18 +2130,14 @@ fn storage_bucket_cache_match_all_callback<'s>(
         return;
     };
     let matched = with_storage_bucket_store_entry(scope, |store| match query.as_ref() {
-        Some(query) => store.match_cache_entries_for_handle_if_current(
-            &handle.bucket.origin,
-            &handle.bucket.name,
-            handle.bucket.generation,
+        Some(query) => store.match_cache_entries_for_handle_and_identity(
+            &handle.bucket.identity,
             &handle.cache_name,
             handle.cache_id,
             query,
         ),
-        None => store.cache_entries_for_handle_if_current(
-            &handle.bucket.origin,
-            &handle.bucket.name,
-            handle.bucket.generation,
+        None => store.cache_entries_for_handle_and_identity(
+            &handle.bucket.identity,
             &handle.cache_name,
             handle.cache_id,
         ),
@@ -2246,18 +2201,14 @@ fn storage_bucket_cache_keys_callback<'s>(
         return;
     };
     let entries = with_storage_bucket_store_entry(scope, |store| match query.as_ref() {
-        Some(query) => store.match_cache_entries_for_handle_if_current(
-            &handle.bucket.origin,
-            &handle.bucket.name,
-            handle.bucket.generation,
+        Some(query) => store.match_cache_entries_for_handle_and_identity(
+            &handle.bucket.identity,
             &handle.cache_name,
             handle.cache_id,
             query,
         ),
-        None => store.cache_entries_for_handle_if_current(
-            &handle.bucket.origin,
-            &handle.bucket.name,
-            handle.bucket.generation,
+        None => store.cache_entries_for_handle_and_identity(
+            &handle.bucket.identity,
             &handle.cache_name,
             handle.cache_id,
         ),
@@ -2308,10 +2259,8 @@ fn storage_bucket_cache_delete_callback<'s>(
         return;
     };
     let deleted = with_storage_bucket_store_entry(scope, |store| {
-        store.delete_cache_entries_for_handle_if_current(
-            &handle.bucket.origin,
-            &handle.bucket.name,
-            handle.bucket.generation,
+        store.delete_cache_entries_for_handle_and_identity(
+            &handle.bucket.identity,
             &handle.cache_name,
             handle.cache_id,
             &query,
@@ -2349,7 +2298,7 @@ pub(in crate::context_bootstrap) fn storage_bucket_durability_callback<'s>(
         return;
     };
     let durability = with_storage_bucket_store_entry(scope, |store| {
-        store.bucket_durability_if_current(&handle.origin, &handle.name, handle.generation)
+        store.bucket_durability_for_identity(&handle.identity)
     });
     let value = match durability {
         Some(Some(durability)) => v8str(scope, durability.as_str()).into(),
@@ -2402,12 +2351,7 @@ pub(in crate::context_bootstrap) fn storage_bucket_set_expires_callback<'s>(
         return;
     };
     let result = with_storage_bucket_store_entry(scope, |store| {
-        store.set_bucket_expires_if_current(
-            &handle.origin,
-            &handle.name,
-            handle.generation,
-            expires,
-        )
+        store.set_bucket_expires_for_identity(&handle.identity, expires)
     });
     match result {
         Some(Ok(true)) => {}
@@ -2449,7 +2393,7 @@ pub(in crate::context_bootstrap) fn storage_bucket_expires_callback<'s>(
         return;
     };
     let expires = with_storage_bucket_store_entry(scope, |store| {
-        store.bucket_expires_if_current(&handle.origin, &handle.name, handle.generation)
+        store.bucket_expires_for_identity(&handle.identity)
     });
     let value = match expires {
         Some(Some(expires)) => expires
@@ -2489,7 +2433,7 @@ pub(in crate::context_bootstrap) fn storage_bucket_get_directory_callback<'s>(
         return;
     };
     let locator = with_storage_bucket_store_entry(scope, |store| {
-        store.bucket_locator_if_current(&handle.origin, &handle.name, handle.generation)
+        store.bucket_locator_for_identity(&handle.identity)
     })
     .flatten();
     let Some(locator) = locator else {
@@ -2530,19 +2474,14 @@ fn storage_bucket_receiver_branded<'s>(
 
 fn build_storage_bucket_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    origin: &str,
-    name: &str,
-    bucket_id: StorageBucketId,
-    generation: u64,
+    identity: StorageBucketIdentity,
 ) -> v8::Local<'s, v8::Object> {
     let bucket = StorageBucketObjectDeclaration::new()
         .bind(scope)
         .expect("StorageBucket declaration should bind");
     let handle = StorageBucketHandle {
-        origin: origin.to_owned(),
-        storage_key: storage_bucket_indexed_db_storage_key(origin, bucket_id),
-        name: name.to_owned(),
-        generation,
+        indexed_db_storage_key: identity.indexed_db_storage_key(),
+        identity,
     };
     set_storage_bucket_handle_slots(scope, bucket, &handle);
     bucket
@@ -2570,16 +2509,11 @@ fn build_storage_bucket_cache_object<'s>(
             .bind_into(scope, object);
     set_storage_bucket_handle_slots(scope, object, bucket);
     if let Some(store) = current_storage_bucket_store(scope) {
-        let origin = bucket.origin.clone();
-        let bucket_name = bucket.name.clone();
-        let generation = bucket.generation;
+        let identity = bucket.identity.clone();
         crate::v8_finalizer::track_context_owned_v8_finalizer(scope, object, move || {
-            store.lock().release_cache_handle_if_current(
-                &origin,
-                &bucket_name,
-                generation,
-                cache_id,
-            );
+            store
+                .lock()
+                .release_cache_handle_for_identity(&identity, cache_id);
         });
     }
     object
@@ -2590,25 +2524,22 @@ fn set_storage_bucket_handle_slots<'s>(
     object: v8::Local<'s, v8::Object>,
     handle: &StorageBucketHandle,
 ) {
-    let origin = v8_string(scope, &handle.origin).unwrap_or_else(|| v8str(scope, ""));
+    let origin =
+        v8_string(scope, handle.identity.storage_key()).unwrap_or_else(|| v8str(scope, ""));
     set_private_value(scope, object, STORAGE_BUCKET_ORIGIN_SLOT, origin.into());
-    let storage_key = v8_string(scope, &handle.storage_key).unwrap_or_else(|| v8str(scope, ""));
+    let storage_key =
+        v8_string(scope, &handle.indexed_db_storage_key).unwrap_or_else(|| v8str(scope, ""));
     set_private_value(
         scope,
         object,
         STORAGE_BUCKET_STORAGE_KEY_SLOT,
         storage_key.into(),
     );
-    let name = v8_string(scope, &handle.name).unwrap_or_else(|| v8str(scope, ""));
+    let name = v8_string(scope, handle.identity.name()).unwrap_or_else(|| v8str(scope, ""));
     set_private_value(scope, object, STORAGE_BUCKET_NAME_SLOT, name.into());
-    let generation =
-        v8_string(scope, &handle.generation.to_string()).unwrap_or_else(|| v8str(scope, "0"));
-    set_private_value(
-        scope,
-        object,
-        STORAGE_BUCKET_GENERATION_SLOT,
-        generation.into(),
-    );
+    let bucket_id = v8_string(scope, &handle.identity.bucket_id().get().to_string())
+        .unwrap_or_else(|| v8str(scope, "0"));
+    set_private_value(scope, object, STORAGE_BUCKET_ID_SLOT, bucket_id.into());
 }
 
 fn storage_bucket_live_handle<'s>(
@@ -2789,7 +2720,11 @@ fn storage_bucket_handle_is_current<'s>(
     stale_error: StorageBucketStaleError,
 ) -> bool {
     let expired = with_storage_bucket_store_entry(scope, |store| {
-        store.delete_bucket_if_expired(&handle.origin, &handle.name, storage_bucket_now_ms())
+        store.delete_bucket_if_expired(
+            handle.identity.storage_key(),
+            handle.identity.name(),
+            storage_bucket_now_ms(),
+        )
     });
     match expired {
         Some(Ok(Some(cleanup))) => {
@@ -2812,7 +2747,7 @@ fn storage_bucket_handle_is_current<'s>(
         }
     }
     match with_storage_bucket_store_entry(scope, |store| {
-        store.bucket_is_current(&handle.origin, &handle.name, handle.generation)
+        store.bucket_identity_is_live(&handle.identity)
     }) {
         Some(true) => true,
         Some(false) => {
@@ -2831,11 +2766,11 @@ fn storage_bucket_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     bucket: v8::Local<'s, v8::Object>,
 ) -> Option<StorageBucketHandle> {
+    let origin = storage_bucket_origin(scope, bucket)?;
+    let name = storage_bucket_name(scope, bucket)?;
     Some(StorageBucketHandle {
-        origin: storage_bucket_origin(scope, bucket)?,
-        storage_key: storage_bucket_storage_key(scope, bucket)?,
-        name: storage_bucket_name(scope, bucket)?,
-        generation: storage_bucket_generation(scope, bucket)?,
+        identity: StorageBucketIdentity::new(&origin, &name, storage_bucket_id(scope, bucket)?),
+        indexed_db_storage_key: storage_bucket_storage_key(scope, bucket)?,
     })
 }
 
@@ -2866,21 +2801,21 @@ fn storage_bucket_name<'s>(
         .map(|value| value.to_rust_string_lossy(scope))
 }
 
-fn storage_bucket_generation<'s>(
+fn storage_bucket_id<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     bucket: v8::Local<'s, v8::Object>,
-) -> Option<u64> {
-    get_private_value(scope, bucket, STORAGE_BUCKET_GENERATION_SLOT)
+) -> Option<moli_storage_service::StorageBucketId> {
+    get_private_value(scope, bucket, STORAGE_BUCKET_ID_SLOT)
         .and_then(|value| value.to_string(scope))
         .and_then(|value| value.to_rust_string_lossy(scope).parse::<u64>().ok())
-        .filter(|generation| *generation != 0)
+        .and_then(moli_storage_service::StorageBucketId::new)
 }
 
 fn storage_bucket_indexed_db_usage_bytes<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     handle: &StorageBucketHandle,
 ) -> u64 {
-    indexed_db_usage_bytes_for_storage_key(scope, &handle.storage_key)
+    indexed_db_usage_bytes_for_storage_key(scope, &handle.indexed_db_storage_key)
 }
 
 fn storage_bucket_cache_storage_usage_bytes<'s>(
@@ -2888,7 +2823,7 @@ fn storage_bucket_cache_storage_usage_bytes<'s>(
     handle: &StorageBucketHandle,
 ) -> u64 {
     with_storage_bucket_store_entry(scope, |store| {
-        store.cache_usage_if_current(&handle.origin, &handle.name, handle.generation)
+        store.cache_usage_for_identity(&handle.identity)
     })
     .flatten()
     .unwrap_or(0)

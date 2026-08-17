@@ -2781,7 +2781,7 @@ fn default_bucket_quota_is_shared_by_cache_indexed_db_and_opfs() {
         moli_storage_service::DEFAULT_ORIGIN_STORAGE_QUOTA_BYTES - reserved_for_other_backends;
     {
         let mut store = vm.storage_bucket_store.lock();
-        let generation = store
+        let identity = store
             .open_bucket(
                 &storage_key,
                 moli_storage_service::IMPLICIT_DEFAULT_BUCKET_INTERNAL_NAME,
@@ -2789,10 +2789,8 @@ fn default_bucket_quota_is_shared_by_cache_indexed_db_and_opfs() {
             .expect("implicit default CacheStorage metadata should open");
         assert_eq!(
             store
-                .put_cache_entry_if_current(
-                    &storage_key,
-                    moli_storage_service::IMPLICIT_DEFAULT_BUCKET_INTERNAL_NAME,
-                    generation,
+                .put_cache_entry_for_identity(
+                    &identity,
                     "fixture",
                     "/reserved",
                     moli_storage_service::StorageBucketCachedResponse {

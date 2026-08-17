@@ -51,7 +51,7 @@ pub(in crate::context_bootstrap::indexed_db) fn storage_bucket_quota_check_for_d
     let storage_scope = indexed_db_typed_storage_scope(scope, database)?.clone();
     let locator = if let Some(context) = storage_scope.bucket_context() {
         let Some(locator) = with_storage_bucket_store_entry(scope, |store| {
-            store.bucket_locator_if_current(&context.origin, &context.name, context.generation)
+            store.bucket_locator_for_identity(&context.identity)
         }) else {
             return Some(Err(IndexedDbError::InvalidState(
                 "StorageBucket IndexedDB quota store is unavailable".to_owned(),
@@ -92,7 +92,7 @@ pub(in crate::context_bootstrap::indexed_db) fn validate_storage_bucket_indexed_
     context: &IndexedDbStorageBucketContext,
 ) -> std::result::Result<(), IndexedDbError> {
     let is_current = with_storage_bucket_store_entry(scope, |store| {
-        store.bucket_is_current(&context.origin, &context.name, context.generation)
+        store.bucket_identity_is_live(&context.identity)
     })
     .ok_or_else(|| {
         IndexedDbError::InvalidState("StorageBucket IndexedDB store is unavailable".to_owned())

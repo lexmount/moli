@@ -1,4 +1,5 @@
 use super::{IndexedDbError, IndexedDbValue, Key};
+use moli_storage_service::StorageBucketIdentity;
 
 #[derive(Debug, Clone)]
 pub(super) struct IdbKeyRangeQuery {
@@ -29,9 +30,7 @@ pub(super) struct PreparedObjectStoreWrite<'s> {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(in crate::context_bootstrap) struct IndexedDbStorageBucketContext {
-    pub(in crate::context_bootstrap) origin: String,
-    pub(in crate::context_bootstrap) name: String,
-    pub(in crate::context_bootstrap) generation: u64,
+    pub(in crate::context_bootstrap) identity: StorageBucketIdentity,
 }
 
 pub(super) enum PreparedObjectStoreWriteError {
