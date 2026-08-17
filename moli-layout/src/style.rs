@@ -498,6 +498,7 @@ pub struct ResolvedLayoutStyle {
     has_mask: bool,
     isolation: bool,
     size_containment: SizeContainment,
+    style_containment: bool,
     layout_containment: bool,
     paint_containment: bool,
     will_change_containment: bool,
@@ -560,6 +561,7 @@ impl std::fmt::Debug for ResolvedLayoutStyle {
             .field("has_mask", &self.has_mask)
             .field("isolation", &self.isolation)
             .field("size_containment", &self.size_containment)
+            .field("style_containment", &self.style_containment)
             .field("layout_containment", &self.layout_containment)
             .field("paint_containment", &self.paint_containment)
             .field("will_change_containment", &self.will_change_containment)
@@ -709,6 +711,7 @@ impl ResolvedLayoutStyle {
                 height: contain_intrinsic_fallback(&computed.clone_contain_intrinsic_height()),
             },
         );
+        let style_containment = contain.contains(style::values::computed::Contain::STYLE);
         let mut layout_containment = contain.contains(style::values::computed::Contain::LAYOUT);
         let mut paint_containment = contain.contains(style::values::computed::Contain::PAINT);
         if content_visibility != StyloContentVisibility::Visible {
@@ -881,6 +884,7 @@ impl ResolvedLayoutStyle {
             has_mask,
             isolation,
             size_containment,
+            style_containment,
             layout_containment,
             paint_containment,
             will_change_containment,
@@ -952,6 +956,7 @@ impl ResolvedLayoutStyle {
             has_mask: false,
             isolation: false,
             size_containment: SizeContainment::NONE,
+            style_containment: false,
             layout_containment: false,
             paint_containment: false,
             will_change_containment: false,
@@ -1017,6 +1022,21 @@ impl ResolvedLayoutStyle {
     /// Returns the inherited writing mode retained for layout.
     pub(crate) fn writing_mode(&self) -> taffy::WritingMode {
         self.writing_mode
+    }
+
+    /// Override only the writing direction consumed by layout.
+    ///
+    /// HTML may propagate the body's writing mode and direction to the root
+    /// LayoutObject while CSSOM keeps the root element's computed values.
+    /// Retaining `computed` and changing this pass-local projection preserves
+    /// that used-style/computed-style split.
+    pub(crate) fn use_layout_writing_direction(
+        &mut self,
+        writing_direction: taffy::WritingDirection,
+    ) {
+        self.writing_mode = writing_direction.mode;
+        self.direction = InlineDirection::from_taffy(writing_direction.direction);
+        self.taffy.direction = writing_direction.direction;
     }
 
     pub(crate) fn inline_baseline_type(&self) -> InlineBaselineType {
@@ -1349,6 +1369,14 @@ impl ResolvedLayoutStyle {
 
     pub(crate) const fn applies_paint_containment(&self) -> bool {
         self.paint_containment
+    }
+
+    pub(crate) const fn applies_layout_containment(&self) -> bool {
+        self.layout_containment
+    }
+
+    pub(crate) const fn applies_style_containment(&self) -> bool {
+        self.style_containment
     }
 
     pub(crate) const fn size_containment(&self) -> SizeContainment {
@@ -1704,6 +1732,7 @@ impl ResolvedLayoutStyle {
             has_mask: false,
             isolation: false,
             size_containment: SizeContainment::NONE,
+            style_containment: false,
             layout_containment: false,
             paint_containment: false,
             will_change_containment: false,
@@ -1766,6 +1795,7 @@ impl ResolvedLayoutStyle {
             has_mask: false,
             isolation: false,
             size_containment: SizeContainment::NONE,
+            style_containment: false,
             layout_containment: false,
             paint_containment: false,
             will_change_containment: false,

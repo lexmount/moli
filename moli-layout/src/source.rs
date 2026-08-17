@@ -627,6 +627,15 @@ pub trait LayoutSource {
         Self: 'a;
 
     fn root(&self) -> Self::NodeId;
+    /// Whether the view root is the document element associated with the
+    /// layout viewport.
+    ///
+    /// Subtree and synthetic layout sources also receive a viewport-sized
+    /// containing block, but they must not participate in HTML document style
+    /// propagation to that internal carrier.
+    fn root_is_document_element(&self) -> bool {
+        false
+    }
     fn document_mode(&self) -> LayoutDocumentMode {
         LayoutDocumentMode::NoQuirks
     }

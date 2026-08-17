@@ -120,6 +120,7 @@ where
         let mut world = LayoutWorld::new(
             root,
             source_root,
+            self.source.root_is_document_element(),
             self.source.document_body(),
             self.source.document_mode(),
             self.source.viewport_scroll_offset(),

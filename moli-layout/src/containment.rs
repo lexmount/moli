@@ -75,6 +75,20 @@ impl<N> LayoutBox<N> {
         containment.axes.width || containment.axes.height
     }
 
+    /// Whether this box stops HTML/body style propagation to the viewport.
+    ///
+    /// Style containment applies independently of principal-box eligibility;
+    /// size, layout, and paint containment retain their normal LayoutObject
+    /// eligibility rules. This is the same boundary Blink exposes through
+    /// `LayoutObject::ShouldApplyAnyContainment()`.
+    pub(crate) fn applies_any_containment(&self) -> bool {
+        self.style.applies_style_containment()
+            || self.applies_any_size_containment()
+            || (self.is_eligible_for_paint_or_layout_containment()
+                && (self.style.applies_layout_containment()
+                    || self.style.applies_paint_containment()))
+    }
+
     /// Resolve computed containment to the used node-level layout protocol.
     ///
     /// Stylo owns the effective logical axes and physical fallback values;
