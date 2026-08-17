@@ -171,6 +171,60 @@ fn canceling_unknown_scope_is_a_noop_and_preserves_deadline() {
 }
 
 #[test]
+fn scope_cancellation_reports_retained_sequences_for_host_sidecar_cleanup() {
+    let base = Instant::now();
+    let mut window = ActionWindow::<&str, &str>::default();
+    let first_scroll = window.push(
+        "retired",
+        WindowAction::Scroll(ScrollAction::pixels(Point::default(), 0.0, 10.0)),
+        base,
+    );
+    let kept_scroll = window.push(
+        "current",
+        WindowAction::Scroll(ScrollAction::pixels(Point::default(), 0.0, 20.0)),
+        base + Duration::from_millis(10),
+    );
+    let replaced_click = window.push(
+        "retired",
+        WindowAction::Click(ClickAction::new(Point::default(), MouseButton::Left, 1)),
+        base + Duration::from_millis(20),
+    );
+    let retained_click = window.push(
+        "retired",
+        WindowAction::Click(ClickAction::new(Point::default(), MouseButton::Left, 2)),
+        base + Duration::from_millis(30),
+    );
+    let ordered = window.push(
+        "retired",
+        WindowAction::Ordered("renderer-sidecar"),
+        base + Duration::from_millis(40),
+    );
+    let original_deadline = window.next_deadline();
+
+    assert_eq!(
+        window.cancel_scope_sequences(&"retired"),
+        vec![
+            first_scroll.sequence(),
+            retained_click.sequence(),
+            ordered.sequence(),
+        ]
+    );
+    assert_ne!(replaced_click.sequence(), retained_click.sequence());
+    assert_eq!(window.next_deadline(), original_deadline);
+    assert_eq!(window.pending_admitted_action_count(), 5);
+    assert_eq!(window.pending_retained_action_count(), 1);
+
+    let batch = window
+        .flush(ActionBarrier::Explicit, base + Duration::from_millis(50))
+        .expect("the other scope should remain pending");
+    let PlannedAction::Scroll { scope, run } = &batch.actions()[0] else {
+        panic!("the surviving action should be a scroll run");
+    };
+    assert_eq!(*scope, "current");
+    assert_eq!(run.steps()[0].sequence(), kept_scroll.sequence());
+}
+
+#[test]
 fn click_replacement_reports_public_compaction_without_rotation() {
     let base = Instant::now();
     let mut window = ActionWindow::<u8, ()>::new();

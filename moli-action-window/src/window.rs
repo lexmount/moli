@@ -168,16 +168,32 @@ impl<S: PartialEq, O> PendingWindow<S, O> {
         self.actions = normalized;
     }
 
-    fn remove_scope(&mut self, scope: &S) -> usize {
-        let before = self.retained_action_count;
-        self.actions.retain(|action| action.scope() != scope);
+    fn remove_scope(&mut self, scope: &S) -> Vec<ActionSequence> {
+        let mut removed_sequences = Vec::new();
+        self.actions.retain(|action| {
+            if action.scope() != scope {
+                return true;
+            }
+            match action {
+                PlannedAction::Scroll { run, .. } => {
+                    removed_sequences.extend(run.steps().iter().map(|step| step.sequence()))
+                }
+                PlannedAction::Click { click, .. } => {
+                    removed_sequences.push(click.sequence());
+                }
+                PlannedAction::Ordered { action, .. } => {
+                    removed_sequences.push(action.sequence());
+                }
+            }
+            false
+        });
         self.retained_action_count = self
             .actions
             .iter()
             .map(PlannedAction::retained_action_count)
             .sum();
         self.normalize_scroll_runs();
-        before - self.retained_action_count
+        removed_sequences
     }
 
     fn into_batch(self, released_at: Instant, cause: ActionBatchCause) -> ActionBatch<S, O> {
@@ -329,8 +345,17 @@ impl<S: PartialEq, O> ActionWindow<S, O> {
     /// If no actions remain, the old deadline is canceled and the queue
     /// returns to idle.
     pub fn cancel_scope(&mut self, scope: &S) -> usize {
+        self.cancel_scope_sequences(scope).len()
+    }
+
+    /// Cancels all pending actions for a scope and returns the retained
+    /// sequences that were removed, in their execution order.
+    ///
+    /// Hosts with renderer-specific sidecars can use these identities to
+    /// retire the matching payloads atomically with the semantic actions.
+    pub fn cancel_scope_sequences(&mut self, scope: &S) -> Vec<ActionSequence> {
         let Some(window) = self.open.as_mut() else {
-            return 0;
+            return Vec::new();
         };
         let removed = window.remove_scope(scope);
         if window.actions.is_empty() {

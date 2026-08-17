@@ -9,7 +9,8 @@ use moli_action_window::{
 use crate::{
     page_task_queue::RendererPageReadyDescriptor,
     runtime::{
-        RendererDocumentToken, RendererInputDispatchOutcome, RendererPointerEventProperties,
+        RendererDocumentLifecycleIdentity, RendererInputDispatchOutcome,
+        RendererPointerEventProperties,
     },
 };
 
@@ -29,7 +30,7 @@ struct QueuedWheelEvent {
 }
 
 pub(super) struct RendererPageActionWindow {
-    window: ActionWindow<RendererDocumentToken>,
+    window: ActionWindow<RendererDocumentLifecycleIdentity>,
     wheel_events: HashMap<ActionSequence, QueuedWheelEvent>,
 }
 
@@ -73,7 +74,7 @@ impl PageVm {
             self.apply_page_action_batch(batch)?;
         }
 
-        let scope = self.document_lifecycle.identity().document;
+        let scope = self.document_lifecycle.identity();
         let admission = self.page_action_window.window.push(
             scope,
             WindowAction::Scroll(ScrollAction {
@@ -127,10 +128,41 @@ impl PageVm {
         Ok(true)
     }
 
-    fn apply_page_action_batch(&mut self, batch: ActionBatch<RendererDocumentToken>) -> Result<()> {
+    pub(super) fn cancel_page_actions_for_document(
+        &mut self,
+        document: RendererDocumentLifecycleIdentity,
+    ) -> Result<usize> {
+        let sequences = self
+            .page_action_window
+            .window
+            .cancel_scope_sequences(&document);
+        for sequence in &sequences {
+            anyhow::ensure!(
+                self.page_action_window
+                    .wheel_events
+                    .remove(sequence)
+                    .is_some(),
+                "action-window cancellation lost wheel payload {}",
+                sequence.get()
+            );
+        }
+        if !sequences.is_empty() {
+            tracing::debug!(
+                ?document,
+                canceled_action_count = sequences.len(),
+                "canceled renderer actions for a retired Document"
+            );
+        }
+        Ok(sequences.len())
+    }
+
+    fn apply_page_action_batch(
+        &mut self,
+        batch: ActionBatch<RendererDocumentLifecycleIdentity>,
+    ) -> Result<()> {
         let batch_id = batch.id().get();
         let cause = batch.cause();
-        let current_document = self.document_lifecycle.identity().document;
+        let current_document = self.document_lifecycle.identity();
         let mut events = Vec::with_capacity(batch.retained_action_count());
         for action in batch.into_actions() {
             match action {
@@ -147,7 +179,7 @@ impl PageVm {
                                 )
                             })?;
                         if scope == current_document {
-                            events.push(event);
+                            events.push((scope, event));
                         }
                     }
                 }
@@ -165,7 +197,12 @@ impl PageVm {
 
         self.vm_mut().begin_batched_mouse_event_dispatch();
         let mut first_error = None;
-        for event in events {
+        let mut skipped_after_document_replacement = 0_usize;
+        for (document, event) in events {
+            if self.document_lifecycle.identity() != document {
+                skipped_after_document_replacement += 1;
+                continue;
+            }
             let result = self
                 .vm_mut()
                 .dispatch_mouse_event_at_point_with_pointer_and_modifiers_without_checkpoint(
@@ -186,10 +223,18 @@ impl PageVm {
                 first_error = Some(error);
             }
         }
+        if skipped_after_document_replacement != 0 {
+            tracing::debug!(
+                batch_id,
+                skipped_action_count = skipped_after_document_replacement,
+                "discarded remaining renderer actions after an in-batch Document replacement"
+            );
+        }
         let dispatch_result = first_error.map_or(Ok(()), Err);
+        let commit_scroll_effects = self.document_lifecycle.identity() == current_document;
         let result = self
             .vm_mut()
-            .finish_batched_mouse_event_dispatch(dispatch_result);
+            .finish_batched_mouse_event_dispatch(dispatch_result, commit_scroll_effects);
         tracing::debug!(batch_id, ?cause, "applied renderer action batch");
         result
     }
@@ -205,5 +250,15 @@ impl PageVm {
             return Ok(());
         };
         self.apply_page_action_batch(batch)
+    }
+
+    #[cfg(test)]
+    pub(super) fn pending_page_action_counts_for_test(&self) -> (usize, usize) {
+        (
+            self.page_action_window
+                .window
+                .pending_retained_action_count(),
+            self.page_action_window.wheel_events.len(),
+        )
     }
 }
