@@ -184,14 +184,19 @@ impl ParkableImageManager {
         }
     }
 
-    pub(crate) fn mark_parked(&self, image: &ParkableImage) {
+    /// Moves an image between the physical-residency indexes.
+    ///
+    /// The caller must hold the image state lock. The manager never acquires
+    /// an image lock while holding the registry lock, so the global lock order
+    /// is always image state -> manager registry.
+    pub(crate) fn move_to_parked_while_image_locked(&self, image: &ParkableImage) {
         self.inner.registry.lock().move_to_parked(image);
-        self.notify_schedule_changed();
     }
 
-    pub(crate) fn mark_resident(&self, image: &ParkableImage) {
-        self.inner.registry.lock().insert_resident(image);
-        self.notify_schedule_changed();
+    /// See [`Self::move_to_parked_while_image_locked`] for the lock-order
+    /// contract.
+    pub(crate) fn move_to_resident_while_image_locked(&self, image: &ParkableImage) {
+        self.inner.registry.lock().move_to_resident(image);
     }
 
     pub(crate) fn unregister(&self, id: u64, released_disk_capacity: bool) {
@@ -216,7 +221,7 @@ impl ParkableImageManager {
     }
 
     fn register_resident(&self, image: &ParkableImage) {
-        self.inner.registry.lock().insert_resident(image);
+        self.inner.registry.lock().register_resident(image);
         self.notify_schedule_changed();
     }
 
