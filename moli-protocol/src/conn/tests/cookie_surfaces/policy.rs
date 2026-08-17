@@ -280,8 +280,7 @@ async fn browser_context_document_cookie_policy_surface_tracks_split_overrides()
 }
 
 #[tokio::test]
-async fn browser_context_cookie_manager_surface_keeps_policy_and_subscription_owner_shape_separate()
-{
+async fn browser_context_cookie_manager_surface_tracks_policy_without_a_live_page() {
     let mut bc = BrowserContext::new("BID-cookie-manager".into());
     let initial = bc.cookie_manager_surface_snapshot();
     assert_eq!(initial.policy.generation, 0);
@@ -289,13 +288,6 @@ async fn browser_context_cookie_manager_surface_keeps_policy_and_subscription_ow
         initial.backend_connection_state,
         BrowserContextCookieBackendConnectionState::NoLivePage
     );
-    assert_eq!(
-        initial.subscriptions.owner_state,
-        BrowserContextCookieSubscriptionOwnerState::Reserved
-    );
-    assert_eq!(initial.subscriptions.subscription_count, 0);
-    assert_eq!(initial.subscriptions.generation, 0);
-
     bc.apply_cookie_manager_policy_overrides_async(
         &BrowserCookieFacadeOverrides::default().with_cookies_enabled(false),
     )
@@ -306,12 +298,6 @@ async fn browser_context_cookie_manager_surface_keeps_policy_and_subscription_ow
         after_policy_change.backend_connection_state,
         BrowserContextCookieBackendConnectionState::NoLivePage
     );
-    assert_eq!(
-        after_policy_change.subscriptions.owner_state,
-        BrowserContextCookieSubscriptionOwnerState::Reserved
-    );
-    assert_eq!(after_policy_change.subscriptions.subscription_count, 0);
-    assert_eq!(after_policy_change.subscriptions.generation, 0);
 }
 
 #[tokio::test]

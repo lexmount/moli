@@ -874,19 +874,6 @@ pub(crate) struct BrowserContextCookieManagerActivitySnapshot {
     pub(crate) telemetry: Option<BrowserContextDocumentCookieTelemetrySnapshot>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum BrowserContextCookieSubscriptionOwnerState {
-    #[default]
-    Reserved,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) struct BrowserContextCookieSubscriptionSurfaceSnapshot {
-    pub(crate) owner_state: BrowserContextCookieSubscriptionOwnerState,
-    pub(crate) subscription_count: usize,
-    pub(crate) generation: u64,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BrowserContextCookieManagerSurfaceSnapshot {
     // Manager-owned browser policy state for document-facing cookie access.
@@ -914,9 +901,6 @@ pub(crate) struct BrowserContextCookieManagerSurfaceSnapshot {
     // keeps browser-facing request probes and telemetry shape attached to the
     // same manager contract as policy and capability.
     pub(crate) activity: BrowserContextCookieManagerActivitySnapshot,
-    // Reserved manager-owned shape for future CookieStoreManager-style change
-    // subscriptions. This is intentionally scaffold state today.
-    pub(crate) subscriptions: BrowserContextCookieSubscriptionSurfaceSnapshot,
 }
 
 impl Default for BrowserContextCookieManagerSurfaceSnapshot {
@@ -928,8 +912,6 @@ impl Default for BrowserContextCookieManagerSurfaceSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct BrowserContextCookieManagerSurface {
     policy_surface: BrowserContextDocumentCookiePolicySurface,
-    subscription_count: usize,
-    subscription_generation: u64,
 }
 
 impl BrowserContextCookieManagerSurface {
@@ -943,8 +925,6 @@ impl BrowserContextCookieManagerSurface {
                     generation: snapshot.policy.generation,
                 },
             ),
-            subscription_count: snapshot.subscriptions.subscription_count,
-            subscription_generation: snapshot.subscriptions.generation,
         }
     }
 
@@ -978,14 +958,6 @@ impl BrowserContextCookieManagerSurface {
             effective_context: None,
             capability: BrowserContextCookieManagerCapabilitySnapshot::default(),
             activity: BrowserContextCookieManagerActivitySnapshot::default(),
-            // Reserve a stable owner seam for future CookieStoreManager-style
-            // change subscriptions without forcing BrowserContext callers to
-            // learn a new snapshot shape later.
-            subscriptions: BrowserContextCookieSubscriptionSurfaceSnapshot {
-                owner_state: BrowserContextCookieSubscriptionOwnerState::Reserved,
-                subscription_count: self.subscription_count,
-                generation: self.subscription_generation,
-            },
         }
     }
 

@@ -79,10 +79,9 @@ pub use command_view::Cmd;
 pub(crate) use cookie_manager_surface::BrowserContextCookieManagerSurfaceSnapshot;
 #[cfg(test)]
 pub(crate) use cookie_manager_surface::{
-    BrowserContextCookieBackendConnectionState, BrowserContextCookieSubscriptionOwnerState,
-    BrowserContextDefaultCookieWriteUrlSource, BrowserContextDocumentCookieCacheLookupResult,
-    BrowserContextFirstCookieRequest, BrowserContextStructuredCookieCommandVerdict,
-    BrowserContextStructuredCookieWriteBackendStatus,
+    BrowserContextCookieBackendConnectionState, BrowserContextDefaultCookieWriteUrlSource,
+    BrowserContextDocumentCookieCacheLookupResult, BrowserContextFirstCookieRequest,
+    BrowserContextStructuredCookieCommandVerdict, BrowserContextStructuredCookieWriteBackendStatus,
     BrowserContextStructuredCookieWriteReadinessStatus,
 };
 #[cfg(test)]
