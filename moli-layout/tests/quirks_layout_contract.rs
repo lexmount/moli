@@ -218,7 +218,7 @@ fn document_viewport_uses_root_or_propagated_body_writing_mode() {
 }
 
 #[test]
-fn quirks_html_and_body_fill_the_available_block_size_before_ratio_transfer() {
+fn quirks_body_intrinsic_floor_supplies_default_size_and_percentage_basis() {
     let child = resolved(Style {
         size: Size {
             width: Dimension::auto(),
@@ -262,6 +262,95 @@ fn quirks_html_and_body_fill_the_available_block_size_before_ratio_transfer() {
     assert_close(html_metrics.client_size.height, 600.0);
     assert_close(body_metrics.offset_size.height, 584.0);
     assert_close(body_metrics.client_size.height, 600.0);
+}
+
+#[test]
+fn quirks_body_ratio_wins_when_explicit_minimum_disables_the_automatic_minimum() {
+    let child = resolved(Style {
+        size: Size {
+            width: Dimension::auto(),
+            height: Dimension::percent(0.5),
+        },
+        ..Style::default()
+    });
+    let mut body = body_taffy_style();
+    body.min_size.height = length(0.0);
+    let output = document(
+        LayoutDocumentMode::Quirks,
+        resolved(Style::default()),
+        resolved(body),
+        Some(child),
+    );
+
+    let html = output
+        .box_model_for_source(0)
+        .unwrap()
+        .border
+        .bounding_rect();
+    let body = output
+        .box_model_for_source(1)
+        .unwrap()
+        .border
+        .bounding_rect();
+    let child = output
+        .box_model_for_source(2)
+        .unwrap()
+        .border
+        .bounding_rect();
+    assert_close(html.height, 600.0);
+    assert_close(body.width, 100.0);
+    assert_close(body.height, 100.0);
+    assert_close(child.height, 50.0);
+
+    let body_metrics = output.element_metrics_for_source(1).unwrap();
+    assert_close(body_metrics.offset_size.height, 100.0);
+    assert_close(body_metrics.client_size.height, 600.0);
+}
+
+#[test]
+fn quirks_html_and_body_grow_beyond_the_viewport_with_content() {
+    let child = resolved(Style {
+        size: Size {
+            width: Dimension::auto(),
+            height: length(900.0),
+        },
+        ..Style::default()
+    });
+    let output = document(
+        LayoutDocumentMode::Quirks,
+        resolved(Style::default()),
+        empty_body_style(taffy::WritingMode::HorizontalTb),
+        Some(child),
+    );
+
+    let html = output
+        .box_model_for_source(0)
+        .unwrap()
+        .border
+        .bounding_rect();
+    let body = output
+        .box_model_for_source(1)
+        .unwrap()
+        .border
+        .bounding_rect();
+    assert_close(html.height, 916.0);
+    assert_close(body.height, 900.0);
+    assert_close(
+        output
+            .element_metrics_for_source(0)
+            .unwrap()
+            .client_size
+            .height,
+        916.0,
+    );
+    assert_close(
+        output
+            .element_metrics_for_source(1)
+            .unwrap()
+            .client_size
+            .height,
+        600.0,
+    );
 }
 
 #[test]
@@ -465,9 +554,9 @@ fn potentially_scrollable_quirks_body_keeps_its_physical_scroll_box() {
     body.overflow = scroll_overflow;
     let output = document(LayoutDocumentMode::Quirks, html, resolved(body), None);
     let metrics = output.element_metrics_for_source(1).unwrap();
-    assert_close(metrics.offset_size.height, 584.0);
+    assert_close(metrics.offset_size.height, 100.0);
     assert_close(metrics.client_size.height, 600.0);
-    assert_close(metrics.scroll_size.height, 584.0);
+    assert_close(metrics.scroll_size.height, 100.0);
 }
 
 #[test]
@@ -489,7 +578,7 @@ fn root_clip_keeps_body_overflow_physical_and_removes_the_quirks_scrolling_eleme
     assert_eq!(output.document_scrolling_element, None);
     let body_metrics = output.element_metrics_for_source(1).unwrap();
     assert!(body_metrics.is_scroll_container);
-    assert_close(body_metrics.scroll_size.height, 584.0);
+    assert_close(body_metrics.scroll_size.height, 100.0);
 }
 
 #[test]
