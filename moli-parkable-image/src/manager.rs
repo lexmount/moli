@@ -1,14 +1,22 @@
-use std::{fmt, sync::Arc};
+use std::{
+    fmt,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Instant,
+};
 
 use moli_disk_pool::DiskPool;
 use parking_lot::Mutex;
 
 use crate::{
-    image::{ParkOutcome, ParkableImage, ParkableImageStorageState, WeakParkableImage},
+    image::{ParkOutcome, ParkableImage, ParkableImageStorageState},
     policy::ParkableImagePolicy,
+    registry::{ParkableImageRegistry, ResidentImage},
 };
 
-/// Browser-runtime scoped owner and diagnostics registry for parkable images.
+/// Browser-runtime scoped owner and deadline scheduler for parkable images.
 #[derive(Clone)]
 pub struct ParkableImageManager {
     inner: Arc<ParkableImageManagerInner>,
@@ -17,8 +25,12 @@ pub struct ParkableImageManager {
 struct ParkableImageManagerInner {
     disk_pool: Option<DiskPool>,
     policy: ParkableImagePolicy,
-    images: Mutex<Vec<WeakParkableImage>>,
+    next_image_id: AtomicU64,
+    registry: Mutex<ParkableImageRegistry>,
+    schedule_wakeup: Option<ScheduleWakeup>,
 }
+
+type ScheduleWakeup = Arc<dyn Fn() + Send + Sync + 'static>;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ParkableImageManagerDiagnostics {
@@ -46,11 +58,32 @@ pub struct ParkableImageSweepReport {
 
 impl ParkableImageManager {
     pub fn new(disk_pool: Option<DiskPool>, policy: ParkableImagePolicy) -> Self {
+        Self::build(disk_pool, policy, None)
+    }
+
+    /// Creates a manager whose owner is notified whenever its next parking
+    /// deadline may have changed. The callback should only wake the owner's
+    /// scheduler; parking work itself remains outside the callback.
+    pub fn new_with_schedule_wakeup(
+        disk_pool: Option<DiskPool>,
+        policy: ParkableImagePolicy,
+        wakeup: impl Fn() + Send + Sync + 'static,
+    ) -> Self {
+        Self::build(disk_pool, policy, Some(Arc::new(wakeup)))
+    }
+
+    fn build(
+        disk_pool: Option<DiskPool>,
+        policy: ParkableImagePolicy,
+        schedule_wakeup: Option<ScheduleWakeup>,
+    ) -> Self {
         Self {
             inner: Arc::new(ParkableImageManagerInner {
                 disk_pool,
                 policy,
-                images: Mutex::new(Vec::new()),
+                next_image_id: AtomicU64::new(0),
+                registry: Mutex::new(ParkableImageRegistry::default()),
+                schedule_wakeup,
             }),
         }
     }
@@ -60,44 +93,66 @@ impl ParkableImageManager {
     }
 
     pub fn create(&self, initial_capacity: usize) -> ParkableImage {
-        let image = ParkableImage::new_mutable(self.clone(), initial_capacity);
-        self.register(&image);
+        let image =
+            ParkableImage::new_mutable(self.clone(), self.allocate_image_id(), initial_capacity);
+        self.register_resident(&image);
         image
     }
 
     pub fn from_frozen_bytes(&self, bytes: Vec<u8>) -> ParkableImage {
-        let image = ParkableImage::new_frozen(self.clone(), bytes);
-        self.register(&image);
+        let image = ParkableImage::new_frozen(self.clone(), self.allocate_image_id(), bytes);
+        self.register_resident(&image);
         image
     }
 
-    /// Attempts to park all currently live images.
+    /// Returns the earliest deadline among schedulable resident images.
+    /// Parked images are kept in a separate registry and are not inspected.
+    pub fn next_parking_deadline(&self) -> Option<Instant> {
+        let now = Instant::now();
+        self.resident_images()
+            .into_iter()
+            .filter(|registered| !registered.capacity_blocked)
+            .filter_map(|registered| registered.image.parking_deadline(now))
+            .min()
+    }
+
+    /// Parks only resident images whose deadline has elapsed.
     ///
-    /// Disk I/O is synchronous. Callers that sweep many images should invoke
-    /// this from a blocking worker, as Blink does for its writes.
+    /// Disk I/O is synchronous. Call this from a blocking worker after waiting
+    /// for [`Self::next_parking_deadline`].
+    pub fn park_images_due(&self) -> ParkableImageSweepReport {
+        let now = Instant::now();
+        let due = self
+            .resident_images()
+            .into_iter()
+            .filter(|registered| !registered.capacity_blocked)
+            .filter(|registered| {
+                registered
+                    .image
+                    .parking_deadline(now)
+                    .is_some_and(|deadline| deadline <= now)
+            })
+            .collect();
+        self.sweep(due)
+    }
+
+    /// Immediately retries every resident image.
+    ///
+    /// This is retained for explicit memory-pressure sweeps and tests. The
+    /// normal renderer path is deadline driven through [`Self::park_images_due`].
     pub fn maybe_park_images(&self) -> ParkableImageSweepReport {
-        let images = self.live_images();
-        let mut report = ParkableImageSweepReport::default();
-        for image in images {
-            report.considered += 1;
-            match image.maybe_park() {
-                Ok(ParkOutcome::Parked) => report.parked += 1,
-                Ok(ParkOutcome::AlreadyParked) => report.already_parked += 1,
-                Ok(ParkOutcome::Delayed { .. }) => report.delayed += 1,
-                Ok(ParkOutcome::InUse) => report.in_use += 1,
-                Ok(ParkOutcome::Unavailable) => report.unavailable += 1,
-                Ok(ParkOutcome::NotFrozen | ParkOutcome::BelowMinimum) => {
-                    report.ineligible += 1;
-                }
-                Err(_) => report.write_failures += 1,
-            }
-        }
-        report
+        let images = {
+            let mut registry = self.inner.registry.lock();
+            registry.unblock_capacity_waiters();
+            registry.resident_images()
+        };
+        self.sweep(images)
     }
 
     pub fn diagnostics(&self) -> ParkableImageManagerDiagnostics {
+        let images = self.inner.registry.lock().all_images();
         let mut diagnostics = ParkableImageManagerDiagnostics::default();
-        for image in self.live_images() {
+        for image in images {
             let image = image.diagnostics();
             diagnostics.image_count += 1;
             match image.storage {
@@ -123,22 +178,75 @@ impl ParkableImageManager {
         self.inner.disk_pool.clone()
     }
 
-    fn register(&self, image: &ParkableImage) {
-        self.inner.images.lock().push(image.downgrade());
+    pub(crate) fn notify_schedule_changed(&self) {
+        if let Some(wakeup) = &self.inner.schedule_wakeup {
+            wakeup();
+        }
     }
 
-    fn live_images(&self) -> Vec<ParkableImage> {
-        let mut registered = self.inner.images.lock();
-        let mut images = Vec::with_capacity(registered.len());
-        registered.retain(|image| {
-            if let Some(image) = image.upgrade() {
-                images.push(image);
-                true
-            } else {
-                false
+    pub(crate) fn mark_parked(&self, image: &ParkableImage) {
+        self.inner.registry.lock().move_to_parked(image);
+        self.notify_schedule_changed();
+    }
+
+    pub(crate) fn mark_resident(&self, image: &ParkableImage) {
+        self.inner.registry.lock().insert_resident(image);
+        self.notify_schedule_changed();
+    }
+
+    pub(crate) fn unregister(&self, id: u64, released_disk_capacity: bool) {
+        let removed = {
+            let mut registry = self.inner.registry.lock();
+            let removed = registry.remove(id);
+            if removed && released_disk_capacity {
+                registry.unblock_capacity_waiters();
             }
-        });
-        images
+            removed
+        };
+        if removed {
+            self.notify_schedule_changed();
+        }
+    }
+
+    fn allocate_image_id(&self) -> u64 {
+        self.inner
+            .next_image_id
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1)
+    }
+
+    fn register_resident(&self, image: &ParkableImage) {
+        self.inner.registry.lock().insert_resident(image);
+        self.notify_schedule_changed();
+    }
+
+    fn resident_images(&self) -> Vec<ResidentImage> {
+        self.inner.registry.lock().resident_images()
+    }
+
+    fn sweep(&self, images: Vec<ResidentImage>) -> ParkableImageSweepReport {
+        let mut report = ParkableImageSweepReport::default();
+        for registered in images {
+            report.considered += 1;
+            match registered.image.maybe_park() {
+                Ok(ParkOutcome::Parked) => report.parked += 1,
+                Ok(ParkOutcome::AlreadyParked) => report.already_parked += 1,
+                Ok(ParkOutcome::Delayed { .. }) => report.delayed += 1,
+                Ok(ParkOutcome::InUse) => report.in_use += 1,
+                Ok(ParkOutcome::Unavailable) => {
+                    report.unavailable += 1;
+                    self.inner.registry.lock().block_for_capacity(registered.id);
+                }
+                Ok(ParkOutcome::NotFrozen | ParkOutcome::BelowMinimum) => {
+                    report.ineligible += 1;
+                }
+                Err(_) => {
+                    report.write_failures += 1;
+                    self.inner.registry.lock().block_for_capacity(registered.id);
+                }
+            }
+        }
+        report
     }
 }
 

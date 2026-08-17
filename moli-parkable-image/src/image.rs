@@ -21,6 +21,7 @@ pub struct WeakParkableImage {
 }
 
 struct ParkableImageInner {
+    id: u64,
     manager: ParkableImageManager,
     state: Mutex<ParkableImageState>,
 }
@@ -52,9 +53,9 @@ enum FrozenImageStorage {
 
 /// A read-only snapshot. While a snapshot exists, its image cannot discard the
 /// corresponding in-memory bytes.
-#[derive(Clone)]
 pub struct ParkableImageSnapshot {
     data: Arc<Vec<u8>>,
+    owner: Option<WeakParkableImage>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,10 +94,40 @@ pub struct ParkableImageDiagnostics {
     pub retained_disk_bytes: usize,
 }
 
+impl Drop for ParkableImageInner {
+    fn drop(&mut self) {
+        // Release a retained disk extent before waking capacity-blocked
+        // residents. The async scheduler can otherwise race this destructor
+        // and retry while the extent is still reserved.
+        let storage = std::mem::replace(
+            self.state.get_mut(),
+            ParkableImageState::Mutable(Vec::new()),
+        );
+        let released_disk_capacity = matches!(
+            &storage,
+            ParkableImageState::Frozen(FrozenImageState {
+                storage: FrozenImageStorage::Parked { .. }
+                    | FrozenImageStorage::Resident {
+                        disk_backup: Some(_),
+                        ..
+                    },
+                ..
+            })
+        );
+        drop(storage);
+        self.manager.unregister(self.id, released_disk_capacity);
+    }
+}
+
 impl ParkableImage {
-    pub(crate) fn new_mutable(manager: ParkableImageManager, initial_capacity: usize) -> Self {
+    pub(crate) fn new_mutable(
+        manager: ParkableImageManager,
+        id: u64,
+        initial_capacity: usize,
+    ) -> Self {
         Self {
             inner: Arc::new(ParkableImageInner {
+                id,
                 manager,
                 state: Mutex::new(ParkableImageState::Mutable(Vec::with_capacity(
                     initial_capacity,
@@ -105,9 +136,10 @@ impl ParkableImage {
         }
     }
 
-    pub(crate) fn new_frozen(manager: ParkableImageManager, bytes: Vec<u8>) -> Self {
+    pub(crate) fn new_frozen(manager: ParkableImageManager, id: u64, bytes: Vec<u8>) -> Self {
         Self {
             inner: Arc::new(ParkableImageInner {
+                id,
                 manager,
                 state: Mutex::new(ParkableImageState::Frozen(FrozenImageState {
                     len: bytes.len(),
@@ -150,6 +182,8 @@ impl ParkableImage {
             frozen_at: Instant::now(),
             used: false,
         });
+        drop(state);
+        self.inner.manager.notify_schedule_changed();
         Ok(())
     }
 
@@ -180,6 +214,7 @@ impl ParkableImage {
         match &mut *state {
             ParkableImageState::Mutable(bytes) => Ok(ParkableImageSnapshot {
                 data: Arc::new(bytes.clone()),
+                owner: None,
             }),
             ParkableImageState::Frozen(frozen) => {
                 frozen.used = true;
@@ -192,7 +227,13 @@ impl ParkableImage {
                         bytes: Arc::clone(&bytes),
                         disk_backup: Some(disk),
                     };
-                    return Ok(ParkableImageSnapshot { data: bytes });
+                    let snapshot = ParkableImageSnapshot {
+                        data: bytes,
+                        owner: Some(self.downgrade()),
+                    };
+                    drop(state);
+                    self.inner.manager.mark_resident(self);
+                    return Ok(snapshot);
                 }
                 let bytes = match &frozen.storage {
                     FrozenImageStorage::Resident { bytes, .. }
@@ -201,7 +242,13 @@ impl ParkableImage {
                         unreachable!("parked storage should have been restored")
                     }
                 };
-                Ok(ParkableImageSnapshot { data: bytes })
+                let snapshot = ParkableImageSnapshot {
+                    data: bytes,
+                    owner: Some(self.downgrade()),
+                };
+                drop(state);
+                self.inner.manager.notify_schedule_changed();
+                Ok(snapshot)
             }
         }
     }
@@ -216,6 +263,40 @@ impl ParkableImage {
             return Ok(Vec::new());
         };
         Ok(remaining[..remaining.len().min(max_len)].to_vec())
+    }
+
+    pub(crate) fn id(&self) -> u64 {
+        self.inner.id
+    }
+
+    pub(crate) fn parking_deadline(&self, now: Instant) -> Option<Instant> {
+        let state = self.inner.state.lock();
+        let ParkableImageState::Frozen(frozen) = &*state else {
+            return None;
+        };
+        let policy = self.inner.manager.policy();
+        if frozen.len < policy.min_size_to_park {
+            return None;
+        }
+        let FrozenImageStorage::Resident { bytes, disk_backup } = &frozen.storage else {
+            return None;
+        };
+        if Arc::strong_count(bytes) != 1 {
+            return None;
+        }
+        if disk_backup.is_none()
+            && !self
+                .inner
+                .manager
+                .disk_pool()
+                .is_some_and(|pool| pool.may_write())
+        {
+            return None;
+        }
+        if frozen.used || disk_backup.is_some() {
+            return Some(now);
+        }
+        frozen.frozen_at.checked_add(policy.parking_delay)
     }
 
     /// Attempts to discard resident bytes according to the Blink parking
@@ -258,6 +339,8 @@ impl ParkableImage {
 
             if let Some(disk) = disk_backup {
                 frozen.storage = FrozenImageStorage::Parked { disk };
+                drop(state);
+                self.inner.manager.mark_parked(self);
                 return Ok(ParkOutcome::Parked);
             }
 
@@ -297,7 +380,9 @@ impl ParkableImage {
                 frozen.storage = FrozenImageStorage::Parked {
                     disk: Arc::new(disk),
                 };
+                drop(state);
                 drop((parking_bytes, write_bytes));
+                self.inner.manager.mark_parked(self);
                 Ok(ParkOutcome::Parked)
             }
             Ok(disk) => {
@@ -305,7 +390,9 @@ impl ParkableImage {
                     bytes: parking_bytes,
                     disk_backup: Some(Arc::new(disk)),
                 };
+                drop(state);
                 drop(write_bytes);
+                self.inner.manager.notify_schedule_changed();
                 Ok(ParkOutcome::InUse)
             }
             Err(error) => {
@@ -313,7 +400,9 @@ impl ParkableImage {
                     bytes: parking_bytes,
                     disk_backup: None,
                 };
+                drop(state);
                 drop(write_bytes);
+                self.inner.manager.notify_schedule_changed();
                 Err(error)
             }
         }
@@ -416,6 +505,23 @@ impl Deref for ParkableImageSnapshot {
 
     fn deref(&self) -> &Self::Target {
         self.data.as_slice()
+    }
+}
+
+impl Clone for ParkableImageSnapshot {
+    fn clone(&self) -> Self {
+        Self {
+            data: Arc::clone(&self.data),
+            owner: self.owner.clone(),
+        }
+    }
+}
+
+impl Drop for ParkableImageSnapshot {
+    fn drop(&mut self) {
+        if let Some(image) = self.owner.as_ref().and_then(WeakParkableImage::upgrade) {
+            image.inner.manager.notify_schedule_changed();
+        }
     }
 }
 

@@ -1,4 +1,10 @@
-use std::time::Duration;
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::{Duration, Instant},
+};
 
 use moli_disk_pool::DiskPool;
 
@@ -419,6 +425,110 @@ fn concurrent_reads_unpark_once_and_preserve_every_copy() {
     assert_eq!(diagnostics.snapshot_count, 0);
     assert_eq!(pool.diagnostics().disk_footprint_bytes, bytes.len() as u64);
     assert_eq!(image.maybe_park().unwrap(), ParkOutcome::Parked);
+}
+
+#[test]
+fn next_deadline_tracks_freeze_use_and_the_last_snapshot_drop() {
+    let delay = Duration::from_secs(30);
+    let wakeups = Arc::new(AtomicUsize::new(0));
+    let wakeups_for_callback = Arc::clone(&wakeups);
+    let pool = DiskPool::new(None).unwrap();
+    let manager = ParkableImageManager::new_with_schedule_wakeup(
+        Some(pool),
+        ParkableImagePolicy {
+            min_size_to_park: 1,
+            parking_delay: delay,
+        },
+        move || {
+            wakeups_for_callback.fetch_add(1, Ordering::Relaxed);
+        },
+    );
+    let image = manager.create(0);
+    image.append(b"encoded image").unwrap();
+    assert_eq!(manager.next_parking_deadline(), None);
+
+    let before_freeze = Instant::now();
+    image.freeze().unwrap();
+    let deadline = manager
+        .next_parking_deadline()
+        .expect("freezing an unused eligible image must schedule its delay");
+    assert!(deadline >= before_freeze + delay);
+    assert!(deadline <= Instant::now() + delay);
+
+    let snapshot = image.snapshot().unwrap();
+    assert_eq!(
+        manager.next_parking_deadline(),
+        None,
+        "a live snapshot must remove the image from deadline candidates"
+    );
+    let wakeups_before_drop = wakeups.load(Ordering::Relaxed);
+    drop(snapshot);
+    assert!(wakeups.load(Ordering::Relaxed) > wakeups_before_drop);
+    assert!(
+        manager
+            .next_parking_deadline()
+            .is_some_and(|deadline| deadline <= Instant::now()),
+        "a used image becomes immediately due after its last snapshot drops"
+    );
+}
+
+#[test]
+fn parked_images_leave_the_resident_schedule_until_they_are_unparked() {
+    let (_, manager) = manager(immediate_policy());
+    let image = manager.from_frozen_bytes(vec![3; 4096]);
+
+    let report = manager.park_images_due();
+    assert_eq!(report.considered, 1);
+    assert_eq!(report.parked, 1);
+    assert_eq!(manager.next_parking_deadline(), None);
+    assert_eq!(
+        manager.maybe_park_images().considered,
+        0,
+        "the parked registry must not be part of resident sweeps"
+    );
+    assert_eq!(manager.diagnostics().parked_count, 1);
+
+    let snapshot = image.snapshot().unwrap();
+    assert_eq!(manager.diagnostics().parked_count, 0);
+    assert_eq!(manager.diagnostics().resident_with_disk_backup_count, 1);
+    assert_eq!(manager.next_parking_deadline(), None);
+    drop(snapshot);
+
+    let report = manager.park_images_due();
+    assert_eq!(report.considered, 1);
+    assert_eq!(report.parked, 1);
+    assert_eq!(manager.diagnostics().parked_count, 1);
+}
+
+#[test]
+fn capacity_failure_has_no_expired_deadline_until_an_extent_is_released() {
+    const IMAGE_SIZE: usize = 4096;
+    let pool = DiskPool::new(Some(IMAGE_SIZE as u64)).unwrap();
+    let manager = ParkableImageManager::new(Some(pool), immediate_policy());
+    let first = manager.from_frozen_bytes(vec![1; IMAGE_SIZE]);
+    let second = manager.from_frozen_bytes(vec![2; IMAGE_SIZE]);
+    assert_eq!(first.maybe_park().unwrap(), ParkOutcome::Parked);
+
+    let report = manager.park_images_due();
+    assert_eq!(report.considered, 1);
+    assert_eq!(report.unavailable, 1);
+    assert_eq!(
+        manager.next_parking_deadline(),
+        None,
+        "a full pool must not leave an already-expired deadline spinning"
+    );
+
+    drop(first);
+    assert!(
+        manager
+            .next_parking_deadline()
+            .is_some_and(|deadline| deadline <= Instant::now())
+    );
+    assert_eq!(manager.park_images_due().parked, 1);
+    assert_eq!(
+        second.diagnostics().storage,
+        ParkableImageStorageState::Parked
+    );
 }
 
 #[test]

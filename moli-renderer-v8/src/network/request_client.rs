@@ -74,7 +74,8 @@ impl ResourceRequestClient {
         &self,
         runner: &crate::network::RendererResourceTaskRunner,
     ) -> ParkableImageManager {
-        self.resource_runtime.ensure_parkable_image_sweep(runner);
+        self.resource_runtime
+            .ensure_parkable_image_scheduler(runner);
         self.resource_runtime.parkable_image_manager()
     }
 
