@@ -21,22 +21,39 @@ struct ResidentEntry {
 }
 
 impl ParkableImageRegistry {
-    pub(crate) fn insert_resident(&mut self, image: &ParkableImage) {
+    pub(crate) fn register_resident(&mut self, image: &ParkableImage) {
         let id = image.id();
-        self.parked.remove(&id);
-        self.resident.insert(
+        debug_assert!(!self.parked.contains_key(&id));
+        let previous = self.resident.insert(
             id,
             ResidentEntry {
                 image: image.downgrade(),
                 capacity_blocked: false,
             },
         );
+        debug_assert!(previous.is_none());
     }
 
     pub(crate) fn move_to_parked(&mut self, image: &ParkableImage) {
         let id = image.id();
-        self.resident.remove(&id);
-        self.parked.insert(id, image.downgrade());
+        let resident = self.resident.remove(&id);
+        debug_assert!(resident.is_some());
+        let previous = self.parked.insert(id, image.downgrade());
+        debug_assert!(previous.is_none());
+    }
+
+    pub(crate) fn move_to_resident(&mut self, image: &ParkableImage) {
+        let id = image.id();
+        let parked = self.parked.remove(&id);
+        debug_assert!(parked.is_some());
+        let previous = self.resident.insert(
+            id,
+            ResidentEntry {
+                image: image.downgrade(),
+                capacity_blocked: false,
+            },
+        );
+        debug_assert!(previous.is_none());
     }
 
     pub(crate) fn remove(&mut self, id: u64) -> bool {

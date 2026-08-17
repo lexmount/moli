@@ -1,12 +1,13 @@
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
 
 use moli_disk_pool::DiskPool;
+use parking_lot::Mutex;
 
 use crate::{
     ParkOutcome, ParkableImageManager, ParkableImageMutationError, ParkableImagePolicy,
@@ -470,6 +471,89 @@ fn next_deadline_tracks_freeze_use_and_the_last_snapshot_drop() {
             .is_some_and(|deadline| deadline <= Instant::now()),
         "a used image becomes immediately due after its last snapshot drops"
     );
+}
+
+#[test]
+fn last_snapshot_release_is_visible_before_the_scheduler_wakeup() {
+    let manager_slot = Arc::new(Mutex::new(None::<ParkableImageManager>));
+    let manager_slot_for_callback = Arc::clone(&manager_slot);
+    let wakeups = Arc::new(AtomicUsize::new(0));
+    let wakeups_for_callback = Arc::clone(&wakeups);
+    let observed_due = Arc::new(AtomicBool::new(false));
+    let observed_due_for_callback = Arc::clone(&observed_due);
+    let manager = ParkableImageManager::new_with_schedule_wakeup(
+        Some(DiskPool::new(None).unwrap()),
+        immediate_policy(),
+        move || {
+            wakeups_for_callback.fetch_add(1, Ordering::SeqCst);
+            let manager = manager_slot_for_callback.lock().clone();
+            let due = manager.is_some_and(|manager| {
+                manager
+                    .next_parking_deadline()
+                    .is_some_and(|deadline| deadline <= Instant::now())
+            });
+            observed_due_for_callback.store(due, Ordering::SeqCst);
+        },
+    );
+    *manager_slot.lock() = Some(manager.clone());
+    let image = manager.from_frozen_bytes(vec![7; 4096]);
+    let first = image.snapshot().unwrap();
+    let second = first.clone();
+
+    observed_due.store(false, Ordering::SeqCst);
+    let wakeups_before_drop = wakeups.load(Ordering::SeqCst);
+    drop(first);
+    assert_eq!(wakeups.load(Ordering::SeqCst), wakeups_before_drop);
+
+    drop(second);
+    assert_eq!(wakeups.load(Ordering::SeqCst), wakeups_before_drop + 1);
+    assert!(
+        observed_due.load(Ordering::SeqCst),
+        "the wakeup must observe the reader count after the last lease is released"
+    );
+}
+
+#[test]
+fn concurrent_park_and_unpark_keep_storage_and_registry_aligned() {
+    const ITERATIONS: usize = 500;
+    let (_, manager) = manager(immediate_policy());
+    let image = manager.from_frozen_bytes(vec![5; 4096]);
+    assert_eq!(image.maybe_park().unwrap(), ParkOutcome::Parked);
+    let start = Arc::new(std::sync::Barrier::new(2));
+
+    let reader = {
+        let image = image.clone();
+        let start = Arc::clone(&start);
+        std::thread::spawn(move || {
+            start.wait();
+            for _ in 0..ITERATIONS {
+                let snapshot = image.snapshot().unwrap();
+                assert_eq!(snapshot.len(), 4096);
+                drop(snapshot);
+                std::thread::yield_now();
+            }
+        })
+    };
+    let parker = {
+        let image = image.clone();
+        let start = Arc::clone(&start);
+        std::thread::spawn(move || {
+            start.wait();
+            for _ in 0..ITERATIONS {
+                image.maybe_park().unwrap();
+                std::thread::yield_now();
+            }
+        })
+    };
+    reader.join().unwrap();
+    parker.join().unwrap();
+
+    let snapshot = image.snapshot().unwrap();
+    drop(snapshot);
+    let report = manager.park_images_due();
+    assert_eq!(report.considered, 1);
+    assert_eq!(report.parked, 1);
+    assert_eq!(manager.diagnostics().parked_count, 1);
 }
 
 #[test]
