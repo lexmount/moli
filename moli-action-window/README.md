@@ -45,3 +45,17 @@ Typical host flow is:
 
 All timestamps supplied to one queue must come from the same monotonic clock
 and be admitted in event-loop order.
+
+## Test layers
+
+- Unit tests pin every state transition, deadline edge, compaction rule,
+  counter, cancellation, and capacity behavior with a virtual clock.
+- Public API tests compile the crate as an external consumer, including owned
+  scopes, non-`Clone` payloads, consuming batches, all mouse buttons, and
+  scroll metadata.
+- Model tests compare the implementation with an independent flat reference
+  compactor for all 9,331 mixed sequences up to five actions, plus a
+  deterministic 1,000-action capacity stream.
+- End-to-end host tests model Page execution, one observer/render commit per
+  batch, screenshot and screencast barriers, stale timer wakes, late input,
+  capacity rotation, and a real timer armed from `next_deadline`.
