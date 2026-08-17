@@ -212,7 +212,7 @@ El documento y los estilos tienen una única fuente de verdad: la integración d
 
 ## Datos de las pruebas
 
-Los dos conjuntos de mediciones siguientes muestran hasta dónde llegan hoy las capacidades de Moli. Las pruebas cubren sitios web reales, clientes de automatización reales, verificaciones específicas del comportamiento de Chromium/WPT y una batería grande de regresión con nextest.
+Los tres conjuntos de mediciones siguientes muestran hasta dónde llegan hoy las capacidades de Moli. Las pruebas cubren sitios web reales, clientes de automatización reales, verificaciones específicas del comportamiento de Chromium/WPT y una batería grande de regresión con nextest.
 
 ### Prueba de rastreo mixto de la web pública
 
@@ -236,7 +236,7 @@ La prueba cubre 192 URLs públicas de sitios importantes de China y del resto de
 
 ### Lexbench-Headless-Browser (compatibilidad de pilas de drivers)
 
-[Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) mide la superficie de runtime de la que realmente dependen los ecosistemas de automatización: 1.928 tareas sobre 13 pilas de drivers reales (CDP en bruto, Playwright, Puppeteer, Selenium sobre el WebDriver nativo de Moli, chromedp, rod, chromiumoxide, ferrum, pydoll y más), además de la corrección semántica de la plataforma web, con verificación de identidad en dos pasos para que ningún resultado de un candidato pueda venir silenciosamente de Chrome.
+[Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) mide la superficie de runtime de la que realmente dependen los ecosistemas de automatización: 1.928 tareas que abarcan CDP en bruto y 13 bibliotecas de drivers con versiones fijadas (Playwright, Puppeteer, Selenium sobre el WebDriver nativo de Moli, chromedp, rod, chromiumoxide, ferrum, pydoll y más), además de la corrección semántica de la plataforma web, con verificación de identidad en dos pasos para que ningún resultado de un candidato pueda venir silenciosamente de Chrome.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-four-engine-overview-dark.png">
@@ -250,7 +250,7 @@ Run `four_engine_full_20260812` · seed `official20260709` · k=3 ·
 | --- | --- | ---: | ---: |
 | Chrome for Testing | 151.0.7922.47 `3b0be9872ea9` | 1,926 / 1,928 (99.90%) | 192 / 192 |
 | **Moli** | **0.1.1 `74e08f8d3eb6`** | **1,556 / 1,928 (80.71%)** | **183 / 192** |
-| Lightpanda | 1.0.0-dev.321 `70f5ab69b0ce` | 845 / 1,928 (43.83%) | 132 / 192 |
+| Lightpanda | 1.0.0-dev.321+b04c99a9 `70f5ab69b0ce` | 845 / 1,928 (43.83%) | 132 / 192 |
 | Obscura | 0.1.11 `42c7eac0f635` | 762 / 1,928 (39.52%) | 84 / 192 |
 
 <picture>
@@ -258,7 +258,7 @@ Run `four_engine_full_20260812` · seed `official20260709` · k=3 ·
   <img alt="Tasa de éxito frente a la mediana de memoria pico por tarea: Chrome con 99,9 % y 697 MiB, Moli con 80,7 % y 92 MiB, Lightpanda con 43,8 % y 34 MiB, Obscura con 39,5 % y 39 MiB" src="../assets/lexbench-efficiency-map-light.png" width="100%">
 </picture>
 
-La medición de recursos calibrada por A/B (mismo bench, `jobs=1 k=5`, CPU de cgroup-v2 y PSS del árbol de procesos sobre la intersección de tareas superadas por los cuatro motores, efecto observador por debajo del 0,9 % por motor) sitúa a **Moli en una mediana de 100,6 ms de CPU y 92 MiB de memoria pico por tarea frente a los 687 ms y 697 MiB de Chrome**: alrededor de 1/7 de la CPU y 1/7,5 de la memoria superando el 80,7 % de la superficie de tareas. Los informes completos están en el repositorio del bench, en [`docs/reports/`](https://github.com/lexmount/Lexbench-Headless-Browser/tree/main/docs/reports).
+La medición de recursos calibrada por A/B utiliza un subconjunto representativo de 557 tareas (`l1.raw_cdp` más `l2.web_platform`, `jobs=1 k=5`) y mide CPU de cgroup-v2 y PSS del árbol de procesos sobre la intersección de tareas superadas por los cuatro motores; el efecto observador queda por debajo del 0,9 % por motor. En ese subconjunto, **Moli registra una mediana de 100,6 ms de CPU y 92 MiB de memoria pico por tarea frente a los 687 ms y 697 MiB de Chrome**: alrededor de 1/7 de la CPU y 1/7,5 de la memoria. En la ejecución de compatibilidad independiente de 1.928 tareas, Moli supera el 80,7 % de la superficie de tareas. Los informes completos están en el repositorio del bench, en [`docs/reports/`](https://github.com/lexmount/Lexbench-Headless-Browser/tree/main/docs/reports).
 
 En el conjunto actual de tests WPT que usamos para validar el alcance funcional de Moli como navegador para agentes, una ejecución completa registró **1.612.000 tests superados**.
 

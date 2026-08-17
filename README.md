@@ -259,7 +259,7 @@ retained display list, GPU compositor, or persistent window.
 
 ## Test data
 
-The following two measured data sets show Moli's current capability envelope.
+The following three measured data sets show Moli's current capability envelope.
 The tests cover real websites, real automation clients, focused Chromium/WPT
 behavior checks, and a large nextest regression suite.
 
@@ -290,10 +290,10 @@ shell-only application does not count.
 
 [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser)
 measures the runtime surface automation ecosystems actually depend on: 1,928
-tasks across 13 real driver stacks (raw CDP, Playwright, Puppeteer, Selenium
-over Moli's native WebDriver, chromedp, rod, chromiumoxide, ferrum, pydoll and
-more), plus web-platform semantic correctness, with two-gate identity
-verification so no candidate result can silently come from Chrome.
+tasks spanning raw CDP and 13 pinned driver libraries (Playwright, Puppeteer,
+Selenium over Moli's native WebDriver, chromedp, rod, chromiumoxide, ferrum,
+pydoll and more), plus web-platform semantic correctness, with two-gate
+identity verification so no candidate result can silently come from Chrome.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/lexbench-four-engine-overview-dark.png">
@@ -307,7 +307,7 @@ Run `four_engine_full_20260812` · seed `official20260709` · k=3 ·
 | --- | --- | ---: | ---: |
 | Chrome for Testing | 151.0.7922.47 `3b0be9872ea9` | 1,926 / 1,928 (99.90%) | 192 / 192 |
 | **Moli** | **0.1.1 `74e08f8d3eb6`** | **1,556 / 1,928 (80.71%)** | **183 / 192** |
-| Lightpanda | 1.0.0-dev.321 `70f5ab69b0ce` | 845 / 1,928 (43.83%) | 132 / 192 |
+| Lightpanda | 1.0.0-dev.321+b04c99a9 `70f5ab69b0ce` | 845 / 1,928 (43.83%) | 132 / 192 |
 | Obscura | 0.1.11 `42c7eac0f635` | 762 / 1,928 (39.52%) | 84 / 192 |
 
 <picture>
@@ -315,15 +315,18 @@ Run `four_engine_full_20260812` · seed `official20260709` · k=3 ·
   <img alt="Task success rate plotted against median peak memory per task: Chrome at 99.9% and 697 MiB, Moli at 80.7% and 92 MiB, Lightpanda at 43.8% and 34 MiB, Obscura at 39.5% and 39 MiB" src="assets/lexbench-efficiency-map-light.png" width="100%">
 </picture>
 
-The A/B-calibrated resource companion (same bench, `jobs=1 k=5`, cgroup-v2 CPU
-and process-tree PSS over the all-pass intersection, observer effect within
-0.9% per engine) puts Moli at a **median 100.6 ms CPU and 92 MiB peak PSS per
-task versus Chrome's 687 ms and 697 MiB** — about 1/7 the CPU and 1/7.5 the
-memory while passing 80.7% of the task surface. Full reports live in the bench repository under
-[`docs/reports/`](https://github.com/lexmount/Lexbench-Headless-Browser/tree/main/docs/reports).
+The A/B-calibrated resource companion uses a representative 557-task subset
+(`l1.raw_cdp` plus `l2.web_platform`, `jobs=1 k=5`) and reports cgroup-v2 CPU
+and process-tree PSS over the all-pass intersection, with observer effect
+within 0.9% per engine. On that subset, Moli records a **median 100.6 ms CPU
+and 92 MiB peak PSS per task versus Chrome's 687 ms and 697 MiB** — about 1/7
+the CPU and 1/7.5 the memory. The separate 1,928-task compatibility run puts
+Moli at 80.7% of the task surface. Full reports live in the bench repository
+under [`docs/reports/`](https://github.com/lexmount/Lexbench-Headless-Browser/tree/main/docs/reports).
 
 In the current WPT selection used to validate Moli's agent-browser scope, one
 complete run recorded **1.612 million passing tests**.
+
 ## Project scope
 
 Within the agent-browser scenarios defined in its documentation, Moli is ready

@@ -211,7 +211,7 @@ Moli は、Chromium を外から操作するだけの仕組みではなく、独
 
 ## 検証結果
 
-以下の 2 種類の実測値は、Moli が現在対応できる範囲を示しています。検証対象には、実在する Web サイト、実際の自動操作用ソフトウェア、Chromium/WPT の特定動作、大規模な nextest 回帰テストを含みます。
+以下の 3 種類の実測値は、Moli が現在対応できる範囲を示しています。検証対象には、実在する Web サイト、実際の自動操作用ソフトウェア、Chromium/WPT の特定動作、大規模な nextest 回帰テストを含みます。
 
 ### 公開 Web サイトの横断取得試験
 
@@ -235,7 +235,7 @@ Moli は、Chromium を外から操作するだけの仕組みではなく、独
 
 ### Lexbench-Headless-Browser（ドライバスタック互換性）
 
-[Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) は、自動化エコシステムが実際に依存しているランタイム表面を測定します。1,928 件のタスクを 13 種類の実在ドライバスタック（生 CDP、Playwright、Puppeteer、Moli ネイティブ WebDriver 経由の Selenium、chromedp、rod、chromiumoxide、ferrum、pydoll など）で実行し、さらに Web プラットフォーム意味論の正しさも検証します。すべての試行は二段階の同一性検証を通過するため、候補エンジンの結果が Chrome に静かに差し替わることはありません。
+[Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) は、自動化エコシステムが実際に依存しているランタイム表面を測定します。1,928 件のタスクを、生 CDP とバージョンを固定した 13 種類のドライバライブラリ（Playwright、Puppeteer、Moli ネイティブ WebDriver 経由の Selenium、chromedp、rod、chromiumoxide、ferrum、pydoll など）で実行し、さらに Web プラットフォーム意味論の正しさも検証します。すべての試行は二段階の同一性検証を通過するため、候補エンジンの結果が Chrome に静かに差し替わることはありません。
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-four-engine-overview-dark.png">
@@ -249,7 +249,7 @@ Run `four_engine_full_20260812` · seed `official20260709` · k=3 ·
 | --- | --- | ---: | ---: |
 | Chrome for Testing | 151.0.7922.47 `3b0be9872ea9` | 1,926 / 1,928 (99.90%) | 192 / 192 |
 | **Moli** | **0.1.1 `74e08f8d3eb6`** | **1,556 / 1,928 (80.71%)** | **183 / 192** |
-| Lightpanda | 1.0.0-dev.321 `70f5ab69b0ce` | 845 / 1,928 (43.83%) | 132 / 192 |
+| Lightpanda | 1.0.0-dev.321+b04c99a9 `70f5ab69b0ce` | 845 / 1,928 (43.83%) | 132 / 192 |
 | Obscura | 0.1.11 `42c7eac0f635` | 762 / 1,928 (39.52%) | 84 / 192 |
 
 <picture>
@@ -257,7 +257,7 @@ Run `four_engine_full_20260812` · seed `official20260709` · k=3 ·
   <img alt="タスク成功率とタスクあたりピークメモリ中央値の関係：Chrome 99.9%・697 MiB、Moli 80.7%・92 MiB、Lightpanda 43.8%・34 MiB、Obscura 39.5%・39 MiB" src="../assets/lexbench-efficiency-map-light.png" width="100%">
 </picture>
 
-A/B 較正付きのリソース測定（同一ベンチ、`jobs=1 k=5`、cgroup-v2 CPU とプロセスツリー PSS、4 エンジンすべてが合格したタスクの共通集合のみで集計、観測による影響は各エンジン 0.9% 未満）では、**Moli は 1 タスクあたり中央値で CPU 100.6 ms・ピークメモリ 92 MiB、Chrome は 687 ms・697 MiB** となり、タスク面の 80.7% を通過しながら CPU で約 1/7、メモリで約 1/7.5 に収まります。詳細なレポートはベンチリポジトリの [`docs/reports/`](https://github.com/lexmount/Lexbench-Headless-Browser/tree/main/docs/reports) にあります。
+A/B 較正付きのリソース測定では、代表的な 557 タスクのサブセット（`l1.raw_cdp` と `l2.web_platform`、`jobs=1 k=5`）を使い、4 エンジンすべてが合格したタスクの共通集合について cgroup-v2 CPU とプロセスツリー PSS を集計しています。観測による影響は各エンジン 0.9% 未満です。このサブセットでは、**Moli は 1 タスクあたり中央値で CPU 100.6 ms・ピークメモリ 92 MiB、Chrome は 687 ms・697 MiB** となり、CPU で約 1/7、メモリで約 1/7.5 に収まります。別個の 1,928 タスクの互換性試験では、Moli はタスク面の 80.7% を通過しています。詳細なレポートはベンチリポジトリの [`docs/reports/`](https://github.com/lexmount/Lexbench-Headless-Browser/tree/main/docs/reports) にあります。
 
 現在の Moli が備える AI エージェント向けブラウザ機能を検証する WPT では、1 回の全件実行で **161万2,000件のテストに合格**しました。
 
