@@ -35,7 +35,7 @@ jobs:
     name: Format
     if: github.event_name != 'pull_request' || github.event.action != 'closed'
     runs-on: ubuntu-latest
-    container: rust:1.96.1-bookworm
+    container: rust:1.96.1-bullseye
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -50,7 +50,7 @@ jobs:
     name: Clippy
     if: github.event_name != 'pull_request' || github.event.action != 'closed'
     runs-on: ubuntu-latest
-    container: rust:1.96.1-bookworm
+    container: rust:1.96.1-bullseye
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -65,7 +65,7 @@ jobs:
     name: Nextest
     if: github.event_name != 'pull_request' || github.event.action != 'closed'
     runs-on: [self-hosted, moli-ci]
-    container: rust:1.96.1-bookworm
+    container: rust:1.96.1-bullseye
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -85,7 +85,7 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.action != 'closed'
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    container: rust:1.96.1-bookworm
+    container: rust:1.96.1-bullseye
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
