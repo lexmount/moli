@@ -155,15 +155,19 @@ async def _dispatch_wheel(
     client: RawCdpClient,
     session_id: str,
     delta_y: float,
+    *,
+    delta_x: float = 0,
+    x: float = 20,
+    y: float = 20,
 ) -> None:
     await _success(
         client,
         "Input.dispatchMouseEvent",
         {
             "type": "mouseWheel",
-            "x": 20,
-            "y": 20,
-            "deltaX": 0,
+            "x": x,
+            "y": y,
+            "deltaX": delta_x,
             "deltaY": delta_y,
         },
         session_id=session_id,
@@ -321,6 +325,79 @@ async def _run_deadline_contract(
     )
 
 
+async def _run_overflow_container_contract(
+    client: RawCdpClient,
+    session_id: str,
+    fixture: str,
+    results: list[dict[str, Any]],
+) -> None:
+    await _reset_witness(fixture)
+    await _navigate(client, session_id, f"{fixture}/action-window-overflow")
+    initial = await _evaluate_json(
+        client,
+        session_id,
+        """JSON.stringify({
+          container: [scroller.scrollLeft, scroller.scrollTop],
+          page: [scrollX, scrollY],
+          deltas: __actionWindowOverflowDeltas
+        })""",
+    )
+    assert_equal(
+        initial,
+        {"container": [0, 0], "page": [0, 0], "deltas": []},
+        "overflow container initial state",
+    )
+
+    opened_at = asyncio.get_running_loop().time()
+    await _dispatch_wheel(client, session_id, 60, x=50, y=50)
+    await _dispatch_wheel(client, session_id, 0, delta_x=45, x=50, y=50)
+    assert_equal(
+        await _witness_count(fixture),
+        0,
+        "vertical and horizontal container wheels remain delayed",
+    )
+
+    await _wait_for_witness(fixture, 2)
+    elapsed = asyncio.get_running_loop().time() - opened_at
+    if elapsed < 0.85:
+        raise SmokeError(
+            f"overflow-container wheel batch applied before its deadline: {elapsed:.3f}s"
+        )
+    state = await _evaluate_json(
+        client,
+        session_id,
+        """JSON.stringify({
+          container: [scroller.scrollLeft, scroller.scrollTop],
+          page: [scrollX, scrollY],
+          deltas: __actionWindowOverflowDeltas
+        })""",
+    )
+    assert_equal(
+        state,
+        {
+            "container": [45, 60],
+            "page": [0, 0],
+            "deltas": [[0, 60], [45, 0]],
+        },
+        "overflow container wheel batch state",
+    )
+    record_contract(
+        results,
+        "raw_cdp_action_window_overflow_container_axes",
+        contract=(
+            "delayed vertical and horizontal wheels hit the innermost overflow container "
+            "at their CDP coordinates without scrolling the page"
+        ),
+        source="Moli coordinate hit testing and fixed action-window scheduling",
+        commands=[
+            "Input.dispatchMouseEvent(mouseWheel deltaY)",
+            "Input.dispatchMouseEvent(mouseWheel deltaX)",
+            "Runtime.evaluate",
+        ],
+        observed={"elapsedSeconds": round(elapsed, 3), **state},
+    )
+
+
 async def _run_capture_barrier_contract(
     client: RawCdpClient,
     session_id: str,
@@ -450,6 +527,7 @@ async def run_action_window_group(
     try:
         context_id, session_id = await _open_target(client)
         await _run_deadline_contract(client, session_id, fixture, results)
+        await _run_overflow_container_contract(client, session_id, fixture, results)
         await _run_capture_barrier_contract(client, session_id, fixture, results)
         await _run_replacement_contract(client, session_id, fixture, results)
     finally:

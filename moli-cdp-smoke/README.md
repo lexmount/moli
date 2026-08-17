@@ -98,12 +98,14 @@ Covered well:
   the public CDP boundary. Three acknowledged `Input.dispatchMouseEvent`
   wheel commands remain delayed until one fixed one-second deadline, preserve
   event order, defer their microtask checkpoint, and publish one derived
-  IntersectionObserver transition. `Page.captureScreenshot` must flush pending
-  wheel work before paint and retire that window so later input receives a
-  fresh deadline. A wheel handler that calls `document.open()` must also stop
+  IntersectionObserver transition. Coordinate-targeted vertical and horizontal
+  wheels must update an inner `overflow: auto` container's `scrollTop` and
+  `scrollLeft` without moving the page. `Page.captureScreenshot` must flush
+  pending wheel work before paint and retire that window so later input receives
+  a fresh deadline. A wheel handler that calls `document.open()` must also stop
   the remainder of its batch from entering the replacement Document. These are
-  Moli scheduling contracts rather than Chromium-compatibility claims; the
-  group records a non-applicable result when pointed at Chromium.
+  Moli scheduling contracts rather than Chromium-compatibility claims; the group
+  records a non-applicable result when pointed at Chromium.
 - The focused `dom-hit-test` group drives `DOM.getNodeForLocation` through the real layout hit index and requires the same option-aware topmost node, backend node id, and frame id shape from Moli and Chromium.
 - Node creation stack capture retains at most the newest 1,024 traces per Inspector session; focused renderer tests cover FIFO eviction, shared payloads, document replacement, and session detach while the wire smoke retains enable/disable/session semantics and verifies that `document.open()` preserves capture for replacement-document nodes.
 - Optional chrome-remote-interface 0.34.0 and cdp-use 1.4.5 coverage for verified browser/page sessions, multiple targets, local/session storage ownership, history traversal, child-frame isolated worlds, Fetch fulfillment with page-session event routing, complete Network terminals, and the declared position-click boundary.

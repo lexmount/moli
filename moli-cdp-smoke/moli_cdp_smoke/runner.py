@@ -88,7 +88,7 @@ RAW_GROUPS: tuple[SmokeGroup, ...] = (
     ),
     SmokeGroup(
         "action-window",
-        "Moli raw-CDP wheel batching, screenshot flush/reset, and exact-Document retirement contracts.",
+        "Moli raw-CDP wheel batching, overflow-container axes, screenshot flush/reset, and exact-Document retirement contracts.",
         "raw",
         run_action_window_group,
     ),

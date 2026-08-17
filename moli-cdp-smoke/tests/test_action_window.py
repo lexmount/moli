@@ -47,6 +47,7 @@ class ActionWindowFixtureTests(unittest.TestCase):
     def test_action_window_pages_expose_each_contract_fixture(self) -> None:
         expected_markers = {
             "/action-window-deadline": "__actionWindowObserver",
+            "/action-window-overflow": "__actionWindowOverflowDeltas",
             "/action-window-capture": "__actionWindowCaptureDeltas",
             "/action-window-replacement": "__actionWindowReplacementDeltas",
         }

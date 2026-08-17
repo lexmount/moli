@@ -204,6 +204,34 @@ __actionWindowObserver.observe(document.getElementById("target"));
 </script>
 """
 
+ACTION_WINDOW_OVERFLOW_FIXTURE = """<!doctype html>
+<style>
+html, body { margin: 0; }
+body { width: 1000px; height: 1000px; }
+#scroller {
+  position: absolute;
+  left: 20px;
+  top: 20px;
+  width: 100px;
+  height: 100px;
+  overflow: auto;
+}
+#content { width: 500px; height: 500px; }
+</style>
+<div id="scroller"><div id="content"></div></div>
+<script>
+globalThis.__actionWindowOverflowDeltas = [];
+const scroller = document.getElementById("scroller");
+scroller.addEventListener("wheel", event => {
+  __actionWindowOverflowDeltas.push([event.deltaX, event.deltaY]);
+  fetch(
+    "/action-window-witness/entered?source=overflow" +
+    "&deltaX=" + event.deltaX + "&deltaY=" + event.deltaY
+  );
+});
+</script>
+"""
+
 ACTION_WINDOW_CAPTURE_FIXTURE = """<!doctype html>
 <style>
 html, body { margin: 0; background: white; }
@@ -630,6 +658,8 @@ class FixtureServer:
                     self._send_html(LAYOUT_SCREENSHOT_FIXTURE)
                 elif route == "/action-window-deadline":
                     self._send_html(ACTION_WINDOW_DEADLINE_FIXTURE)
+                elif route == "/action-window-overflow":
+                    self._send_html(ACTION_WINDOW_OVERFLOW_FIXTURE)
                 elif route == "/action-window-capture":
                     self._send_html(ACTION_WINDOW_CAPTURE_FIXTURE)
                 elif route == "/action-window-replacement":

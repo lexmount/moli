@@ -386,33 +386,35 @@ fn wheel_default_action_scrolls_the_innermost_container_then_chains_to_the_root(
           document.body.style.margin = "0";
           document.body.innerHTML =
             '<div id="scroller" style="width: 200px; height: 100px; overflow: auto">' +
-              '<div style="height: 500px"></div>' +
+              '<div style="width: 500px; height: 500px"></div>' +
             '</div>' +
-            '<div style="height: 2000px"></div>';
+            '<div style="width: 2000px; height: 2000px"></div>';
         })()
         "#,
     )
     .expect("nested wheel fixture should initialize");
     refresh_layout_for_test(&mut vm);
 
-    vm.dispatch_mouse_event_at_point(10.0, 10.0, "wheel", -1, Some(0), 0.0, 60.0)
+    vm.dispatch_mouse_event_at_point(10.0, 10.0, "wheel", -1, Some(0), 35.0, 60.0)
         .expect("nested wheel input should dispatch");
     assert_eq!(
-        vm.eval("JSON.stringify([document.getElementById('scroller').scrollTop, window.scrollY])")
+        vm.eval(
+            "JSON.stringify([document.getElementById('scroller').scrollLeft, document.getElementById('scroller').scrollTop, window.scrollX, window.scrollY])"
+        )
             .expect("nested wheel positions should evaluate"),
-        "[60,0]"
+        "[35,60,0,0]"
     );
 
     vm.eval(
-        "document.getElementById('scroller').scrollTop = document.getElementById('scroller').scrollHeight"
+        "document.getElementById('scroller').scrollTo(document.getElementById('scroller').scrollWidth, document.getElementById('scroller').scrollHeight)"
     )
     .expect("nested scroller should move to its boundary");
-    vm.dispatch_mouse_event_at_point(10.0, 10.0, "wheel", -1, Some(0), 0.0, 40.0)
+    vm.dispatch_mouse_event_at_point(10.0, 10.0, "wheel", -1, Some(0), 25.0, 40.0)
         .expect("chained wheel input should dispatch");
     assert_eq!(
-        vm.eval("String(window.scrollY)")
+        vm.eval("JSON.stringify([window.scrollX, window.scrollY])")
             .expect("root chained scroll position should evaluate"),
-        "40"
+        "[25,40]"
     );
 }
 
