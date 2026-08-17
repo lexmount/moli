@@ -132,7 +132,7 @@ impl PageVm {
                 replacement.to == self.document_lifecycle.identity(),
                 "Document replacement admission targets a non-current identity"
             );
-            self.cancel_page_actions_for_document(replacement.from)?;
+            self.retire_document_actions(replacement.from)?;
         }
 
         let ready_admission =

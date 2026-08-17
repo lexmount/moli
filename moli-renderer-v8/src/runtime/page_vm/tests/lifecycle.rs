@@ -53,7 +53,7 @@ fn stale_domcontentloaded_barrier_preserves_current_document_frontend_bindings()
 }
 
 #[tokio::test]
-async fn action_window_is_preserved_for_same_document_history_and_canceled_on_document_open() {
+async fn history_keeps_action_window_but_document_open_cancels_it() {
     run_page_vm_async_test(async move {
         let page_vm = test_page_vm();
         let local_executor = page_vm.local_executor.clone();
@@ -74,13 +74,12 @@ async fn action_window_is_preserved_for_same_document_history_and_canceled_on_do
                     0,
                 )?;
                 assert!(outcome.handled);
-                let original_deadline = page_vm
+                let deadline = page_vm
                     .next_action_window_deadline()
                     .expect("the first wheel should open an action window");
-                assert_eq!(page_vm.pending_page_action_counts_for_test(), (1, 1));
+                assert_eq!(page_vm.pending_action_counts_for_test(), (1, 1));
 
-                let same_document_snapshot =
-                    page_vm.document_replacement_lifecycle_action_snapshot();
+                let history_snapshot = page_vm.document_replacement_lifecycle_action_snapshot();
                 assert_eq!(
                     page_vm
                         .vm_mut()
@@ -91,7 +90,7 @@ async fn action_window_is_preserved_for_same_document_history_and_canceled_on_do
                 assert!(
                     page_vm
                         .reconcile_document_replacement_lifecycle_after_owner_action(
-                            same_document_snapshot,
+                            history_snapshot,
                             &mut pending_document_lifecycle_turn,
                         )
                         .await?
@@ -100,27 +99,27 @@ async fn action_window_is_preserved_for_same_document_history_and_canceled_on_do
                 assert_eq!(page_vm.document_lifecycle.identity(), initial_document);
                 assert_eq!(
                     page_vm.next_action_window_deadline(),
-                    Some(original_deadline),
+                    Some(deadline),
                     "same-Document history must retain the existing action window"
                 );
-                assert_eq!(page_vm.pending_page_action_counts_for_test(), (1, 1));
+                assert_eq!(page_vm.pending_action_counts_for_test(), (1, 1));
 
-                let replacement_snapshot = page_vm.document_replacement_lifecycle_action_snapshot();
+                let open_snapshot = page_vm.document_replacement_lifecycle_action_snapshot();
                 assert_eq!(
                     page_vm.vm_mut().eval("document.open(); 'opened'")?,
                     "opened"
                 );
-                let replacement_document = page_vm.document_lifecycle.identity();
+                let opened_document = page_vm.document_lifecycle.identity();
                 assert_eq!(
-                    replacement_document.document, initial_document.document,
+                    opened_document.document, initial_document.document,
                     "document.open keeps the cross-document token generation"
                 );
                 assert_ne!(
-                    replacement_document.epoch, initial_document.epoch,
+                    opened_document.epoch, initial_document.epoch,
                     "document.open must still create a new exact Document lifecycle"
                 );
                 assert_eq!(
-                    page_vm.pending_page_action_counts_for_test(),
+                    page_vm.pending_action_counts_for_test(),
                     (1, 1),
                     "cancellation belongs to the owner lifecycle reconciliation boundary"
                 );
@@ -128,7 +127,7 @@ async fn action_window_is_preserved_for_same_document_history_and_canceled_on_do
                 assert!(
                     page_vm
                         .reconcile_document_replacement_lifecycle_after_owner_action(
-                            replacement_snapshot,
+                            open_snapshot,
                             &mut pending_document_lifecycle_turn,
                         )
                         .await?
@@ -137,7 +136,7 @@ async fn action_window_is_preserved_for_same_document_history_and_canceled_on_do
                 );
                 assert_eq!(page_vm.next_action_window_deadline(), None);
                 assert_eq!(
-                    page_vm.pending_page_action_counts_for_test(),
+                    page_vm.pending_action_counts_for_test(),
                     (0, 0),
                     "retiring the exact Document must remove semantic actions and host payloads"
                 );

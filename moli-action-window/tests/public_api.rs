@@ -163,7 +163,7 @@ fn canceling_unknown_scope_is_a_noop_and_preserves_deadline() {
     );
     let deadline = window.next_deadline();
 
-    assert_eq!(window.cancel_scope(&"missing".to_owned()), 0);
+    assert!(window.cancel_scope(&"missing".to_owned()).is_empty());
     assert_eq!(window.next_deadline(), deadline);
     assert_eq!(window.pending_admitted_action_count(), 1);
     assert_eq!(window.pending_retained_action_count(), 1);
@@ -171,7 +171,7 @@ fn canceling_unknown_scope_is_a_noop_and_preserves_deadline() {
 }
 
 #[test]
-fn scope_cancellation_reports_retained_sequences_for_host_sidecar_cleanup() {
+fn cancel_scope_returns_retained_sequences() {
     let base = Instant::now();
     let mut window = ActionWindow::<&str, &str>::default();
     let first_scroll = window.push(
@@ -202,7 +202,7 @@ fn scope_cancellation_reports_retained_sequences_for_host_sidecar_cleanup() {
     let original_deadline = window.next_deadline();
 
     assert_eq!(
-        window.cancel_scope_sequences(&"retired"),
+        window.cancel_scope(&"retired"),
         vec![
             first_scroll.sequence(),
             retained_click.sequence(),

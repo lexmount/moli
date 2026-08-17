@@ -457,7 +457,7 @@ fn cancel_scope_keeps_other_scope_and_original_deadline() {
     window.push(SCOPE_A, click(10.0), at(base, 100));
     window.push(SCOPE_B, scroll(20.0), at(base, 200));
 
-    assert_eq!(window.cancel_scope(&SCOPE_A), 2);
+    assert_eq!(window.cancel_scope(&SCOPE_A).len(), 2);
     assert_eq!(window.next_deadline(), Some(at(base, 1_000)));
     assert_eq!(window.pending_retained_action_count(), 1);
     let batch = window.take_due(at(base, 1_000)).expect("scope B batch");
@@ -470,8 +470,8 @@ fn canceling_last_scope_returns_to_idle() {
     let mut window = default_window();
     window.push(SCOPE_A, scroll(10.0), base);
 
-    assert_eq!(window.cancel_scope(&SCOPE_A), 1);
-    assert_eq!(window.cancel_scope(&SCOPE_A), 0);
+    assert_eq!(window.cancel_scope(&SCOPE_A).len(), 1);
+    assert!(window.cancel_scope(&SCOPE_A).is_empty());
     assert!(window.is_idle());
     assert_eq!(window.next_deadline(), None);
 }
@@ -484,7 +484,7 @@ fn canceling_an_intervening_scope_normalizes_scroll_runs() {
     window.push(SCOPE_B, ordered("separator"), at(base, 100));
     window.push(SCOPE_A, scroll(20.0), at(base, 200));
 
-    assert_eq!(window.cancel_scope(&SCOPE_B), 1);
+    assert_eq!(window.cancel_scope(&SCOPE_B).len(), 1);
     assert_eq!(window.pending_planned_action_count(), 1);
     let batch = window.take_due(at(base, 1_000)).expect("batch");
     assert_eq!(scroll_deltas(&batch.actions()[0]), vec![10.0, 20.0]);

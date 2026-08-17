@@ -386,13 +386,13 @@ impl ScriptVm {
     pub(crate) fn finish_batched_mouse_event_dispatch(
         &mut self,
         dispatch_result: Result<()>,
-        commit_scroll_observable_effects: bool,
+        commit_effects: bool,
     ) -> Result<()> {
         let effects = self
             ._context_host
             .borrow_mut()
             .finish_scroll_observable_effect_batch();
-        let effects_result = match effects.filter(|_| commit_scroll_observable_effects) {
+        let effects_result = match effects.filter(|_| commit_effects) {
             Some(effects) => self.with_default_context_scope(|scope, runtime_ptr| {
                 crate::native_bridge::element::apply_scroll_observable_effects(
                     scope,

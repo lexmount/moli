@@ -128,14 +128,11 @@ impl PageVm {
         Ok(true)
     }
 
-    pub(super) fn cancel_page_actions_for_document(
+    pub(super) fn retire_document_actions(
         &mut self,
         document: RendererDocumentLifecycleIdentity,
-    ) -> Result<usize> {
-        let sequences = self
-            .page_action_window
-            .window
-            .cancel_scope_sequences(&document);
+    ) -> Result<()> {
+        let sequences = self.page_action_window.window.cancel_scope(&document);
         for sequence in &sequences {
             anyhow::ensure!(
                 self.page_action_window
@@ -153,7 +150,7 @@ impl PageVm {
                 "canceled renderer actions for a retired Document"
             );
         }
-        Ok(sequences.len())
+        Ok(())
     }
 
     fn apply_page_action_batch(
@@ -162,7 +159,7 @@ impl PageVm {
     ) -> Result<()> {
         let batch_id = batch.id().get();
         let cause = batch.cause();
-        let current_document = self.document_lifecycle.identity();
+        let batch_document = self.document_lifecycle.identity();
         let mut events = Vec::with_capacity(batch.retained_action_count());
         for action in batch.into_actions() {
             match action {
@@ -178,7 +175,7 @@ impl PageVm {
                                     step.sequence().get()
                                 )
                             })?;
-                        if scope == current_document {
+                        if scope == batch_document {
                             events.push((scope, event));
                         }
                     }
@@ -197,10 +194,10 @@ impl PageVm {
 
         self.vm_mut().begin_batched_mouse_event_dispatch();
         let mut first_error = None;
-        let mut skipped_after_document_replacement = 0_usize;
+        let mut skipped_events = 0_usize;
         for (document, event) in events {
             if self.document_lifecycle.identity() != document {
-                skipped_after_document_replacement += 1;
+                skipped_events += 1;
                 continue;
             }
             let result = self
@@ -223,18 +220,18 @@ impl PageVm {
                 first_error = Some(error);
             }
         }
-        if skipped_after_document_replacement != 0 {
+        if skipped_events != 0 {
             tracing::debug!(
                 batch_id,
-                skipped_action_count = skipped_after_document_replacement,
+                skipped_action_count = skipped_events,
                 "discarded remaining renderer actions after an in-batch Document replacement"
             );
         }
         let dispatch_result = first_error.map_or(Ok(()), Err);
-        let commit_scroll_effects = self.document_lifecycle.identity() == current_document;
+        let document_unchanged = self.document_lifecycle.identity() == batch_document;
         let result = self
             .vm_mut()
-            .finish_batched_mouse_event_dispatch(dispatch_result, commit_scroll_effects);
+            .finish_batched_mouse_event_dispatch(dispatch_result, document_unchanged);
         tracing::debug!(batch_id, ?cause, "applied renderer action batch");
         result
     }
@@ -253,7 +250,7 @@ impl PageVm {
     }
 
     #[cfg(test)]
-    pub(super) fn pending_page_action_counts_for_test(&self) -> (usize, usize) {
+    pub(super) fn pending_action_counts_for_test(&self) -> (usize, usize) {
         (
             self.page_action_window
                 .window

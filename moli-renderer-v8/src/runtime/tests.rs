@@ -12661,7 +12661,7 @@ addEventListener("wheel", event => {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn wheel_batch_stops_when_an_event_replaces_the_exact_document() {
+async fn wheel_batch_stops_on_document_replacement() {
     let runtime = initialize_layout_test_runtime();
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
         .expect("default resource request client");
@@ -12673,15 +12673,15 @@ async fn wheel_batch_stops_when_an_event_replaces_the_exact_document() {
         r#"<!doctype html>
 <style>html, body { margin: 0; } body { height: 1200px; }</style>
 <script>
-globalThis.__lmRetiredDocumentWheelDeltas = [];
-globalThis.__lmReplacementDocumentWheelDeltas = [];
+globalThis.__lmRetiredDeltas = [];
+globalThis.__lmReplacementDeltas = [];
 document.addEventListener("wheel", event => {
-  __lmRetiredDocumentWheelDeltas.push(event.deltaY);
+  __lmRetiredDeltas.push(event.deltaY);
   document.open();
   document.write("<!doctype html><body style='height:1200px'>replacement</body>");
   document.close();
   document.addEventListener("wheel", replacementEvent => {
-    __lmReplacementDocumentWheelDeltas.push(replacementEvent.deltaY);
+    __lmReplacementDeltas.push(replacementEvent.deltaY);
   }, { capture: true });
 }, { capture: true, once: true });
 </script>"#,
@@ -12699,8 +12699,8 @@ document.addEventListener("wheel", event => {
     let (state, _) = page
         .run_async_command(RendererPageCommand::EvaluateExpression {
             expression: r#"JSON.stringify({
-  retired: __lmRetiredDocumentWheelDeltas,
-  replacement: __lmReplacementDocumentWheelDeltas
+  retired: __lmRetiredDeltas,
+  replacement: __lmReplacementDeltas
 })"#
             .to_owned(),
             await_promise: false,

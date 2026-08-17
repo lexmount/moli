@@ -340,20 +340,13 @@ impl<S: PartialEq, O> ActionWindow<S, O> {
             .map(|window| window.into_batch(now, ActionBatchCause::Barrier(barrier)))
     }
 
-    /// Cancels all pending actions for a scope.
+    /// Cancels all pending actions for a scope and returns their retained
+    /// sequences in execution order.
     ///
     /// If no actions remain, the old deadline is canceled and the queue
-    /// returns to idle.
-    pub fn cancel_scope(&mut self, scope: &S) -> usize {
-        self.cancel_scope_sequences(scope).len()
-    }
-
-    /// Cancels all pending actions for a scope and returns the retained
-    /// sequences that were removed, in their execution order.
-    ///
-    /// Hosts with renderer-specific sidecars can use these identities to
-    /// retire the matching payloads atomically with the semantic actions.
-    pub fn cancel_scope_sequences(&mut self, scope: &S) -> Vec<ActionSequence> {
+    /// returns to idle. Hosts can use the returned identities to retire
+    /// matching sidecar payloads at the same boundary.
+    pub fn cancel_scope(&mut self, scope: &S) -> Vec<ActionSequence> {
         let Some(window) = self.open.as_mut() else {
             return Vec::new();
         };
