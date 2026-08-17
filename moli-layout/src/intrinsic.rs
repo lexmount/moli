@@ -8,8 +8,8 @@
 use std::{fmt::Debug, hash::Hash};
 
 use taffy::{
-    AvailableSpace, IntrinsicSizeResult, LayoutInput, LayoutOutput, LayoutPartialTree,
-    RequestedAxis, RunMode, Size, SizingPurpose,
+    AvailableSpace, LayoutInput, LayoutOutput, LayoutPartialTree, RequestedAxis, RunMode, Size,
+    SizingPurpose,
 };
 
 use crate::{LayoutBoxId, LayoutDisplay, LayoutWorld};
@@ -77,15 +77,19 @@ where
         self.compute_child_layout(child.to_taffy(), inputs)
     }
 
-    /// Measure one atomic inline-level box while retaining intrinsic sizing
-    /// provenance from its formatting context.
-    pub(crate) fn compute_atomic_inline_size(
+    /// Measure one atomic inline-level box while retaining its fragment state.
+    ///
+    /// Atomic alignment needs the child's baseline set even when an ancestor
+    /// only requested an intrinsic size. Keep the rich `LayoutOutput` until
+    /// the parent IFC has consumed those baselines; callers can project the
+    /// same value into `IntrinsicSizeResult` for dependency metadata.
+    pub(crate) fn compute_atomic_inline_measurement(
         &mut self,
         child: LayoutBoxId,
         inputs: LayoutInput,
-    ) -> IntrinsicSizeResult {
+    ) -> LayoutOutput {
         let inputs = self.resolve_atomic_inline_fit_content(child, inputs);
-        self.compute_child_size(child.to_taffy(), inputs)
+        self.compute_child_layout(child.to_taffy(), inputs)
     }
 
     /// Resolve the fit-content border-box width shared by the layout and
