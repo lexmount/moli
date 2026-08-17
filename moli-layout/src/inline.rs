@@ -2075,6 +2075,7 @@ impl InlineBuildInput {
             1.0,
             quantize,
         );
+        builder.set_initial_text_wrap_mode(root_text_style.text_wrap_mode);
         let style_indices = styles
             .iter()
             .map(|style| builder.push_style(style.clone()))
@@ -2088,13 +2089,39 @@ impl InlineBuildInput {
             }
         }
         for (object_id, (byte_index, _, kind)) in self.objects.iter().enumerate() {
-            builder.push_inline_box(InlineBox {
+            let inline_box = InlineBox {
                 id: u64::try_from(object_id).expect("one IFC exceeded the u64 object limit"),
                 kind: *kind,
                 index: *byte_index,
                 width: 0.0,
                 height: 0.0,
-            });
+            };
+            let object = &self.objects[object_id].1;
+            let text_wrap_mode_after = match object.role {
+                InlineObjectRole::StartEdge => Some(
+                    world.boxes[object.box_id.index()]
+                        .style
+                        .parley_text_style()
+                        .text_wrap_mode,
+                ),
+                InlineObjectRole::EndEdge => {
+                    let parent = object.ancestors.last().copied().unwrap_or(self.root_style);
+                    Some(
+                        world.boxes[parent.index()]
+                            .style
+                            .parley_text_style()
+                            .text_wrap_mode,
+                    )
+                }
+                InlineObjectRole::Atomic
+                | InlineObjectRole::Float
+                | InlineObjectRole::OutOfFlow => None,
+            };
+            if let Some(text_wrap_mode_after) = text_wrap_mode_after {
+                builder.push_inline_box_with_text_wrap_mode(inline_box, text_wrap_mode_after);
+            } else {
+                builder.push_inline_box(inline_box);
+            }
         }
         let layout = builder.build(&self.text);
         let font_metrics = styles
@@ -2688,7 +2715,7 @@ impl InlineNormalizer {
         self.push_object(
             box_id,
             InlineObjectRole::StartEdge,
-            InlineBoxKind::InFlow,
+            InlineBoxKind::InlineStart,
             ancestors,
             vertical_align,
         );
@@ -2705,7 +2732,7 @@ impl InlineNormalizer {
         self.push_object(
             box_id,
             InlineObjectRole::EndEdge,
-            InlineBoxKind::InFlow,
+            InlineBoxKind::InlineEnd,
             ancestors,
             vertical_align,
         );
