@@ -20194,7 +20194,7 @@ async fn service_worker_window_client_owner_requests_reject_on_stale_page_genera
             ),
             request_id: 101,
             source_version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
-            source_generation: 1,
+            source_run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
             url: url::Url::parse(&format!("{base_url}/app/stale-navigate.html")).unwrap(),
         },
     )
@@ -20213,7 +20213,7 @@ async fn service_worker_window_client_owner_requests_reject_on_stale_page_genera
             ),
             request_id: 102,
             source_version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
-            source_generation: 1,
+            source_run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
         },
     )
     .await;
@@ -20231,7 +20231,7 @@ async fn service_worker_window_client_owner_requests_reject_on_stale_page_genera
             ),
             request_id: 103,
             source_version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
-            source_generation: 1,
+            source_run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
             url: url::Url::parse(&format!("{base_url}/app/opened.html")).unwrap(),
         },
     )
@@ -20313,7 +20313,7 @@ async fn service_worker_client_focus_request_marks_current_page_focused() {
             ),
             request_id: 77,
             source_version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
-            source_generation: 1,
+            source_run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
         },
     )
     .await;
@@ -20413,7 +20413,7 @@ async fn service_worker_clients_open_window_request_records_popup_activation() {
             ),
             request_id: 88,
             source_version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
-            source_generation: 1,
+            source_run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
             url: url::Url::parse(&format!("{base_url}/app/opened.html")).unwrap(),
         },
     )
@@ -20480,7 +20480,7 @@ async fn service_worker_clients_open_window_request_records_popup_activation() {
             ),
             request_id: 90,
             source_version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
-            source_generation: 1,
+            source_run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
         },
     )
     .await;
@@ -20739,7 +20739,7 @@ async fn service_worker_popup_client_survives_javascript_reopen() {
             ),
             request_id: 98,
             source_version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
-            source_generation: 1,
+            source_run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
         },
     )
     .await;
@@ -20771,7 +20771,7 @@ async fn service_worker_popup_client_survives_javascript_reopen() {
             ),
             request_id: 100,
             source_version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
-            source_generation: 1,
+            source_run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
         },
     )
     .await;
@@ -20856,7 +20856,7 @@ async fn service_worker_clients_open_window_about_blank_request_creates_no_popup
             ),
             request_id: 92,
             source_version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
-            source_generation: 1,
+            source_run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
             url: url::Url::parse("about:blank").unwrap(),
         },
     )
@@ -20941,7 +20941,7 @@ async fn service_worker_clients_open_window_cross_origin_result_stays_null() {
             ),
             request_id: 94,
             source_version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
-            source_generation: 1,
+            source_run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
             url: url::Url::parse(&popup_url).unwrap(),
         },
     )

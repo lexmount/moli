@@ -593,7 +593,6 @@ impl RendererBrowserContextRuntime {
                 "runningWorkers": service_worker_diagnostics.running_host_count,
                 "pendingUnregistrations": service_worker_diagnostics.pending_unregistration_count,
                 "inFlightEvents": service_worker_diagnostics.in_flight_event_count,
-                "maxGeneration": service_worker_diagnostics.max_generation,
                 "liveClients": service_worker_diagnostics.live_client_count,
                 "controlledClients": service_worker_diagnostics.controlled_client_count,
                 "pendingServiceLaneEventCount": service_worker_diagnostics.pending_service_lane_event_count,

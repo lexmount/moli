@@ -757,7 +757,7 @@ pub(super) struct ServiceWorkerClientNavigateRequestCompletion {
     pub(super) target: ServiceWorkerWindowClientTarget,
     pub(super) request_id: u64,
     pub(super) source_version_id: crate::service_worker_runtime::ServiceWorkerVersionId,
-    pub(super) source_generation: u64,
+    pub(super) source_run: crate::runtime::RendererServiceWorkerRunIdentity,
     pub(super) url: url::Url,
 }
 
@@ -765,14 +765,14 @@ pub(super) struct ServiceWorkerClientNavigateRequestCompletion {
 pub(super) struct ServiceWorkerClientNavigateContinuation {
     pub(super) request_id: u64,
     pub(super) source_version_id: crate::service_worker_runtime::ServiceWorkerVersionId,
-    pub(super) source_generation: u64,
+    pub(super) source_run: crate::runtime::RendererServiceWorkerRunIdentity,
 }
 
 #[derive(Debug)]
 pub(super) struct ServiceWorkerClientNavigateCompletion {
     pub(super) request_id: u64,
     pub(super) source_version_id: crate::service_worker_runtime::ServiceWorkerVersionId,
-    pub(super) source_generation: u64,
+    pub(super) source_run: crate::runtime::RendererServiceWorkerRunIdentity,
     pub(super) result: std::result::Result<
         Option<crate::service_worker_runtime::ServiceWorkerClientSnapshot>,
         crate::service_worker_runtime::ServiceWorkerClientNavigateError,
@@ -784,14 +784,14 @@ pub(super) struct ServiceWorkerClientFocusRequestCompletion {
     pub(super) target: ServiceWorkerWindowClientTarget,
     pub(super) request_id: u64,
     pub(super) source_version_id: crate::service_worker_runtime::ServiceWorkerVersionId,
-    pub(super) source_generation: u64,
+    pub(super) source_run: crate::runtime::RendererServiceWorkerRunIdentity,
 }
 
 #[derive(Debug)]
 pub(super) struct ServiceWorkerClientFocusCompletion {
     pub(super) request_id: u64,
     pub(super) source_version_id: crate::service_worker_runtime::ServiceWorkerVersionId,
-    pub(super) source_generation: u64,
+    pub(super) source_run: crate::runtime::RendererServiceWorkerRunIdentity,
     pub(super) result: std::result::Result<
         crate::service_worker_runtime::ServiceWorkerClientSnapshot,
         crate::service_worker_runtime::ServiceWorkerClientFocusError,
@@ -803,7 +803,7 @@ pub(super) struct ServiceWorkerClientsOpenWindowRequestCompletion {
     pub(super) host: ServiceWorkerWindowClientTarget,
     pub(super) request_id: u64,
     pub(super) source_version_id: crate::service_worker_runtime::ServiceWorkerVersionId,
-    pub(super) source_generation: u64,
+    pub(super) source_run: crate::runtime::RendererServiceWorkerRunIdentity,
     pub(super) url: url::Url,
 }
 
@@ -811,7 +811,7 @@ pub(super) struct ServiceWorkerClientsOpenWindowRequestCompletion {
 pub(super) struct ServiceWorkerClientsOpenWindowCompletion {
     pub(super) request_id: u64,
     pub(super) source_version_id: crate::service_worker_runtime::ServiceWorkerVersionId,
-    pub(super) source_generation: u64,
+    pub(super) source_run: crate::runtime::RendererServiceWorkerRunIdentity,
     pub(super) result: std::result::Result<
         Option<crate::service_worker_runtime::ServiceWorkerClientSnapshot>,
         crate::service_worker_runtime::ServiceWorkerClientsOpenWindowError,

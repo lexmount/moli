@@ -32,7 +32,7 @@ impl ScriptVm {
                     crate::types::ServiceWorkerClientNavigateCompletion {
                         request_id: completion.request_id,
                         source_version_id: completion.source_version_id,
-                        source_generation: completion.source_generation,
+                        source_run: completion.source_run,
                         result: Err(ServiceWorkerClientNavigateError::type_error(
                             "The client was not found.",
                         )),
@@ -46,7 +46,7 @@ impl ScriptVm {
             crate::native_bridge::OwnerDispatchScope::Child(child_handle) => {
                 let request_id = completion.request_id;
                 let source_version_id = completion.source_version_id;
-                let source_generation = completion.source_generation;
+                let source_run = completion.source_run;
                 let url = completion.url.clone();
                 self.with_default_context_scope(move |scope, host_ptr| {
                     let result = unsafe { &mut *host_ptr }
@@ -57,7 +57,7 @@ impl ScriptVm {
                             crate::types::ServiceWorkerClientNavigateContinuation {
                                 request_id,
                                 source_version_id,
-                                source_generation,
+                                source_run: source_run.clone(),
                             },
                         );
                     if let Err(error) = result {
@@ -67,7 +67,7 @@ impl ScriptVm {
                                 crate::types::ServiceWorkerClientNavigateCompletion {
                                     request_id,
                                     source_version_id,
-                                    source_generation,
+                                    source_run,
                                     result: Err(error),
                                 },
                             );
@@ -83,7 +83,7 @@ impl ScriptVm {
                         crate::types::ServiceWorkerClientNavigateCompletion {
                             request_id: completion.request_id,
                             source_version_id: completion.source_version_id,
-                            source_generation: completion.source_generation,
+                            source_run: completion.source_run,
                             result: Err(ServiceWorkerClientNavigateError::type_error(
                                 "The client was not found.",
                             )),
@@ -104,7 +104,7 @@ impl ScriptVm {
                     crate::types::ServiceWorkerClientNavigateCompletion {
                         request_id: completion.request_id,
                         source_version_id: completion.source_version_id,
-                        source_generation: completion.source_generation,
+                        source_run: completion.source_run,
                         result: Err(ServiceWorkerClientNavigateError::type_error(
                             "The client is already navigating.",
                         )),
@@ -122,7 +122,7 @@ impl ScriptVm {
                 crate::types::ServiceWorkerClientNavigateContinuation {
                     request_id,
                     source_version_id,
-                    source_generation: completion.source_generation,
+                    source_run: completion.source_run,
                 },
             );
         Ok(ServiceWorkerInternalBodyEffect::InternalActionApplied)
@@ -145,7 +145,7 @@ impl ScriptVm {
                 .enqueue_client_focus_completed(crate::types::ServiceWorkerClientFocusCompletion {
                     request_id: completion.request_id,
                     source_version_id: completion.source_version_id,
-                    source_generation: completion.source_generation,
+                    source_run: completion.source_run,
                     result: Err(crate::runtime::ServiceWorkerClientFocusError::not_found()),
                 });
             return Ok(ServiceWorkerInternalBodyEffect::ExactTargetUnavailable);
@@ -163,7 +163,7 @@ impl ScriptVm {
             .enqueue_client_focus_completed(crate::types::ServiceWorkerClientFocusCompletion {
                 request_id: completion.request_id,
                 source_version_id: completion.source_version_id,
-                source_generation: completion.source_generation,
+                source_run: completion.source_run,
                 result,
             });
         Ok(ServiceWorkerInternalBodyEffect::InternalActionApplied)
@@ -186,7 +186,7 @@ impl ScriptVm {
                     crate::types::ServiceWorkerClientsOpenWindowCompletion {
                         request_id: completion.request_id,
                         source_version_id: completion.source_version_id,
-                        source_generation: completion.source_generation,
+                        source_run: completion.source_run,
                         result: Err(
                             crate::runtime::ServiceWorkerClientsOpenWindowError::type_error(
                                 "No live window client is available to host openWindow().",
@@ -205,7 +205,7 @@ impl ScriptVm {
                     crate::types::ServiceWorkerClientsOpenWindowCompletion {
                         request_id: completion.request_id,
                         source_version_id: completion.source_version_id,
-                        source_generation: completion.source_generation,
+                        source_run: completion.source_run,
                         result: Err(
                             crate::runtime::ServiceWorkerClientsOpenWindowError::type_error(
                                 format!("'{}' cannot be opened.", completion.url.as_str()),
@@ -231,7 +231,7 @@ impl ScriptVm {
                     crate::types::ServiceWorkerClientsOpenWindowCompletion {
                         request_id: completion.request_id,
                         source_version_id: completion.source_version_id,
-                        source_generation: completion.source_generation,
+                        source_run: completion.source_run,
                         result: Err(
                             crate::runtime::ServiceWorkerClientsOpenWindowError::type_error(
                                 "No live window client is available to host openWindow().",
@@ -280,7 +280,7 @@ impl ScriptVm {
                     completion.url.clone(),
                     completion.request_id,
                     completion.source_version_id,
-                    completion.source_generation,
+                    completion.source_run,
                 );
                 host_scope.restore(scope, previous_owner_context);
                 return Ok(());
@@ -291,7 +291,7 @@ impl ScriptVm {
                     crate::types::ServiceWorkerClientsOpenWindowCompletion {
                         request_id: completion.request_id,
                         source_version_id: completion.source_version_id,
-                        source_generation: completion.source_generation,
+                        source_run: completion.source_run,
                         result: Ok(None),
                     },
                 );

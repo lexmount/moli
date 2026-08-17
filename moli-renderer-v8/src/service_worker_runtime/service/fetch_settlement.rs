@@ -375,8 +375,7 @@ impl ServiceWorkerRuntimeService {
                 .pending_fetch_jobs
                 .get(&started.event_id)
                 .and_then(|job| {
-                    if job.version_id != started.version_id || job.generation != started.generation
-                    {
+                    if job.version_id != started.version_id || !job.is_bound_to_run(&started.run) {
                         return None;
                     }
                     service_worker_fetch_can_forward_stream(job, &started.response_head).err()
@@ -392,7 +391,7 @@ impl ServiceWorkerRuntimeService {
             let Some(job) = state.pending_fetch_jobs.get_mut(&started.event_id) else {
                 return;
             };
-            if job.version_id != started.version_id || job.generation != started.generation {
+            if job.version_id != started.version_id || !job.is_bound_to_run(&started.run) {
                 return;
             }
             match service_worker_fetch_can_forward_stream(job, &started.response_head) {
@@ -440,25 +439,25 @@ impl ServiceWorkerRuntimeService {
                 let Some(version) = state.versions.get(&started.version_id) else {
                     return;
                 };
-                if version.generation != started.generation {
+                if version.run != started.run {
                     return;
                 }
             }
             let Some(job) = state.pending_fetch_jobs.remove(&started.event_id) else {
                 return;
             };
-            if job.version_id != started.version_id || job.generation != started.generation {
+            if job.version_id != started.version_id || !job.is_bound_to_run(&started.run) {
                 return;
             }
             let stream_cancel = state.versions.get(&job.version_id).and_then(|version| {
-                if version.generation != job.generation {
+                if !job.is_bound_to_run(&version.run) {
                     return None;
                 }
                 let ServiceWorkerVersionRunningState::Running { host } = &version.running_state
                 else {
                     return None;
                 };
-                (host.version_id() == job.version_id && host.generation() == job.generation)
+                (host.version_id() == job.version_id && job.is_bound_to_run(&host.run_identity()))
                     .then_some((host.clone(), started.event_id, started.body_source_id))
             });
             if let Some(version) = state.versions.get_mut(&started.version_id) {
@@ -492,7 +491,7 @@ impl ServiceWorkerRuntimeService {
         let result = ServiceWorkerFetchResult::Failure(message.clone());
         let diagnostic =
             super::event_completion::service_worker_fetch_diagnostic_from_job_result(&job, &result);
-        self.enqueue_target_fetch_diagnostic(started.version_id, started.generation, diagnostic);
+        self.enqueue_target_fetch_diagnostic(started.version_id, started.run, diagnostic);
         for progress in lifecycle_progress {
             self.run_lifecycle_progress(progress);
         }
@@ -948,7 +947,7 @@ mod tests {
         service: &ServiceWorkerRuntimeServiceOwner,
         event_id: ServiceWorkerEventId,
         version_id: ServiceWorkerVersionId,
-        generation: u64,
+        run: &RendererServiceWorkerRunIdentity,
         internal_id: u64,
         completion_tx: RendererResourceCompletionSender,
     ) -> Url {
@@ -956,7 +955,7 @@ mod tests {
             service,
             event_id,
             version_id,
-            generation,
+            run,
             internal_id,
             completion_tx,
             moli_fetch::RequestRedirectMode::Follow,
@@ -967,7 +966,7 @@ mod tests {
         service: &ServiceWorkerRuntimeServiceOwner,
         event_id: ServiceWorkerEventId,
         version_id: ServiceWorkerVersionId,
-        generation: u64,
+        run: &RendererServiceWorkerRunIdentity,
         internal_id: u64,
         completion_tx: RendererResourceCompletionSender,
         redirect_mode: moli_fetch::RequestRedirectMode,
@@ -976,7 +975,7 @@ mod tests {
             service,
             event_id,
             version_id,
-            generation,
+            run,
             internal_id,
             completion_tx,
             moli_fetch::RequestMode::Cors,
@@ -988,7 +987,7 @@ mod tests {
         service: &ServiceWorkerRuntimeServiceOwner,
         event_id: ServiceWorkerEventId,
         version_id: ServiceWorkerVersionId,
-        generation: u64,
+        run: &RendererServiceWorkerRunIdentity,
         internal_id: u64,
         completion_tx: RendererResourceCompletionSender,
         request_mode: moli_fetch::RequestMode,
@@ -998,7 +997,7 @@ mod tests {
             service,
             event_id,
             version_id,
-            generation,
+            run,
             internal_id,
             completion_tx,
             request_mode,
@@ -1011,7 +1010,7 @@ mod tests {
         service: &ServiceWorkerRuntimeServiceOwner,
         event_id: ServiceWorkerEventId,
         version_id: ServiceWorkerVersionId,
-        generation: u64,
+        run: &RendererServiceWorkerRunIdentity,
         internal_id: u64,
         completion_tx: RendererResourceCompletionSender,
         request_mode: moli_fetch::RequestMode,
@@ -1022,7 +1021,7 @@ mod tests {
             service,
             event_id,
             version_id,
-            generation,
+            run,
             internal_id,
             completion_tx,
             request_mode,
@@ -1036,7 +1035,7 @@ mod tests {
         service: &ServiceWorkerRuntimeServiceOwner,
         event_id: ServiceWorkerEventId,
         version_id: ServiceWorkerVersionId,
-        generation: u64,
+        run: &RendererServiceWorkerRunIdentity,
         internal_id: u64,
         completion_tx: RendererResourceCompletionSender,
         request_mode: moli_fetch::RequestMode,
@@ -1047,7 +1046,7 @@ mod tests {
             service,
             event_id,
             version_id,
-            generation,
+            run,
             internal_id,
             completion_tx,
             request_mode,
@@ -1061,7 +1060,7 @@ mod tests {
         service: &ServiceWorkerRuntimeServiceOwner,
         event_id: ServiceWorkerEventId,
         version_id: ServiceWorkerVersionId,
-        generation: u64,
+        run: &RendererServiceWorkerRunIdentity,
         internal_id: u64,
         completion_tx: RendererResourceCompletionSender,
         request_mode: moli_fetch::RequestMode,
@@ -1137,8 +1136,8 @@ mod tests {
                 pending_start_events: VecDeque::new(),
                 pending_activation_fetch_events: VecDeque::new(),
                 in_flight_event_count: 1,
-                generation,
-                idle_generation: 0,
+                run: run.clone(),
+                idle_timeout_token: None,
                 skip_waiting_requested: false,
                 clients_claim_requested: false,
                 last_start_error: None,
@@ -1149,7 +1148,7 @@ mod tests {
             ServiceWorkerFetchJob {
                 internal_id,
                 version_id,
-                generation,
+                run: Some(run.clone()),
                 request_url: request_url.clone(),
                 request_method: "GET".to_owned(),
                 request_headers: vec![("accept".to_owned(), "text/plain".to_owned())],
@@ -1213,7 +1212,7 @@ mod tests {
             &service,
             event_id,
             ServiceWorkerVersionId(1),
-            4,
+            &RendererServiceWorkerRunIdentity::fresh(),
             310,
             completion_queue.sender(),
             moli_fetch::RequestMode::Cors,
@@ -1242,14 +1241,14 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(21);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let mut completion_queue =
             crate::page_task_queue::RendererResourceCompletionTestHarness::new();
         let request_url = insert_active_fetch_job(
             &service,
             event_id,
             version_id,
-            generation,
+            &run,
             301,
             completion_queue.sender(),
         );
@@ -1258,7 +1257,7 @@ mod tests {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(final_url.clone()),
                 response_type: "default".to_owned(),
@@ -1295,7 +1294,7 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(211);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let body_source_id = 77;
         let mut completion_queue =
             crate::page_task_queue::RendererResourceCompletionTestHarness::new();
@@ -1303,7 +1302,7 @@ mod tests {
             &service,
             event_id,
             version_id,
-            generation,
+            &run,
             301,
             completion_queue.sender(),
         );
@@ -1312,7 +1311,7 @@ mod tests {
         service.finish_fetch_stream_started(ServiceWorkerFetchStreamStarted {
             event_id,
             version_id,
-            generation,
+            run: run.clone(),
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
                 final_url: Some(final_url.clone()),
@@ -1351,7 +1350,7 @@ mod tests {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(final_url),
                 response_type: "default".to_owned(),
@@ -1378,7 +1377,7 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(212);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let body_source_id = 78;
         let mut completion_queue =
             crate::page_task_queue::RendererResourceCompletionTestHarness::new();
@@ -1386,7 +1385,7 @@ mod tests {
             &service,
             event_id,
             version_id,
-            generation,
+            &run,
             302,
             completion_queue.sender(),
         );
@@ -1395,7 +1394,7 @@ mod tests {
         service.finish_fetch_stream_started(ServiceWorkerFetchStreamStarted {
             event_id,
             version_id,
-            generation,
+            run: run.clone(),
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
                 final_url: Some(final_url),
@@ -1429,7 +1428,7 @@ mod tests {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Failure(
                 "FetchEvent.respondWith stream aborted".to_owned(),
             ),
@@ -1453,14 +1452,14 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(35);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let mut completion_queue =
             crate::page_task_queue::RendererResourceCompletionTestHarness::new();
         insert_active_fetch_job_with_modes(
             &service,
             event_id,
             version_id,
-            generation,
+            &run,
             315,
             completion_queue.sender(),
             moli_fetch::RequestMode::NoCors,
@@ -1470,7 +1469,7 @@ mod tests {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: None,
                 response_type: "opaque".to_owned(),
@@ -1499,14 +1498,14 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(36);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let mut completion_queue =
             crate::page_task_queue::RendererResourceCompletionTestHarness::new();
         insert_active_fetch_job_with_modes(
             &service,
             event_id,
             version_id,
-            generation,
+            &run,
             316,
             completion_queue.sender(),
             moli_fetch::RequestMode::Cors,
@@ -1516,7 +1515,7 @@ mod tests {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: None,
                 response_type: "opaqueredirect".to_owned(),
@@ -1545,14 +1544,14 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(24);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let mut completion_queue =
             crate::page_task_queue::RendererResourceCompletionTestHarness::new();
         insert_active_fetch_job(
             &service,
             event_id,
             version_id,
-            generation,
+            &run,
             304,
             completion_queue.sender(),
         );
@@ -1561,7 +1560,7 @@ mod tests {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(final_url.clone()),
                 response_type: "default".to_owned(),
@@ -1589,14 +1588,14 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(25);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let mut completion_queue =
             crate::page_task_queue::RendererResourceCompletionTestHarness::new();
         insert_active_fetch_job_with_redirect_mode(
             &service,
             event_id,
             version_id,
-            generation,
+            &run,
             305,
             completion_queue.sender(),
             moli_fetch::RequestRedirectMode::Manual,
@@ -1605,7 +1604,7 @@ mod tests {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(url("https://example.test/app/manual-final.txt")),
                 response_type: "default".to_owned(),
@@ -1638,14 +1637,14 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(30);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let mut completion_queue =
             crate::page_task_queue::RendererResourceCompletionTestHarness::new();
         insert_active_fetch_job_with_redirect_mode(
             &service,
             event_id,
             version_id,
-            generation,
+            &run,
             310,
             completion_queue.sender(),
             moli_fetch::RequestRedirectMode::Error,
@@ -1654,7 +1653,7 @@ mod tests {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: None,
                 response_type: "default".to_owned(),
@@ -1689,14 +1688,14 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(33);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let mut completion_queue =
             crate::page_task_queue::RendererResourceCompletionTestHarness::new();
         insert_active_fetch_job(
             &service,
             event_id,
             version_id,
-            generation,
+            &run,
             313,
             completion_queue.sender(),
         );
@@ -1704,7 +1703,7 @@ mod tests {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Failure(
                 "FetchEvent.respondWith promise rejected: Error: fetch-boom".to_owned(),
             ),
@@ -1728,14 +1727,14 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(34);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let mut completion_queue =
             crate::page_task_queue::RendererResourceCompletionTestHarness::new();
         insert_active_fetch_job(
             &service,
             event_id,
             version_id,
-            generation,
+            &run,
             314,
             completion_queue.sender(),
         );
@@ -1743,7 +1742,7 @@ mod tests {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Failure(
                 "service worker fetch dispatch failed: worker is not running".to_owned(),
             ),
@@ -1764,14 +1763,14 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(31);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let mut completion_queue =
             crate::page_task_queue::RendererResourceCompletionTestHarness::new();
         let request_url = insert_active_fetch_job_with_redirect_mode(
             &service,
             event_id,
             version_id,
-            generation,
+            &run,
             311,
             completion_queue.sender(),
             moli_fetch::RequestRedirectMode::Manual,
@@ -1780,7 +1779,7 @@ mod tests {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: None,
                 response_type: "default".to_owned(),
@@ -1817,14 +1816,14 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(32);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let mut completion_queue =
             crate::page_task_queue::RendererResourceCompletionTestHarness::new();
         insert_active_fetch_job(
             &service,
             event_id,
             version_id,
-            generation,
+            &run,
             312,
             completion_queue.sender(),
         );
@@ -1832,14 +1831,14 @@ mod tests {
             let mut state = service.inner.state.lock();
             let version = state.versions.get_mut(&version_id).unwrap();
             version.running_state = ServiceWorkerVersionRunningState::Starting {
-                host: RendererServiceWorkerHost::new_loading(version_id, generation),
+                host: RendererServiceWorkerHost::new_loading(version_id, &run),
             };
         }
 
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: None,
                 response_type: "default".to_owned(),
@@ -1894,7 +1893,7 @@ mod tests {
         let mut job = ServiceWorkerFetchJob {
             internal_id: 312,
             version_id: ServiceWorkerVersionId(1),
-            generation: 4,
+            run: Some(crate::runtime::RendererServiceWorkerRunIdentity::fresh()),
             request_url: request_url.clone(),
             request_method: "POST".to_owned(),
             request_headers: vec![
@@ -1968,14 +1967,14 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(33);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let mut completion_queue =
             crate::page_task_queue::RendererResourceCompletionTestHarness::new();
         insert_active_fetch_job(
             &service,
             event_id,
             version_id,
-            generation,
+            &run,
             333,
             completion_queue.sender(),
         );
@@ -1983,7 +1982,7 @@ mod tests {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: None,
                 response_type: "default".to_owned(),
@@ -2015,14 +2014,14 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(37);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let mut completion_queue =
             crate::page_task_queue::RendererResourceCompletionTestHarness::new();
         let request_url = insert_active_fetch_job(
             &service,
             event_id,
             version_id,
-            generation,
+            &run,
             337,
             completion_queue.sender(),
         );
@@ -2031,7 +2030,7 @@ mod tests {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(response_url.clone()),
                 response_type: "default".to_owned(),
@@ -2081,14 +2080,14 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(26);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let mut completion_queue =
             crate::page_task_queue::RendererResourceCompletionTestHarness::new();
         insert_active_fetch_job(
             &service,
             event_id,
             version_id,
-            generation,
+            &run,
             306,
             completion_queue.sender(),
         );
@@ -2096,7 +2095,7 @@ mod tests {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: None,
                 response_type: "error".to_owned(),
@@ -2127,14 +2126,14 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(27);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let mut completion_queue =
             crate::page_task_queue::RendererResourceCompletionTestHarness::new();
         insert_active_fetch_job_with_modes(
             &service,
             event_id,
             version_id,
-            generation,
+            &run,
             307,
             completion_queue.sender(),
             moli_fetch::RequestMode::SameOrigin,
@@ -2144,7 +2143,7 @@ mod tests {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(url("https://cross-origin.test/data.txt")),
                 response_type: "cors".to_owned(),
@@ -2174,14 +2173,14 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(28);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let mut completion_queue =
             crate::page_task_queue::RendererResourceCompletionTestHarness::new();
         insert_active_fetch_job_with_modes(
             &service,
             event_id,
             version_id,
-            generation,
+            &run,
             308,
             completion_queue.sender(),
             moli_fetch::RequestMode::Cors,
@@ -2191,7 +2190,7 @@ mod tests {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: None,
                 response_type: "opaque".to_owned(),
@@ -2222,7 +2221,7 @@ mod tests {
     fn response_completion_rejects_opaque_response_for_client_request() {
         let service = new_service_worker_runtime_service();
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
 
         for (index, destination) in [
             ServiceWorkerRequestDestination::Document,
@@ -2240,7 +2239,7 @@ mod tests {
                 &service,
                 event_id,
                 version_id,
-                generation,
+                &run,
                 320 + index as u64,
                 completion_queue.sender(),
                 moli_fetch::RequestMode::NoCors,
@@ -2251,7 +2250,7 @@ mod tests {
             service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
                 event_id,
                 version_id,
-                generation,
+                run: run.clone(),
                 result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                     final_url: None,
                     response_type: "opaque".to_owned(),
@@ -2282,14 +2281,14 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(50);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let mut completion_queue =
             crate::page_task_queue::RendererResourceCompletionTestHarness::new();
         insert_active_fetch_job_with_modes(
             &service,
             event_id,
             version_id,
-            generation,
+            &run,
             330,
             completion_queue.sender(),
             moli_fetch::RequestMode::NoCors,
@@ -2299,7 +2298,7 @@ mod tests {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(url("https://cdn.example.test/app/image.png")),
                 response_type: "default".to_owned(),
@@ -2335,14 +2334,14 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(58);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let mut completion_queue =
             crate::page_task_queue::RendererResourceCompletionTestHarness::new();
         insert_active_fetch_job_with_modes_and_resource_type(
             &service,
             event_id,
             version_id,
-            generation,
+            &run,
             338,
             completion_queue.sender(),
             moli_fetch::RequestMode::NoCors,
@@ -2353,7 +2352,7 @@ mod tests {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(url("https://cdn.example.test/app/image.png")),
                 response_type: "default".to_owned(),
@@ -2389,14 +2388,14 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(53);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let mut completion_queue =
             crate::page_task_queue::RendererResourceCompletionTestHarness::new();
         insert_active_fetch_job_with_modes(
             &service,
             event_id,
             version_id,
-            generation,
+            &run,
             333,
             completion_queue.sender(),
             moli_fetch::RequestMode::NoCors,
@@ -2417,7 +2416,7 @@ mod tests {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
@@ -2448,14 +2447,14 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(55);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let mut completion_queue =
             crate::page_task_queue::RendererResourceCompletionTestHarness::new();
         insert_active_fetch_job_with_modes_and_resource_type(
             &service,
             event_id,
             version_id,
-            generation,
+            &run,
             335,
             completion_queue.sender(),
             moli_fetch::RequestMode::NoCors,
@@ -2477,7 +2476,7 @@ mod tests {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
@@ -2508,14 +2507,14 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(54);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let mut completion_queue =
             crate::page_task_queue::RendererResourceCompletionTestHarness::new();
         insert_active_fetch_job_with_modes(
             &service,
             event_id,
             version_id,
-            generation,
+            &run,
             334,
             completion_queue.sender(),
             moli_fetch::RequestMode::NoCors,
@@ -2536,7 +2535,7 @@ mod tests {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
@@ -2566,14 +2565,14 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(56);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let mut completion_queue =
             crate::page_task_queue::RendererResourceCompletionTestHarness::new();
         insert_active_fetch_job_with_modes_and_resource_type(
             &service,
             event_id,
             version_id,
-            generation,
+            &run,
             336,
             completion_queue.sender(),
             moli_fetch::RequestMode::NoCors,
@@ -2595,7 +2594,7 @@ mod tests {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
@@ -2625,14 +2624,14 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(59);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let mut completion_queue =
             crate::page_task_queue::RendererResourceCompletionTestHarness::new();
         insert_active_fetch_job_with_modes_and_resource_type(
             &service,
             event_id,
             version_id,
-            generation,
+            &run,
             339,
             completion_queue.sender(),
             moli_fetch::RequestMode::NoCors,
@@ -2655,7 +2654,7 @@ mod tests {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
@@ -2679,14 +2678,14 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(60);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let mut completion_queue =
             crate::page_task_queue::RendererResourceCompletionTestHarness::new();
         insert_active_fetch_job_with_modes_and_resource_type(
             &service,
             event_id,
             version_id,
-            generation,
+            &run,
             340,
             completion_queue.sender(),
             moli_fetch::RequestMode::NoCors,
@@ -2709,7 +2708,7 @@ mod tests {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
@@ -2739,14 +2738,14 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(70);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let mut completion_queue =
             crate::page_task_queue::RendererResourceCompletionTestHarness::new();
         insert_active_fetch_job_with_modes_and_resource_type(
             &service,
             event_id,
             version_id,
-            generation,
+            &run,
             370,
             completion_queue.sender(),
             moli_fetch::RequestMode::NoCors,
@@ -2768,7 +2767,7 @@ mod tests {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
@@ -2798,14 +2797,14 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(71);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let mut completion_queue =
             crate::page_task_queue::RendererResourceCompletionTestHarness::new();
         insert_active_fetch_job_with_modes_and_resource_type(
             &service,
             event_id,
             version_id,
-            generation,
+            &run,
             371,
             completion_queue.sender(),
             moli_fetch::RequestMode::NoCors,
@@ -2826,7 +2825,7 @@ mod tests {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
@@ -2850,14 +2849,14 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(72);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let mut completion_queue =
             crate::page_task_queue::RendererResourceCompletionTestHarness::new();
         insert_active_fetch_job_with_modes_and_resource_type(
             &service,
             event_id,
             version_id,
-            generation,
+            &run,
             372,
             completion_queue.sender(),
             moli_fetch::RequestMode::NoCors,
@@ -2878,7 +2877,7 @@ mod tests {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
@@ -2907,7 +2906,7 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(57);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let body_source_id = 107;
         let mut completion_queue =
             crate::page_task_queue::RendererResourceCompletionTestHarness::new();
@@ -2915,7 +2914,7 @@ mod tests {
             &service,
             event_id,
             version_id,
-            generation,
+            &run,
             337,
             completion_queue.sender(),
             moli_fetch::RequestMode::NoCors,
@@ -2937,7 +2936,7 @@ mod tests {
         service.finish_fetch_stream_started(ServiceWorkerFetchStreamStarted {
             event_id,
             version_id,
-            generation,
+            run,
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
@@ -2974,7 +2973,7 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(61);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let body_source_id = 108;
         let mut completion_queue =
             crate::page_task_queue::RendererResourceCompletionTestHarness::new();
@@ -2982,7 +2981,7 @@ mod tests {
             &service,
             event_id,
             version_id,
-            generation,
+            &run,
             341,
             completion_queue.sender(),
             moli_fetch::RequestMode::NoCors,
@@ -3005,7 +3004,7 @@ mod tests {
         service.finish_fetch_stream_started(ServiceWorkerFetchStreamStarted {
             event_id,
             version_id,
-            generation,
+            run,
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
@@ -3041,7 +3040,7 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(73);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let body_source_id = 109;
         let mut completion_queue =
             crate::page_task_queue::RendererResourceCompletionTestHarness::new();
@@ -3049,7 +3048,7 @@ mod tests {
             &service,
             event_id,
             version_id,
-            generation,
+            &run,
             373,
             completion_queue.sender(),
             moli_fetch::RequestMode::NoCors,
@@ -3070,7 +3069,7 @@ mod tests {
         service.finish_fetch_stream_started(ServiceWorkerFetchStreamStarted {
             event_id,
             version_id,
-            generation,
+            run,
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
@@ -3105,14 +3104,14 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(51);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let mut completion_queue =
             crate::page_task_queue::RendererResourceCompletionTestHarness::new();
         insert_active_fetch_job_with_modes(
             &service,
             event_id,
             version_id,
-            generation,
+            &run,
             331,
             completion_queue.sender(),
             moli_fetch::RequestMode::NoCors,
@@ -3122,7 +3121,7 @@ mod tests {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(url("https://cdn.example.test/app/data.json")),
                 response_type: "default".to_owned(),
@@ -3152,14 +3151,14 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(52);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let mut completion_queue =
             crate::page_task_queue::RendererResourceCompletionTestHarness::new();
         insert_active_fetch_job_with_modes(
             &service,
             event_id,
             version_id,
-            generation,
+            &run,
             332,
             completion_queue.sender(),
             moli_fetch::RequestMode::Cors,
@@ -3169,7 +3168,7 @@ mod tests {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(url("https://cdn.example.test/app/data.json")),
                 response_type: "default".to_owned(),
@@ -3197,14 +3196,14 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(29);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let mut completion_queue =
             crate::page_task_queue::RendererResourceCompletionTestHarness::new();
         insert_active_fetch_job_with_modes(
             &service,
             event_id,
             version_id,
-            generation,
+            &run,
             309,
             completion_queue.sender(),
             moli_fetch::RequestMode::Cors,
@@ -3214,7 +3213,7 @@ mod tests {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: None,
                 response_type: "opaqueredirect".to_owned(),
@@ -3246,14 +3245,14 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(22);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let mut completion_queue =
             crate::page_task_queue::RendererResourceCompletionTestHarness::new();
         insert_active_fetch_job(
             &service,
             event_id,
             version_id,
-            generation,
+            &run,
             302,
             completion_queue.sender(),
         );
@@ -3270,7 +3269,7 @@ mod tests {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Fallback,
         });
 
@@ -3298,13 +3297,13 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(22);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let completion_queue = crate::page_task_queue::RendererResourceCompletionTestHarness::new();
         insert_active_fetch_job(
             &service,
             event_id,
             version_id,
-            generation,
+            &run,
             302,
             completion_queue.sender(),
         );

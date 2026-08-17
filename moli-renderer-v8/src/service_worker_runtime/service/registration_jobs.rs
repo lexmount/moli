@@ -593,7 +593,7 @@ impl ServiceWorkerRuntimeService {
         preloaded_script: Option<LoadedServiceWorkerScript>,
     ) -> Option<ServiceWorkerQueuedLaunch> {
         let allow_identical_script_update = preloaded_script.is_none();
-        let (version_id, generation, launch_config, host) = self.create_installing_version_locked(
+        let (version_id, run, launch_config, host) = self.create_installing_version_locked(
             state,
             registration_id,
             &queued_job,
@@ -629,7 +629,7 @@ impl ServiceWorkerRuntimeService {
             params: ServiceWorkerLaunchParams {
                 registration_id,
                 version_id,
-                generation,
+                run,
                 script_url: queued_job.script_url,
                 scope_url: queued_job.scope_url,
                 storage_key: queued_job.storage_key,
@@ -673,7 +673,7 @@ impl ServiceWorkerRuntimeService {
             return None;
         };
         let host = host.clone();
-        let generation = version.generation;
+        let run = version.run.clone();
         let launch_config = version.launch_config.clone();
         let register_callbacks = std::mem::take(&mut queued_job.callbacks);
         let mut pending_register_job = ServiceWorkerPendingRegisterJob::new_with_options(
@@ -700,7 +700,7 @@ impl ServiceWorkerRuntimeService {
             params: ServiceWorkerLaunchParams {
                 registration_id,
                 version_id: new_version_id,
-                generation,
+                run,
                 script_url: queued_job.script_url,
                 scope_url: queued_job.scope_url,
                 storage_key: queued_job.storage_key,
@@ -728,7 +728,7 @@ impl ServiceWorkerRuntimeService {
         allow_identical_script_update: bool,
     ) -> Option<(
         ServiceWorkerVersionId,
-        u64,
+        RendererServiceWorkerRunIdentity,
         ServiceWorkerVersionLaunchConfig,
         SharedRendererServiceWorkerHost,
     )> {
@@ -739,7 +739,7 @@ impl ServiceWorkerRuntimeService {
                 break id;
             }
         };
-        let generation = 1;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let registration = state.registrations.get_mut(&registration_id)?;
         registration.script_url = queued_job.script_url.clone();
         registration.scope_url = queued_job.scope_url.clone();
@@ -747,7 +747,7 @@ impl ServiceWorkerRuntimeService {
         registration.installing_version_id = Some(version_id);
         registration.pending_unregistration = false;
         let launch_config = ServiceWorkerVersionLaunchConfig::from_queued_register_job(queued_job);
-        let host = RendererServiceWorkerHost::new_loading(version_id, generation);
+        let host = RendererServiceWorkerHost::new_loading(version_id, &run);
         let should_pause_on_start_for_devtools = self
             .should_pause_new_worker_on_start_for_devtools_locked(
                 state,
@@ -776,8 +776,8 @@ impl ServiceWorkerRuntimeService {
                 pending_start_events: VecDeque::new(),
                 pending_activation_fetch_events: VecDeque::new(),
                 in_flight_event_count: 0,
-                generation,
-                idle_generation: 0,
+                run: run.clone(),
+                idle_timeout_token: None,
                 skip_waiting_requested: false,
                 clients_claim_requested: false,
                 last_start_error: None,
@@ -789,7 +789,7 @@ impl ServiceWorkerRuntimeService {
             queued_job.script_url.clone(),
             queued_job.scope_url.clone(),
         );
-        Some((version_id, generation, launch_config, host))
+        Some((version_id, run, launch_config, host))
     }
 
     pub(super) fn cleanup_precreated_update_check_version_locked(

@@ -15,7 +15,7 @@ impl ServiceWorkerRuntimeService {
             let Some(version) = state.versions.get_mut(&completion.version_id) else {
                 return;
             };
-            if version.generation != completion.generation {
+            if version.run != completion.run {
                 return;
             }
             let mut activated_pending_fetch_events = Vec::new();
@@ -268,7 +268,7 @@ impl ServiceWorkerRuntimeService {
                         previous_version.lifecycle_state =
                             ServiceWorkerVersionLifecycleState::Redundant;
                         previous_version.skip_waiting_requested = false;
-                        let previous_generation = previous_version.generation;
+                        let previous_run = previous_version.run.clone();
                         failed_replaced_pending_events =
                             previous_version.pending_start_events.drain(..).collect();
                         let failed_replaced_activation_fetch_events = previous_version
@@ -276,11 +276,13 @@ impl ServiceWorkerRuntimeService {
                             .drain(..)
                             .collect::<Vec<_>>();
                         let previous_host = previous_version.running_state.take_host_for_shutdown();
-                        let previous_run = previous_host.as_ref().map(|host| host.run_identity());
+                        let previous_host_run =
+                            previous_host.as_ref().map(|host| host.run_identity());
                         if let Some(host) = previous_host {
                             progress.push(LifecycleProgress::TerminateHost(host));
                         }
-                        previous_target_cleanup = Some((previous_active_version_id, previous_run));
+                        previous_target_cleanup =
+                            Some((previous_active_version_id, previous_host_run));
                         let pending_start_fetch_event_ids = failed_replaced_pending_events
                             .iter()
                             .filter_map(|event| match event {
@@ -300,14 +302,14 @@ impl ServiceWorkerRuntimeService {
                             .iter()
                             .filter(|(event_id, job)| {
                                 job.version_id == previous_active_version_id
-                                    && job.generation == previous_generation
+                                    && job.is_bound_to_run(&previous_run)
                                     && !pending_start_fetch_event_ids.contains(event_id)
                                     && !pending_activation_fetch_event_ids.contains(event_id)
                             })
                             .map(|(event_id, job)| ServiceWorkerFetchCompletion {
                                 event_id: *event_id,
                                 version_id: job.version_id,
-                                generation: job.generation,
+                                run: job.run_identity().clone(),
                                 result: ServiceWorkerFetchResult::Failure(
                                     "service worker was replaced by a newer active worker"
                                         .to_owned(),
@@ -320,7 +322,7 @@ impl ServiceWorkerRuntimeService {
                                 .map(|event| ServiceWorkerFetchCompletion {
                                     event_id: event.event_id,
                                     version_id: event.version_id,
-                                    generation: event.generation,
+                                    run: event.run.clone(),
                                     result: ServiceWorkerFetchResult::Failure(
                                         "service worker was replaced by a newer active worker"
                                             .to_owned(),

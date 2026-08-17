@@ -18,7 +18,7 @@ const NAVIGATION_PRELOAD_NETWORK_ERROR_MESSAGE: &str = "The service worker navig
 struct ServiceWorkerNavigationPreloadDispatch {
     event_id: ServiceWorkerEventId,
     version_id: ServiceWorkerVersionId,
-    generation: u64,
+    run: RendererServiceWorkerRunIdentity,
     request_url: url::Url,
     request_mode: moli_fetch::RequestMode,
     request_client: ResourceRequestClient,
@@ -115,7 +115,7 @@ async fn stream_navigation_preload_response(
                 let _ = host.fail_navigation_preload(ServiceWorkerNavigationPreloadFailure {
                     event_id: dispatch.event_id,
                     version_id: dispatch.version_id,
-                    generation: dispatch.generation,
+                    run: dispatch.run.clone(),
                     message: navigation_preload_response_start_failure_message(&cancel_handle),
                 });
                 return;
@@ -125,7 +125,7 @@ async fn stream_navigation_preload_response(
             let _ = host.fail_navigation_preload(ServiceWorkerNavigationPreloadFailure {
                 event_id: dispatch.event_id,
                 version_id: dispatch.version_id,
-                generation: dispatch.generation,
+                run: dispatch.run.clone(),
                 message,
             });
             return;
@@ -137,7 +137,7 @@ async fn stream_navigation_preload_response(
     if !service.mark_navigation_preload_response_started(
         dispatch.event_id,
         dispatch.version_id,
-        dispatch.generation,
+        dispatch.run.clone(),
     ) {
         cancel_handle.cancel();
         return;
@@ -145,7 +145,7 @@ async fn stream_navigation_preload_response(
     if !host.start_navigation_preload_response(ServiceWorkerNavigationPreloadResponseStarted {
         event_id: dispatch.event_id,
         version_id: dispatch.version_id,
-        generation: dispatch.generation,
+        run: dispatch.run.clone(),
         request_url: dispatch.request_url,
         request_mode: dispatch.request_mode,
         body_source_id,
@@ -173,7 +173,7 @@ async fn stream_navigation_preload_response(
     let _ = host.finish_navigation_preload_stream(ServiceWorkerNavigationPreloadStreamFinished {
         event_id: dispatch.event_id,
         version_id: dispatch.version_id,
-        generation: dispatch.generation,
+        run: dispatch.run.clone(),
         body_source_id,
         result,
     });
@@ -248,11 +248,11 @@ impl ServiceWorkerRuntimeService {
             return Some(launch);
         }
         let version_id = launch.params.version_id;
-        let generation = launch.params.generation;
+        let run = launch.params.run.clone();
         let mut state = self.inner.state.lock();
         let should_defer = state.versions.get(&version_id).is_some_and(|version| {
             version.should_pause_on_start_for_devtools
-                && version.generation == generation
+                && version.run == run
                 && version.lifecycle_state == ServiceWorkerVersionLifecycleState::Installing
                 && matches!(
                     version.running_state,
@@ -271,7 +271,7 @@ impl ServiceWorkerRuntimeService {
         let fetch_job = ServiceWorkerFetchJob {
             internal_id: dispatch.internal_id,
             version_id: ServiceWorkerVersionId(0),
-            generation: 0,
+            run: None,
             request_url: request.url.clone(),
             request_method: request.method.clone(),
             request_headers: request.headers.clone(),
@@ -353,14 +353,14 @@ impl ServiceWorkerRuntimeService {
                 return Err(Box::new(fetch_job));
             };
             fetch_job.version_id = version_id;
-            fetch_job.generation = version.generation;
+            fetch_job.bind_to_run(version.run.clone());
             if version.lifecycle_state == ServiceWorkerVersionLifecycleState::Activating {
                 let event_id =
                     ServiceWorkerEventId(self.inner.next_event_id.fetch_add(1, Ordering::Relaxed));
                 let event = ServiceWorkerFetchEvent {
                     event_id,
                     version_id,
-                    generation: version.generation,
+                    run: version.run.clone(),
                     request,
                     navigation_preload_sent: false,
                 };
@@ -382,7 +382,7 @@ impl ServiceWorkerRuntimeService {
                         let event = ServiceWorkerFetchEvent {
                             event_id,
                             version_id,
-                            generation: version.generation,
+                            run: version.run.clone(),
                             request,
                             navigation_preload_sent: false,
                         };
@@ -393,7 +393,7 @@ impl ServiceWorkerRuntimeService {
                             ServiceWorkerPendingStartEvent::Fetch(ServiceWorkerFetchEvent {
                                 event_id,
                                 version_id,
-                                generation: version.generation,
+                                run: version.run.clone(),
                                 request,
                                 navigation_preload_sent: false,
                             }),
@@ -401,16 +401,16 @@ impl ServiceWorkerRuntimeService {
                         (None, None, None)
                     }
                     ServiceWorkerVersionRunningState::Stopped => {
-                        version.generation = version.generation.saturating_add(1);
+                        version.run = RendererServiceWorkerRunIdentity::fresh();
                         version.last_start_error = None;
-                        let generation = version.generation;
-                        fetch_job.generation = generation;
-                        let host = RendererServiceWorkerHost::new_loading(version_id, generation);
+                        let run = version.run.clone();
+                        fetch_job.bind_to_run(run.clone());
+                        let host = RendererServiceWorkerHost::new_loading(version_id, &run);
                         version.launch_config.document_url = document_url.clone();
                         let params = version.launch_config.to_launch_params(
                             registration_id,
                             version_id,
-                            generation,
+                            &run,
                             version.script_url.clone(),
                             scope_url,
                             registration_storage_key,
@@ -419,7 +419,7 @@ impl ServiceWorkerRuntimeService {
                         let event = ServiceWorkerFetchEvent {
                             event_id,
                             version_id,
-                            generation,
+                            run: run.clone(),
                             request,
                             navigation_preload_sent: false,
                         };
@@ -473,7 +473,7 @@ impl ServiceWorkerRuntimeService {
             let action = {
                 let mut state = self.inner.state.lock();
                 match state.versions.get_mut(&event.version_id) {
-                    Some(version) if version.generation != event.generation => {
+                    Some(version) if version.run != event.run => {
                         PendingActivationFetchAction::Failure(
                             "service worker fetch dispatch failed: stale activating worker"
                                 .to_owned(),
@@ -524,7 +524,7 @@ impl ServiceWorkerRuntimeService {
                     self.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
                         event_id: event.event_id,
                         version_id: event.version_id,
-                        generation: event.generation,
+                        run: event.run.clone(),
                         result: ServiceWorkerFetchResult::Fallback,
                     });
                 }
@@ -532,7 +532,7 @@ impl ServiceWorkerRuntimeService {
                     self.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
                         event_id: event.event_id,
                         version_id: event.version_id,
-                        generation: event.generation,
+                        run: event.run.clone(),
                         result: ServiceWorkerFetchResult::Failure(message),
                     });
                 }
@@ -584,7 +584,7 @@ impl ServiceWorkerRuntimeService {
             let event = ServiceWorkerMessageEvent {
                 event_id,
                 version_id,
-                generation: version.generation,
+                run: version.run.clone(),
                 source_client_id: Some(source_client_id),
                 source_client_url: Some(source_client_url),
                 source_client_snapshot: Some(source_client_snapshot),
@@ -672,7 +672,7 @@ impl ServiceWorkerRuntimeService {
             let event = ServiceWorkerPushEvent {
                 event_id,
                 version_id,
-                generation: version.generation,
+                run: version.run.clone(),
                 data,
             };
             self.start_push_event_locked(
@@ -725,7 +725,7 @@ impl ServiceWorkerRuntimeService {
             if version.lifecycle_state != ServiceWorkerVersionLifecycleState::Activated {
                 return false;
             }
-            let generation = version.generation;
+            let run = version.run.clone();
             let sync_key = (registration_id, tag.clone());
             if state
                 .sync_registrations
@@ -740,7 +740,7 @@ impl ServiceWorkerRuntimeService {
                     event_id,
                     registration_id,
                     version_id,
-                    generation,
+                    run,
                     tag: tag.clone(),
                     last_chance: false,
                 };
@@ -814,14 +814,14 @@ impl ServiceWorkerRuntimeService {
             if !sync_record.is_idle() {
                 return false;
             }
-            let generation = version.generation;
+            let run = version.run.clone();
             let event_id =
                 ServiceWorkerEventId(self.inner.next_event_id.fetch_add(1, Ordering::Relaxed));
             let event = ServiceWorkerSyncEvent {
                 event_id,
                 registration_id,
                 version_id,
-                generation,
+                run,
                 tag: tag.to_owned(),
                 last_chance: sync_record.failed_attempts > 0,
             };
@@ -968,7 +968,7 @@ impl ServiceWorkerRuntimeService {
             if version.lifecycle_state != ServiceWorkerVersionLifecycleState::Activated {
                 return false;
             }
-            let generation = version.generation;
+            let run = version.run.clone();
             if state
                 .periodic_sync_registrations
                 .get_mut(&periodic_sync_key)
@@ -982,7 +982,7 @@ impl ServiceWorkerRuntimeService {
                     event_id,
                     registration_id,
                     version_id,
-                    generation,
+                    run,
                     tag: tag.to_owned(),
                 };
                 let start = self.start_periodic_sync_event_locked(
@@ -1299,7 +1299,7 @@ impl ServiceWorkerRuntimeService {
                 kind,
                 registration_id,
                 version_id,
-                generation: version.generation,
+                run: version.run.clone(),
                 notification_id,
                 title,
                 tag,
@@ -1397,7 +1397,7 @@ impl ServiceWorkerRuntimeService {
         self.enqueue_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id: event.event_id,
             version_id: event.version_id,
-            generation: event.generation,
+            run: event.run.clone(),
             result: ServiceWorkerFetchResult::Failure(
                 "service worker fetch dispatch failed: worker is not running".to_owned(),
             ),
@@ -1410,7 +1410,7 @@ impl ServiceWorkerRuntimeService {
     ) -> Option<ServiceWorkerNavigationPreloadDispatch> {
         let mut state = self.inner.state.lock();
         let job = state.pending_fetch_jobs.get(&event.event_id)?;
-        if job.version_id != event.version_id || job.generation != event.generation {
+        if job.version_id != event.version_id || !job.is_bound_to_run(&event.run) {
             return None;
         }
         if !service_worker_fetch_event_can_use_navigation_preload(job) {
@@ -1436,7 +1436,7 @@ impl ServiceWorkerRuntimeService {
         if request.is_ok()
             && let Some(job) = state.pending_fetch_jobs.get_mut(&event.event_id)
             && job.version_id == event.version_id
-            && job.generation == event.generation
+            && job.is_bound_to_run(&event.run)
         {
             job.navigation_preload_cancel_handle = Some(cancel_handle.clone());
         }
@@ -1444,7 +1444,7 @@ impl ServiceWorkerRuntimeService {
         Some(ServiceWorkerNavigationPreloadDispatch {
             event_id: event.event_id,
             version_id: event.version_id,
-            generation: event.generation,
+            run: event.run.clone(),
             request_url,
             request_mode,
             request_client,
@@ -1469,13 +1469,13 @@ impl ServiceWorkerRuntimeService {
         &self,
         event_id: ServiceWorkerEventId,
         version_id: ServiceWorkerVersionId,
-        generation: u64,
+        run: RendererServiceWorkerRunIdentity,
     ) -> bool {
         let mut state = self.inner.state.lock();
         let Some(job) = state.pending_fetch_jobs.get_mut(&event_id) else {
             return false;
         };
-        if job.version_id != version_id || job.generation != generation {
+        if job.version_id != version_id || !job.is_bound_to_run(&run) {
             return false;
         }
         job.clear_pending_navigation_preload_cancel_handle();
@@ -1493,7 +1493,7 @@ impl ServiceWorkerRuntimeService {
         self.enqueue_notification_event_completed(ServiceWorkerNotificationCompletion {
             event_id: event.event_id,
             version_id: event.version_id,
-            generation: event.generation,
+            run: event.run.clone(),
             result: Err(
                 "service worker notification dispatch failed: worker is not running".to_owned(),
             ),
@@ -1511,7 +1511,7 @@ impl ServiceWorkerRuntimeService {
         self.enqueue_push_event_completed(ServiceWorkerPushCompletion {
             event_id: event.event_id,
             version_id: event.version_id,
-            generation: event.generation,
+            run: event.run.clone(),
             result: Err("service worker push dispatch failed: worker is not running".to_owned()),
         });
     }
@@ -1528,7 +1528,7 @@ impl ServiceWorkerRuntimeService {
             event_id: event.event_id,
             registration_id: event.registration_id,
             version_id: event.version_id,
-            generation: event.generation,
+            run: event.run.clone(),
             tag: event.tag,
             result: Err("service worker sync dispatch failed: worker is not running".to_owned()),
         });
@@ -1546,7 +1546,7 @@ impl ServiceWorkerRuntimeService {
             event_id: event.event_id,
             registration_id: event.registration_id,
             version_id: event.version_id,
-            generation: event.generation,
+            run: event.run.clone(),
             tag: event.tag,
             result: Err(
                 "service worker periodic sync dispatch failed: worker is not running".to_owned(),
@@ -1565,7 +1565,7 @@ impl ServiceWorkerRuntimeService {
         self.enqueue_message_event_completed(ServiceWorkerMessageCompletion {
             event_id: event.event_id,
             version_id: event.version_id,
-            generation: event.generation,
+            run: event.run.clone(),
             result: Err("service worker message dispatch failed: worker is not running".to_owned()),
         });
     }

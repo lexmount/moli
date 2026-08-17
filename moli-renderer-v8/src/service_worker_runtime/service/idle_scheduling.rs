@@ -46,9 +46,5 @@ fn enqueue_idle_timeout_after_delay(
     let Some(service) = service.upgrade() else {
         return;
     };
-    service.enqueue_worker_idle_timeout(
-        timeout.version_id,
-        timeout.generation,
-        timeout.idle_generation,
-    );
+    service.enqueue_worker_idle_timeout(timeout);
 }

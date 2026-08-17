@@ -4,7 +4,7 @@ impl ServiceWorkerRuntimeService {
     pub(super) fn finish_show_notification_requested(
         &self,
         request: ServiceWorkerShowNotification,
-        generation: u64,
+        run: RendererServiceWorkerRunIdentity,
         source_host: SharedRendererServiceWorkerHost,
     ) {
         let mut state = self.inner.state.lock();
@@ -15,7 +15,7 @@ impl ServiceWorkerRuntimeService {
             });
             return;
         };
-        if version.generation != generation
+        if version.run != run
             || version.registration_id != request.registration_id
             || version.lifecycle_state != ServiceWorkerVersionLifecycleState::Activated
         {
@@ -69,7 +69,7 @@ impl ServiceWorkerRuntimeService {
     pub(super) fn finish_get_notifications_requested(
         &self,
         request: ServiceWorkerGetNotifications,
-        generation: u64,
+        run: RendererServiceWorkerRunIdentity,
         source_host: SharedRendererServiceWorkerHost,
     ) {
         let delivery = {
@@ -83,7 +83,7 @@ impl ServiceWorkerRuntimeService {
                 );
                 return;
             };
-            if version.generation != generation {
+            if version.run != run {
                 source_host.dispatch_get_notifications_result(
                     ServiceWorkerGetNotificationsResult {
                         request_id: request.request_id,
@@ -137,7 +137,7 @@ impl ServiceWorkerRuntimeService {
     pub(super) fn finish_sync_registration_requested(
         &self,
         request: ServiceWorkerSyncRegistration,
-        generation: u64,
+        run: RendererServiceWorkerRunIdentity,
         source_host: SharedRendererServiceWorkerHost,
     ) {
         let (delivery, start) = {
@@ -151,7 +151,7 @@ impl ServiceWorkerRuntimeService {
                 );
                 return;
             };
-            if version.generation != generation {
+            if version.run != run {
                 source_host.dispatch_sync_registration_result(
                     ServiceWorkerSyncRegistrationResult {
                         request_id: request.request_id,
@@ -223,7 +223,7 @@ impl ServiceWorkerRuntimeService {
                                 event_id,
                                 registration_id: request.registration_id,
                                 version_id: request.version_id,
-                                generation,
+                                run,
                                 tag: request.tag.clone(),
                                 last_chance: false,
                             };
@@ -288,7 +288,7 @@ impl ServiceWorkerRuntimeService {
     pub(super) fn finish_sync_get_tags_requested(
         &self,
         request: ServiceWorkerSyncGetTags,
-        generation: u64,
+        run: RendererServiceWorkerRunIdentity,
         source_host: SharedRendererServiceWorkerHost,
     ) {
         let delivery = {
@@ -300,7 +300,7 @@ impl ServiceWorkerRuntimeService {
                 });
                 return;
             };
-            if version.generation != generation {
+            if version.run != run {
                 source_host.dispatch_sync_get_tags_result(ServiceWorkerSyncGetTagsResult {
                     request_id: request.request_id,
                     result: Err("service worker request is stale".to_owned()),
@@ -352,7 +352,7 @@ impl ServiceWorkerRuntimeService {
     pub(super) fn finish_periodic_sync_registration_requested(
         &self,
         request: ServiceWorkerPeriodicSyncRegistration,
-        generation: u64,
+        run: RendererServiceWorkerRunIdentity,
         source_host: SharedRendererServiceWorkerHost,
     ) {
         let delivery = {
@@ -366,7 +366,7 @@ impl ServiceWorkerRuntimeService {
                 );
                 return;
             };
-            if version.generation != generation {
+            if version.run != run {
                 source_host.dispatch_periodic_sync_registration_result(
                     ServiceWorkerPeriodicSyncRegistrationResult {
                         request_id: request.request_id,
@@ -429,7 +429,7 @@ impl ServiceWorkerRuntimeService {
     pub(super) fn finish_periodic_sync_get_tags_requested(
         &self,
         request: ServiceWorkerPeriodicSyncGetTags,
-        generation: u64,
+        run: RendererServiceWorkerRunIdentity,
         source_host: SharedRendererServiceWorkerHost,
     ) {
         let delivery = {
@@ -443,7 +443,7 @@ impl ServiceWorkerRuntimeService {
                 );
                 return;
             };
-            if version.generation != generation {
+            if version.run != run {
                 source_host.dispatch_periodic_sync_get_tags_result(
                     ServiceWorkerPeriodicSyncGetTagsResult {
                         request_id: request.request_id,
@@ -498,7 +498,7 @@ impl ServiceWorkerRuntimeService {
     pub(super) fn finish_periodic_sync_unregistration_requested(
         &self,
         request: ServiceWorkerPeriodicSyncUnregistration,
-        generation: u64,
+        run: RendererServiceWorkerRunIdentity,
         source_host: SharedRendererServiceWorkerHost,
     ) {
         let delivery = {
@@ -512,7 +512,7 @@ impl ServiceWorkerRuntimeService {
                 );
                 return;
             };
-            if version.generation != generation {
+            if version.run != run {
                 source_host.dispatch_periodic_sync_unregistration_result(
                     ServiceWorkerPeriodicSyncUnregistrationResult {
                         request_id: request.request_id,
@@ -562,7 +562,7 @@ impl ServiceWorkerRuntimeService {
     pub(super) fn finish_push_subscribe_requested(
         &self,
         request: ServiceWorkerPushSubscribe,
-        generation: u64,
+        run: RendererServiceWorkerRunIdentity,
         source_host: SharedRendererServiceWorkerHost,
     ) {
         let delivery = {
@@ -574,7 +574,7 @@ impl ServiceWorkerRuntimeService {
                 });
                 return;
             };
-            if version.generation != generation {
+            if version.run != run {
                 source_host.dispatch_push_subscribe_result(ServiceWorkerPushSubscribeResult {
                     request_id: request.request_id,
                     result: Err("service worker request is stale".to_owned()),
@@ -627,7 +627,7 @@ impl ServiceWorkerRuntimeService {
     pub(super) fn finish_push_get_subscription_requested(
         &self,
         request: ServiceWorkerPushGetSubscription,
-        generation: u64,
+        run: RendererServiceWorkerRunIdentity,
         source_host: SharedRendererServiceWorkerHost,
     ) {
         let delivery = {
@@ -641,7 +641,7 @@ impl ServiceWorkerRuntimeService {
                 );
                 return;
             };
-            if version.generation != generation {
+            if version.run != run {
                 source_host.dispatch_push_get_subscription_result(
                     ServiceWorkerPushGetSubscriptionResult {
                         request_id: request.request_id,
@@ -693,7 +693,7 @@ impl ServiceWorkerRuntimeService {
     pub(super) fn finish_push_unsubscribe_requested(
         &self,
         request: ServiceWorkerPushUnsubscribe,
-        generation: u64,
+        run: RendererServiceWorkerRunIdentity,
         source_host: SharedRendererServiceWorkerHost,
     ) {
         let delivery = {
@@ -705,7 +705,7 @@ impl ServiceWorkerRuntimeService {
                 });
                 return;
             };
-            if version.generation != generation {
+            if version.run != run {
                 source_host.dispatch_push_unsubscribe_result(ServiceWorkerPushUnsubscribeResult {
                     request_id: request.request_id,
                     result: Err("service worker request is stale".to_owned()),
@@ -756,14 +756,14 @@ impl ServiceWorkerRuntimeService {
     pub(super) fn finish_close_notification_requested(
         &self,
         request: ServiceWorkerCloseNotification,
-        generation: u64,
+        run: RendererServiceWorkerRunIdentity,
     ) {
         let should_close = {
             let state = self.inner.state.lock();
             let Some(version) = state.versions.get(&request.version_id) else {
                 return;
             };
-            if version.generation != generation
+            if version.run != run
                 || version.registration_id != request.registration_id
                 || version.lifecycle_state != ServiceWorkerVersionLifecycleState::Activated
             {

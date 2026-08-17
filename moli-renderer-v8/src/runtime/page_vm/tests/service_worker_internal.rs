@@ -334,7 +334,7 @@ async fn service_worker_internal_action_is_checkpoint_only() {
                 target,
                 request_id: 41,
                 source_version_id: ServiceWorkerVersionId::from_u64_for_test(43),
-                source_generation: 47,
+                source_run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
             })
             .expect("focus request should enter the stable internal source");
 

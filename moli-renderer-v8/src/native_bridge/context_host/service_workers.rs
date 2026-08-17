@@ -107,7 +107,7 @@ pub(crate) struct ServiceWorkerRegistrationWatcher {
 pub(crate) struct PendingServiceWorkerClientsOpenWindowPopup {
     request_id: u64,
     source_version_id: ServiceWorkerVersionId,
-    source_generation: u64,
+    source_run: crate::runtime::RendererServiceWorkerRunIdentity,
     document_owner: crate::native_bridge::LightweightPopupDocumentOwner,
 }
 
@@ -1343,7 +1343,7 @@ impl JsContextHost {
                 crate::types::ServiceWorkerClientNavigateCompletion {
                     request_id: continuation.request_id,
                     source_version_id: continuation.source_version_id,
-                    source_generation: continuation.source_generation,
+                    source_run: continuation.source_run,
                     result,
                 },
             );
@@ -1368,7 +1368,7 @@ impl JsContextHost {
                 crate::types::ServiceWorkerClientNavigateCompletion {
                     request_id: continuation.request_id,
                     source_version_id: continuation.source_version_id,
-                    source_generation: continuation.source_generation,
+                    source_run: continuation.source_run,
                     result: Err(
                         crate::service_worker_runtime::ServiceWorkerClientNavigateError::type_error(
                             message,
@@ -1453,7 +1453,7 @@ impl JsContextHost {
         document_url: Url,
         request_id: u64,
         source_version_id: ServiceWorkerVersionId,
-        source_generation: u64,
+        source_run: crate::runtime::RendererServiceWorkerRunIdentity,
     ) {
         let Some(document_owner) = self.current_lightweight_popup_document_owner(popup_id) else {
             tracing::warn!(
@@ -1467,7 +1467,7 @@ impl JsContextHost {
                     crate::types::ServiceWorkerClientsOpenWindowCompletion {
                         request_id,
                         source_version_id,
-                        source_generation,
+                        source_run,
                         result: Ok(None),
                     },
                 );
@@ -1476,7 +1476,7 @@ impl JsContextHost {
         let pending = PendingServiceWorkerClientsOpenWindowPopup {
             request_id,
             source_version_id,
-            source_generation,
+            source_run,
             document_owner,
         };
         if self
@@ -1568,7 +1568,7 @@ impl JsContextHost {
                 crate::types::ServiceWorkerClientsOpenWindowCompletion {
                     request_id: pending.request_id,
                     source_version_id: pending.source_version_id,
-                    source_generation: pending.source_generation,
+                    source_run: pending.source_run,
                     result,
                 },
             );

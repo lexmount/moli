@@ -18,7 +18,6 @@ pub(crate) struct ServiceWorkerRuntimeDiagnostics {
     pub(crate) running_host_count: usize,
     pub(crate) pending_unregistration_count: usize,
     pub(crate) in_flight_event_count: usize,
-    pub(crate) max_generation: u64,
     pub(crate) failed_start_count: usize,
     pub(crate) live_client_count: usize,
     pub(crate) controlled_client_count: usize,
@@ -72,7 +71,6 @@ pub(crate) struct ServiceWorkerVersionDiagnostics {
     pub(crate) lifecycle_state: &'static str,
     pub(crate) running_state: &'static str,
     pub(crate) in_flight_event_count: usize,
-    pub(crate) generation: u64,
     pub(crate) host_is_running: bool,
     pub(crate) last_start_error: Option<String>,
 }

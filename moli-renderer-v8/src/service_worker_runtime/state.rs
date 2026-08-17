@@ -331,24 +331,6 @@ impl ServiceWorkerRuntimeState {
         self.target_output_streams.bind_transport(transport);
     }
 
-    /// Resolves a renderer-local asynchronous callback to the exact live host
-    /// that authorized it.
-    ///
-    /// The generation is intentionally consumed here, inside the renderer. It
-    /// is only a stale-callback fence; the returned host-owned identity is the
-    /// value carried by every protocol-facing run-specific fact.
-    pub(super) fn live_target_run_for_generation(
-        &self,
-        version_id: ServiceWorkerVersionId,
-        generation: u64,
-    ) -> Option<RendererServiceWorkerRunIdentity> {
-        let version = self.versions.get(&version_id)?;
-        if version.generation != generation {
-            return None;
-        }
-        self.live_target_run(version_id)
-    }
-
     fn live_target_run(
         &self,
         version_id: ServiceWorkerVersionId,
@@ -359,7 +341,7 @@ impl ServiceWorkerRuntimeState {
             | ServiceWorkerVersionRunningState::Running { host } => host,
             ServiceWorkerVersionRunningState::Stopped => return None,
         };
-        (host.version_id() == version_id && host.generation() == version.generation)
+        (host.version_id() == version_id && host.run_identity() == version.run)
             .then(|| host.run_identity())
     }
 
@@ -779,7 +761,7 @@ pub(super) enum ServiceWorkerPeriodicSyncStart {
 pub(super) struct ServiceWorkerFetchJob {
     pub(super) internal_id: u64,
     pub(super) version_id: ServiceWorkerVersionId,
-    pub(super) generation: u64,
+    pub(super) run: Option<RendererServiceWorkerRunIdentity>,
     pub(super) request_url: Url,
     pub(super) request_method: String,
     pub(super) request_headers: Vec<(String, String)>,
@@ -810,6 +792,20 @@ pub(super) struct ServiceWorkerFetchJob {
 }
 
 impl ServiceWorkerFetchJob {
+    pub(super) fn bind_to_run(&mut self, run: RendererServiceWorkerRunIdentity) {
+        self.run = Some(run);
+    }
+
+    pub(super) fn is_bound_to_run(&self, run: &RendererServiceWorkerRunIdentity) -> bool {
+        self.run.as_ref() == Some(run)
+    }
+
+    pub(super) fn run_identity(&self) -> &RendererServiceWorkerRunIdentity {
+        self.run
+            .as_ref()
+            .expect("pending ServiceWorker fetch jobs must be bound to an exact run")
+    }
+
     pub(super) fn cancel_pending_navigation_preload(&mut self) {
         if let Some(cancel_handle) = self.navigation_preload_cancel_handle.take() {
             cancel_handle.cancel();

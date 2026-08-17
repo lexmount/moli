@@ -5,12 +5,12 @@ impl ServiceWorkerRuntimeService {
     pub(super) fn finish_worker_start_completed(
         &self,
         version_id: ServiceWorkerVersionId,
-        generation: u64,
+        run: RendererServiceWorkerRunIdentity,
         final_script_url: String,
     ) {
         self.finish_worker_start_completed_with_script_resource(
             version_id,
-            generation,
+            run,
             final_script_url,
             None,
             ServiceWorkerFetchHandlerType::NotSkippable,
@@ -20,7 +20,7 @@ impl ServiceWorkerRuntimeService {
     pub(super) fn finish_worker_start_completed_with_script_resource(
         &self,
         version_id: ServiceWorkerVersionId,
-        generation: u64,
+        run: RendererServiceWorkerRunIdentity,
         final_script_url: String,
         script_resource: Option<ServiceWorkerScriptResource>,
         fetch_handler_type: ServiceWorkerFetchHandlerType,
@@ -28,7 +28,7 @@ impl ServiceWorkerRuntimeService {
         let Ok(final_script_url) = Url::parse(&final_script_url) else {
             self.finish_worker_start_failed(
                 version_id,
-                generation,
+                run,
                 ServiceWorkerVersionStartFailure::Bootstrap {
                     failure: WorkerBootstrapFailure {
                         message: "service worker final script URL is invalid".to_owned(),
@@ -50,7 +50,7 @@ impl ServiceWorkerRuntimeService {
                 let Some(version) = state.versions.get_mut(&version_id) else {
                     return;
                 };
-                if version.generation != generation {
+                if version.run != run {
                     return;
                 }
                 let ServiceWorkerVersionRunningState::Starting { host } =
@@ -58,7 +58,7 @@ impl ServiceWorkerRuntimeService {
                 else {
                     return;
                 };
-                if host.version_id() != version_id || host.generation() != generation {
+                if host.version_id() != version_id || host.run_identity() != run {
                     return;
                 }
                 version.final_script_url = Some(final_script_url);
@@ -146,7 +146,7 @@ impl ServiceWorkerRuntimeService {
                     let dispatch = {
                         let state = self.inner.state.lock();
                         state.versions.get(&event.version_id).and_then(|version| {
-                            if version.generation != event.generation {
+                            if version.run != event.run {
                                 return None;
                             }
                             if version.fetch_handler_existence
@@ -172,7 +172,7 @@ impl ServiceWorkerRuntimeService {
                             self.enqueue_fetch_event_completed(ServiceWorkerFetchCompletion {
                                 event_id: event.event_id,
                                 version_id: event.version_id,
-                                generation: event.generation,
+                                run: event.run.clone(),
                                 result: ServiceWorkerFetchResult::Fallback,
                             });
                         }
@@ -180,7 +180,7 @@ impl ServiceWorkerRuntimeService {
                             self.enqueue_fetch_event_completed(ServiceWorkerFetchCompletion {
                                 event_id: event.event_id,
                                 version_id: event.version_id,
-                                generation: event.generation,
+                                run: event.run.clone(),
                                 result: ServiceWorkerFetchResult::Failure(
                                     "service worker fetch dispatch failed: worker did not start"
                                         .to_owned(),
@@ -193,7 +193,7 @@ impl ServiceWorkerRuntimeService {
                     let host = {
                         let state = self.inner.state.lock();
                         state.versions.get(&event.version_id).and_then(|version| {
-                            if version.generation != event.generation {
+                            if version.run != event.run {
                                 return None;
                             }
                             match &version.running_state {
@@ -211,7 +211,7 @@ impl ServiceWorkerRuntimeService {
                         self.enqueue_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
                             event_id: event.event_id,
                             version_id: event.version_id,
-                            generation: event.generation,
+                            run: event.run.clone(),
                             kind: event.kind,
                             result: Err(
                                 "service worker lifecycle dispatch failed: worker did not start"
@@ -224,7 +224,7 @@ impl ServiceWorkerRuntimeService {
                     let host = {
                         let state = self.inner.state.lock();
                         state.versions.get(&event.version_id).and_then(|version| {
-                            if version.generation != event.generation {
+                            if version.run != event.run {
                                 return None;
                             }
                             match &version.running_state {
@@ -242,7 +242,7 @@ impl ServiceWorkerRuntimeService {
                         self.enqueue_message_event_completed(ServiceWorkerMessageCompletion {
                             event_id: event.event_id,
                             version_id: event.version_id,
-                            generation: event.generation,
+                            run: event.run.clone(),
                             result: Err(
                                 "service worker message dispatch failed: worker did not start"
                                     .to_owned(),
@@ -254,7 +254,7 @@ impl ServiceWorkerRuntimeService {
                     let host = {
                         let state = self.inner.state.lock();
                         state.versions.get(&event.version_id).and_then(|version| {
-                            if version.generation != event.generation {
+                            if version.run != event.run {
                                 return None;
                             }
                             match &version.running_state {
@@ -273,7 +273,7 @@ impl ServiceWorkerRuntimeService {
                             ServiceWorkerNotificationCompletion {
                                 event_id: event.event_id,
                                 version_id: event.version_id,
-                                generation: event.generation,
+                                run: event.run.clone(),
                                 result: Err(
                                     "service worker notification dispatch failed: worker did not start"
                                         .to_owned(),
@@ -286,7 +286,7 @@ impl ServiceWorkerRuntimeService {
                     let host = {
                         let state = self.inner.state.lock();
                         state.versions.get(&event.version_id).and_then(|version| {
-                            if version.generation != event.generation {
+                            if version.run != event.run {
                                 return None;
                             }
                             match &version.running_state {
@@ -304,7 +304,7 @@ impl ServiceWorkerRuntimeService {
                         self.enqueue_push_event_completed(ServiceWorkerPushCompletion {
                             event_id: event.event_id,
                             version_id: event.version_id,
-                            generation: event.generation,
+                            run: event.run.clone(),
                             result: Err(
                                 "service worker push dispatch failed: worker did not start"
                                     .to_owned(),
@@ -316,7 +316,7 @@ impl ServiceWorkerRuntimeService {
                     let host = {
                         let state = self.inner.state.lock();
                         state.versions.get(&event.version_id).and_then(|version| {
-                            if version.generation != event.generation {
+                            if version.run != event.run {
                                 return None;
                             }
                             match &version.running_state {
@@ -335,7 +335,7 @@ impl ServiceWorkerRuntimeService {
                             event_id: event.event_id,
                             registration_id: event.registration_id,
                             version_id: event.version_id,
-                            generation: event.generation,
+                            run: event.run.clone(),
                             tag: event.tag,
                             result: Err(
                                 "service worker sync dispatch failed: worker did not start"
@@ -348,7 +348,7 @@ impl ServiceWorkerRuntimeService {
                     let host = {
                         let state = self.inner.state.lock();
                         state.versions.get(&event.version_id).and_then(|version| {
-                            if version.generation != event.generation {
+                            if version.run != event.run {
                                 return None;
                             }
                             match &version.running_state {
@@ -368,7 +368,7 @@ impl ServiceWorkerRuntimeService {
                                 event_id: event.event_id,
                                 registration_id: event.registration_id,
                                 version_id: event.version_id,
-                                generation: event.generation,
+                                run: event.run.clone(),
                                 tag: event.tag,
                                 result: Err(
                                     "service worker periodic sync dispatch failed: worker did not start"
@@ -385,7 +385,7 @@ impl ServiceWorkerRuntimeService {
     pub(in crate::service_worker_runtime) fn finish_worker_start_identical_script_update(
         &self,
         version_id: ServiceWorkerVersionId,
-        generation: u64,
+        run: RendererServiceWorkerRunIdentity,
         loaded_script_resource: &ServiceWorkerScriptResource,
     ) -> bool {
         let (register_completion, queue_progress, force_update_page_load_waiters) = {
@@ -393,7 +393,7 @@ impl ServiceWorkerRuntimeService {
             let Some(version) = state.versions.get(&version_id) else {
                 return false;
             };
-            if version.generation != generation
+            if version.run != run
                 || version.lifecycle_state != ServiceWorkerVersionLifecycleState::Installing
                 || !version.allow_identical_script_update
             {
@@ -402,7 +402,7 @@ impl ServiceWorkerRuntimeService {
             let ServiceWorkerVersionRunningState::Starting { host } = &version.running_state else {
                 return false;
             };
-            if host.version_id() != version_id || host.generation() != generation {
+            if host.version_id() != version_id || host.run_identity() != run {
                 return false;
             }
             let registration_id = version.registration_id;
@@ -770,7 +770,7 @@ impl ServiceWorkerRuntimeService {
         &self,
         registration_id: ServiceWorkerRegistrationId,
         version_id: ServiceWorkerVersionId,
-        generation: u64,
+        run: RendererServiceWorkerRunIdentity,
         resource: WorkerScriptResource,
     ) {
         let resource = ServiceWorkerScriptResource::from_worker_script_resource(resource);
@@ -779,7 +779,7 @@ impl ServiceWorkerRuntimeService {
             let Some(version) = state.versions.get_mut(&version_id) else {
                 return;
             };
-            if version.registration_id != registration_id || version.generation != generation {
+            if version.registration_id != registration_id || version.run != run {
                 return;
             }
             version
@@ -799,7 +799,7 @@ impl ServiceWorkerRuntimeService {
     pub(super) fn finish_worker_start_failed(
         &self,
         version_id: ServiceWorkerVersionId,
-        generation: u64,
+        run: RendererServiceWorkerRunIdentity,
         failure: ServiceWorkerVersionStartFailure,
     ) {
         let message = failure.to_diagnostic_message();
@@ -809,13 +809,13 @@ impl ServiceWorkerRuntimeService {
             let Some(version) = state.versions.get_mut(&version_id) else {
                 return;
             };
-            if version.generation != generation {
+            if version.run != run {
                 return;
             }
             let should_apply = match &version.running_state {
                 ServiceWorkerVersionRunningState::Starting { host }
                 | ServiceWorkerVersionRunningState::Running { host } => {
-                    host.version_id() == version_id && host.generation() == generation
+                    host.version_id() == version_id && host.run_identity() == run
                 }
                 ServiceWorkerVersionRunningState::Stopped => false,
             };
@@ -890,19 +890,15 @@ impl ServiceWorkerRuntimeService {
         }
     }
 
-    pub(super) fn finish_worker_idle_timeout(
-        &self,
-        version_id: ServiceWorkerVersionId,
-        generation: u64,
-        idle_generation: u64,
-    ) {
+    pub(super) fn finish_worker_idle_timeout(&self, timeout: ServiceWorkerIdleTimeout) {
+        let version_id = timeout.version_id;
         let host = {
             let mut state = self.inner.state.lock();
             let Some(version) = state.versions.get(&version_id) else {
                 return;
             };
-            if version.generation != generation
-                || version.idle_generation != idle_generation
+            if version.run != timeout.run
+                || version.idle_timeout_token.as_ref() != Some(&timeout.token)
                 || version.lifecycle_state != ServiceWorkerVersionLifecycleState::Activated
                 || version.in_flight_event_count != 0
                 || !version.pending_start_events.is_empty()
@@ -933,7 +929,7 @@ impl ServiceWorkerRuntimeService {
             if !host.has_running_worker() {
                 return;
             }
-            version.idle_generation = version.idle_generation.saturating_add(1);
+            version.idle_timeout_token = None;
             let host = version.running_state.take_host_for_shutdown();
             if let Some(host) = &host {
                 state.record_target_stopped(version_id, host.run_identity(), "idle_timeout");

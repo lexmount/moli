@@ -123,8 +123,8 @@ use super::{
     },
     version::{
         ServiceWorkerFetchHandlerExistence, ServiceWorkerFetchHandlerType,
-        ServiceWorkerIdleTimeout, ServiceWorkerPendingStartEvent, ServiceWorkerVersion,
-        ServiceWorkerVersionLifecycleState, ServiceWorkerVersionRunningState,
+        ServiceWorkerIdleTimeout, ServiceWorkerIdleTimeoutToken, ServiceWorkerPendingStartEvent,
+        ServiceWorkerVersion, ServiceWorkerVersionLifecycleState, ServiceWorkerVersionRunningState,
         ServiceWorkerVersionStartFailure,
     },
 };
@@ -436,13 +436,13 @@ impl ServiceWorkerRuntimeService {
     pub(super) fn enqueue_target_fetch_diagnostic(
         &self,
         version_id: ServiceWorkerVersionId,
-        generation: u64,
+        run: RendererServiceWorkerRunIdentity,
         diagnostic: RendererServiceWorkerFetchDiagnostic,
     ) {
         let mut state = self.inner.state.lock();
-        let Some(run) = state.live_target_run_for_generation(version_id, generation) else {
+        if !state.observes_live_target_run(version_id, &run) {
             return;
-        };
+        }
         state.record_target_fetch_diagnostic(version_id, run, diagnostic);
     }
 
@@ -702,15 +702,15 @@ mod tests {
         service: &ServiceWorkerRuntimeServiceOwner,
         registration_id: ServiceWorkerRegistrationId,
         version_id: ServiceWorkerVersionId,
-        generation: u64,
         script_url: Url,
         scope_url: Url,
     ) -> ServiceWorkerQueuedLaunch {
+        let run = exact_version_run(service, version_id);
         let launch_config = test_launch_config(service, &script_url, &scope_url);
         let params = launch_config.to_launch_params(
             registration_id,
             version_id,
-            generation,
+            &run,
             script_url,
             scope_url.clone(),
             ServiceWorkerRegistrationKey::storage_key_for_scope_url(&scope_url),
@@ -718,7 +718,7 @@ mod tests {
         );
         ServiceWorkerQueuedLaunch {
             params,
-            host: RendererServiceWorkerHost::new_loading(version_id, generation),
+            host: RendererServiceWorkerHost::new_loading(version_id, &run),
             lifecycle_notifications: Vec::new(),
             preloaded_script: None,
         }
@@ -738,6 +738,21 @@ mod tests {
                 _ => None,
             })
             .expect("a target created for a concrete worker host must expose its exact run")
+    }
+
+    fn exact_version_run(
+        service: &ServiceWorkerRuntimeServiceOwner,
+        version_id: ServiceWorkerVersionId,
+    ) -> RendererServiceWorkerRunIdentity {
+        service
+            .inner
+            .state
+            .lock()
+            .versions
+            .get(&version_id)
+            .expect("test version must exist")
+            .run
+            .clone()
     }
 
     fn insert_registered_version(
@@ -821,8 +836,8 @@ mod tests {
                 pending_start_events: VecDeque::new(),
                 pending_activation_fetch_events: VecDeque::new(),
                 in_flight_event_count: 0,
-                generation: 1,
-                idle_generation: 0,
+                run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
+                idle_timeout_token: None,
                 skip_waiting_requested: false,
                 clients_claim_requested: false,
                 last_start_error: None,
@@ -856,7 +871,7 @@ mod tests {
         service: &ServiceWorkerRuntimeServiceOwner,
         internal_id: u64,
         version_id: ServiceWorkerVersionId,
-        generation: u64,
+        run: &RendererServiceWorkerRunIdentity,
         client_id: ServiceWorkerClientId,
         document_url: Url,
         request_url: Url,
@@ -866,7 +881,7 @@ mod tests {
         ServiceWorkerFetchJob {
             internal_id,
             version_id,
-            generation,
+            run: Some(run.clone()),
             request_url,
             request_method: "GET".to_owned(),
             request_headers: Vec::new(),
@@ -906,7 +921,7 @@ mod tests {
         event_id: ServiceWorkerEventId,
         internal_id: u64,
         version_id: ServiceWorkerVersionId,
-        generation: u64,
+        run: &RendererServiceWorkerRunIdentity,
         client_id: ServiceWorkerClientId,
         document_url: Url,
         request_url: Url,
@@ -918,7 +933,7 @@ mod tests {
             service,
             internal_id,
             version_id,
-            generation,
+            run,
             client_id,
             document_url,
             request_url,
@@ -929,7 +944,7 @@ mod tests {
 
         let mut state = service.inner.state.lock();
         let version = state.versions.get_mut(&version_id).unwrap();
-        version.generation = generation;
+        version.run = run.clone();
         version.in_flight_event_count = 1;
         state.pending_fetch_jobs.insert(event_id, job);
     }
@@ -980,8 +995,8 @@ mod tests {
                 pending_start_events: VecDeque::new(),
                 pending_activation_fetch_events: VecDeque::new(),
                 in_flight_event_count: 0,
-                generation: 1,
-                idle_generation: 0,
+                run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
+                idle_timeout_token: None,
                 skip_waiting_requested: false,
                 clients_claim_requested: false,
                 last_start_error: None,
@@ -1404,9 +1419,8 @@ mod tests {
         let scope_url = Url::parse("https://example.test/app/").expect("scope url");
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 1;
-        let host =
-            RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, generation);
+        let run = RendererServiceWorkerRunIdentity::fresh();
+        let host = RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, &run);
         let mut state = service.inner.state.lock();
         state.registrations.insert(
             registration_id,
@@ -1446,8 +1460,8 @@ mod tests {
                 pending_start_events: VecDeque::new(),
                 pending_activation_fetch_events: VecDeque::new(),
                 in_flight_event_count: 0,
-                generation,
-                idle_generation: 0,
+                run: run.clone(),
+                idle_timeout_token: None,
                 skip_waiting_requested: false,
                 clients_claim_requested: false,
                 last_start_error: None,
@@ -1463,8 +1477,8 @@ mod tests {
         let scope_url = Url::parse("https://example.test/app/").expect("scope url");
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 1;
-        let host = RendererServiceWorkerHost::new_loading(version_id, generation);
+        let run = RendererServiceWorkerRunIdentity::fresh();
+        let host = RendererServiceWorkerHost::new_loading(version_id, &run);
         let mut state = service.inner.state.lock();
         state.registrations.insert(
             registration_id,
@@ -1504,8 +1518,8 @@ mod tests {
                 pending_start_events: VecDeque::new(),
                 pending_activation_fetch_events: VecDeque::new(),
                 in_flight_event_count: 1,
-                generation,
-                idle_generation: 0,
+                run: run.clone(),
+                idle_timeout_token: None,
                 skip_waiting_requested: false,
                 clients_claim_requested: false,
                 last_start_error: None,
@@ -1523,8 +1537,8 @@ mod tests {
         request_id: u64,
         completion_tx: RendererPageServiceWorkerTaskSender,
     ) {
-        let generation = 1;
-        let host = RendererServiceWorkerHost::new_loading(version_id, generation);
+        let run = RendererServiceWorkerRunIdentity::fresh();
+        let host = RendererServiceWorkerHost::new_loading(version_id, &run);
         let mut state = service.inner.state.lock();
         let registration = state
             .registrations
@@ -1577,8 +1591,8 @@ mod tests {
                 pending_start_events: VecDeque::new(),
                 pending_activation_fetch_events: VecDeque::new(),
                 in_flight_event_count: 0,
-                generation,
-                idle_generation: 0,
+                run: run.clone(),
+                idle_timeout_token: None,
                 skip_waiting_requested: false,
                 clients_claim_requested: false,
                 last_start_error: None,
@@ -3304,8 +3318,8 @@ mod tests {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 0,
-                    generation: 1,
-                    idle_generation: 0,
+                    run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -3689,13 +3703,14 @@ mod tests {
                 .discarded_or_frozen = true;
         }
 
+        let run = exact_version_run(&service, version_id);
         service.finish_client_focus_requested(
             ServiceWorkerClientFocus {
                 request_id: 40,
                 source_version_id: version_id,
                 target_client_id: client_id,
             },
-            1,
+            run,
         );
 
         assert!(!completion_queue.has_ready_task());
@@ -3781,13 +3796,14 @@ mod tests {
                 .discarded_or_frozen = true;
         }
 
+        let run = exact_version_run(&service, version_id);
         service.finish_clients_open_window_requested(
             ServiceWorkerClientsOpenWindow {
                 request_id: 51,
                 source_version_id: version_id,
                 url: url("https://example.test/app/opened.html"),
             },
-            1,
+            run.clone(),
         );
 
         assert!(!not_ready_queue.has_ready_task());
@@ -3805,7 +3821,7 @@ mod tests {
         assert_eq!(completion.host.document_epoch, Some(23));
         assert_eq!(completion.host.transport_generation, 23);
         assert_eq!(completion.source_version_id, version_id);
-        assert_eq!(completion.source_generation, 1);
+        assert_eq!(completion.source_run, run);
         assert_eq!(completion.url, url("https://example.test/app/opened.html"));
     }
 
@@ -3862,9 +3878,8 @@ mod tests {
         let scope_url = url("https://example.test/app/");
         let active_script_url = url("https://example.test/app/worker-v1.js");
         let waiting_script_url = url("https://example.test/app/worker-v2.js");
-        let waiting_generation = 3;
-        let waiting_host =
-            RendererServiceWorkerHost::new_loading(waiting_version_id, waiting_generation);
+        let waiting_run = RendererServiceWorkerRunIdentity::fresh();
+        let waiting_host = RendererServiceWorkerHost::new_loading(waiting_version_id, &waiting_run);
         {
             let mut state = service.inner.state.lock();
             state.live_clients.insert(
@@ -3930,8 +3945,8 @@ mod tests {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 0,
-                    generation: 1,
-                    idle_generation: 0,
+                    run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -3959,8 +3974,8 @@ mod tests {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 0,
-                    generation: waiting_generation,
-                    idle_generation: 0,
+                    run: waiting_run.clone(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -3990,7 +4005,7 @@ mod tests {
             panic!("expected queued activate event");
         };
         assert_eq!(event.kind, ServiceWorkerLifecycleEventKind::Activate);
-        assert_eq!(event.generation, waiting_generation);
+        assert_eq!(event.run, waiting_run);
     }
 
     #[test]
@@ -4190,12 +4205,18 @@ mod tests {
                 ),
                 (kept_event_id, kept_version_id, kept_fetch_queue.sender()),
             ] {
+                let run = state
+                    .versions
+                    .get(&version_id)
+                    .expect("inserted version")
+                    .run
+                    .clone();
                 state.pending_fetch_jobs.insert(
                     event_id,
                     ServiceWorkerFetchJob {
                         internal_id: event_id.as_u64(),
                         version_id,
-                        generation: 1,
+                        run: Some(run),
                         request_url: request_url.clone(),
                         request_method: "GET".to_owned(),
                         request_headers: Vec::new(),
@@ -4350,7 +4371,7 @@ mod tests {
         let service = new_service_worker_runtime_service();
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 1;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let scope_url = url("https://example.test/app/");
         let script_url = url("https://example.test/app/sw.js");
         let mut handle = crate::worker::spawn_worker_with_options(
@@ -4434,7 +4455,7 @@ self.addEventListener("message", event => {
         handle.dispatch_service_worker_message_event(ServiceWorkerMessageEvent {
             event_id: ServiceWorkerEventId::from_u64_for_worker(61),
             version_id,
-            generation,
+            run: run.clone(),
             source_client_id: None,
             source_client_url: None,
             source_client_snapshot: None,
@@ -4450,9 +4471,8 @@ self.addEventListener("message", event => {
         let mut parent_rx = handle
             .take_receiver()
             .expect("service worker should expose parent receiver");
-        let host = RendererServiceWorkerHost::new_running_with_handle_for_test(
-            version_id, generation, handle,
-        );
+        let host =
+            RendererServiceWorkerHost::new_running_with_handle_for_test(version_id, &run, handle);
         {
             let mut state = service.inner.state.lock();
             state.registrations.insert(
@@ -4495,8 +4515,8 @@ self.addEventListener("message", event => {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 0,
-                    generation,
-                    idle_generation: 0,
+                    run: run.clone(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -4504,6 +4524,7 @@ self.addEventListener("message", event => {
             );
         }
 
+        let stale_run = RendererServiceWorkerRunIdentity::fresh();
         let mut stale_rejection_count = 0;
         let mut push_subscribe_count = 0;
         let mut first_message = Some(first_message);
@@ -4519,19 +4540,23 @@ self.addEventListener("message", event => {
                 crate::worker::WorkerToParentMessage::ServiceWorkerSyncRegistration(request) => {
                     service.finish_sync_registration_requested(
                         request,
-                        generation + 1,
+                        stale_run.clone(),
                         host.clone(),
                     );
                     stale_rejection_count += 1;
                 }
                 crate::worker::WorkerToParentMessage::ServiceWorkerSyncGetTags(request) => {
-                    service.finish_sync_get_tags_requested(request, generation + 1, host.clone());
+                    service.finish_sync_get_tags_requested(
+                        request,
+                        stale_run.clone(),
+                        host.clone(),
+                    );
                     stale_rejection_count += 1;
                 }
                 crate::worker::WorkerToParentMessage::ServiceWorkerGetNotifications(request) => {
                     service.finish_get_notifications_requested(
                         request,
-                        generation + 1,
+                        stale_run.clone(),
                         host.clone(),
                     );
                     stale_rejection_count += 1;
@@ -4539,7 +4564,7 @@ self.addEventListener("message", event => {
                 crate::worker::WorkerToParentMessage::ServiceWorkerShowNotification(request) => {
                     service.finish_show_notification_requested(
                         request,
-                        generation + 1,
+                        stale_run.clone(),
                         host.clone(),
                     );
                     stale_rejection_count += 1;
@@ -4549,7 +4574,7 @@ self.addEventListener("message", event => {
                 ) => {
                     service.finish_periodic_sync_registration_requested(
                         request,
-                        generation + 1,
+                        stale_run.clone(),
                         host.clone(),
                     );
                     stale_rejection_count += 1;
@@ -4557,7 +4582,7 @@ self.addEventListener("message", event => {
                 crate::worker::WorkerToParentMessage::ServiceWorkerPeriodicSyncGetTags(request) => {
                     service.finish_periodic_sync_get_tags_requested(
                         request,
-                        generation + 1,
+                        stale_run.clone(),
                         host.clone(),
                     );
                     stale_rejection_count += 1;
@@ -4567,7 +4592,7 @@ self.addEventListener("message", event => {
                 ) => {
                     service.finish_periodic_sync_unregistration_requested(
                         request,
-                        generation + 1,
+                        stale_run.clone(),
                         host.clone(),
                     );
                     stale_rejection_count += 1;
@@ -4575,7 +4600,7 @@ self.addEventListener("message", event => {
                 crate::worker::WorkerToParentMessage::ServiceWorkerPushGetSubscription(request) => {
                     service.finish_push_get_subscription_requested(
                         request,
-                        generation + 1,
+                        stale_run.clone(),
                         host.clone(),
                     );
                     stale_rejection_count += 1;
@@ -4585,18 +4610,18 @@ self.addEventListener("message", event => {
                     if push_subscribe_count == 1 {
                         service.finish_push_subscribe_requested(
                             request,
-                            generation + 1,
+                            stale_run.clone(),
                             host.clone(),
                         );
                         stale_rejection_count += 1;
                     } else {
-                        service.finish_push_subscribe_requested(request, generation, host.clone());
+                        service.finish_push_subscribe_requested(request, run.clone(), host.clone());
                     }
                 }
                 crate::worker::WorkerToParentMessage::ServiceWorkerPushUnsubscribe(request) => {
                     service.finish_push_unsubscribe_requested(
                         request,
-                        generation + 1,
+                        stale_run.clone(),
                         host.clone(),
                     );
                     stale_rejection_count += 1;
@@ -4626,7 +4651,7 @@ self.addEventListener("message", event => {
         let service = new_service_worker_runtime_service();
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 5;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let event_id = ServiceWorkerEventId(31);
         let scope_url = url("https://example.test/app/");
         let script_url = url("https://example.test/app/worker.js");
@@ -4660,7 +4685,7 @@ self.addEventListener("message", event => {
                 ServiceWorkerFetchJob {
                     internal_id: 131,
                     version_id,
-                    generation,
+                    run: Some(run.clone()),
                     request_url: request_url.clone(),
                     request_method: "GET".to_owned(),
                     request_headers: Vec::new(),
@@ -4714,8 +4739,8 @@ self.addEventListener("message", event => {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 1,
-                    generation,
-                    idle_generation: 0,
+                    run: run.clone(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -4734,7 +4759,7 @@ self.addEventListener("message", event => {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Failure("done".to_owned()),
         });
 
@@ -4861,7 +4886,6 @@ self.addEventListener("message", event => {
             1,
             completion_queue.sender(),
         );
-
         let completion = pop_register_completion(&mut completion_queue);
         assert_eq!(completion.request_id, 33);
         let snapshot = completion
@@ -4924,7 +4948,8 @@ self.addEventListener("message", event => {
             &script_url
         );
 
-        service.finish_worker_start_completed(version_id, 1, script_url.to_string());
+        let run = exact_version_run(&service, version_id);
+        service.finish_worker_start_completed(version_id, run.clone(), script_url.to_string());
         assert!(!completion_queue.has_ready_task());
         assert_eq!(
             service
@@ -4936,7 +4961,7 @@ self.addEventListener("message", event => {
         service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
             event_id: ServiceWorkerEventId(1),
             version_id,
-            generation: 1,
+            run,
             kind: ServiceWorkerLifecycleEventKind::Install,
             result: Ok(()),
         });
@@ -5001,7 +5026,8 @@ self.addEventListener("message", event => {
             );
         }
 
-        service.finish_worker_start_completed(version_id, 1, script_url.to_string());
+        let run = exact_version_run(&service, version_id);
+        service.finish_worker_start_completed(version_id, run.clone(), script_url.to_string());
         assert!(!register_queue.has_ready_task());
         assert!(!first_unregister_queue.has_ready_task());
         assert!(!second_unregister_queue.has_ready_task());
@@ -5009,7 +5035,7 @@ self.addEventListener("message", event => {
         service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
             event_id: ServiceWorkerEventId(1),
             version_id,
-            generation: 1,
+            run,
             kind: ServiceWorkerLifecycleEventKind::Install,
             result: Ok(()),
         });
@@ -5109,12 +5135,17 @@ self.addEventListener("message", event => {
         assert_eq!(diagnostics.queued_register_job_count, 1);
         assert_eq!(diagnostics.pending_unregistration_count, 0);
 
-        service.finish_worker_start_completed(first_version_id, 1, first_script_url.to_string());
+        let first_run = exact_version_run(&service, first_version_id);
+        service.finish_worker_start_completed(
+            first_version_id,
+            first_run.clone(),
+            first_script_url.to_string(),
+        );
         assert!(!first_queue.has_ready_task());
         service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
             event_id: ServiceWorkerEventId(1),
             version_id: first_version_id,
-            generation: 1,
+            run: first_run,
             kind: ServiceWorkerLifecycleEventKind::Install,
             result: Ok(()),
         });
@@ -5327,14 +5358,16 @@ self.addEventListener("message", event => {
         assert!(!first_completion_queue.has_ready_task());
         assert!(!second_completion_queue.has_ready_task());
 
-        service.finish_worker_start_completed(ServiceWorkerVersionId(1), 1, script_url.to_string());
+        let version_id = ServiceWorkerVersionId(1);
+        let run = exact_version_run(&service, version_id);
+        service.finish_worker_start_completed(version_id, run.clone(), script_url.to_string());
 
         assert!(!first_completion_queue.has_ready_task());
         assert!(!second_completion_queue.has_ready_task());
         service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
             event_id: ServiceWorkerEventId(1),
-            version_id: ServiceWorkerVersionId(1),
-            generation: 1,
+            version_id,
+            run,
             kind: ServiceWorkerLifecycleEventKind::Install,
             result: Ok(()),
         });
@@ -5412,9 +5445,11 @@ self.addEventListener("message", event => {
         assert_eq!(diagnostics.version_count, 1);
         assert_eq!(diagnostics.queued_register_job_count, 1);
 
+        let first_version_id = ServiceWorkerVersionId(1);
+        let first_run = exact_version_run(&service, first_version_id);
         service.finish_worker_start_completed(
-            ServiceWorkerVersionId(1),
-            1,
+            first_version_id,
+            first_run.clone(),
             first_script_url.to_string(),
         );
         assert!(!first_completion_queue.has_ready_task());
@@ -5423,8 +5458,8 @@ self.addEventListener("message", event => {
 
         service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
             event_id: ServiceWorkerEventId(1),
-            version_id: ServiceWorkerVersionId(1),
-            generation: 1,
+            version_id: first_version_id,
+            run: first_run,
             kind: ServiceWorkerLifecycleEventKind::Install,
             result: Ok(()),
         });
@@ -5435,17 +5470,19 @@ self.addEventListener("message", event => {
         assert_eq!(diagnostics.queued_register_job_count, 0);
         assert_eq!(diagnostics.starting_version_count, 1);
 
+        let second_version_id = ServiceWorkerVersionId(2);
+        let second_run = exact_version_run(&service, second_version_id);
         service.finish_worker_start_completed(
-            ServiceWorkerVersionId(2),
-            1,
+            second_version_id,
+            second_run.clone(),
             second_script_url.to_string(),
         );
         assert!(!second_completion_queue.has_ready_task());
         assert!(!third_completion_queue.has_ready_task());
         service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
             event_id: ServiceWorkerEventId(2),
-            version_id: ServiceWorkerVersionId(2),
-            generation: 1,
+            version_id: second_version_id,
+            run: second_run,
             kind: ServiceWorkerLifecycleEventKind::Install,
             result: Ok(()),
         });
@@ -5483,7 +5520,9 @@ self.addEventListener("message", event => {
             1,
             first_completion_queue.sender(),
         );
-        service.finish_worker_start_completed(ServiceWorkerVersionId(1), 1, script_url.to_string());
+        let version_id = ServiceWorkerVersionId(1);
+        let run = exact_version_run(&service, version_id);
+        service.finish_worker_start_completed(version_id, run.clone(), script_url.to_string());
         assert!(!first_completion_queue.has_ready_task());
 
         service.start_registration(
@@ -5511,8 +5550,8 @@ self.addEventListener("message", event => {
 
         service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
             event_id: ServiceWorkerEventId(1),
-            version_id: ServiceWorkerVersionId(1),
-            generation: 1,
+            version_id,
+            run,
             kind: ServiceWorkerLifecycleEventKind::Install,
             result: Ok(()),
         });
@@ -5549,7 +5588,9 @@ self.addEventListener("message", event => {
             1,
             completion_queue.sender(),
         );
-        service.finish_worker_start_completed(ServiceWorkerVersionId(1), 1, script_url.to_string());
+        let version_id = ServiceWorkerVersionId(1);
+        let run = exact_version_run(&service, version_id);
+        service.finish_worker_start_completed(version_id, run.clone(), script_url.to_string());
 
         assert!(!completion_queue.has_ready_task());
         {
@@ -5567,8 +5608,8 @@ self.addEventListener("message", event => {
 
         service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
             event_id: ServiceWorkerEventId(1),
-            version_id: ServiceWorkerVersionId(1),
-            generation: 1,
+            version_id,
+            run,
             kind: ServiceWorkerLifecycleEventKind::Install,
             result: Ok(()),
         });
@@ -5625,9 +5666,10 @@ self.addEventListener("message", event => {
             second_queue.sender(),
         );
 
+        let first_run = exact_version_run(&service, first_version_id);
         service.finish_worker_start_completed(
             first_version_id,
-            1,
+            first_run.clone(),
             "https://example.test/app/worker-v1.js".to_owned(),
         );
         assert!(!first_queue.has_ready_task());
@@ -5636,7 +5678,7 @@ self.addEventListener("message", event => {
         service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
             event_id: ServiceWorkerEventId(1),
             version_id: first_version_id,
-            generation: 1,
+            run: first_run,
             kind: ServiceWorkerLifecycleEventKind::Install,
             result: Ok(()),
         });
@@ -5686,9 +5728,10 @@ self.addEventListener("message", event => {
             second_queue.sender(),
         );
 
+        let first_run = exact_version_run(&service, first_version_id);
         service.finish_worker_start_failed(
             first_version_id,
-            1,
+            first_run,
             ServiceWorkerVersionStartFailure::ScriptLoad {
                 message: "first worker load failed".to_owned(),
             },
@@ -5878,8 +5921,8 @@ self.addEventListener("message", event => {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 0,
-                    generation: 1,
-                    idle_generation: 0,
+                    run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -6072,7 +6115,7 @@ self.addEventListener("message", event => {
         };
         service.enqueue_worker_start_failed(
             version_id,
-            1,
+            created_run.clone(),
             ServiceWorkerVersionStartFailure::ScriptLoad {
                 message: "service worker script load failed: network request client not available"
                     .to_owned(),
@@ -6122,7 +6165,6 @@ self.addEventListener("message", event => {
         assert_eq!(diagnostics.stopped_version_count, 0);
         assert_eq!(diagnostics.failed_start_count, 0);
         assert_eq!(diagnostics.pending_service_lane_event_count, 0);
-        assert_eq!(diagnostics.max_generation, 0);
     }
 
     #[test]
@@ -6154,13 +6196,14 @@ self.addEventListener("message", event => {
             service.take_target_output_events_for_test();
         }
 
-        service.finish_worker_start_completed(version_id, 1, script_url.to_string());
+        let run = exact_version_run(&service, version_id);
+        service.finish_worker_start_completed(version_id, run.clone(), script_url.to_string());
         service.take_target_output_events_for_test();
 
         service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
             event_id: ServiceWorkerEventId(1),
             version_id,
-            generation: 1,
+            run,
             kind: ServiceWorkerLifecycleEventKind::Install,
             result: Ok(()),
         });
@@ -6190,7 +6233,7 @@ self.addEventListener("message", event => {
 
         service.enqueue_worker_start_completed(
             version_id,
-            0,
+            RendererServiceWorkerRunIdentity::fresh(),
             "https://example.test/app/sw.js".to_owned(),
             test_script_resource(&script_url),
             ServiceWorkerFetchHandlerType::NotSkippable,
@@ -6210,9 +6253,10 @@ self.addEventListener("message", event => {
         let service = new_service_worker_runtime_service();
         let (script_url, _, _, version_id) = insert_starting_version(&service);
 
+        let run = exact_version_run(&service, version_id);
         service.finish_worker_start_completed_with_script_resource(
             version_id,
-            1,
+            run,
             script_url.to_string(),
             Some(test_script_resource(&script_url)),
             ServiceWorkerFetchHandlerType::NotSkippable,
@@ -6248,10 +6292,11 @@ self.addEventListener("message", event => {
         let (_, _, registration_id, version_id) = insert_starting_version(&service);
         let import_url = url("https://example.test/app/dep.js");
 
+        let run = exact_version_run(&service, version_id);
         service.finish_imported_script_loaded(
             registration_id,
             version_id,
-            0,
+            RendererServiceWorkerRunIdentity::fresh(),
             test_worker_script_resource(&import_url),
         );
         assert_eq!(
@@ -6262,7 +6307,7 @@ self.addEventListener("message", event => {
         service.finish_imported_script_loaded(
             registration_id,
             version_id,
-            1,
+            run,
             test_worker_script_resource(&import_url),
         );
 
@@ -6430,7 +6475,14 @@ self.addEventListener("message", event => {
                 .next()
                 .expect("install launch should wait for debugger");
             assert_eq!(launch.params.version_id, *version_id);
-            assert_eq!(launch.params.generation, 1);
+            assert_eq!(
+                launch.params.run,
+                state
+                    .versions
+                    .get(version_id)
+                    .expect("starting version")
+                    .run
+            );
             assert!(launch.preloaded_script.is_none());
             *version_id
         };
@@ -6485,14 +6537,8 @@ self.addEventListener("message", event => {
             version.lifecycle_state = ServiceWorkerVersionLifecycleState::Installing;
             version.should_pause_on_start_for_devtools = true;
         }
-        let mut launch = test_queued_launch(
-            &service,
-            registration_id,
-            version_id,
-            1,
-            script_url,
-            scope_url,
-        );
+        let mut launch =
+            test_queued_launch(&service, registration_id, version_id, script_url, scope_url);
 
         service.apply_devtools_evaluation_pause_to_launch_if_needed(&mut launch, false);
 
@@ -6527,14 +6573,8 @@ self.addEventListener("message", event => {
                 .should_pause_on_start_for_devtools = true;
         }
         service.set_devtools_attached_for_version(version_id, true);
-        let mut launch = test_queued_launch(
-            &service,
-            registration_id,
-            version_id,
-            1,
-            script_url,
-            scope_url,
-        );
+        let mut launch =
+            test_queued_launch(&service, registration_id, version_id, script_url, scope_url);
 
         service.apply_devtools_evaluation_pause_to_launch_if_needed(&mut launch, false);
 
@@ -6568,14 +6608,8 @@ self.addEventListener("message", event => {
                 .expect("inserted version")
                 .should_pause_on_start_for_devtools = true;
         }
-        let mut launch = test_queued_launch(
-            &service,
-            registration_id,
-            version_id,
-            1,
-            script_url,
-            scope_url,
-        );
+        let mut launch =
+            test_queued_launch(&service, registration_id, version_id, script_url, scope_url);
 
         service.apply_devtools_evaluation_pause_to_launch_if_needed(&mut launch, false);
 
@@ -6602,14 +6636,8 @@ self.addEventListener("message", event => {
             Vec::<Url>::new(),
         );
         service.set_pause_new_workers_on_start_for_devtools(true);
-        let mut launch = test_queued_launch(
-            &service,
-            registration_id,
-            version_id,
-            1,
-            script_url,
-            scope_url,
-        );
+        let mut launch =
+            test_queued_launch(&service, registration_id, version_id, script_url, scope_url);
 
         service.apply_devtools_evaluation_pause_to_launch_if_needed(&mut launch, false);
 
@@ -6624,14 +6652,20 @@ self.addEventListener("message", event => {
     fn devtools_released_launch_does_not_double_pause_evaluation() {
         let service = new_service_worker_runtime_service();
         service.set_pause_new_workers_on_start_for_devtools(true);
-        let mut launch = test_queued_launch(
+        let registration_id = ServiceWorkerRegistrationId(1);
+        let version_id = ServiceWorkerVersionId(1);
+        let script_url = url("https://example.test/app/worker.js");
+        let scope_url = url("https://example.test/app/");
+        insert_registered_version(
             &service,
-            ServiceWorkerRegistrationId(1),
-            ServiceWorkerVersionId(1),
-            1,
-            url("https://example.test/app/worker.js"),
-            url("https://example.test/app/"),
+            registration_id,
+            version_id,
+            script_url.clone(),
+            scope_url.clone(),
+            Vec::<Url>::new(),
         );
+        let mut launch =
+            test_queued_launch(&service, registration_id, version_id, script_url, scope_url);
 
         service.apply_devtools_evaluation_pause_to_launch_if_needed(&mut launch, true);
 
@@ -6648,7 +6682,7 @@ self.addEventListener("message", event => {
         service.set_pause_new_workers_on_start_for_devtools(true);
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 1;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let script_url = url("https://example.test/app/worker.js");
         let scope_url = url("https://example.test/app/");
         insert_registered_version(
@@ -6662,10 +6696,10 @@ self.addEventListener("message", event => {
         {
             let mut state = service.inner.state.lock();
             let version = state.versions.get_mut(&version_id).unwrap();
-            version.generation = generation;
+            version.run = run.clone();
             version.should_pause_on_start_for_devtools = true;
             version.running_state = ServiceWorkerVersionRunningState::Starting {
-                host: RendererServiceWorkerHost::new_loading(version_id, generation),
+                host: RendererServiceWorkerHost::new_loading(version_id, &run),
             };
         }
         service.set_devtools_attached_for_version(version_id, true);
@@ -6683,14 +6717,8 @@ self.addEventListener("message", event => {
             );
         }
 
-        let mut launch = test_queued_launch(
-            &service,
-            registration_id,
-            version_id,
-            generation,
-            script_url,
-            scope_url,
-        );
+        let mut launch =
+            test_queued_launch(&service, registration_id, version_id, script_url, scope_url);
         service.apply_devtools_evaluation_pause_to_launch_if_needed(&mut launch, false);
 
         assert!(
@@ -7536,11 +7564,12 @@ self.addEventListener("message", event => {
                 .main_script_resource = Some(test_script_resource(&script_url));
         }
         resource_store.lock().fail_next_persist_attempts_for_test(1);
+        let run = exact_version_run(&service, version_id);
 
         service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
             event_id: ServiceWorkerEventId(1),
             version_id,
-            generation: 1,
+            run,
             kind: ServiceWorkerLifecycleEventKind::Install,
             result: Ok(()),
         });
@@ -7656,11 +7685,12 @@ self.addEventListener("message", event => {
                 .expect("installing version should exist")
                 .main_script_resource = Some(test_script_resource(&script_url));
         }
+        let run = exact_version_run(&service, version_id);
 
         service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
             event_id: ServiceWorkerEventId(1),
             version_id,
-            generation: 1,
+            run,
             kind: ServiceWorkerLifecycleEventKind::Install,
             result: Ok(()),
         });
@@ -7717,11 +7747,12 @@ self.addEventListener("message", event => {
                 .expect("first installing version should exist")
                 .main_script_resource = Some(test_script_resource(&first_script_url));
         }
+        let first_run = exact_version_run(&service, first_version_id);
 
         service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
             event_id: ServiceWorkerEventId(1),
             version_id: first_version_id,
-            generation: 1,
+            run: first_run,
             kind: ServiceWorkerLifecycleEventKind::Install,
             result: Ok(()),
         });
@@ -7798,11 +7829,12 @@ self.addEventListener("message", event => {
                 .expect("installing update version should exist")
                 .main_script_resource = Some(test_script_resource(&new_script_url));
         }
+        let installing_run = exact_version_run(&service, installing_version_id);
 
         service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
             event_id: ServiceWorkerEventId(1),
             version_id: installing_version_id,
-            generation: 1,
+            run: installing_run.clone(),
             kind: ServiceWorkerLifecycleEventKind::Install,
             result: Ok(()),
         });
@@ -8207,12 +8239,13 @@ self.addEventListener("message", event => {
             42,
             completion_queue.sender(),
         );
+        let installing_run = exact_version_run(&service, installing_version_id);
 
         let mut different_resource = test_script_resource(&script_url);
         different_resource.body_sha256 = "different".to_owned();
         assert!(!service.finish_worker_start_identical_script_update(
             installing_version_id,
-            1,
+            installing_run.clone(),
             &different_resource
         ));
         {
@@ -8225,7 +8258,7 @@ self.addEventListener("message", event => {
         }
         assert!(!service.finish_worker_start_identical_script_update(
             installing_version_id,
-            1,
+            installing_run.clone(),
             &test_script_resource(&script_url)
         ));
         {
@@ -8239,7 +8272,7 @@ self.addEventListener("message", event => {
 
         assert!(service.finish_worker_start_identical_script_update(
             installing_version_id,
-            1,
+            installing_run,
             &test_script_resource(&script_url)
         ));
 
@@ -8285,7 +8318,7 @@ self.addEventListener("message", event => {
         let service = new_service_worker_runtime_service();
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 2;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let scope_url = url("https://example.test/app/");
         let script_url = url("https://example.test/app/worker.js");
         let document_url = url("https://example.test/app/page.html");
@@ -8293,7 +8326,7 @@ self.addEventListener("message", event => {
         let client_id = register_client_for_test(&service, document_url.clone());
         let event_id = ServiceWorkerEventId(7);
         let mut completion_queue = async_subresource_completion_queue();
-        let host = RendererServiceWorkerHost::new_loading(version_id, generation);
+        let host = RendererServiceWorkerHost::new_loading(version_id, &run);
         {
             let mut state = service.inner.state.lock();
             state.registrations.insert(
@@ -8321,7 +8354,7 @@ self.addEventListener("message", event => {
                 ServiceWorkerFetchJob {
                     internal_id: 41,
                     version_id,
-                    generation,
+                    run: Some(run.clone()),
                     request_url: request_url.clone(),
                     request_method: "GET".to_owned(),
                     request_headers: Vec::new(),
@@ -8376,7 +8409,7 @@ self.addEventListener("message", event => {
                         ServiceWorkerFetchEvent {
                             event_id,
                             version_id,
-                            generation,
+                            run: run.clone(),
                             request: ServiceWorkerFetchRequest {
                                 client_id,
                                 resulting_client_id: None,
@@ -8397,8 +8430,8 @@ self.addEventListener("message", event => {
                     )]),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 1,
-                    generation,
-                    idle_generation: 0,
+                    run: run.clone(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -8408,7 +8441,7 @@ self.addEventListener("message", event => {
 
         service.finish_worker_start_failed(
             version_id,
-            generation,
+            run,
             ServiceWorkerVersionStartFailure::ScriptLoad {
                 message: "restart script load failed".to_owned(),
             },
@@ -8442,7 +8475,7 @@ self.addEventListener("message", event => {
         let service = new_service_worker_runtime_service();
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 3;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let event_id = ServiceWorkerEventId(17);
         let scope_url = url("https://example.test/app/");
         let script_url = url("https://example.test/app/worker.js");
@@ -8462,10 +8495,10 @@ self.addEventListener("message", event => {
         {
             let mut state = service.inner.state.lock();
             let version = state.versions.get_mut(&version_id).unwrap();
-            version.generation = generation;
+            version.run = run.clone();
             version.running_state = ServiceWorkerVersionRunningState::Running {
                 host: RendererServiceWorkerHost::new_running_without_handle_for_test(
-                    version_id, generation,
+                    version_id, &run,
                 ),
             };
             version.in_flight_event_count = 1;
@@ -8475,7 +8508,7 @@ self.addEventListener("message", event => {
                     &service,
                     51,
                     version_id,
-                    generation,
+                    &run,
                     client_id,
                     document_url,
                     request_url,
@@ -8500,7 +8533,7 @@ self.addEventListener("message", event => {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Fallback,
         });
         {
@@ -8520,7 +8553,7 @@ self.addEventListener("message", event => {
         let service = new_service_worker_runtime_service();
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 1;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let event_id = ServiceWorkerEventId(60);
         let scope_url = url("https://example.test/app/");
         let script_url = url("https://example.test/app/worker.js");
@@ -8543,7 +8576,7 @@ self.addEventListener("message", event => {
             event_id,
             301,
             version_id,
-            generation,
+            &run,
             client_id,
             document_url,
             request_url,
@@ -8564,7 +8597,7 @@ self.addEventListener("message", event => {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Fallback,
         });
 
@@ -8597,7 +8630,7 @@ self.addEventListener("message", event => {
         let service = new_service_worker_runtime_service();
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 1;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let event_id = ServiceWorkerEventId(61);
         let scope_url = url("https://example.test/app/");
         let script_url = url("https://example.test/app/worker.js");
@@ -8620,7 +8653,7 @@ self.addEventListener("message", event => {
             event_id,
             302,
             version_id,
-            generation,
+            &run,
             client_id,
             document_url,
             request_url,
@@ -8629,7 +8662,11 @@ self.addEventListener("message", event => {
             navigation_preload_cancel_handle.clone(),
         );
 
-        assert!(service.mark_navigation_preload_response_started(event_id, version_id, generation));
+        assert!(service.mark_navigation_preload_response_started(
+            event_id,
+            version_id,
+            run.clone(),
+        ));
         assert!(
             !navigation_preload_cancel_handle.is_cancelled(),
             "marking response-started should detach the runtime cancel handle, not cancel it"
@@ -8638,7 +8675,7 @@ self.addEventListener("message", event => {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 status: 200,
                 status_text: "OK".to_owned(),
@@ -8664,7 +8701,7 @@ self.addEventListener("message", event => {
         let service = new_service_worker_runtime_service();
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 3;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let event_id = ServiceWorkerEventId(62);
         let scope_url = url("https://example.test/app/");
         let script_url = url("https://example.test/app/worker.js");
@@ -8687,7 +8724,7 @@ self.addEventListener("message", event => {
             event_id,
             303,
             version_id,
-            generation,
+            &run,
             client_id,
             document_url,
             request_url,
@@ -8720,7 +8757,7 @@ self.addEventListener("message", event => {
         let service = new_service_worker_runtime_service();
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 3;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let event_id = ServiceWorkerEventId(20);
         let scope_url = url("https://example.test/app/");
         let script_url = url("https://example.test/app/worker.js");
@@ -8742,10 +8779,10 @@ self.addEventListener("message", event => {
             state.record_target_created(registration_id, version_id, script_url, scope_url);
             service.take_target_output_events_for_test();
             let version = state.versions.get_mut(&version_id).unwrap();
-            version.generation = generation;
+            version.run = run.clone();
             version.running_state = ServiceWorkerVersionRunningState::Running {
                 host: RendererServiceWorkerHost::new_running_without_handle_for_test(
-                    version_id, generation,
+                    version_id, &run,
                 ),
             };
             version.in_flight_event_count = 1;
@@ -8755,7 +8792,7 @@ self.addEventListener("message", event => {
                     &service,
                     56,
                     version_id,
-                    generation,
+                    &run,
                     client_id,
                     document_url,
                     request_url,
@@ -8798,7 +8835,7 @@ self.addEventListener("message", event => {
         let service = new_service_worker_runtime_service();
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 3;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let event_id = ServiceWorkerEventId(18);
         let body_source_id = 77;
         let scope_url = url("https://example.test/app/");
@@ -8827,10 +8864,10 @@ self.addEventListener("message", event => {
         {
             let mut state = service.inner.state.lock();
             let version = state.versions.get_mut(&version_id).unwrap();
-            version.generation = generation;
+            version.run = run.clone();
             version.running_state = ServiceWorkerVersionRunningState::Running {
                 host: RendererServiceWorkerHost::new_running_with_handle_for_test(
-                    version_id, generation, handle,
+                    version_id, &run, handle,
                 ),
             };
             version.in_flight_event_count = 1;
@@ -8838,7 +8875,7 @@ self.addEventListener("message", event => {
                 &service,
                 55,
                 version_id,
-                generation,
+                &run,
                 client_id,
                 document_url,
                 request_url,
@@ -8884,7 +8921,7 @@ self.addEventListener("message", event => {
         let service = new_service_worker_runtime_service();
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 3;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let event_id = ServiceWorkerEventId(19);
         let scope_url = url("https://example.test/app/");
         let script_url = url("https://example.test/app/worker.js");
@@ -8905,10 +8942,10 @@ self.addEventListener("message", event => {
         {
             let mut state = service.inner.state.lock();
             let version = state.versions.get_mut(&version_id).unwrap();
-            version.generation = generation;
+            version.run = run.clone();
             version.running_state = ServiceWorkerVersionRunningState::Running {
                 host: RendererServiceWorkerHost::new_running_without_handle_for_test(
-                    version_id, generation,
+                    version_id, &run,
                 ),
             };
             version.in_flight_event_count = 1;
@@ -8916,7 +8953,7 @@ self.addEventListener("message", event => {
                 &service,
                 53,
                 version_id,
-                generation,
+                &run,
                 client_id,
                 document_url,
                 request_url,
@@ -8946,7 +8983,7 @@ self.addEventListener("message", event => {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 status: 200,
                 status_text: "OK".to_owned(),
@@ -8974,7 +9011,7 @@ self.addEventListener("message", event => {
         let service = new_service_worker_runtime_service();
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let event_id = ServiceWorkerEventId(18);
         let scope_url = url("https://example.test/app/");
         let script_url = url("https://example.test/app/worker.js");
@@ -8999,7 +9036,7 @@ self.addEventListener("message", event => {
                     &service,
                     52,
                     version_id,
-                    generation,
+                    &run,
                     client_id,
                     document_url.clone(),
                     request_url.clone(),
@@ -9008,15 +9045,15 @@ self.addEventListener("message", event => {
                 ),
             );
             let version = state.versions.get_mut(&version_id).unwrap();
-            version.generation = generation;
+            version.run = run.clone();
             version.running_state = ServiceWorkerVersionRunningState::Starting {
-                host: RendererServiceWorkerHost::new_loading(version_id, generation),
+                host: RendererServiceWorkerHost::new_loading(version_id, &run),
             };
             version.pending_start_events = VecDeque::from([ServiceWorkerPendingStartEvent::Fetch(
                 ServiceWorkerFetchEvent {
                     event_id,
                     version_id,
-                    generation,
+                    run: run.clone(),
                     request: test_fetch_request(client_id, request_url),
                     navigation_preload_sent: false,
                 },
@@ -9038,7 +9075,7 @@ self.addEventListener("message", event => {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Fallback,
         });
         {
@@ -9055,15 +9092,14 @@ self.addEventListener("message", event => {
         let service = new_service_worker_runtime_service();
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 3;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let scope_url = url("https://example.test/app/");
         let script_url = url("https://example.test/app/worker.js");
         let document_url = url("https://example.test/app/page.html");
         let request_url = url("https://example.test/app/data.txt");
         let client_id = register_client_for_test(&service, document_url.clone());
         let mut completion_queue = async_subresource_completion_queue();
-        let host =
-            RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, generation);
+        let host = RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, &run);
         {
             let mut state = service.inner.state.lock();
             state.registrations.insert(
@@ -9106,8 +9142,8 @@ self.addEventListener("message", event => {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 0,
-                    generation,
-                    idle_generation: 0,
+                    run: run.clone(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -9180,7 +9216,7 @@ self.addEventListener("message", event => {
         let service = new_service_worker_runtime_service();
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 6;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let scope_url = url("https://example.test/app/");
         let script_url = url("https://example.test/app/worker.js");
         let document_url = url("https://example.test/app/page.html");
@@ -9197,8 +9233,7 @@ self.addEventListener("message", event => {
             [document_url.clone()],
         );
         let client_id = client_id_for_document(&service, &document_url);
-        let host =
-            RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, generation);
+        let host = RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, &run);
         {
             let mut state = service.inner.state.lock();
             let version = state.versions.get_mut(&version_id).unwrap();
@@ -9207,7 +9242,7 @@ self.addEventListener("message", event => {
             version.lifecycle_state = ServiceWorkerVersionLifecycleState::Activating;
             version.running_state = ServiceWorkerVersionRunningState::Running { host };
             version.in_flight_event_count = 1;
-            version.generation = generation;
+            version.run = run.clone();
         }
 
         assert!(
@@ -9254,7 +9289,7 @@ self.addEventListener("message", event => {
             assert_eq!(version.pending_activation_fetch_events.len(), 1);
             let event = version.pending_activation_fetch_events.front().unwrap();
             assert_eq!(event.version_id, version_id);
-            assert_eq!(event.generation, generation);
+            assert_eq!(event.run, run);
             assert_eq!(
                 event.request.destination,
                 ServiceWorkerRequestDestination::Document
@@ -9268,7 +9303,7 @@ self.addEventListener("message", event => {
         service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
             event_id: ServiceWorkerEventId(77),
             version_id,
-            generation,
+            run,
             kind: ServiceWorkerLifecycleEventKind::Activate,
             result: Ok(()),
         });
@@ -9297,7 +9332,7 @@ self.addEventListener("message", event => {
         let service = new_service_worker_runtime_service();
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 9;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let scope_url = url("https://example.test/app/");
         let script_url = url("https://example.test/app/sw.js");
         let worker_script_url = url("https://example.test/app/dedicated-worker.js");
@@ -9347,9 +9382,8 @@ self.addEventListener("message", event => {
         let mut parent_rx = handle
             .take_receiver()
             .expect("service worker should expose parent receiver");
-        let host = RendererServiceWorkerHost::new_running_with_handle_for_test(
-            version_id, generation, handle,
-        );
+        let host =
+            RendererServiceWorkerHost::new_running_with_handle_for_test(version_id, &run, handle);
         insert_registered_version(
             &service,
             registration_id,
@@ -9364,7 +9398,7 @@ self.addEventListener("message", event => {
             version.fetch_handler_existence = ServiceWorkerFetchHandlerExistence::Exists;
             version.fetch_handler_type = ServiceWorkerFetchHandlerType::NotSkippable;
             version.running_state = ServiceWorkerVersionRunningState::Running { host };
-            version.generation = generation;
+            version.run = run.clone();
         }
         let storage_key =
             ServiceWorkerRegistrationKey::first_party_storage_key_for_url(&worker_script_url);
@@ -9468,7 +9502,7 @@ self.addEventListener("message", event => {
         let service = new_service_worker_runtime_service();
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 4;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let scope_url = url("https://example.test/app/");
         let script_url = url("https://example.test/app/worker.js");
         let document_url = url("https://example.test/app/page.html");
@@ -9483,15 +9517,14 @@ self.addEventListener("message", event => {
             [document_url.clone()],
         );
         let client_id = client_id_for_document(&service, &document_url);
-        let host =
-            RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, generation);
+        let host = RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, &run);
         {
             let mut state = service.inner.state.lock();
             let version = state.versions.get_mut(&version_id).unwrap();
             version.fetch_handler_existence = ServiceWorkerFetchHandlerExistence::Exists;
             version.fetch_handler_type = ServiceWorkerFetchHandlerType::EmptyFetchHandler;
             version.running_state = ServiceWorkerVersionRunningState::Running { host };
-            version.generation = generation;
+            version.run = run.clone();
         }
 
         let (direct_completion_tx, mut direct_completion_rx) = tokio::sync::oneshot::channel();
@@ -9559,7 +9592,7 @@ self.addEventListener("message", event => {
         let service = new_service_worker_runtime_service();
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 5;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let scope_url = url("https://example.test/app/");
         let script_url = url("https://example.test/app/worker.js");
         let document_url = url("https://example.test/app/page.html");
@@ -9575,7 +9608,7 @@ self.addEventListener("message", event => {
             [document_url.clone()],
         );
         let client_id = client_id_for_document(&service, &document_url);
-        let host = RendererServiceWorkerHost::new_loading(version_id, generation);
+        let host = RendererServiceWorkerHost::new_loading(version_id, &run);
         let request = ServiceWorkerFetchRequest {
             client_id,
             resulting_client_id: None,
@@ -9599,7 +9632,7 @@ self.addEventListener("message", event => {
                 ServiceWorkerFetchJob {
                     internal_id: 90,
                     version_id,
-                    generation,
+                    run: Some(run.clone()),
                     request_url,
                     request_method: "GET".to_owned(),
                     request_headers: Vec::new(),
@@ -9641,18 +9674,18 @@ self.addEventListener("message", event => {
                 ServiceWorkerFetchEvent {
                     event_id,
                     version_id,
-                    generation,
+                    run: run.clone(),
                     request,
                     navigation_preload_sent: false,
                 },
             )]);
             version.in_flight_event_count = 1;
-            version.generation = generation;
+            version.run = run.clone();
         }
 
         service.finish_worker_start_completed_with_script_resource(
             version_id,
-            generation,
+            run,
             script_url.to_string(),
             Some(test_script_resource(&script_url)),
             ServiceWorkerFetchHandlerType::EmptyFetchHandler,
@@ -9696,7 +9729,7 @@ self.addEventListener("message", event => {
         service.set_idle_delay_for_test(Duration::ZERO);
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 1;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let scope_url = url("https://example.test/app/");
         let script_url = url("https://example.test/app/worker.js");
         let document_url = url("https://example.test/app/page.html");
@@ -9704,8 +9737,7 @@ self.addEventListener("message", event => {
         let client_id = register_client_for_test(&service, document_url.clone());
         let event_id = ServiceWorkerEventId(11);
         let mut completion_queue = async_subresource_completion_queue();
-        let host =
-            RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, generation);
+        let host = RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, &run);
         {
             let mut state = service.inner.state.lock();
             state.registrations.insert(
@@ -9733,7 +9765,7 @@ self.addEventListener("message", event => {
                 ServiceWorkerFetchJob {
                     internal_id: 77,
                     version_id,
-                    generation,
+                    run: Some(run.clone()),
                     request_url,
                     request_method: "GET".to_owned(),
                     request_headers: Vec::new(),
@@ -9787,8 +9819,8 @@ self.addEventListener("message", event => {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 1,
-                    generation,
-                    idle_generation: 0,
+                    run: run.clone(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -9805,7 +9837,7 @@ self.addEventListener("message", event => {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id,
-            generation,
+            run,
             result: ServiceWorkerFetchResult::Failure("handled".to_owned()),
         });
 
@@ -9853,7 +9885,7 @@ self.addEventListener("message", event => {
         let service = new_service_worker_runtime_service();
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 3;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let scope_url = url("https://example.test/app/");
         let script_url = url("https://example.test/app/worker.js");
         insert_registered_version(
@@ -9864,12 +9896,11 @@ self.addEventListener("message", event => {
             scope_url.clone(),
             [],
         );
-        let host =
-            RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, generation);
+        let host = RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, &run);
         {
             let mut state = service.inner.state.lock();
             let version = state.versions.get_mut(&version_id).unwrap();
-            version.generation = generation;
+            version.run = run.clone();
             version.running_state = ServiceWorkerVersionRunningState::Running { host };
             state.record_target_created(registration_id, version_id, script_url, scope_url);
             service.take_target_output_events_for_test();
@@ -9952,6 +9983,7 @@ self.addEventListener("message", event => {
         let scope_url = url("https://example.test/app/");
         let active_script_url = url("https://example.test/app/worker-v1.js");
         let waiting_script_url = url("https://example.test/app/worker-v2.js");
+        let waiting_run = RendererServiceWorkerRunIdentity::fresh();
         insert_registered_version(
             &service,
             registration_id,
@@ -9960,8 +9992,10 @@ self.addEventListener("message", event => {
             scope_url.clone(),
             [],
         );
-        let waiting_host =
-            RendererServiceWorkerHost::new_running_without_handle_for_test(waiting_version_id, 1);
+        let waiting_host = RendererServiceWorkerHost::new_running_without_handle_for_test(
+            waiting_version_id,
+            &waiting_run,
+        );
         {
             let mut state = service.inner.state.lock();
             let registration = state.registrations.get_mut(&registration_id).unwrap();
@@ -9987,8 +10021,8 @@ self.addEventListener("message", event => {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 0,
-                    generation: 1,
-                    idle_generation: 0,
+                    run: waiting_run.clone(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -10147,7 +10181,7 @@ self.addEventListener("message", event => {
         let service = new_service_worker_runtime_service();
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 9;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let origin = url("https://example.test/");
         let other_origin = url("https://other.test/");
         let scope_url = url("https://example.test/app/");
@@ -10163,9 +10197,9 @@ self.addEventListener("message", event => {
         {
             let mut state = service.inner.state.lock();
             let version = state.versions.get_mut(&version_id).unwrap();
-            version.generation = generation;
+            version.run = run.clone();
             version.running_state = ServiceWorkerVersionRunningState::Starting {
-                host: RendererServiceWorkerHost::new_loading(version_id, generation),
+                host: RendererServiceWorkerHost::new_loading(version_id, &run),
             };
         }
 
@@ -10212,14 +10246,14 @@ self.addEventListener("message", event => {
             panic!("expected pending push event");
         };
         assert_eq!(push.version_id, version_id);
-        assert_eq!(push.generation, generation);
+        assert_eq!(push.run, run);
         assert_eq!(push.data.as_deref(), Some(&b"payload"[..]));
         let ServiceWorkerPendingStartEvent::Sync(sync) = &version.pending_start_events[1] else {
             panic!("expected pending sync event");
         };
         assert_eq!(sync.registration_id, registration_id);
         assert_eq!(sync.version_id, version_id);
-        assert_eq!(sync.generation, generation);
+        assert_eq!(sync.run, run);
         assert_eq!(sync.tag, "sync-tag");
         assert!(sync.last_chance);
         let ServiceWorkerPendingStartEvent::PeriodicSync(periodic) =
@@ -10229,7 +10263,7 @@ self.addEventListener("message", event => {
         };
         assert_eq!(periodic.registration_id, registration_id);
         assert_eq!(periodic.version_id, version_id);
-        assert_eq!(periodic.generation, generation);
+        assert_eq!(periodic.run, run);
         assert_eq!(periodic.tag, "periodic-tag");
     }
 
@@ -10239,16 +10273,15 @@ self.addEventListener("message", event => {
         let registration_id = ServiceWorkerRegistrationId(1);
         let active_version_id = ServiceWorkerVersionId(1);
         let waiting_version_id = ServiceWorkerVersionId(2);
-        let active_generation = 4;
-        let waiting_generation = 7;
+        let active_run = RendererServiceWorkerRunIdentity::fresh();
+        let waiting_run = RendererServiceWorkerRunIdentity::fresh();
         let scope_url = url("https://example.test/app/");
         let active_script_url = url("https://example.test/app/worker-v1.js");
         let waiting_script_url = url("https://example.test/app/worker-v2.js");
         let document_url = url("https://example.test/app/page.html");
         let request_url = url("https://example.test/app/data.txt");
         let event_id = ServiceWorkerEventId(19);
-        let waiting_host =
-            RendererServiceWorkerHost::new_loading(waiting_version_id, waiting_generation);
+        let waiting_host = RendererServiceWorkerHost::new_loading(waiting_version_id, &waiting_run);
         let mut completion_queue = async_subresource_completion_queue();
         {
             let mut state = service.inner.state.lock();
@@ -10277,7 +10310,7 @@ self.addEventListener("message", event => {
                 ServiceWorkerFetchJob {
                     internal_id: 91,
                     version_id: active_version_id,
-                    generation: active_generation,
+                    run: Some(active_run.clone()),
                     request_url: request_url.clone(),
                     request_method: "GET".to_owned(),
                     request_headers: Vec::new(),
@@ -10331,8 +10364,8 @@ self.addEventListener("message", event => {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 1,
-                    generation: active_generation,
-                    idle_generation: 0,
+                    run: active_run.clone(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -10360,8 +10393,8 @@ self.addEventListener("message", event => {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 0,
-                    generation: waiting_generation,
-                    idle_generation: 0,
+                    run: waiting_run.clone(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -10372,7 +10405,7 @@ self.addEventListener("message", event => {
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
             version_id: active_version_id,
-            generation: active_generation,
+            run: active_run.clone(),
             result: ServiceWorkerFetchResult::Failure("done".to_owned()),
         });
 
@@ -10400,16 +10433,15 @@ self.addEventListener("message", event => {
     }
 
     #[test]
-    fn idle_timeout_is_ignored_after_new_event_invalidates_generation() {
+    fn idle_timeout_is_ignored_after_new_event_invalidates_timeout_token() {
         let service = new_service_worker_runtime_service();
         service.set_idle_delay_for_test(Duration::ZERO);
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 1;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let scope_url = url("https://example.test/app/");
         let script_url = url("https://example.test/app/worker.js");
-        let host =
-            RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, generation);
+        let host = RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, &run);
         {
             let mut state = service.inner.state.lock();
             state.registrations.insert(
@@ -10452,8 +10484,8 @@ self.addEventListener("message", event => {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 0,
-                    generation,
-                    idle_generation: 0,
+                    run: run.clone(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -10485,11 +10517,12 @@ self.addEventListener("message", event => {
     fn install_completion_moves_version_to_waiting_and_decrements_event_count() {
         let service = new_service_worker_runtime_service();
         let (registration_id, version_id) = insert_running_installing_version(&service);
+        let run = exact_version_run(&service, version_id);
 
         service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
             event_id: ServiceWorkerEventId(1),
             version_id,
-            generation: 1,
+            run,
             kind: ServiceWorkerLifecycleEventKind::Install,
             result: Ok(()),
         });
@@ -10511,11 +10544,12 @@ self.addEventListener("message", event => {
     fn install_rejection_deletes_initial_install_registration() {
         let service = new_service_worker_runtime_service();
         let (registration_id, version_id) = insert_running_installing_version(&service);
+        let run = exact_version_run(&service, version_id);
 
         service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
             event_id: ServiceWorkerEventId(1),
             version_id,
-            generation: 1,
+            run,
             kind: ServiceWorkerLifecycleEventKind::Install,
             result: Err("service worker waitUntil promise rejected".to_owned()),
         });
@@ -10529,6 +10563,7 @@ self.addEventListener("message", event => {
     fn activate_rejection_still_commits_active_version() {
         let service = new_service_worker_runtime_service();
         let (registration_id, version_id) = insert_running_installing_version(&service);
+        let run = exact_version_run(&service, version_id);
         {
             let mut state = service.inner.state.lock();
             let registration = state.registrations.get_mut(&registration_id).unwrap();
@@ -10542,7 +10577,7 @@ self.addEventListener("message", event => {
         service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
             event_id: ServiceWorkerEventId(2),
             version_id,
-            generation: 1,
+            run,
             kind: ServiceWorkerLifecycleEventKind::Activate,
             result: Err("service worker waitUntil promise rejected".to_owned()),
         });
@@ -10637,8 +10672,8 @@ self.addEventListener("message", event => {
                         pending_start_events: VecDeque::new(),
                         pending_activation_fetch_events: VecDeque::new(),
                         in_flight_event_count,
-                        generation: 1,
-                        idle_generation: 0,
+                        run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
+                        idle_timeout_token: None,
                         skip_waiting_requested: false,
                         clients_claim_requested: false,
                         last_start_error: None,
@@ -10646,11 +10681,12 @@ self.addEventListener("message", event => {
                 );
             }
         }
+        let activating_run = exact_version_run(&service, activating_version_id);
 
         service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
             event_id: ServiceWorkerEventId(2),
             version_id: activating_version_id,
-            generation: 1,
+            run: activating_run,
             kind: ServiceWorkerLifecycleEventKind::Activate,
             result: Ok(()),
         });
@@ -10754,8 +10790,8 @@ self.addEventListener("message", event => {
                         pending_start_events: VecDeque::new(),
                         pending_activation_fetch_events: VecDeque::new(),
                         in_flight_event_count,
-                        generation: 1,
-                        idle_generation: 0,
+                        run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
+                        idle_timeout_token: None,
                         skip_waiting_requested: false,
                         clients_claim_requested: false,
                         last_start_error: None,
@@ -10763,11 +10799,12 @@ self.addEventListener("message", event => {
                 );
             }
         }
+        let activating_run = exact_version_run(&service, activating_version_id);
 
         service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
             event_id: ServiceWorkerEventId(2),
             version_id: activating_version_id,
-            generation: 1,
+            run: activating_run,
             kind: ServiceWorkerLifecycleEventKind::Activate,
             result: Ok(()),
         });
@@ -10840,10 +10877,11 @@ self.addEventListener("message", event => {
             root_version.lifecycle_state = ServiceWorkerVersionLifecycleState::Activating;
             root_version.in_flight_event_count = 1;
         }
+        let root_run = exact_version_run(&service, root_version_id);
         service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
             event_id: ServiceWorkerEventId(2),
             version_id: root_version_id,
-            generation: 1,
+            run: root_run,
             kind: ServiceWorkerLifecycleEventKind::Activate,
             result: Ok(()),
         });
@@ -10868,10 +10906,11 @@ self.addEventListener("message", event => {
             admin_version.lifecycle_state = ServiceWorkerVersionLifecycleState::Activating;
             admin_version.in_flight_event_count = 1;
         }
+        let admin_run = exact_version_run(&service, admin_version_id);
         service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
             event_id: ServiceWorkerEventId(3),
             version_id: admin_version_id,
-            generation: 1,
+            run: admin_run,
             kind: ServiceWorkerLifecycleEventKind::Activate,
             result: Ok(()),
         });
@@ -10895,9 +10934,10 @@ self.addEventListener("message", event => {
         let scope_url = url("https://example.test/app/");
         let active_script_url = url("https://example.test/app/worker-v1.js");
         let installing_script_url = url("https://example.test/app/worker-v2.js");
+        let installing_run = RendererServiceWorkerRunIdentity::fresh();
         let host = RendererServiceWorkerHost::new_running_without_handle_for_test(
             installing_version_id,
-            1,
+            &installing_run,
         );
         let (force_update_tx, mut force_update_rx) = tokio::sync::oneshot::channel();
         {
@@ -10968,8 +11008,8 @@ self.addEventListener("message", event => {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 0,
-                    generation: 1,
-                    idle_generation: 0,
+                    run: RendererServiceWorkerRunIdentity::fresh(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -10995,8 +11035,8 @@ self.addEventListener("message", event => {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 1,
-                    generation: 1,
-                    idle_generation: 0,
+                    run: installing_run.clone(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -11007,7 +11047,7 @@ self.addEventListener("message", event => {
         service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
             event_id: ServiceWorkerEventId(1),
             version_id: installing_version_id,
-            generation: 1,
+            run: installing_run.clone(),
             kind: ServiceWorkerLifecycleEventKind::Install,
             result: Ok(()),
         });
@@ -11053,7 +11093,7 @@ self.addEventListener("message", event => {
         service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
             event_id: ServiceWorkerEventId(2),
             version_id: installing_version_id,
-            generation: 1,
+            run: installing_run.clone(),
             kind: ServiceWorkerLifecycleEventKind::Activate,
             result: Ok(()),
         });
@@ -11081,9 +11121,10 @@ self.addEventListener("message", event => {
         let scope_url = url("https://example.test/app/");
         let active_script_url = url("https://example.test/app/worker-v1.js");
         let installing_script_url = url("https://example.test/app/worker-v2.js");
+        let installing_run = RendererServiceWorkerRunIdentity::fresh();
         let host = RendererServiceWorkerHost::new_running_without_handle_for_test(
             installing_version_id,
-            1,
+            &installing_run,
         );
         {
             let mut state = service.inner.state.lock();
@@ -11154,8 +11195,8 @@ self.addEventListener("message", event => {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 0,
-                    generation: 1,
-                    idle_generation: 0,
+                    run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -11181,8 +11222,8 @@ self.addEventListener("message", event => {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 1,
-                    generation: 1,
-                    idle_generation: 0,
+                    run: installing_run.clone(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -11193,7 +11234,7 @@ self.addEventListener("message", event => {
         service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
             event_id: ServiceWorkerEventId(1),
             version_id: installing_version_id,
-            generation: 1,
+            run: installing_run.clone(),
             kind: ServiceWorkerLifecycleEventKind::Install,
             result: Ok(()),
         });
@@ -11220,9 +11261,10 @@ self.addEventListener("message", event => {
         let scope_url = url("https://example.test/app/");
         let active_script_url = url("https://example.test/app/worker-v1.js");
         let installing_script_url = url("https://example.test/app/worker-v2.js");
+        let installing_run = RendererServiceWorkerRunIdentity::fresh();
         let host = RendererServiceWorkerHost::new_running_without_handle_for_test(
             installing_version_id,
-            1,
+            &installing_run,
         );
         {
             let mut state = service.inner.state.lock();
@@ -11266,8 +11308,8 @@ self.addEventListener("message", event => {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 0,
-                    generation: 1,
-                    idle_generation: 0,
+                    run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -11293,8 +11335,8 @@ self.addEventListener("message", event => {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 1,
-                    generation: 1,
-                    idle_generation: 0,
+                    run: installing_run.clone(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -11305,7 +11347,7 @@ self.addEventListener("message", event => {
         service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
             event_id: ServiceWorkerEventId(1),
             version_id: installing_version_id,
-            generation: 1,
+            run: installing_run.clone(),
             kind: ServiceWorkerLifecycleEventKind::Install,
             result: Ok(()),
         });
@@ -11375,8 +11417,8 @@ self.addEventListener("message", event => {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 0,
-                    generation: 1,
-                    idle_generation: 0,
+                    run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -11402,8 +11444,8 @@ self.addEventListener("message", event => {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 0,
-                    generation: 1,
-                    idle_generation: 0,
+                    run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: true,
                     clients_claim_requested: false,
                     last_start_error: Some("previous idle stop".to_owned()),
@@ -11418,6 +11460,7 @@ self.addEventListener("message", event => {
             service.take_target_output_events_for_test();
         }
 
+        let previous_waiting_run = exact_version_run(&service, waiting_version_id);
         let start = {
             let mut state = service.inner.state.lock();
             service
@@ -11444,11 +11487,12 @@ self.addEventListener("message", event => {
         };
         assert_eq!(launch.params.registration_id, registration_id);
         assert_eq!(launch.params.version_id, waiting_version_id);
-        assert_eq!(launch.params.generation, 2);
+        let restarted_run = launch.params.run.clone();
+        assert_ne!(restarted_run, previous_waiting_run);
         assert_eq!(launch.params.script_url, waiting_script_url);
         assert_eq!(launch.params.scope_url, scope_url);
         assert_eq!(launch.host.version_id(), waiting_version_id);
-        assert_eq!(launch.host.generation(), 2);
+        assert_eq!(launch.host.run_identity(), restarted_run);
 
         let state = service.inner.state.lock();
         let registration = state.registrations.get(&registration_id).unwrap();
@@ -11459,7 +11503,7 @@ self.addEventListener("message", event => {
             waiting.lifecycle_state,
             ServiceWorkerVersionLifecycleState::Activating
         );
-        assert_eq!(waiting.generation, 2);
+        assert_eq!(waiting.run, restarted_run);
         assert_eq!(waiting.in_flight_event_count, 1);
         assert_eq!(waiting.last_start_error, None);
         assert!(matches!(
@@ -11473,7 +11517,7 @@ self.addEventListener("message", event => {
             panic!("expected pending activate lifecycle event");
         };
         assert_eq!(event.version_id, waiting_version_id);
-        assert_eq!(event.generation, 2);
+        assert_eq!(event.run, restarted_run);
         assert_eq!(event.kind, ServiceWorkerLifecycleEventKind::Activate);
     }
 
@@ -11482,11 +11526,10 @@ self.addEventListener("message", event => {
         let service = new_service_worker_runtime_service();
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(2);
-        let generation = 2;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let scope_url = url("https://example.test/app/");
         let script_url = url("https://example.test/app/worker.js");
-        let host =
-            RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, generation);
+        let host = RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, &run);
         {
             let mut state = service.inner.state.lock();
             state.registrations.insert(
@@ -11529,8 +11572,8 @@ self.addEventListener("message", event => {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 1,
-                    generation,
-                    idle_generation: 0,
+                    run: run.clone(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -11548,7 +11591,7 @@ self.addEventListener("message", event => {
         service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
             event_id: ServiceWorkerEventId(7),
             version_id,
-            generation,
+            run,
             kind: ServiceWorkerLifecycleEventKind::Activate,
             result: Ok(()),
         });
@@ -11572,12 +11615,12 @@ self.addEventListener("message", event => {
         let registration_id = ServiceWorkerRegistrationId(1);
         let active_version_id = ServiceWorkerVersionId(1);
         let waiting_version_id = ServiceWorkerVersionId(2);
-        let generation = 2;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let scope_url = url("https://example.test/app/");
         let active_script_url = url("https://example.test/app/worker-v1.js");
         let waiting_script_url = url("https://example.test/app/worker-v2.js");
         let event_id = ServiceWorkerEventId(7);
-        let host = RendererServiceWorkerHost::new_loading(waiting_version_id, generation);
+        let host = RendererServiceWorkerHost::new_loading(waiting_version_id, &run);
         {
             let mut state = service.inner.state.lock();
             state.registrations.insert(
@@ -11620,8 +11663,8 @@ self.addEventListener("message", event => {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 0,
-                    generation: 1,
-                    idle_generation: 0,
+                    run: RendererServiceWorkerRunIdentity::fresh(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -11648,14 +11691,14 @@ self.addEventListener("message", event => {
                         ServiceWorkerPendingStartEvent::Lifecycle(ServiceWorkerLifecycleEvent {
                             event_id,
                             version_id: waiting_version_id,
-                            generation,
+                            run: run.clone(),
                             kind: ServiceWorkerLifecycleEventKind::Activate,
                         }),
                     ]),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 1,
-                    generation,
-                    idle_generation: 0,
+                    run: run.clone(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: true,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -11663,9 +11706,11 @@ self.addEventListener("message", event => {
             );
         }
 
+        let stale_run = RendererServiceWorkerRunIdentity::fresh();
+        assert_ne!(stale_run, run);
         service.finish_worker_start_completed(
             waiting_version_id,
-            generation - 1,
+            stale_run,
             waiting_script_url.to_string(),
         );
 
@@ -11696,6 +11741,7 @@ self.addEventListener("message", event => {
         let scope_url = url("https://example.test/app/");
         let active_script_url = url("https://example.test/app/worker-v1.js");
         let waiting_script_url = url("https://example.test/app/worker-v2.js");
+        let waiting_run = RendererServiceWorkerRunIdentity::fresh();
         let mut client_queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
         let client_id = ServiceWorkerClientId::from_u64_for_test(1);
         {
@@ -11763,8 +11809,8 @@ self.addEventListener("message", event => {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 0,
-                    generation: 1,
-                    idle_generation: 0,
+                    run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -11790,8 +11836,8 @@ self.addEventListener("message", event => {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 1,
-                    generation: 1,
-                    idle_generation: 0,
+                    run: waiting_run.clone(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: true,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -11802,7 +11848,7 @@ self.addEventListener("message", event => {
         service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
             event_id: ServiceWorkerEventId(2),
             version_id: waiting_version_id,
-            generation: 1,
+            run: waiting_run,
             kind: ServiceWorkerLifecycleEventKind::Activate,
             result: Ok(()),
         });
@@ -11844,8 +11890,8 @@ self.addEventListener("message", event => {
         let registration_id = ServiceWorkerRegistrationId(1);
         let active_version_id = ServiceWorkerVersionId(1);
         let waiting_version_id = ServiceWorkerVersionId(2);
-        let active_generation = 7;
-        let waiting_generation = 3;
+        let active_run = RendererServiceWorkerRunIdentity::fresh();
+        let waiting_run = RendererServiceWorkerRunIdentity::fresh();
         let dispatched_event_id = ServiceWorkerEventId(41);
         let pending_event_id = ServiceWorkerEventId(42);
         let activation_wait_event_id = ServiceWorkerEventId(43);
@@ -11857,7 +11903,7 @@ self.addEventListener("message", event => {
         let client_id = ServiceWorkerClientId::from_u64_for_test(1);
         let active_host = RendererServiceWorkerHost::new_running_without_handle_for_test(
             active_version_id,
-            active_generation,
+            &active_run,
         );
         let mut completion_queue = async_subresource_completion_queue();
         {
@@ -11915,7 +11961,7 @@ self.addEventListener("message", event => {
                     ServiceWorkerFetchJob {
                         internal_id,
                         version_id: active_version_id,
-                        generation: active_generation,
+                        run: Some(active_run.clone()),
                         request_url: request_url.clone(),
                         request_method: "GET".to_owned(),
                         request_headers: Vec::new(),
@@ -11971,7 +12017,7 @@ self.addEventListener("message", event => {
                         ServiceWorkerFetchEvent {
                             event_id: pending_event_id,
                             version_id: active_version_id,
-                            generation: active_generation,
+                            run: active_run.clone(),
                             request: ServiceWorkerFetchRequest {
                                 client_id,
                                 resulting_client_id: None,
@@ -11993,7 +12039,7 @@ self.addEventListener("message", event => {
                     pending_activation_fetch_events: VecDeque::from([ServiceWorkerFetchEvent {
                         event_id: activation_wait_event_id,
                         version_id: active_version_id,
-                        generation: active_generation,
+                        run: active_run.clone(),
                         request: ServiceWorkerFetchRequest {
                             client_id,
                             resulting_client_id: None,
@@ -12012,8 +12058,8 @@ self.addEventListener("message", event => {
                         navigation_preload_sent: false,
                     }]),
                     in_flight_event_count: 2,
-                    generation: active_generation,
-                    idle_generation: 0,
+                    run: active_run.clone(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -12039,8 +12085,8 @@ self.addEventListener("message", event => {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 1,
-                    generation: waiting_generation,
-                    idle_generation: 0,
+                    run: waiting_run.clone(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: true,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -12051,7 +12097,7 @@ self.addEventListener("message", event => {
         service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
             event_id: ServiceWorkerEventId(2),
             version_id: waiting_version_id,
-            generation: waiting_generation,
+            run: waiting_run.clone(),
             kind: ServiceWorkerLifecycleEventKind::Activate,
             result: Ok(()),
         });
@@ -12114,8 +12160,8 @@ self.addEventListener("message", event => {
         let registration_id = ServiceWorkerRegistrationId(1);
         let active_version_id = ServiceWorkerVersionId(1);
         let waiting_version_id = ServiceWorkerVersionId(2);
-        let active_generation = 7;
-        let waiting_generation = 3;
+        let active_run = RendererServiceWorkerRunIdentity::fresh();
+        let waiting_run = RendererServiceWorkerRunIdentity::fresh();
         let scope_url = url("https://example.test/app/");
         let active_script_url = url("https://example.test/app/sw-v1.js");
         let waiting_script_url = url("https://example.test/app/sw-v2.js");
@@ -12131,13 +12177,13 @@ self.addEventListener("message", event => {
             let mut state = service.inner.state.lock();
             let active_host = RendererServiceWorkerHost::new_running_without_handle_for_test(
                 active_version_id,
-                active_generation,
+                &active_run,
             );
             let active = state
                 .versions
                 .get_mut(&active_version_id)
                 .expect("active version should exist");
-            active.generation = active_generation;
+            active.run = active_run.clone();
             active.running_state = ServiceWorkerVersionRunningState::Running { host: active_host };
             state.record_target_created(
                 registration_id,
@@ -12171,8 +12217,8 @@ self.addEventListener("message", event => {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 1,
-                    generation: waiting_generation,
-                    idle_generation: 0,
+                    run: waiting_run.clone(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: true,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -12183,7 +12229,7 @@ self.addEventListener("message", event => {
         service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
             event_id: ServiceWorkerEventId(2),
             version_id: waiting_version_id,
-            generation: waiting_generation,
+            run: waiting_run.clone(),
             kind: ServiceWorkerLifecycleEventKind::Activate,
             result: Ok(()),
         });
@@ -12248,6 +12294,7 @@ self.addEventListener("message", event => {
             let mut state = service.inner.state.lock();
             state.live_clients.get_mut(&client_id).unwrap().focused = true;
         }
+        let previous_run = exact_version_run(&service, version_id);
 
         assert!(service.dispatch_message_to_version(
             version_id,
@@ -12262,7 +12309,8 @@ self.addEventListener("message", event => {
             version.running_state,
             ServiceWorkerVersionRunningState::Starting { .. }
         ));
-        assert_eq!(version.generation, 2);
+        assert_ne!(version.run, previous_run);
+        let restarted_run = version.run.clone();
         assert_eq!(version.in_flight_event_count, 1);
         assert_eq!(version.pending_start_events.len(), 1);
         let ServiceWorkerPendingStartEvent::Message(event) =
@@ -12271,7 +12319,7 @@ self.addEventListener("message", event => {
             panic!("expected pending message event");
         };
         assert_eq!(event.version_id, version_id);
-        assert_eq!(event.generation, 2);
+        assert_eq!(event.run, restarted_run);
         assert_eq!(event.source_client_id, Some(client_id));
         assert_eq!(
             event.source_client_snapshot,
@@ -12333,11 +12381,10 @@ self.addEventListener("message", event => {
         service.set_idle_delay_for_test(Duration::ZERO);
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 3;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let scope_url = url("https://example.test/app/");
         let script_url = url("https://example.test/app/sw.js");
-        let host =
-            RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, generation);
+        let host = RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, &run);
         {
             let mut state = service.inner.state.lock();
             state.registrations.insert(
@@ -12380,8 +12427,8 @@ self.addEventListener("message", event => {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 1,
-                    generation,
-                    idle_generation: 0,
+                    run: run.clone(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -12392,7 +12439,7 @@ self.addEventListener("message", event => {
         service.finish_message_event_completed(ServiceWorkerMessageCompletion {
             event_id: ServiceWorkerEventId(7),
             version_id,
-            generation,
+            run,
             result: Ok(()),
         });
 
@@ -12411,11 +12458,10 @@ self.addEventListener("message", event => {
         let service = new_service_worker_runtime_service();
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 3;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let scope_url = url("https://example.test/app/");
         let script_url = url("https://example.test/app/sw.js");
-        let host =
-            RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, generation);
+        let host = RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, &run);
         {
             let mut state = service.inner.state.lock();
             state.registrations.insert(
@@ -12458,8 +12504,8 @@ self.addEventListener("message", event => {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 0,
-                    generation,
-                    idle_generation: 0,
+                    run: run.clone(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -12506,11 +12552,10 @@ self.addEventListener("message", event => {
         let service = new_service_worker_runtime_service();
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 3;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let scope_url = url("https://example.test/app/");
         let script_url = url("https://example.test/app/sw.js");
-        let host =
-            RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, generation);
+        let host = RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, &run);
         {
             let mut state = service.inner.state.lock();
             state.registrations.insert(
@@ -12553,8 +12598,8 @@ self.addEventListener("message", event => {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 0,
-                    generation,
-                    idle_generation: 0,
+                    run: run.clone(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -12584,11 +12629,10 @@ self.addEventListener("message", event => {
         let service = new_service_worker_runtime_service();
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 3;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let scope_url = url("https://example.test/app/");
         let script_url = url("https://example.test/app/sw.js");
-        let host =
-            RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, generation);
+        let host = RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, &run);
         {
             let mut state = service.inner.state.lock();
             state.registrations.insert(
@@ -12631,8 +12675,8 @@ self.addEventListener("message", event => {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 0,
-                    generation,
-                    idle_generation: 0,
+                    run: run.clone(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -12668,11 +12712,10 @@ self.addEventListener("message", event => {
         let service = new_service_worker_runtime_service();
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 3;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let scope_url = url("https://example.test/app/");
         let script_url = url("https://example.test/app/sw.js");
-        let host =
-            RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, generation);
+        let host = RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, &run);
         {
             let mut state = service.inner.state.lock();
             state.registrations.insert(
@@ -12715,8 +12758,8 @@ self.addEventListener("message", event => {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 0,
-                    generation,
-                    idle_generation: 0,
+                    run: run.clone(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -12774,12 +12817,11 @@ self.addEventListener("message", event => {
         let service = new_service_worker_runtime_service();
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 3;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let sync_key = (registration_id, "sync-tag".to_owned());
         let scope_url = url("https://example.test/app/");
         let script_url = url("https://example.test/app/sw.js");
-        let host =
-            RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, generation);
+        let host = RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, &run);
         {
             let mut state = service.inner.state.lock();
             state.registrations.insert(
@@ -12822,8 +12864,8 @@ self.addEventListener("message", event => {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 0,
-                    generation,
-                    idle_generation: 0,
+                    run: run.clone(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -12839,7 +12881,7 @@ self.addEventListener("message", event => {
                     version_id,
                     tag: "sync-tag".to_owned(),
                 },
-                generation,
+                run.clone(),
                 host.clone(),
             );
         }
@@ -12917,11 +12959,10 @@ self.addEventListener("message", event => {
         let service = new_service_worker_runtime_service();
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 7;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let scope_url = url("https://example.test/app/");
         let script_url = url("https://example.test/app/sw.js");
-        let host =
-            RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, generation);
+        let host = RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, &run);
         {
             let mut state = service.inner.state.lock();
             state.registrations.insert(
@@ -12964,8 +13005,8 @@ self.addEventListener("message", event => {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 0,
-                    generation,
-                    idle_generation: 0,
+                    run: run.clone(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -12990,7 +13031,7 @@ self.addEventListener("message", event => {
         };
         assert_eq!(event.tag, "sync-tag");
         assert!(event.last_chance);
-        assert_eq!(event.generation, generation);
+        assert_eq!(event.run, run);
     }
 
     #[test]
@@ -13070,11 +13111,10 @@ self.addEventListener("message", event => {
         let service = new_service_worker_runtime_service();
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 5;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let scope_url = url("https://example.test/app/");
         let script_url = url("https://example.test/app/sw.js");
-        let host =
-            RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, generation);
+        let host = RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, &run);
         {
             let mut state = service.inner.state.lock();
             state.registrations.insert(
@@ -13117,8 +13157,8 @@ self.addEventListener("message", event => {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 0,
-                    generation,
-                    idle_generation: 0,
+                    run: run.clone(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -13144,13 +13184,13 @@ self.addEventListener("message", event => {
             };
             assert_eq!(event.registration_id, registration_id);
             assert_eq!(event.version_id, version_id);
-            assert_eq!(event.generation, generation);
+            assert_eq!(event.run, run);
             assert_eq!(event.tag, "daily");
         }
 
         service.finish_worker_start_failed(
             version_id,
-            generation,
+            run,
             ServiceWorkerVersionStartFailure::ScriptLoad {
                 message: "worker start failed".to_owned(),
             },
@@ -13175,12 +13215,11 @@ self.addEventListener("message", event => {
         let service = new_service_worker_runtime_service();
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 5;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let periodic_key = (registration_id, "daily".to_owned());
         let scope_url = url("https://example.test/app/");
         let script_url = url("https://example.test/app/sw.js");
-        let host =
-            RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, generation);
+        let host = RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, &run);
         {
             let mut state = service.inner.state.lock();
             state.registrations.insert(
@@ -13223,8 +13262,8 @@ self.addEventListener("message", event => {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 0,
-                    generation,
-                    idle_generation: 0,
+                    run: run.clone(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -13304,11 +13343,10 @@ self.addEventListener("message", event => {
         let service = new_service_worker_runtime_service();
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 3;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let scope_url = url("https://example.test/app/");
         let script_url = url("https://example.test/app/sw.js");
-        let host =
-            RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, generation);
+        let host = RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, &run);
         {
             let mut state = service.inner.state.lock();
             state.registrations.insert(
@@ -13351,8 +13389,8 @@ self.addEventListener("message", event => {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 0,
-                    generation,
-                    idle_generation: 0,
+                    run: run.clone(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -13444,11 +13482,10 @@ self.addEventListener("message", event => {
         let service = new_service_worker_runtime_service();
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 3;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let scope_url = url("https://example.test/app/");
         let script_url = url("https://example.test/app/sw.js");
-        let host =
-            RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, generation);
+        let host = RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, &run);
         {
             let mut state = service.inner.state.lock();
             state.registrations.insert(
@@ -13491,8 +13528,8 @@ self.addEventListener("message", event => {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 0,
-                    generation,
-                    idle_generation: 0,
+                    run: run.clone(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -13531,12 +13568,11 @@ self.addEventListener("message", event => {
         let service = new_service_worker_runtime_service();
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 3;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let scope_url = url("https://example.test/app/");
         let script_url = url("https://example.test/app/sw.js");
         let action_url = url("https://example.test/app/reply.html");
-        let host =
-            RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, generation);
+        let host = RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, &run);
         let mut completion_queue =
             crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
         let client_id = ServiceWorkerClientId(9);
@@ -13582,8 +13618,8 @@ self.addEventListener("message", event => {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 0,
-                    generation,
-                    idle_generation: 0,
+                    run: run.clone(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,
@@ -13656,11 +13692,10 @@ self.addEventListener("message", event => {
         service.set_idle_delay_for_test(Duration::ZERO);
         let registration_id = ServiceWorkerRegistrationId(1);
         let version_id = ServiceWorkerVersionId(1);
-        let generation = 3;
+        let run = RendererServiceWorkerRunIdentity::fresh();
         let scope_url = url("https://example.test/app/");
         let script_url = url("https://example.test/app/sw.js");
-        let host =
-            RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, generation);
+        let host = RendererServiceWorkerHost::new_running_without_handle_for_test(version_id, &run);
         {
             let mut state = service.inner.state.lock();
             state.registrations.insert(
@@ -13703,8 +13738,8 @@ self.addEventListener("message", event => {
                     pending_start_events: VecDeque::new(),
                     pending_activation_fetch_events: VecDeque::new(),
                     in_flight_event_count: 0,
-                    generation,
-                    idle_generation: 0,
+                    run: run.clone(),
+                    idle_timeout_token: None,
                     skip_waiting_requested: false,
                     clients_claim_requested: false,
                     last_start_error: None,

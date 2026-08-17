@@ -129,12 +129,10 @@ impl ServiceWorkerRuntimeService {
                 lifecycle_state: version.lifecycle_state.as_str(),
                 running_state,
                 in_flight_event_count: version.in_flight_event_count,
-                generation: version.generation,
                 host_is_running,
                 last_start_error: version.last_start_error.clone(),
             });
             diagnostics.in_flight_event_count += version.in_flight_event_count;
-            diagnostics.max_generation = diagnostics.max_generation.max(version.generation);
         }
         diagnostics
     }

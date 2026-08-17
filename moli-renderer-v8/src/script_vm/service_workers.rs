@@ -39,7 +39,7 @@ impl ScriptVm {
                 crate::types::ServiceWorkerClientNavigateCompletion {
                     request_id: continuation.request_id,
                     source_version_id: continuation.source_version_id,
-                    source_generation: continuation.source_generation,
+                    source_run: continuation.source_run,
                     result,
                 },
             );
@@ -65,7 +65,7 @@ impl ScriptVm {
                 crate::types::ServiceWorkerClientNavigateCompletion {
                     request_id: continuation.request_id,
                     source_version_id: continuation.source_version_id,
-                    source_generation: continuation.source_generation,
+                    source_run: continuation.source_run,
                     result: Err(ServiceWorkerClientNavigateError::type_error(message)),
                 },
             );

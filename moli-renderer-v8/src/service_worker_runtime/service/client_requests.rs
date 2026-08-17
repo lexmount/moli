@@ -69,7 +69,7 @@ impl ServiceWorkerRuntimeService {
             let event = ServiceWorkerMessageEvent {
                 event_id,
                 version_id: message.target_version_id,
-                generation: target_version.generation,
+                run: target_version.run.clone(),
                 source_client_id: None,
                 source_client_url: None,
                 source_client_snapshot: None,
@@ -101,7 +101,7 @@ impl ServiceWorkerRuntimeService {
     pub(super) fn finish_client_query(
         &self,
         version_id: ServiceWorkerVersionId,
-        generation: u64,
+        run: RendererServiceWorkerRunIdentity,
         result: ServiceWorkerClientQueryResult,
     ) {
         let host = {
@@ -109,7 +109,7 @@ impl ServiceWorkerRuntimeService {
             let Some(version) = state.versions.get(&version_id) else {
                 return;
             };
-            if version.generation != generation {
+            if version.run != run {
                 return;
             }
             match &version.running_state {
@@ -126,24 +126,24 @@ impl ServiceWorkerRuntimeService {
     pub(super) fn finish_client_query_requested(
         &self,
         query: ServiceWorkerClientQuery,
-        generation: u64,
+        run: RendererServiceWorkerRunIdentity,
     ) {
         let version_id = query.version_id;
         let result = self.query_clients(&query);
-        self.finish_client_query(version_id, generation, result);
+        self.finish_client_query(version_id, run, result);
     }
 
     pub(super) fn finish_client_navigate_requested(
         &self,
         navigate: ServiceWorkerClientNavigate,
-        generation: u64,
+        run: RendererServiceWorkerRunIdentity,
     ) {
         let delivery = {
             let state = self.inner.state.lock();
             let Some(source_version) = state.versions.get(&navigate.source_version_id) else {
                 return;
             };
-            if source_version.generation != generation {
+            if source_version.run != run {
                 return;
             }
             if source_version.lifecycle_state == ServiceWorkerVersionLifecycleState::Redundant {
@@ -165,7 +165,7 @@ impl ServiceWorkerRuntimeService {
                     )),
                 };
                 drop(state);
-                self.finish_client_navigate(navigate.source_version_id, generation, result);
+                self.finish_client_navigate(navigate.source_version_id, run, result);
                 return;
             };
             if target_client.client_type != ServiceWorkerClientType::Window {
@@ -176,7 +176,7 @@ impl ServiceWorkerRuntimeService {
                     )),
                 };
                 drop(state);
-                self.finish_client_navigate(navigate.source_version_id, generation, result);
+                self.finish_client_navigate(navigate.source_version_id, run, result);
                 return;
             }
             if !service_worker_scope_matches_url(
@@ -190,7 +190,7 @@ impl ServiceWorkerRuntimeService {
                     )),
                 };
                 drop(state);
-                self.finish_client_navigate(navigate.source_version_id, generation, result);
+                self.finish_client_navigate(navigate.source_version_id, run, result);
                 return;
             }
             if !source_registration
@@ -204,7 +204,7 @@ impl ServiceWorkerRuntimeService {
                     )),
                 };
                 drop(state);
-                self.finish_client_navigate(navigate.source_version_id, generation, result);
+                self.finish_client_navigate(navigate.source_version_id, run, result);
                 return;
             }
             (
@@ -223,7 +223,7 @@ impl ServiceWorkerRuntimeService {
                 target,
                 request_id: navigate.request_id,
                 source_version_id: navigate.source_version_id,
-                source_generation: generation,
+                source_run: run,
                 url: navigate.url,
             },
         );
@@ -235,7 +235,7 @@ impl ServiceWorkerRuntimeService {
     ) {
         self.finish_client_navigate(
             completion.source_version_id,
-            completion.source_generation,
+            completion.source_run,
             ServiceWorkerClientNavigateResult {
                 request_id: completion.request_id,
                 result: completion.result,
@@ -246,14 +246,14 @@ impl ServiceWorkerRuntimeService {
     pub(super) fn finish_client_focus_requested(
         &self,
         focus: ServiceWorkerClientFocus,
-        generation: u64,
+        run: RendererServiceWorkerRunIdentity,
     ) {
         let delivery = {
             let state = self.inner.state.lock();
             let Some(source_version) = state.versions.get(&focus.source_version_id) else {
                 return;
             };
-            if source_version.generation != generation {
+            if source_version.run != run {
                 return;
             }
             if source_version.lifecycle_state == ServiceWorkerVersionLifecycleState::Redundant {
@@ -273,7 +273,7 @@ impl ServiceWorkerRuntimeService {
                     result: Err(ServiceWorkerClientFocusError::not_found()),
                 };
                 drop(state);
-                self.finish_client_focus(focus.source_version_id, generation, result);
+                self.finish_client_focus(focus.source_version_id, run, result);
                 return;
             };
             if target_client.client_type != ServiceWorkerClientType::Window {
@@ -282,7 +282,7 @@ impl ServiceWorkerRuntimeService {
                     result: Err(ServiceWorkerClientFocusError::not_found()),
                 };
                 drop(state);
-                self.finish_client_focus(focus.source_version_id, generation, result);
+                self.finish_client_focus(focus.source_version_id, run, result);
                 return;
             }
             if !service_worker_scope_matches_url(
@@ -294,7 +294,7 @@ impl ServiceWorkerRuntimeService {
                     result: Err(ServiceWorkerClientFocusError::not_found()),
                 };
                 drop(state);
-                self.finish_client_focus(focus.source_version_id, generation, result);
+                self.finish_client_focus(focus.source_version_id, run, result);
                 return;
             }
             if !source_registration
@@ -308,7 +308,7 @@ impl ServiceWorkerRuntimeService {
                     )),
                 };
                 drop(state);
-                self.finish_client_focus(focus.source_version_id, generation, result);
+                self.finish_client_focus(focus.source_version_id, run, result);
                 return;
             }
             if !target_client.execution_ready {
@@ -317,7 +317,7 @@ impl ServiceWorkerRuntimeService {
                     result: Err(ServiceWorkerClientFocusError::not_found()),
                 };
                 drop(state);
-                self.finish_client_focus(focus.source_version_id, generation, result);
+                self.finish_client_focus(focus.source_version_id, run, result);
                 return;
             }
             if target_client.discarded_or_frozen {
@@ -326,7 +326,7 @@ impl ServiceWorkerRuntimeService {
                     result: Err(ServiceWorkerClientFocusError::inactive()),
                 };
                 drop(state);
-                self.finish_client_focus(focus.source_version_id, generation, result);
+                self.finish_client_focus(focus.source_version_id, run, result);
                 return;
             }
             (
@@ -345,7 +345,7 @@ impl ServiceWorkerRuntimeService {
                 target,
                 request_id: focus.request_id,
                 source_version_id: focus.source_version_id,
-                source_generation: generation,
+                source_run: run,
             },
         );
     }
@@ -356,7 +356,7 @@ impl ServiceWorkerRuntimeService {
     ) {
         self.finish_client_focus(
             completion.source_version_id,
-            completion.source_generation,
+            completion.source_run,
             ServiceWorkerClientFocusResult {
                 request_id: completion.request_id,
                 result: completion.result,
@@ -367,14 +367,14 @@ impl ServiceWorkerRuntimeService {
     pub(super) fn finish_clients_open_window_requested(
         &self,
         open_window: ServiceWorkerClientsOpenWindow,
-        generation: u64,
+        run: RendererServiceWorkerRunIdentity,
     ) {
         let delivery = {
             let state = self.inner.state.lock();
             let Some(source_version) = state.versions.get(&open_window.source_version_id) else {
                 return;
             };
-            if source_version.generation != generation {
+            if source_version.run != run {
                 return;
             }
             if source_version.lifecycle_state == ServiceWorkerVersionLifecycleState::Redundant {
@@ -403,7 +403,7 @@ impl ServiceWorkerRuntimeService {
                     )),
                 };
                 drop(state);
-                self.finish_clients_open_window(open_window.source_version_id, generation, result);
+                self.finish_clients_open_window(open_window.source_version_id, run, result);
                 return;
             };
             (
@@ -422,7 +422,7 @@ impl ServiceWorkerRuntimeService {
                 host,
                 request_id: open_window.request_id,
                 source_version_id: open_window.source_version_id,
-                source_generation: generation,
+                source_run: run,
                 url: open_window.url,
             },
         );
@@ -434,7 +434,7 @@ impl ServiceWorkerRuntimeService {
     ) {
         self.finish_clients_open_window(
             completion.source_version_id,
-            completion.source_generation,
+            completion.source_run,
             ServiceWorkerClientsOpenWindowResult {
                 request_id: completion.request_id,
                 result: completion.result,
@@ -521,7 +521,7 @@ impl ServiceWorkerRuntimeService {
     fn finish_client_navigate(
         &self,
         version_id: ServiceWorkerVersionId,
-        generation: u64,
+        run: RendererServiceWorkerRunIdentity,
         result: ServiceWorkerClientNavigateResult,
     ) {
         let host = {
@@ -529,7 +529,7 @@ impl ServiceWorkerRuntimeService {
             let Some(version) = state.versions.get(&version_id) else {
                 return;
             };
-            if version.generation != generation {
+            if version.run != run {
                 return;
             }
             match &version.running_state {
@@ -546,7 +546,7 @@ impl ServiceWorkerRuntimeService {
     fn finish_client_focus(
         &self,
         version_id: ServiceWorkerVersionId,
-        generation: u64,
+        run: RendererServiceWorkerRunIdentity,
         result: ServiceWorkerClientFocusResult,
     ) {
         let host = {
@@ -554,7 +554,7 @@ impl ServiceWorkerRuntimeService {
             let Some(version) = state.versions.get(&version_id) else {
                 return;
             };
-            if version.generation != generation {
+            if version.run != run {
                 return;
             }
             match &version.running_state {
@@ -571,7 +571,7 @@ impl ServiceWorkerRuntimeService {
     fn finish_clients_open_window(
         &self,
         version_id: ServiceWorkerVersionId,
-        generation: u64,
+        run: RendererServiceWorkerRunIdentity,
         result: ServiceWorkerClientsOpenWindowResult,
     ) {
         let host = {
@@ -579,7 +579,7 @@ impl ServiceWorkerRuntimeService {
             let Some(version) = state.versions.get(&version_id) else {
                 return;
             };
-            if version.generation != generation {
+            if version.run != run {
                 return;
             }
             match &version.running_state {

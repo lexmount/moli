@@ -3,7 +3,7 @@ use super::*;
 impl ServiceWorkerRuntimeService {
     pub(super) fn begin_version_event_locked(version: &mut ServiceWorkerVersion) {
         version.in_flight_event_count += 1;
-        version.idle_generation = version.idle_generation.saturating_add(1);
+        version.idle_timeout_token = None;
     }
 
     pub(super) fn maybe_schedule_idle_timeout_locked(
@@ -20,7 +20,7 @@ impl ServiceWorkerRuntimeService {
             return None;
         }
         let registration_id = version.registration_id;
-        let generation = version.generation;
+        let run = version.run.clone();
         let ServiceWorkerVersionRunningState::Running { host } = &version.running_state else {
             return None;
         };
@@ -34,11 +34,12 @@ impl ServiceWorkerRuntimeService {
         {
             return None;
         }
-        version.idle_generation = version.idle_generation.saturating_add(1);
+        let token = ServiceWorkerIdleTimeoutToken::fresh();
+        version.idle_timeout_token = Some(token.clone());
         Some(ServiceWorkerIdleTimeout {
             version_id,
-            generation,
-            idle_generation: version.idle_generation,
+            run,
+            token,
         })
     }
 
@@ -53,7 +54,7 @@ impl ServiceWorkerRuntimeService {
                     self.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
                         event_id: event.event_id,
                         version_id: event.version_id,
-                        generation: event.generation,
+                        run: event.run.clone(),
                         result: ServiceWorkerFetchResult::Failure(message.to_owned()),
                     });
                 }
@@ -61,7 +62,7 @@ impl ServiceWorkerRuntimeService {
                     self.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
                         event_id: event.event_id,
                         version_id: event.version_id,
-                        generation: event.generation,
+                        run: event.run.clone(),
                         kind: event.kind,
                         result: Err(message.to_owned()),
                     });
@@ -70,7 +71,7 @@ impl ServiceWorkerRuntimeService {
                     self.finish_message_event_completed(ServiceWorkerMessageCompletion {
                         event_id: event.event_id,
                         version_id: event.version_id,
-                        generation: event.generation,
+                        run: event.run.clone(),
                         result: Err(message.to_owned()),
                     });
                 }
@@ -78,7 +79,7 @@ impl ServiceWorkerRuntimeService {
                     self.finish_notification_event_completed(ServiceWorkerNotificationCompletion {
                         event_id: event.event_id,
                         version_id: event.version_id,
-                        generation: event.generation,
+                        run: event.run.clone(),
                         result: Err(message.to_owned()),
                     });
                 }
@@ -86,7 +87,7 @@ impl ServiceWorkerRuntimeService {
                     self.finish_push_event_completed(ServiceWorkerPushCompletion {
                         event_id: event.event_id,
                         version_id: event.version_id,
-                        generation: event.generation,
+                        run: event.run.clone(),
                         result: Err(message.to_owned()),
                     });
                 }
@@ -95,7 +96,7 @@ impl ServiceWorkerRuntimeService {
                         event_id: event.event_id,
                         registration_id: event.registration_id,
                         version_id: event.version_id,
-                        generation: event.generation,
+                        run: event.run.clone(),
                         tag: event.tag,
                         result: Err(message.to_owned()),
                     });
@@ -106,7 +107,7 @@ impl ServiceWorkerRuntimeService {
                             event_id: event.event_id,
                             registration_id: event.registration_id,
                             version_id: event.version_id,
-                            generation: event.generation,
+                            run: event.run.clone(),
                             tag: event.tag,
                             result: Err(message.to_owned()),
                         },
@@ -127,7 +128,7 @@ impl ServiceWorkerRuntimeService {
         self.enqueue_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
             event_id: event.event_id,
             version_id: event.version_id,
-            generation: event.generation,
+            run: event.run.clone(),
             kind: event.kind,
             result: Err(
                 "service worker lifecycle dispatch failed: worker is not running".to_owned(),
@@ -327,7 +328,7 @@ impl ServiceWorkerRuntimeService {
                         ServiceWorkerLifecycleEvent {
                             event_id,
                             version_id,
-                            generation: version.generation,
+                            run: version.run.clone(),
                             kind,
                         },
                     )))
@@ -341,21 +342,21 @@ impl ServiceWorkerRuntimeService {
                         ServiceWorkerPendingStartEvent::Lifecycle(ServiceWorkerLifecycleEvent {
                             event_id,
                             version_id,
-                            generation: version.generation,
+                            run: version.run.clone(),
                             kind,
                         }),
                     );
                     Some(ServiceWorkerLifecycleStart::Queued)
                 }
                 LifecycleRunningAction::StartStopped => {
-                    version.generation = version.generation.saturating_add(1);
+                    version.run = RendererServiceWorkerRunIdentity::fresh();
                     version.last_start_error = None;
-                    let generation = version.generation;
-                    let host = RendererServiceWorkerHost::new_loading(version_id, generation);
+                    let run = version.run.clone();
+                    let host = RendererServiceWorkerHost::new_loading(version_id, &run);
                     let params = version.launch_config.to_launch_params(
                         registration_id,
                         version_id,
-                        generation,
+                        &run,
                         version.script_url.clone(),
                         scope_url,
                         storage_key,
@@ -369,7 +370,7 @@ impl ServiceWorkerRuntimeService {
                         ServiceWorkerPendingStartEvent::Lifecycle(ServiceWorkerLifecycleEvent {
                             event_id,
                             version_id,
-                            generation,
+                            run,
                             kind,
                         }),
                     );
@@ -413,33 +414,33 @@ impl ServiceWorkerRuntimeService {
             ServiceWorkerVersionRunningState::Running { host } if host.has_running_worker() => {
                 let host = host.clone();
                 Self::begin_version_event_locked(version);
-                event.generation = version.generation;
+                event.run = version.run.clone();
                 ServiceWorkerMessageStart::Dispatch(Box::new((host, event)))
             }
             ServiceWorkerVersionRunningState::Starting { .. } => {
                 Self::begin_version_event_locked(version);
-                event.generation = version.generation;
+                event.run = version.run.clone();
                 version
                     .pending_start_events
                     .push_back(ServiceWorkerPendingStartEvent::Message(event));
                 ServiceWorkerMessageStart::Queued
             }
             ServiceWorkerVersionRunningState::Stopped => {
-                version.generation = version.generation.saturating_add(1);
+                version.run = RendererServiceWorkerRunIdentity::fresh();
                 version.last_start_error = None;
-                let generation = version.generation;
-                let host = RendererServiceWorkerHost::new_loading(event.version_id, generation);
+                let run = version.run.clone();
+                let host = RendererServiceWorkerHost::new_loading(event.version_id, &run);
                 let params = version.launch_config.to_launch_params(
                     registration_id,
                     event.version_id,
-                    generation,
+                    &run,
                     version.script_url.clone(),
                     scope_url,
                     storage_key,
                     version.script_kind,
                 );
                 Self::begin_version_event_locked(version);
-                event.generation = generation;
+                event.run = run;
                 version
                     .pending_start_events
                     .push_back(ServiceWorkerPendingStartEvent::Message(event));
@@ -477,33 +478,33 @@ impl ServiceWorkerRuntimeService {
             ServiceWorkerVersionRunningState::Running { host } if host.has_running_worker() => {
                 let host = host.clone();
                 Self::begin_version_event_locked(version);
-                event.generation = version.generation;
+                event.run = version.run.clone();
                 ServiceWorkerNotificationStart::Dispatch(Box::new((host, event)))
             }
             ServiceWorkerVersionRunningState::Starting { .. } => {
                 Self::begin_version_event_locked(version);
-                event.generation = version.generation;
+                event.run = version.run.clone();
                 version
                     .pending_start_events
                     .push_back(ServiceWorkerPendingStartEvent::Notification(event));
                 ServiceWorkerNotificationStart::Queued
             }
             ServiceWorkerVersionRunningState::Stopped => {
-                version.generation = version.generation.saturating_add(1);
+                version.run = RendererServiceWorkerRunIdentity::fresh();
                 version.last_start_error = None;
-                let generation = version.generation;
-                let host = RendererServiceWorkerHost::new_loading(event.version_id, generation);
+                let run = version.run.clone();
+                let host = RendererServiceWorkerHost::new_loading(event.version_id, &run);
                 let params = version.launch_config.to_launch_params(
                     registration_id,
                     event.version_id,
-                    generation,
+                    &run,
                     version.script_url.clone(),
                     scope_url,
                     storage_key,
                     version.script_kind,
                 );
                 Self::begin_version_event_locked(version);
-                event.generation = generation;
+                event.run = run;
                 version
                     .pending_start_events
                     .push_back(ServiceWorkerPendingStartEvent::Notification(event));
@@ -543,33 +544,33 @@ impl ServiceWorkerRuntimeService {
             ServiceWorkerVersionRunningState::Running { host } if host.has_running_worker() => {
                 let host = host.clone();
                 Self::begin_version_event_locked(version);
-                event.generation = version.generation;
+                event.run = version.run.clone();
                 ServiceWorkerPushStart::Dispatch(Box::new((host, event)))
             }
             ServiceWorkerVersionRunningState::Starting { .. } => {
                 Self::begin_version_event_locked(version);
-                event.generation = version.generation;
+                event.run = version.run.clone();
                 version
                     .pending_start_events
                     .push_back(ServiceWorkerPendingStartEvent::Push(event));
                 ServiceWorkerPushStart::Queued
             }
             ServiceWorkerVersionRunningState::Stopped => {
-                version.generation = version.generation.saturating_add(1);
+                version.run = RendererServiceWorkerRunIdentity::fresh();
                 version.last_start_error = None;
-                let generation = version.generation;
-                let host = RendererServiceWorkerHost::new_loading(event.version_id, generation);
+                let run = version.run.clone();
+                let host = RendererServiceWorkerHost::new_loading(event.version_id, &run);
                 let params = version.launch_config.to_launch_params(
                     registration_id,
                     event.version_id,
-                    generation,
+                    &run,
                     version.script_url.clone(),
                     scope_url,
                     storage_key,
                     version.script_kind,
                 );
                 Self::begin_version_event_locked(version);
-                event.generation = generation;
+                event.run = run;
                 version
                     .pending_start_events
                     .push_back(ServiceWorkerPendingStartEvent::Push(event));
@@ -607,33 +608,33 @@ impl ServiceWorkerRuntimeService {
             ServiceWorkerVersionRunningState::Running { host } if host.has_running_worker() => {
                 let host = host.clone();
                 Self::begin_version_event_locked(version);
-                event.generation = version.generation;
+                event.run = version.run.clone();
                 ServiceWorkerSyncStart::Dispatch(Box::new((host, event)))
             }
             ServiceWorkerVersionRunningState::Starting { .. } => {
                 Self::begin_version_event_locked(version);
-                event.generation = version.generation;
+                event.run = version.run.clone();
                 version
                     .pending_start_events
                     .push_back(ServiceWorkerPendingStartEvent::Sync(event));
                 ServiceWorkerSyncStart::Queued
             }
             ServiceWorkerVersionRunningState::Stopped => {
-                version.generation = version.generation.saturating_add(1);
+                version.run = RendererServiceWorkerRunIdentity::fresh();
                 version.last_start_error = None;
-                let generation = version.generation;
-                let host = RendererServiceWorkerHost::new_loading(event.version_id, generation);
+                let run = version.run.clone();
+                let host = RendererServiceWorkerHost::new_loading(event.version_id, &run);
                 let params = version.launch_config.to_launch_params(
                     registration_id,
                     event.version_id,
-                    generation,
+                    &run,
                     version.script_url.clone(),
                     scope_url,
                     storage_key,
                     version.script_kind,
                 );
                 Self::begin_version_event_locked(version);
-                event.generation = generation;
+                event.run = run;
                 version
                     .pending_start_events
                     .push_back(ServiceWorkerPendingStartEvent::Sync(event));
@@ -671,33 +672,33 @@ impl ServiceWorkerRuntimeService {
             ServiceWorkerVersionRunningState::Running { host } if host.has_running_worker() => {
                 let host = host.clone();
                 Self::begin_version_event_locked(version);
-                event.generation = version.generation;
+                event.run = version.run.clone();
                 ServiceWorkerPeriodicSyncStart::Dispatch(Box::new((host, event)))
             }
             ServiceWorkerVersionRunningState::Starting { .. } => {
                 Self::begin_version_event_locked(version);
-                event.generation = version.generation;
+                event.run = version.run.clone();
                 version
                     .pending_start_events
                     .push_back(ServiceWorkerPendingStartEvent::PeriodicSync(event));
                 ServiceWorkerPeriodicSyncStart::Queued
             }
             ServiceWorkerVersionRunningState::Stopped => {
-                version.generation = version.generation.saturating_add(1);
+                version.run = RendererServiceWorkerRunIdentity::fresh();
                 version.last_start_error = None;
-                let generation = version.generation;
-                let host = RendererServiceWorkerHost::new_loading(event.version_id, generation);
+                let run = version.run.clone();
+                let host = RendererServiceWorkerHost::new_loading(event.version_id, &run);
                 let params = version.launch_config.to_launch_params(
                     registration_id,
                     event.version_id,
-                    generation,
+                    &run,
                     version.script_url.clone(),
                     scope_url,
                     storage_key,
                     version.script_kind,
                 );
                 Self::begin_version_event_locked(version);
-                event.generation = generation;
+                event.run = run;
                 version
                     .pending_start_events
                     .push_back(ServiceWorkerPendingStartEvent::PeriodicSync(event));

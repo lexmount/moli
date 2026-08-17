@@ -15,7 +15,7 @@ use super::ids::ServiceWorkerVersionId;
 ///
 /// A ServiceWorker may stop and restart many V8 runs while its version target
 /// remains alive. Consequently the stream lifetime follows the version, not a
-/// worker thread or run generation: `Created` opens it, run/status events append
+/// worker thread or run run: `Created` opens it, run/status events append
 /// to it, and `Destroyed` is its final record before closure.
 pub(super) struct ServiceWorkerTargetOutputStreams {
     browser_context_runtime_id: RendererBrowserContextRuntimeId,

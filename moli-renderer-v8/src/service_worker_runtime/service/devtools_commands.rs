@@ -318,14 +318,14 @@ impl ServiceWorkerRuntimeService {
                     return Ok(false);
                 }
                 ServiceWorkerVersionRunningState::Stopped => {
-                    version.generation = version.generation.saturating_add(1);
+                    version.run = RendererServiceWorkerRunIdentity::fresh();
                     version.last_start_error = None;
-                    let generation = version.generation;
-                    let host = RendererServiceWorkerHost::new_loading(version_id, generation);
+                    let run = version.run.clone();
+                    let host = RendererServiceWorkerHost::new_loading(version_id, &run);
                     let params = version.launch_config.to_launch_params(
                         registration_id,
                         version_id,
-                        generation,
+                        &run,
                         version.script_url.clone(),
                         registration_scope_url,
                         registration_storage_key,
@@ -533,7 +533,7 @@ impl ServiceWorkerRuntimeService {
             let event = ServiceWorkerPushEvent {
                 event_id,
                 version_id,
-                generation: version.generation,
+                run: version.run.clone(),
                 data,
             };
             self.start_push_event_locked(&mut state, registration_id, scope_url, storage_key, event)
@@ -578,7 +578,7 @@ impl ServiceWorkerRuntimeService {
                 event_id,
                 registration_id,
                 version_id,
-                generation: version.generation,
+                run: version.run.clone(),
                 tag,
                 last_chance,
             };
@@ -623,7 +623,7 @@ impl ServiceWorkerRuntimeService {
                 event_id,
                 registration_id,
                 version_id,
-                generation: version.generation,
+                run: version.run.clone(),
                 tag,
             };
             self.start_periodic_sync_event_locked(
@@ -676,7 +676,7 @@ fn stop_worker_version_locked(
     let host = {
         let version = state.versions.get_mut(&version_id)?;
         let host = version.running_state.take_host_for_shutdown()?;
-        version.idle_generation = version.idle_generation.saturating_add(1);
+        version.idle_timeout_token = None;
         host
     };
     state.record_target_stopped(version_id, host.run_identity(), reason);

@@ -24,7 +24,7 @@ impl ServiceWorkerRuntimeService {
             };
             let mut should_update_lifecycle = false;
             if let Some(version) = state.versions.get_mut(&job.version_id)
-                && version.generation == job.generation
+                && job.is_bound_to_run(&version.run)
             {
                 let activation_len_before = version.pending_activation_fetch_events.len();
                 version
@@ -48,25 +48,25 @@ impl ServiceWorkerRuntimeService {
             }
             let stream_cancel = job.streaming_body_source_id.and_then(|body_source_id| {
                 let version = state.versions.get(&job.version_id)?;
-                if version.generation != job.generation {
+                if !job.is_bound_to_run(&version.run) {
                     return None;
                 }
                 let ServiceWorkerVersionRunningState::Running { host } = &version.running_state
                 else {
                     return None;
                 };
-                (host.version_id() == job.version_id && host.generation() == job.generation)
+                (host.version_id() == job.version_id && job.is_bound_to_run(&host.run_identity()))
                     .then_some((host.clone(), event_id, body_source_id))
             });
             let request_signal_abort = state.versions.get(&job.version_id).and_then(|version| {
-                if version.generation != job.generation {
+                if !job.is_bound_to_run(&version.run) {
                     return None;
                 }
                 let ServiceWorkerVersionRunningState::Running { host } = &version.running_state
                 else {
                     return None;
                 };
-                (host.version_id() == job.version_id && host.generation() == job.generation)
+                (host.version_id() == job.version_id && job.is_bound_to_run(&host.run_identity()))
                     .then_some((host.clone(), event_id))
             });
             job.cancel_handle.cancel();
@@ -91,7 +91,7 @@ impl ServiceWorkerRuntimeService {
                 progress.extend(activation_progress);
                 Some((
                     job.version_id,
-                    job.generation,
+                    job.run_identity().clone(),
                     job,
                     idle_timeout,
                     progress,
@@ -101,7 +101,7 @@ impl ServiceWorkerRuntimeService {
             } else {
                 Some((
                     job.version_id,
-                    job.generation,
+                    job.run_identity().clone(),
                     job,
                     None,
                     Vec::new(),
@@ -112,7 +112,7 @@ impl ServiceWorkerRuntimeService {
         };
         let Some((
             version_id,
-            generation,
+            run,
             job,
             idle_timeout,
             lifecycle_progress,
@@ -131,7 +131,7 @@ impl ServiceWorkerRuntimeService {
         let abort_result =
             ServiceWorkerFetchResult::Failure(crate::network_host::ABORTED_ERROR_TEXT.to_owned());
         let diagnostic = service_worker_fetch_diagnostic_from_job_result(&job, &abort_result);
-        self.enqueue_target_fetch_diagnostic(version_id, generation, diagnostic);
+        self.enqueue_target_fetch_diagnostic(version_id, run, diagnostic);
         for progress in lifecycle_progress {
             self.run_lifecycle_progress(progress);
         }
@@ -143,14 +143,14 @@ impl ServiceWorkerRuntimeService {
 
     pub(super) fn finish_fetch_event_completed(&self, completion: ServiceWorkerFetchCompletion) {
         let version_id = completion.version_id;
-        let generation = completion.generation;
+        let run = completion.run;
         let (job, result, idle_timeout, lifecycle_progress) = {
             let mut state = self.inner.state.lock();
             {
                 let Some(version) = state.versions.get(&version_id) else {
                     return;
                 };
-                if version.generation != generation {
+                if version.run != run {
                     return;
                 }
             }
@@ -174,7 +174,7 @@ impl ServiceWorkerRuntimeService {
             (job, completion.result, idle_timeout, progress)
         };
         let diagnostic = service_worker_fetch_diagnostic_from_job_result(&job, &result);
-        self.enqueue_target_fetch_diagnostic(version_id, generation, diagnostic);
+        self.enqueue_target_fetch_diagnostic(version_id, run, diagnostic);
         for progress in lifecycle_progress {
             self.run_lifecycle_progress(progress);
         }
@@ -203,7 +203,7 @@ impl ServiceWorkerRuntimeService {
             let Some(version) = state.versions.get_mut(&completion.version_id) else {
                 return;
             };
-            if version.generation != completion.generation {
+            if version.run != completion.run {
                 return;
             }
             version.in_flight_event_count = version.in_flight_event_count.saturating_sub(1);
@@ -245,7 +245,7 @@ impl ServiceWorkerRuntimeService {
             let Some(version) = state.versions.get_mut(&completion.version_id) else {
                 return;
             };
-            if version.generation != completion.generation {
+            if version.run != completion.run {
                 return;
             }
             version.in_flight_event_count = version.in_flight_event_count.saturating_sub(1);
@@ -284,7 +284,7 @@ impl ServiceWorkerRuntimeService {
             let Some(version) = state.versions.get_mut(&completion.version_id) else {
                 return;
             };
-            if version.generation != completion.generation {
+            if version.run != completion.run {
                 return;
             }
             version.in_flight_event_count = version.in_flight_event_count.saturating_sub(1);
@@ -328,7 +328,7 @@ impl ServiceWorkerRuntimeService {
             let Some(version) = state.versions.get_mut(&completion.version_id) else {
                 return;
             };
-            if version.generation != completion.generation {
+            if version.run != completion.run {
                 return;
             }
             version.in_flight_event_count = version.in_flight_event_count.saturating_sub(1);
@@ -441,7 +441,7 @@ impl ServiceWorkerRuntimeService {
             let Some(version) = state.versions.get_mut(&completion.version_id) else {
                 return;
             };
-            if version.generation != completion.generation
+            if version.run != completion.run
                 || version.registration_id != completion.registration_id
             {
                 return;

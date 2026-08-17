@@ -6,7 +6,10 @@ use url::Url;
 use crate::{
     network::{BrowserResourceRuntimeBinding, ResourceRequestClient},
     page_task_queue::RendererPageServiceWorkerTaskSender,
-    runtime::{RendererBrowserContextRuntime, RendererWorkerContextRuntime},
+    runtime::{
+        RendererBrowserContextRuntime, RendererServiceWorkerRunIdentity,
+        RendererWorkerContextRuntime,
+    },
     types::{ServiceWorkerRegisterCompletion, ServiceWorkerUnregisterCompletion},
     worker::{WorkerNetworkPolicy, WorkerScriptKind},
 };
@@ -23,7 +26,7 @@ use super::{
 pub(crate) struct ServiceWorkerLaunchParams {
     pub(super) registration_id: ServiceWorkerRegistrationId,
     pub(super) version_id: ServiceWorkerVersionId,
-    pub(super) generation: u64,
+    pub(super) run: RendererServiceWorkerRunIdentity,
     pub(super) script_url: Url,
     pub(super) scope_url: Url,
     pub(super) storage_key: String,
@@ -745,7 +748,7 @@ impl ServiceWorkerVersionLaunchConfig {
         &self,
         registration_id: ServiceWorkerRegistrationId,
         version_id: ServiceWorkerVersionId,
-        generation: u64,
+        run: &RendererServiceWorkerRunIdentity,
         script_url: Url,
         scope_url: Url,
         storage_key: String,
@@ -754,7 +757,7 @@ impl ServiceWorkerVersionLaunchConfig {
         ServiceWorkerLaunchParams {
             registration_id,
             version_id,
-            generation,
+            run: run.clone(),
             script_url,
             scope_url,
             storage_key,

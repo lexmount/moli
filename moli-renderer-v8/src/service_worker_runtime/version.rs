@@ -1,8 +1,14 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    sync::Arc,
+};
 
 use url::Url;
 
-use crate::worker::{WorkerBootstrapFailure, WorkerScriptKind};
+use crate::{
+    runtime::RendererServiceWorkerRunIdentity,
+    worker::{WorkerBootstrapFailure, WorkerScriptKind},
+};
 
 use super::{
     events::{
@@ -16,12 +22,29 @@ use super::{
     script_loading::ServiceWorkerScriptResource,
 };
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(super) struct ServiceWorkerIdleTimeout {
     pub(super) version_id: ServiceWorkerVersionId,
-    pub(super) generation: u64,
-    pub(super) idle_generation: u64,
+    pub(super) run: RendererServiceWorkerRunIdentity,
+    pub(super) token: ServiceWorkerIdleTimeoutToken,
 }
+
+#[derive(Clone, Debug)]
+pub(super) struct ServiceWorkerIdleTimeoutToken(Arc<()>);
+
+impl ServiceWorkerIdleTimeoutToken {
+    pub(super) fn fresh() -> Self {
+        Self(Arc::new(()))
+    }
+}
+
+impl PartialEq for ServiceWorkerIdleTimeoutToken {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for ServiceWorkerIdleTimeoutToken {}
 
 #[derive(Debug)]
 pub(super) struct ServiceWorkerVersion {
@@ -42,8 +65,8 @@ pub(super) struct ServiceWorkerVersion {
     pub(super) pending_start_events: VecDeque<ServiceWorkerPendingStartEvent>,
     pub(super) pending_activation_fetch_events: VecDeque<ServiceWorkerFetchEvent>,
     pub(super) in_flight_event_count: usize,
-    pub(super) generation: u64,
-    pub(super) idle_generation: u64,
+    pub(super) run: RendererServiceWorkerRunIdentity,
+    pub(super) idle_timeout_token: Option<ServiceWorkerIdleTimeoutToken>,
     pub(super) skip_waiting_requested: bool,
     pub(super) clients_claim_requested: bool,
     pub(super) last_start_error: Option<String>,

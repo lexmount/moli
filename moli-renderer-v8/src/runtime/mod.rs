@@ -689,7 +689,7 @@ impl PageVmFollowedNavigationMetadata {
                 crate::types::ServiceWorkerClientNavigateCompletion {
                     request_id: continuation.request_id,
                     source_version_id: continuation.source_version_id,
-                    source_generation: continuation.source_generation,
+                    source_run: continuation.source_run,
                     result: Err(
                         crate::service_worker_runtime::ServiceWorkerClientNavigateError::type_error(
                             message,
