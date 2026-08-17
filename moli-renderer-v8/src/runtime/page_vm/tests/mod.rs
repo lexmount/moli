@@ -128,6 +128,7 @@ mod history_traversal;
 mod image_load_event;
 mod indexed_db;
 mod inline_svg_paint;
+mod inline_wrap;
 mod internal_loading_completion;
 mod intrinsic_block_sizing;
 mod intrinsic_percentage_resolution;
