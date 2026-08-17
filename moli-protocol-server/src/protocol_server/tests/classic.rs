@@ -1163,8 +1163,12 @@ async fn webdriver_classic_element_reference_owner_rejects_forged_and_stales_aft
         .as_str()
         .expect("classic session id");
 
-    let first_url = classic_data_url("<body><main id='target'>first</main></body>");
-    let second_url = classic_data_url("<body><main id='target'>second</main></body>");
+    let second_url = classic_data_url(
+        "<body><a id='navigate' href='#'>navigate</a><main id='target'>second</main></body>",
+    );
+    let first_url = classic_data_url(&format!(
+        "<body><a id='navigate' href='{second_url}'>navigate</a><main id='target'>first</main></body>"
+    ));
     let _ = classic_request_json_with_body(
         app.clone(),
         Method::POST,
@@ -1202,13 +1206,14 @@ async fn webdriver_classic_element_reference_owner_rejects_forged_and_stales_aft
     assert_eq!(forged_owner_status, StatusCode::NOT_FOUND);
     assert_eq!(forged_owner["value"]["error"], json!("no such element"));
 
-    let _ = classic_request_json_with_body(
+    let navigate_link_id = classic_find_css_element_id(app.clone(), session_id, "#navigate").await;
+    let clicked = classic_request_json(
         app.clone(),
         Method::POST,
-        &format!("/session/{session_id}/url"),
-        json!({ "url": second_url }),
+        &format!("/session/{session_id}/element/{navigate_link_id}/click"),
     )
     .await;
+    assert_eq!(clicked, json!({ "value": null }));
     let (stale_status, stale) = classic_request_status_and_json(
         app.clone(),
         Method::GET,

@@ -517,11 +517,11 @@ pub(crate) use site_data_manager_surface::{
     BrowserContextReservedSiteDataOwnerState, BrowserContextSiteDataManagerOwnerState,
 };
 pub use state::{
-    BackgroundTarget, BrowserContext, BrowserWindowBounds, DocumentStartScript, DownloadNavigation,
-    EmulatedDeviceMetrics, EmulatedGeolocationOverride, EmulatedGeolocationOverrideState,
-    EmulatedMediaOverrides, IsolatedWorldDefinition, LoadedNavigation, NavigationDispatchState,
-    NavigationLoadOutcome, NavigationRequestLoadPolicy, PageNavigationHistoryEntry,
-    ParkedFetchState, ParkedNetworkArtifacts, ParkedPageSessionState,
+    BackgroundTarget, BrowserContext, BrowserWindowBounds, DevToolsPageResidenceIdentity,
+    DocumentStartScript, DownloadNavigation, EmulatedDeviceMetrics, EmulatedGeolocationOverride,
+    EmulatedGeolocationOverrideState, EmulatedMediaOverrides, IsolatedWorldDefinition,
+    LoadedNavigation, NavigationDispatchState, NavigationLoadOutcome, NavigationRequestLoadPolicy,
+    PageNavigationHistoryEntry, ParkedFetchState, ParkedNetworkArtifacts, ParkedPageSessionState,
     PendingNavigationHistoryUpdate, RuntimeBindingDefinition, TargetInfo, URL_BASE,
 };
 pub(crate) use state::{
@@ -2035,7 +2035,9 @@ impl CdpConnection {
         context: &DevToolsCommandContext,
     ) -> Option<CommandOwnerScope> {
         if let Some(target_id) = context.target_id.as_ref() {
-            let route = self.target_session_route_for_target_id(target_id.as_str())?;
+            let route = self
+                .target_session_route_for_target_id(target_id.as_str())
+                .or_else(|| self.target_session_route_for_child_frame_id(target_id.as_str()))?;
             return Some(CommandOwnerScope::from_session_and_owner_route(
                 None,
                 Some(route),
@@ -2048,6 +2050,21 @@ impl CdpConnection {
                 .map(|session_id| session_id.as_str()),
             None,
         ))
+    }
+
+    /// Captures the exact target Page currently addressed by a protocol-neutral
+    /// command context. The identity remains stable across Document replacement
+    /// within that Page and changes when the Page itself is replaced.
+    pub fn page_residence_identity_for_devtools_context(
+        &mut self,
+        context: &DevToolsCommandContext,
+    ) -> Option<DevToolsPageResidenceIdentity> {
+        let owner_scope = self.command_owner_scope_for_devtools_context(context)?;
+        let session_id = owner_scope.session_id().map(str::to_owned);
+        let mut route_scope = owner_scope.enter(self);
+        route_scope
+            .conn_mut()
+            .target_page_residence_identity_for_session(session_id.as_deref())
     }
 
     pub fn capture_devtools_document_lifecycle_wait_key(

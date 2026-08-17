@@ -78,8 +78,8 @@ impl RendererPageResidenceIdentity {
 /// so work emitted before installation and work emitted after commit retain the
 /// same identity without predicting a numeric generation. A target without a
 /// current or reserved Page has no Page residence identity.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TargetPageResidenceIdentity {
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
+pub struct TargetPageResidenceIdentity {
     browser_context_id: String,
     target_id: Option<String>,
     page_attachment_id: TargetPageAttachmentId,

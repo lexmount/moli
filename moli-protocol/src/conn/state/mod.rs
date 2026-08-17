@@ -31,6 +31,7 @@ mod tests;
 // Re-export everything so `use super::state::*` paths continue to work.
 
 pub(crate) use attachment_identity::{NavigationRequestId, TargetPageAttachmentId};
+pub use identity::TargetPageResidenceIdentity as DevToolsPageResidenceIdentity;
 pub use identity::URL_BASE;
 pub(crate) use identity::{
     RendererPageResidenceIdentity, TargetIdentityState, TargetPageProtocolAttachmentIdentity,

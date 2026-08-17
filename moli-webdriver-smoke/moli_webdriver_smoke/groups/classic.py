@@ -513,6 +513,10 @@ async def _run_input_navigation_replacement_smoke(
         "Classic input action responds across Page replacement",
     )
     await _wait_for_current_url(client, session_id, destination)
+    _assert_classic_stale_element(
+        lambda: client.get(f"/session/{session_id}/element/{field_id}/name"),
+        "Classic input-navigation source element after Page replacement",
+    )
     assert_true(
         "input navigation complete" in classic_value(client.get(f"/session/{session_id}/source")),
         "Classic input action replacement Page remains usable",

@@ -370,6 +370,71 @@ async fn websocket_bidi_existing_classic_session_shares_classic_runtime_context(
 }
 
 #[tokio::test]
+async fn websocket_bidi_navigation_stales_classic_element_from_replaced_page() {
+    let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
+    let session_id = classic_new_session_on_server(cdp_addr).await;
+    let first_url =
+        classic_data_url_for_bidi_test("<!doctype html><main id='target'>first Page</main>");
+    let second_url =
+        classic_data_url_for_bidi_test("<!doctype html><main id='target'>second Page</main>");
+    let navigated = classic_request_on_server_with_body(
+        cdp_addr,
+        "POST",
+        &format!("/session/{session_id}/url"),
+        json!({ "url": first_url }),
+    )
+    .await;
+    assert_eq!(navigated, json!({ "value": null }));
+    let element = classic_request_on_server_with_body(
+        cdp_addr,
+        "POST",
+        &format!("/session/{session_id}/element"),
+        json!({ "using": "css selector", "value": "#target" }),
+    )
+    .await;
+    let element_id = element["value"]["element-6066-11e4-a52e-4f735466cecf"]
+        .as_str()
+        .expect("Classic element id")
+        .to_owned();
+
+    let mut socket = connect_classic_session_bidi_socket(cdp_addr, &session_id).await;
+    let tree = send_bidi_command(&mut socket, 1, "browsingContext.getTree", json!({})).await;
+    let context_id = tree["result"]["contexts"][0]["context"]
+        .as_str()
+        .expect("attached Classic context id")
+        .to_owned();
+    let bidi_navigation = send_bidi_command(
+        &mut socket,
+        2,
+        "browsingContext.navigate",
+        json!({
+            "context": context_id,
+            "url": second_url,
+            "wait": "complete"
+        }),
+    )
+    .await;
+    assert_eq!(
+        bidi_navigation["type"],
+        json!("success"),
+        "attached BiDi navigation should replace the Classic-owned Page: {bidi_navigation:?}"
+    );
+
+    let (status, stale) = classic_request_status_on_server_with_body(
+        cdp_addr,
+        "GET",
+        &format!("/session/{session_id}/element/{element_id}/text"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, 404);
+    assert_eq!(stale["value"]["error"], json!("stale element reference"));
+
+    let _ = socket.close(None).await;
+    protocol_server.abort();
+}
+
+#[tokio::test]
 async fn websocket_bidi_attached_classic_session_title_waits_for_script_triggered_form_navigation()
 {
     let fixture_app = Router::new()
@@ -19572,6 +19637,46 @@ async fn classic_request_on_server_with_body(
         .map(|(_, body)| body)
         .expect("Classic response body");
     serde_json::from_str(body).expect("Classic response json")
+}
+
+async fn classic_request_status_on_server_with_body(
+    addr: std::net::SocketAddr,
+    method: &str,
+    path: &str,
+    body: serde_json::Value,
+) -> (u16, serde_json::Value) {
+    let mut stream = tokio::net::TcpStream::connect(addr)
+        .await
+        .expect("connect to Classic HTTP server");
+    let body = body.to_string();
+    let request = format!(
+        "{method} {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .expect("write Classic request");
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .await
+        .expect("read Classic response");
+    let response = String::from_utf8(response).expect("Classic response utf-8");
+    let status = response
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|status| status.parse::<u16>().ok())
+        .expect("Classic HTTP status");
+    let body = response
+        .split_once("\r\n\r\n")
+        .map(|(_, body)| body)
+        .expect("Classic response body");
+    (
+        status,
+        serde_json::from_str(body).expect("Classic response json"),
+    )
 }
 
 fn classic_data_url_for_bidi_test(html: &str) -> String {

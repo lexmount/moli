@@ -11,7 +11,7 @@ static NEXT_NAVIGATION_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 /// The id is allocated when renderer Page construction is reserved and remains
 /// stable when that exact Page is installed. It also keys the attachment's
 /// directly terminable residence token.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) struct TargetPageAttachmentId(NonZeroU64);
 
 impl TargetPageAttachmentId {

@@ -15,10 +15,11 @@ use moli_protocol::{
     CdpTargetHostLifecycleObserver, CommandDispatchContext, CompletedCdpCommandDispatch,
     CompletedDeferredMainDocumentLoadCompletion, DeferredMainDocumentLoadCompletionOutputAction,
     DeferredMainDocumentLoadCompletionOutputInterest, DeferredMainDocumentLoadObservationId,
-    DeferredMainDocumentLoadPredecessorCandidate, PageScreencastCaptureCompletion,
-    PageScreencastCaptureStart, PageScreencastRegistration, PageScreencastSubscriptionStatus,
-    ParsedCdpCommand, PendingCdpCommandDispatch, PendingDeferredMainDocumentLoadCompletion,
-    PendingPageScreencastCapture, ProtocolSchedulerWorkKind, RuntimeCommandOutputBarriers,
+    DeferredMainDocumentLoadPredecessorCandidate, DevToolsPageResidenceIdentity,
+    PageScreencastCaptureCompletion, PageScreencastCaptureStart, PageScreencastRegistration,
+    PageScreencastSubscriptionStatus, ParsedCdpCommand, PendingCdpCommandDispatch,
+    PendingDeferredMainDocumentLoadCompletion, PendingPageScreencastCapture,
+    ProtocolSchedulerWorkKind, RuntimeCommandOutputBarriers,
     conn::{RuntimeInspectorResponseReady, RuntimeInspectorResponseReadySender},
     devtools_runtime::{
         DevToolsCommand, DevToolsCommandResult, DevToolsError, DevToolsNavigationWait,
@@ -86,6 +87,11 @@ pub(crate) struct DevToolsCommandExecution {
     pub(crate) protocol_output: ProtocolOutputSequence,
 }
 
+pub(crate) struct DevToolsPageCommandExecution {
+    pub(crate) execution: DevToolsCommandExecution,
+    pub(crate) page_residence: Option<DevToolsPageResidenceIdentity>,
+}
+
 // `Dispatch` is the common, short-lived command-start result. Boxing it only
 // to match the rare no-payload variant would add one allocation to every
 // dispatched protocol command; the bounded stack value is intentional.
@@ -105,6 +111,16 @@ pub(crate) struct CdpScheduler {
     runtime_command_output_barriers: RuntimeCommandOutputBarriers,
     queues: SchedulerQueues,
     page_screencasts: HashMap<Option<String>, PageScreencastSchedule>,
+}
+
+impl CdpScheduler {
+    pub(crate) fn page_residence_identity_for_devtools_context(
+        &mut self,
+        context: &moli_protocol::devtools_runtime::DevToolsCommandContext,
+    ) -> Option<DevToolsPageResidenceIdentity> {
+        self.conn
+            .page_residence_identity_for_devtools_context(context)
+    }
 }
 
 #[derive(Debug)]
@@ -1012,9 +1028,10 @@ impl CdpScheduler {
         command: DevToolsCommand,
     ) -> DevToolsCommandExecution {
         self.execute_devtools_command_with_external_load_wait_and_protocol_messages_inner(
-            receivers, command, None, None,
+            receivers, command, None, None, None,
         )
         .await
+        .execution
     }
 
     pub(crate) async fn execute_devtools_command_with_external_load_wait_and_protocol_messages_background_command_id(
@@ -1028,21 +1045,25 @@ impl CdpScheduler {
             command,
             None,
             background_command_id,
+            None,
         )
         .await
+        .execution
     }
 
-    pub(crate) async fn execute_devtools_command_with_external_load_wait_and_protocol_messages_timeout(
+    pub(crate) async fn execute_devtools_command_with_external_load_wait_and_page_residence(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
         command: DevToolsCommand,
-        timeout: std::time::Duration,
-    ) -> DevToolsCommandExecution {
+        timeout: Option<std::time::Duration>,
+        expected_page: Option<&DevToolsPageResidenceIdentity>,
+    ) -> DevToolsPageCommandExecution {
         self.execute_devtools_command_with_external_load_wait_and_protocol_messages_inner(
             receivers,
             command,
-            Some(timeout),
+            timeout,
             None,
+            expected_page,
         )
         .await
     }
@@ -1053,7 +1074,8 @@ impl CdpScheduler {
         command: DevToolsCommand,
         timeout: Option<std::time::Duration>,
         background_command_id: Option<u64>,
-    ) -> DevToolsCommandExecution {
+        expected_page: Option<&DevToolsPageResidenceIdentity>,
+    ) -> DevToolsPageCommandExecution {
         let navigation_wait = devtools_navigation_wait(&command);
         let navigation_lifecycle_milestone =
             devtools_navigation_lifecycle_milestone(navigation_wait);
@@ -1074,12 +1096,32 @@ impl CdpScheduler {
             Ok(output) => output,
             Err(failure) => {
                 let (protocol_output, error) = failure.into_parts();
-                return DevToolsCommandExecution {
-                    result: Err(error),
-                    protocol_output,
+                return DevToolsPageCommandExecution {
+                    execution: DevToolsCommandExecution {
+                        result: Err(error),
+                        protocol_output,
+                    },
+                    page_residence: None,
                 };
             }
         };
+        // Background navigation completion is deliberately drained before a
+        // command starts. Capture and authorize the Page only after that
+        // drain, so a DOM reference cannot pass a pre-drain check and then be
+        // dispatched to the replacement Page.
+        let page_residence = self.page_residence_identity_for_devtools_context(&navigation_context);
+        if expected_page.is_some_and(|expected| page_residence.as_ref() != Some(expected)) {
+            return DevToolsPageCommandExecution {
+                execution: DevToolsCommandExecution {
+                    result: Err(DevToolsError::new(
+                        moli_protocol::devtools_runtime::DevToolsErrorKind::NoSuchNode,
+                        "DOM reference belongs to a replaced Page",
+                    )),
+                    protocol_output,
+                },
+                page_residence,
+            };
+        }
         let navigation_command_output_start = protocol_output.len();
         let mut execution =
             if runtime_dispatch::devtools_command_uses_interleaved_runtime_dispatch(&command) {
@@ -1278,7 +1320,10 @@ impl CdpScheduler {
         execution
             .protocol_output
             .append(foreground_navigation_network_barrier.finish());
-        execution
+        DevToolsPageCommandExecution {
+            execution,
+            page_residence,
+        }
     }
 
     async fn drain_inflight_background_navigation_before_internal_command(
