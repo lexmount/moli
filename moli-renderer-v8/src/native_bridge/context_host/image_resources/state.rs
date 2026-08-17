@@ -23,17 +23,17 @@ pub(crate) struct ReadyImageForLayout {
     pub(crate) svg: Option<Arc<moli_image::SvgImage>>,
 }
 
-/// Resource sizing data before CSS replaced-element normalization.
+/// Layout-facing resource sizing data before CSS replaced-element
+/// normalization. SVG natural axes remain independently optional.
 ///
-/// SVG natural axes remain independently optional. `concrete_*` is retained
-/// separately for the default-object-size fallback and paint surfaces.
+/// Decoded concrete dimensions are intentionally exposed through
+/// `intrinsic_dimensions()` instead: they serve DOM dimensions and paint, but
+/// are not CSS natural axes or a default natural size.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ImageNaturalSizing {
     pub(crate) width: Option<f32>,
     pub(crate) height: Option<f32>,
     pub(crate) ratio: Option<f32>,
-    pub(crate) concrete_width: f32,
-    pub(crate) concrete_height: f32,
 }
 
 /// Layout-visible state of one element-owned image resource.
@@ -374,7 +374,6 @@ pub(super) fn intrinsic_dimensions(resource: &ReadyImageResource) -> (f32, f32) 
 
 pub(super) fn natural_sizing(resource: &ReadyImageResource) -> ImageNaturalSizing {
     let density = resource_density(resource);
-    let (concrete_width, concrete_height) = intrinsic_dimensions(resource);
     let (width, height, ratio) = match resource.descriptor.decode_metadata {
         super::ImageDecodeMetadata::Raster(metadata) => {
             let width = metadata.width as f32 / density;
@@ -395,8 +394,6 @@ pub(super) fn natural_sizing(resource: &ReadyImageResource) -> ImageNaturalSizin
         width,
         height,
         ratio,
-        concrete_width,
-        concrete_height,
     }
 }
 
@@ -453,8 +450,6 @@ mod tests {
                 width: Some(50.0),
                 height: None,
                 ratio: None,
-                concrete_width: 50.0,
-                concrete_height: 150.0,
             }
         );
     }
