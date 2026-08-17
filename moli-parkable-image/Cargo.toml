@@ -8,5 +8,8 @@ edition = "2024"
 moli-disk-pool = { path = "../moli-disk-pool" }
 parking_lot = "0.12"
 
+[dev-dependencies]
+moli-disk-pool = { path = "../moli-disk-pool", features = ["test-support"] }
+
 [lints]
 workspace = true
