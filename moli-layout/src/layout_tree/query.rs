@@ -52,6 +52,9 @@ pub struct LayoutElementMetrics<N> {
     pub offset_position: LayoutPoint,
     pub offset_size: LayoutSize,
     pub content_size: LayoutSize,
+    /// Layout-dependent CSSOM resolved `width`/`height`, if those properties
+    /// have used values for the source's principal box.
+    pub resolved_size: Option<LayoutSize>,
     pub client_size: LayoutSize,
     pub client_border: LayoutPoint,
     pub scroll_size: LayoutSize,

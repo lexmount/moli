@@ -323,6 +323,13 @@ pub struct LayoutBoxGeometry {
     pub padding_box: LayoutRect,
     pub border_box: LayoutRect,
     pub margin_box: LayoutRect,
+    /// CSSOM resolved `width`/`height` from this layout epoch.
+    ///
+    /// The size is selected from the content or border box using the
+    /// layout-time `box-sizing`, then unzoomed using the same retained
+    /// computed style. `None` means the properties do not have used values
+    /// for this principal box (for example, a non-replaced inline box).
+    pub resolved_size: Option<LayoutSize>,
     pub fragments: Vec<LayoutFragmentId>,
     /// Untransformed border-box origin in document layout coordinates.
     pub layout_origin_in_document: LayoutPoint,

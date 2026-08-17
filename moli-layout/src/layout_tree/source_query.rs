@@ -168,6 +168,7 @@ where
             ),
             offset_size,
             content_size: LayoutSize::new(geometry.content_box.width, geometry.content_box.height),
+            resolved_size: geometry.resolved_size,
             client_size,
             client_border: LayoutPoint::new(
                 geometry.padding_box.x - geometry.border_box.x,

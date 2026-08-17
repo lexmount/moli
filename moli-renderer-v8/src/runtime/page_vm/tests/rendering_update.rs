@@ -2600,8 +2600,8 @@ const canvas = document.getElementById('canvas');
 return [r3.width,r3.height,r4.width,r4.height,hidden.width,hidden.height,canvas.offsetWidth,canvas.offsetHeight].join('|');
 })()"#,
             )?,
-            "20px|auto|auto|50px|90px|45px|600|150",
-            "HTML dimensions must enter computed style per axis, while canvas dimensions remain intrinsic integers",
+            "40px|40px|80px|40px|90px|45px|600|150",
+            "resolved width and height must expose the used border boxes while hidden HTML dimensions remain computed presentation hints",
         );
 
         page_vm
@@ -2615,8 +2615,8 @@ return [r3.width,r3.height,r4.width,r4.height,hidden.width,hidden.height,canvas.
             page_vm.vm_mut().eval(
                 "(() => { const e=document.getElementById('r3'),s=getComputedStyle(e); return `${s.width}|${e.offsetWidth},${e.offsetHeight}`; })()",
             )?,
-            "60px|50,40",
-            "width mutation must recascade the presentation hint before applying max-width and ratio transfer",
+            "50px|50,40",
+            "width mutation must recascade the presentation hint before exposing the max-width-clamped used border box",
         );
 
         page_vm
@@ -2847,17 +2847,45 @@ document.body.innerHTML = `
         page_vm.vm_mut().eval(
             "document.getElementById('icon').classList.add('blue');document.getElementById('shape').setAttribute('x','2');document.getElementById('feishu-time').setAttribute('width','2em');'mutated'",
         )?;
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(220, 190, 1.0))?
+            .expect("the presentation-attribute mutation must publish a layout tree");
         assert_eq!(
             page_vm.vm_mut().eval(
-                "const icon=document.getElementById('feishu-time');const fromAttribute=getComputedStyle(icon).width;icon.classList.add('css-width');const fromCss=getComputedStyle(icon).width;icon.classList.remove('css-width');[fromAttribute,fromCss,getComputedStyle(icon).width].join('|')",
+                "getComputedStyle(document.getElementById('feishu-time')).width",
             )?,
-            "32px|24px|32px",
-            "mutated presentation attributes must recascade and author CSS must override them",
+            "32px",
+            "the published presentation-attribute mutation must update resolved geometry",
         );
+        page_vm
+            .vm_mut()
+            .eval("document.getElementById('feishu-time').classList.add('css-width')")?;
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(220, 190, 1.0))?
+            .expect("the author CSS override must publish a layout tree");
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                "getComputedStyle(document.getElementById('feishu-time')).width",
+            )?,
+            "24px",
+            "author CSS must override the presentation attribute after layout publication",
+        );
+        page_vm
+            .vm_mut()
+            .eval("document.getElementById('feishu-time').classList.remove('css-width')")?;
         let second = page_vm
             .vm_mut()
             .screenshot_layout_snapshot(moli_layout::PaintViewport::new(220, 190, 1.0))?
             .expect("mutated inline SVG fixture must retain a layout root");
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                "getComputedStyle(document.getElementById('feishu-time')).width",
+            )?,
+            "32px",
+            "removing author CSS must reveal the presentation attribute in the next layout",
+        );
         assert_eq!(second.svg_images.len(), 3);
         assert!(second.fragments.iter().any(|fragment| {
             matches!(

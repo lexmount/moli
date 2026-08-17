@@ -691,6 +691,7 @@ fn mock_element_metrics(
         offset_position: LayoutPoint::new(rect.left as f32, rect.top as f32),
         offset_size: size,
         content_size: size,
+        resolved_size: Some(size),
         client_size: size,
         client_border: LayoutPoint::ZERO,
         scroll_size: size,

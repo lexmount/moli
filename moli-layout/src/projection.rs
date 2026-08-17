@@ -326,6 +326,24 @@ where
             let body_uses_viewport_client_metrics =
                 is_body_element && self.world.document_mode == crate::LayoutDocumentMode::Quirks;
             let (layout_x, layout_y) = self.world.global_layout_origin(layout_box_id);
+            let resolved_size = (layout_box.is_css_box()
+                && !matches!(
+                    layout_box.style.display(),
+                    crate::LayoutDisplay::None | crate::LayoutDisplay::Contents
+                ))
+            .then(|| {
+                let box_rect = match layout_box.style.taffy.box_sizing {
+                    taffy::BoxSizing::ContentBox => content_box,
+                    taffy::BoxSizing::BorderBox => border_box,
+                };
+                let unzoom = |value| {
+                    layout_box
+                        .style
+                        .stylo_computed_values()
+                        .map_or(value, |computed| computed.effective_zoom.unzoom(value))
+                };
+                LayoutSize::new(unzoom(box_rect.width), unzoom(box_rect.height))
+            });
             self.boxes.push(LayoutBoxGeometry {
                 id,
                 structural_parent: layout_box
@@ -344,6 +362,7 @@ where
                 padding_box,
                 border_box,
                 margin_box,
+                resolved_size,
                 fragments: Vec::new(),
                 layout_origin_in_document: LayoutPoint::new(layout_x, layout_y),
                 is_body_element,

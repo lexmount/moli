@@ -4948,12 +4948,13 @@ fn computed_display_treats_hidden_attribute_as_none() {
 fn detached_nested_iframe_window_get_computed_style_uses_iframe_width() {
     let mut vm = new_storage_test_vm("https://nested-computed-width.test/");
 
-    let result = vm
+    let before = vm
         .eval(
             r#"
 (() => {
   const appendTarget = document.body || document.documentElement || document;
   const outer = document.createElement('iframe');
+  outer.id = 'nested-computed-outer';
   outer.setAttribute('width', '100');
   appendTarget.appendChild(outer);
   const outerDocument = outer.contentWindow.document;
@@ -4978,18 +4979,33 @@ fn detached_nested_iframe_window_get_computed_style_uses_iframe_width() {
     /\[native code\]/.test(String(value))
   ].join(':');
   const before = innerWindow.getComputedStyle(target).width;
-  outer.setAttribute('width', '200');
-  const after = innerWindow.getComputedStyle(target).width;
-  return `${before}|${after}|${shape}`;
+  return `${before}|${shape}`;
 })()
 "#,
         )
         .expect("nested detached iframe window should expose getComputedStyle");
 
     assert_eq!(
-        result,
-        "100px|200px|function:getComputedStyle:1:true:true:true:true"
+        before,
+        "100px|function:getComputedStyle:1:true:true:true:true"
     );
+
+    vm.eval("document.getElementById('nested-computed-outer').setAttribute('width', '200')")
+        .expect("outer iframe width mutation should evaluate");
+    refresh_layout_for_test(&mut vm);
+
+    let after = vm
+        .eval(
+            r#"
+(() => {
+  const outerDocument = document.getElementById('nested-computed-outer').contentWindow.document;
+  const innerWindow = outerDocument.getElementById('inner').contentWindow;
+  return innerWindow.getComputedStyle(innerWindow.document.querySelector('div')).width;
+})()
+"#,
+        )
+        .expect("nested iframe computed width should observe the published resize");
+    assert_eq!(after, "200px");
 }
 #[test]
 fn detached_iframe_computed_style_keeps_pseudo_and_target_identity() {
@@ -6481,6 +6497,8 @@ fn popup_css_register_property_uses_popup_document_world() {
 
   const popup = open('about:blank');
   globalThis.__styleRegisterPopup = popup;
+  popup.document.documentElement.style.cssText = 'width: 100%; height: 100%;';
+  popup.document.body.style.cssText = 'margin: 0; width: 100%; height: 100%;';
   const popupBody = popup.document.body || popup.document.documentElement || popup.document;
   const target = popup.document.createElement('div');
   target.id = 'popup-register-target';
@@ -9879,11 +9897,13 @@ fn computed_style_resolves_valid_typed_css_math_and_rejects_invalid_unit_algebra
     'calc((20% + 1em) * 0.5)',
     'calc(100px / 1 / 1)'
   ];
-  const values = validWidthValues.map((value) => {
-    target.style.width = 'initial';
-    target.style.width = value;
-    return getComputedStyle(target).width;
+  const widthTargets = validWidthValues.map((value) => {
+    const widthTarget = document.createElement('div');
+    widthTarget.style.width = value;
+    document.body.appendChild(widthTarget);
+    return widthTarget;
   });
+  const values = widthTargets.map((widthTarget) => getComputedStyle(widthTarget).width);
 
   letter.style.letterSpacing = 'calc(1em / 4)';
   values.push(getComputedStyle(letter).letterSpacing);
