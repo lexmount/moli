@@ -1,7 +1,7 @@
 use std::{collections::HashMap, fmt::Debug, hash::Hash, sync::Arc};
 
 use style::Atom;
-use taffy::{Cache, Dimension, Layout, LayoutEnvironment, LogicalStaticPosition, Style};
+use taffy::{Cache, Dimension, Layout, LayoutEnvironment, LogicalStaticPosition, Size, Style};
 
 use crate::{
     LayoutElementSemantics, LayoutError, LayoutPoint, LayoutPseudo, ResolvedLayoutStyle,
@@ -269,6 +269,15 @@ pub struct LayoutBox<N> {
     pub(crate) scroll_offset: LayoutPoint,
     /// Pass-local natural sizing retained once at box construction.
     pub(crate) replaced_context: Option<ReplacedContext>,
+    /// Browser-supplied default intrinsic content-box size for a non-replaced
+    /// native layout object.
+    ///
+    /// Blink exposes the same seam through LayoutBox's
+    /// DefaultIntrinsicContentInlineSize/BlockSize hooks. It lets controls
+    /// retain real inner layout while intrinsic queries account for platform
+    /// content that is not represented by visible descendants (for example,
+    /// the widest option of a closed menu-list select).
+    pub(crate) default_intrinsic_content_size: Size<Option<f32>>,
     pub(crate) replaced_image: Option<crate::LayoutImageResource>,
     pub(crate) css_images: crate::source::LayoutCssImageResources,
     /// Winning collapsed-table edges owned by the table wrapper for this pass.
@@ -939,6 +948,7 @@ where
             outside_list_marker: false,
             scroll_offset: LayoutPoint::ZERO,
             replaced_context: None,
+            default_intrinsic_content_size: Size::NONE,
             replaced_image: None,
             css_images: crate::source::LayoutCssImageResources::default(),
             collapsed_table_borders: None,

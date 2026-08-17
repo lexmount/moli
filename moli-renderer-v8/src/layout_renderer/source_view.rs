@@ -687,10 +687,11 @@ fn html_element_semantics(local_name: &str) -> (LayoutElementCategory, LayoutEle
             FormControl(TextArea),
             Replaced(LayoutReplacedKind::FormControl),
         ),
-        "select" => (
-            FormControl(Select),
-            Replaced(LayoutReplacedKind::FormControl),
-        ),
+        // Selects use non-replaced layout objects: menu lists own
+        // browser-generated inner content while listboxes retain option
+        // descendants. The distinction is observable through CSS Sizing's
+        // aspect-ratio automatic minimum.
+        "select" => (FormControl(Select), Normal),
         "option" => (FormControl(FormOption), Normal),
         "optgroup" => (FormControl(OptionGroup), Normal),
         "fieldset" => (FormControl(FieldSet), Normal),
@@ -820,13 +821,7 @@ mod tests {
                     Replaced(LayoutReplacedKind::FormControl),
                 ),
             ),
-            (
-                "select",
-                (
-                    FormControl(Select),
-                    Replaced(LayoutReplacedKind::FormControl),
-                ),
-            ),
+            ("select", (FormControl(Select), Normal)),
             ("option", (FormControl(FormOption), Normal)),
             ("optgroup", (FormControl(OptionGroup), Normal)),
             ("fieldset", (FormControl(FieldSet), Normal)),
@@ -959,7 +954,8 @@ mod tests {
     #[test]
     fn phase_four_metadata_is_normalized_from_live_dom_state() {
         use moli_layout::{
-            LayoutElementMetadata, LayoutFormControlData, LayoutListData, LayoutTableData,
+            LayoutElementMetadata, LayoutFormControlData, LayoutListData, LayoutSelectPresentation,
+            LayoutTableData,
         };
 
         let mut host = test_host();
@@ -1057,6 +1053,34 @@ mod tests {
             .expect("select metadata");
         assert_eq!(select_data.value.as_ref(), "selected text");
         assert_eq!(select_data.maximum_option_characters, 13);
+        assert_eq!(
+            select_data.select_presentation(),
+            LayoutSelectPresentation::MenuList
+        );
+
+        for (multiple, size, expected) in [
+            (true, None, LayoutSelectPresentation::ListBox),
+            (true, Some("1"), LayoutSelectPresentation::MenuList),
+            (false, Some("4"), LayoutSelectPresentation::ListBox),
+        ] {
+            let select = host.create_element("select");
+            if multiple {
+                assert!(host.set_attribute(select, "multiple", ""));
+            }
+            if let Some(size) = size {
+                assert!(host.set_attribute(select, "size", size));
+            }
+            let semantics = layout_element_semantics_for_source(
+                &host,
+                select,
+                host.node(select).unwrap().as_element().unwrap(),
+            );
+            let data = semantics
+                .metadata
+                .form_control
+                .expect("select form-control metadata");
+            assert_eq!(data.select_presentation(), expected);
+        }
     }
 
     #[test]
