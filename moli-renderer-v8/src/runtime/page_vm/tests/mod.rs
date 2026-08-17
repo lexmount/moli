@@ -128,6 +128,7 @@ mod history_traversal;
 mod image_load_event;
 mod indexed_db;
 mod internal_loading_completion;
+mod intrinsic_percentage_resolution;
 mod lifecycle;
 mod main_document_post_parse_completion;
 mod main_document_runtime;
