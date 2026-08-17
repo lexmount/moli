@@ -713,7 +713,7 @@ pub(super) struct DocumentRuntime {
     structural_mutation_depth: usize,
     dom_content_loaded_dispatched: bool,
     runtime_reset_generation: u64,
-    document_open_generation: Option<u64>,
+    document_input_stream_opened: bool,
     next_document_write_external_script_load_id: u64,
     document_write_script_preload_scanner:
         Option<Box<crate::runtime::IncrementalBufferedScriptPreloadScanner>>,

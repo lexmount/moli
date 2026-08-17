@@ -245,7 +245,7 @@ impl DocumentRuntime {
             .get_mut()
             .clear();
         self.runtime_reset_generation = self.runtime_reset_generation.wrapping_add(1);
-        self.document_open_generation = Some(self.runtime_reset_generation);
+        self.document_input_stream_opened = true;
         self.set_document_ready_state(DocumentReadyState::Loading);
     }
 
@@ -341,7 +341,7 @@ impl DocumentRuntime {
     }
 
     pub(crate) fn document_input_stream_opened(&self) -> bool {
-        self.document_open_generation.is_some()
+        self.document_input_stream_opened
     }
 
     pub(crate) fn document_url(&self) -> &Url {
