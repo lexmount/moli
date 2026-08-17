@@ -988,11 +988,12 @@ where
             if !self.is_quirky_viewport_filler(layout_box_id) {
                 return inputs;
             }
-            // HTML's quirks viewport filler is an auto-size policy supplied by
-            // the containing formatting context. It consumes the margin-box
-            // available block size before preferred-ratio transfer and keeps
-            // authored min/max constraints in the normal used-size pipeline.
-            inputs.block_auto_behavior = AutoSizeBehavior::FillAvailable;
+            // HTML's quirks viewport filler remains content-sized. Definite
+            // available block space floors its real intrinsic block size and
+            // participates in initial percentage geometry through the normal
+            // ratio/min/max order, matching Blink's CalculateDefaultBlockSize
+            // and ClampIntrinsicBlockSize stages.
+            inputs.block_auto_behavior = AutoSizeBehavior::FitContentWithAvailableIntrinsicFloor;
         }
         inputs
     }
