@@ -126,6 +126,7 @@ mod hash_change_delivery;
 mod history_traversal;
 mod image_load_event;
 mod indexed_db;
+mod inline_svg_paint;
 mod internal_loading_completion;
 mod lifecycle;
 mod main_document_post_parse_completion;

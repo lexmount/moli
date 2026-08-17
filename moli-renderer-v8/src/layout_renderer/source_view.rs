@@ -167,12 +167,9 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
                     svg: ready.svg,
                 })
             }
-            Some(LayoutReplacedKind::Svg) => super::inline_svg::replaced_resource(
-                self.host(),
-                node,
-                style.current_color(),
-                style.font_size(),
-            ),
+            Some(LayoutReplacedKind::Svg) => {
+                super::inline_svg::replaced_resource(self.host(), node, style)
+            }
             Some(LayoutReplacedKind::Canvas) => {
                 let pixels = self.runtime.canvas_pixels_for_layout(node)?;
                 Some(LayoutImageResource {
