@@ -265,6 +265,28 @@ where
     context.collect_caption_inline_constraints(world);
     context.collect_cell_inline_constraints(world);
     let grid_inputs = context.resolve_column_tracks(inputs);
+    // CSS Tables determines ROWMIN before applying the table-root's block
+    // sizing properties. The authored height is then a minimum target for the
+    // row grid, and max-height is not allowed to shrink the table below
+    // ROWMIN. The virtual Grid adapter therefore needs both values: a
+    // content-size pass with an indefinite block axis, followed by the normal
+    // constrained pass that distributes any excess height among rows.
+    normalize_table_block_intrinsic_sizing(&mut context.style, context.writing_mode);
+    let block_size_is_requested = inputs.run_mode == RunMode::PerformLayout
+        || inputs.axis.contains(context.writing_mode.block_axis());
+    let natural_grid_block_size = block_size_is_requested.then(|| {
+        let natural_inputs = table_intrinsic_block_inputs(grid_inputs, context.writing_mode);
+        let mut wrapper = TableTreeWrapper {
+            world,
+            context: &mut context,
+        };
+        let natural_output =
+            compute_grid_layout(&mut wrapper, NodeId::from(0usize), natural_inputs);
+        context
+            .writing_mode
+            .to_logical(natural_output.size)
+            .block_size
+    });
     let mut output = {
         let mut wrapper = TableTreeWrapper {
             world,
@@ -272,6 +294,24 @@ where
         };
         compute_grid_layout(&mut wrapper, NodeId::from(0usize), grid_inputs)
     };
+
+    // A parent-owned known block size is already the final used size for this
+    // box. Otherwise the table owns its synthesized block size and CSS Tables
+    // requires ROWMIN to encompass the result after ordinary height/min/max
+    // resolution. Grid tracks retain their intrinsic bases when the
+    // constrained container is smaller, so enlarging the table border box to
+    // ROWMIN does not require a third row-layout pass.
+    let known_grid_block_size = context
+        .writing_mode
+        .to_logical(grid_inputs.known_dimensions)
+        .block_size;
+    if let (None, Some(natural_grid_block_size)) = (known_grid_block_size, natural_grid_block_size)
+    {
+        let mut logical_output_size = context.writing_mode.to_logical(output.size);
+        logical_output_size.block_size =
+            logical_output_size.block_size.max(natural_grid_block_size);
+        output.size = context.writing_mode.to_physical(logical_output_size);
+    }
 
     if inputs.run_mode == RunMode::PerformLayout {
         let grid_outer_size = output.size;
@@ -310,6 +350,68 @@ where
         output.content_size.height = output.content_size.height.min(output.size.height);
     }
     output
+}
+
+/// Build the first-pass constraint space used to establish a table's ROWMIN.
+///
+/// The final column width remains definite because cell block contributions
+/// can depend on wrapping. The block axis and its percentage basis are
+/// deliberately indefinite, matching Blink's initial table block-size pass.
+fn table_intrinsic_block_inputs(
+    mut inputs: LayoutInput,
+    writing_mode: taffy::WritingMode,
+) -> LayoutInput {
+    let mut known_size = writing_mode.to_logical(inputs.known_dimensions);
+    known_size.block_size = None;
+    inputs.known_dimensions = writing_mode.to_physical(known_size);
+
+    let mut definite_size = writing_mode.to_logical(inputs.definite_dimensions);
+    definite_size.block_size = None;
+    inputs.definite_dimensions = writing_mode.to_physical(definite_size);
+
+    let mut parent_size = writing_mode.to_logical(inputs.parent_size);
+    parent_size.block_size = None;
+    inputs.parent_size = writing_mode.to_physical(parent_size);
+
+    let mut available_size = writing_mode.to_logical(inputs.available_space);
+    available_size.block_size = AvailableSpace::MaxContent;
+    inputs.available_space = writing_mode.to_physical(available_size);
+
+    inputs.run_mode = RunMode::ComputeSize;
+    inputs.sizing_mode = SizingMode::ContentSize;
+    inputs.sizing_purpose = SizingPurpose::IntrinsicContribution;
+    inputs.axis = RequestedAxis::from(writing_mode.block_axis());
+    inputs.block_auto_behavior = AutoSizeBehavior::FitContent;
+    inputs.block_margins_are_collapsible = Line::FALSE;
+    inputs
+}
+
+/// Remove block-axis intrinsic keywords from the virtual Grid's constrained
+/// pass while retaining them on the authored table style.
+///
+/// Blink resolves these keywords through a table block-size callback during
+/// the initial indefinite pass. At that point the callback is indefinite, so
+/// preferred/minimum keywords behave as `auto` and maximum keywords as
+/// `none`. ROWMIN, measured separately above, remains the real lower bound.
+fn normalize_table_block_intrinsic_sizing(
+    style: &mut Style<Atom>,
+    writing_mode: taffy::WritingMode,
+) {
+    let mut size = writing_mode.to_logical(style.size);
+    let mut min_size = writing_mode.to_logical(style.min_size);
+    let mut max_size = writing_mode.to_logical(style.max_size);
+    if size.block_size.is_intrinsic() {
+        size.block_size = Dimension::auto();
+    }
+    if min_size.block_size.is_intrinsic() {
+        min_size.block_size = Dimension::auto();
+    }
+    if max_size.block_size.is_intrinsic() {
+        max_size.block_size = Dimension::auto();
+    }
+    style.size = writing_mode.to_physical(size);
+    style.min_size = writing_mode.to_physical(min_size);
+    style.max_size = writing_mode.to_physical(max_size);
 }
 
 fn build_table_context<N>(world: &LayoutWorld<N>, root: LayoutBoxId) -> TableContext
