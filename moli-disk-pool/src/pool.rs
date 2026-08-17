@@ -137,7 +137,7 @@ impl DiskPool {
             may_write: state.may_write,
             disk_footprint_bytes: state.file_tail,
             free_bytes: state.free_bytes,
-            free_chunk_count: state.free_chunks.len(),
+            free_chunk_count: state.free_chunks_by_offset.len(),
         }
     }
 
@@ -151,6 +151,23 @@ impl DiskPool {
 
     pub(crate) fn read_exact_file_at(&self, buffer: &mut [u8], offset: u64) -> io::Result<()> {
         self.inner.file.read_exact_at(buffer, offset)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn free_chunks_for_test(&self) -> Vec<(u64, usize)> {
+        self.inner
+            .state
+            .lock()
+            .free_chunks_by_offset
+            .iter()
+            .map(|(&offset, &len)| (offset, len))
+            .collect()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn fail_next_write_for_test(&self) {
+        self.inner.file.fail_next_write_for_test();
     }
 
     #[cfg(feature = "test-support")]

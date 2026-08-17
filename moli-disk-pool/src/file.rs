@@ -2,12 +2,16 @@ use std::{fs::File, io};
 
 #[cfg(not(any(unix, windows)))]
 use parking_lot::Mutex;
+#[cfg(any(test, feature = "test-support"))]
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub(crate) struct PoolFile {
     #[cfg(any(unix, windows))]
     file: File,
     #[cfg(not(any(unix, windows)))]
     file: Mutex<File>,
+    #[cfg(any(test, feature = "test-support"))]
+    fail_next_write: AtomicBool,
 }
 
 impl PoolFile {
@@ -17,6 +21,8 @@ impl PoolFile {
             file,
             #[cfg(not(any(unix, windows)))]
             file: Mutex::new(file),
+            #[cfg(any(test, feature = "test-support"))]
+            fail_next_write: AtomicBool::new(false),
         }
     }
 
@@ -47,6 +53,11 @@ impl PoolFile {
     }
 
     pub(crate) fn write_all_at(&self, mut data: &[u8], mut offset: u64) -> io::Result<()> {
+        #[cfg(any(test, feature = "test-support"))]
+        if self.fail_next_write.swap(false, Ordering::SeqCst) {
+            return Err(io::Error::other("injected disk pool write failure"));
+        }
+
         while !data.is_empty() {
             match self.write_at(data, offset) {
                 Ok(0) => {
@@ -70,6 +81,11 @@ impl PoolFile {
             }
         }
         Ok(())
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn fail_next_write_for_test(&self) {
+        self.fail_next_write.store(true, Ordering::SeqCst);
     }
 
     #[cfg(unix)]
