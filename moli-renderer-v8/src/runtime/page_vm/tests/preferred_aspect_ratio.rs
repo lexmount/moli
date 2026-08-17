@@ -59,3 +59,62 @@ document.body.innerHTML = `
     .await
     .expect("preferred aspect-ratio fixture should run");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_ignores_preferred_aspect_ratios_on_internal_table_boxes() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/table-internal-aspect-ratio.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0}
+table{border-collapse:collapse}
+th,td{padding:0}
+</style>`;
+document.body.innerHTML = `
+  <table id=internal>
+    <tr><th style="width:100px;aspect-ratio:1/1"></th><td id=internal-cell style="height:50px;aspect-ratio:4/1"></td><td style="height:50px;min-width:min-content;aspect-ratio:4/1"></td></tr>
+  </table>
+  <table id=outer style="width:100px;aspect-ratio:2/1"></table>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(320, 200, 1.0))?
+            .expect("internal table aspect-ratio screenshot layout");
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries(['internal','outer'].map(id=>{const r=document.getElementById(id).getBoundingClientRect();return [id,[r.width,r.height]]})))"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        for (id, expected) in [("internal", [100.0, 50.0]), ("outer", [100.0, 50.0])] {
+            let actual = geometry[id]
+                .as_array()
+                .unwrap_or_else(|| panic!("missing geometry for {id}: {geometry}"));
+            for (axis, expected) in expected.into_iter().enumerate() {
+                let actual = actual[axis].as_f64().expect("numeric geometry") as f32;
+                assert!(
+                    (actual - expected).abs() <= 0.05,
+                    "{id}[{axis}]: expected {expected}, got {actual}; geometry={geometry}"
+                );
+            }
+        }
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval("getComputedStyle(document.getElementById('internal-cell')).aspectRatio")?,
+            "4 / 1"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("internal table aspect-ratio fixture should run");
+}
