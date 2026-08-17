@@ -81,9 +81,9 @@ pub use source::{
     LayoutDocumentMode, LayoutElementCategory, LayoutElementContent, LayoutElementMetadata,
     LayoutElementSemantics, LayoutFormControlData, LayoutFormControlKind,
     LayoutImageFallbackContent, LayoutImageResource, LayoutInputControlKind, LayoutListData,
-    LayoutListRole, LayoutNamespace, LayoutPseudo, LayoutReplacedKind, LayoutSource,
-    LayoutSourceKind, LayoutStyleResolver, LayoutTableData, LayoutTableRole, LayoutTextSelection,
-    ReplacedMetrics, ReplacedObjectSize,
+    LayoutListRole, LayoutNamespace, LayoutPseudo, LayoutReplacedKind, LayoutSelectPresentation,
+    LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutTableData, LayoutTableRole,
+    LayoutTextSelection, ReplacedMetrics, ReplacedObjectSize,
 };
 pub use style::{
     LayoutDisplay, LayoutInlineAlignment, LayoutListMarkerPosition, LayoutListMarkerType,

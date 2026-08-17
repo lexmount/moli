@@ -16,9 +16,10 @@ use crate::{
     LayoutAnonymousReason, LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic, LayoutDisplay,
     LayoutElementCategory, LayoutElementSemantics, LayoutError, LayoutPseudo, LayoutSource,
     LayoutSourceKind, LayoutStyleResolver, LayoutWorld, ResolvedLayoutStyle,
-    form::form_control_context, replaced::ReplacedContext, style::InlineWhiteSpaceCollapse,
+    form::form_control_intrinsic_size, replaced::ReplacedContext, style::InlineWhiteSpaceCollapse,
 };
 use style::values::generics::image::GenericImage;
+use taffy::Size;
 
 /// Constructs a complete pass-local CSS box tree from a borrowed source view.
 pub fn build_layout_world<S, R>(
@@ -93,11 +94,11 @@ where
         }
         if root_semantics.is_replaced() {
             root_style.mark_replaced();
-        } else if matches!(
-            root_semantics.category,
-            crate::LayoutElementCategory::FormControl(crate::LayoutFormControlKind::Button)
-        ) {
-            root_style.mark_intrinsic_form_control_container();
+        } else if is_button(&root_semantics) {
+            root_style.adjust_button_flow_layout();
+        }
+        if is_menu_list_select(&root_semantics) {
+            root_style.mark_menu_list_formatting_context();
         }
         let root_kind = principal_kind(&root_semantics, &root_style);
         let root_generates_principal_box = root_style.display() != LayoutDisplay::None;
@@ -229,11 +230,11 @@ where
             let metrics = self.source.replaced_metrics(source_node);
             if semantics.is_replaced() {
                 style.mark_replaced();
-            } else if matches!(
-                semantics.category,
-                crate::LayoutElementCategory::FormControl(crate::LayoutFormControlKind::Button)
-            ) {
-                style.mark_intrinsic_form_control_container();
+            } else if is_button(&semantics) {
+                style.adjust_button_flow_layout();
+            }
+            if is_menu_list_select(&semantics) {
+                style.mark_menu_list_formatting_context();
             }
 
             if semantics.is_hidden_input()
@@ -288,7 +289,9 @@ where
         style: ResolvedLayoutStyle,
         metrics: Option<crate::ReplacedMetrics>,
     ) -> crate::LayoutBox<S::NodeId> {
-        let replaced_context = build_replaced_context(&semantics, metrics, &style);
+        let form_control_size =
+            form_control_intrinsic_size(&semantics, style.font_size(), style.line_height());
+        let replaced_context = build_replaced_context(&semantics, metrics, form_control_size);
         let mut layout_box = LayoutWorld::new_box(
             Some(source_node),
             None,
@@ -302,6 +305,11 @@ where
             None,
         );
         layout_box.replaced_context = replaced_context;
+        if is_menu_list_select(&semantics) {
+            layout_box.default_intrinsic_content_size = form_control_size
+                .map(|size| size.map(Some))
+                .unwrap_or(Size::NONE);
+        }
         layout_box.replaced_image = self.source.replaced_image(source_node, &style);
         layout_box.css_images = self.css_image_resources(&style);
         layout_box.scroll_offset = self.source.scroll_offset(source_node);
@@ -1231,7 +1239,7 @@ where
 fn build_replaced_context(
     semantics: &LayoutElementSemantics,
     metrics: Option<crate::ReplacedMetrics>,
-    style: &ResolvedLayoutStyle,
+    form_control_size: Option<Size<f32>>,
 ) -> Option<ReplacedContext> {
     if !semantics.is_replaced() {
         return None;
@@ -1247,11 +1255,25 @@ fn build_replaced_context(
             metrics,
         ));
     }
-    form_control_context(semantics, style.font_size(), style.line_height()).or_else(|| {
-        semantics
-            .replaced_kind()
-            .map(|kind| ReplacedContext::for_element(kind, metrics))
-    })
+    form_control_size
+        .map(ReplacedContext::form_control)
+        .or_else(|| {
+            semantics
+                .replaced_kind()
+                .map(|kind| ReplacedContext::for_element(kind, metrics))
+        })
+}
+
+fn is_button(semantics: &LayoutElementSemantics) -> bool {
+    matches!(
+        semantics.category,
+        LayoutElementCategory::FormControl(crate::LayoutFormControlKind::Button)
+    )
+}
+
+fn is_menu_list_select(semantics: &LayoutElementSemantics) -> bool {
+    semantics.select_presentation() == Some(crate::LayoutSelectPresentation::MenuList)
+        && !semantics.is_replaced()
 }
 
 fn whitespace_text_is_ignorable(text: &str, mode: InlineWhiteSpaceCollapse) -> bool {
@@ -1322,6 +1344,7 @@ fn is_leaf_element(
     style: &ResolvedLayoutStyle,
 ) -> bool {
     semantics.is_replaced()
+        || is_menu_list_select(semantics)
         || semantics.category == LayoutElementCategory::LineBreak
         || kind == LayoutBoxKind::TableColumn
         || style.display() == LayoutDisplay::TableColumn
