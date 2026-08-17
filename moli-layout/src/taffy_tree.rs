@@ -1409,9 +1409,7 @@ where
         }
 
         if inline_formatting_context {
-            return self
-                .compute_inline_formatting_context(id, inputs, block_context)
-                .output;
+            return self.compute_inline_formatting_context(id, inputs, block_context);
         }
 
         // Pseudo origins retain a pseudo-specific box kind, so their computed
@@ -1492,10 +1490,9 @@ where
             return output.into_intrinsic_size_result();
         }
         if self.boxes[id.index()].inline_formatting_context {
-            let result = self.compute_inline_formatting_context(id, inputs, None);
-            let mut intrinsic = result.output.into_intrinsic_size_result();
-            intrinsic.depends_on_block_constraints |= result.depends_on_block_constraints;
-            return intrinsic;
+            return self
+                .compute_inline_formatting_context(id, inputs, None)
+                .into_intrinsic_size_result();
         }
         self.compute_child_layout_uncached(node_id, inputs, None)
             .into_intrinsic_size_result()
@@ -1551,7 +1548,7 @@ where
         id: LayoutBoxId,
         inputs: LayoutInput,
         block_context: Option<&mut BlockContext<'_>>,
-    ) -> InlineLayoutResult {
+    ) -> LayoutOutput {
         let style = self.boxes[id.index()].style.taffy.clone();
         let writing_mode = self.boxes[id.index()].style.writing_mode();
         let writing_direction = self.boxes[id.index()].style.writing_direction();
@@ -1688,10 +1685,7 @@ where
         if inputs.run_mode == RunMode::PerformLayout {
             self.layout_custom_context_out_of_flow_children(id, &mut output, padding, border);
         }
-        InlineLayoutResult {
-            output,
-            depends_on_block_constraints,
-        }
+        output.with_block_constraint_dependency(depends_on_block_constraints)
     }
 
     /// Consume positioned descendants after a custom formatting context has
@@ -1921,9 +1915,11 @@ where
                         ..child_inputs
                     };
                     let child_output = if inputs.run_mode == RunMode::ComputeSize {
-                        let result = self.compute_atomic_inline_size(object.box_id, atomic_inputs);
-                        depends_on_block_constraints |= result.depends_on_block_constraints;
-                        LayoutOutput::from_outer_size(result.size)
+                        let output =
+                            self.compute_atomic_inline_measurement(object.box_id, atomic_inputs);
+                        let intrinsic = output.into_intrinsic_size_result();
+                        depends_on_block_constraints |= intrinsic.depends_on_block_constraints;
+                        output
                     } else {
                         self.compute_atomic_inline_layout(object.box_id, atomic_inputs)
                     };
@@ -2790,11 +2786,6 @@ struct InlineMeasurement {
     fragments: LineRelativeFragments,
     /// Whether any atomic or floated child contribution changes with the
     /// containing block's block-size.
-    depends_on_block_constraints: bool,
-}
-
-struct InlineLayoutResult {
-    output: LayoutOutput,
     depends_on_block_constraints: bool,
 }
 
