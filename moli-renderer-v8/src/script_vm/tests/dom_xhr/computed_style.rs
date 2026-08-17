@@ -3368,6 +3368,33 @@ fn computed_width_resolves_percent_against_parent_and_child_frame_viewport() {
 }
 
 #[test]
+fn layout_resolves_root_font_relative_units_from_the_document_root_style() {
+    let mut vm = new_parsed_test_vm(
+        "https://layout-root-font-relative.test/",
+        r#"<html style="font-size:30px;line-height:1.5"><head></head><body style="width:520px;margin:0"><div id="target" style="width:calc(5% + 4rem);height:1rlh"></div></body></html>"#,
+    );
+
+    refresh_layout_for_test(&mut vm);
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const target = document.getElementById('target');
+  const rect = target.getBoundingClientRect();
+  return [getComputedStyle(document.documentElement).fontSize,
+          getComputedStyle(target).width,
+          getComputedStyle(target).height,
+          rect.width,
+          rect.height].join('|');
+})()
+"#,
+        )
+        .expect("root font-relative layout probe should evaluate");
+
+    assert_eq!(result, "30px|146px|45px|146|45");
+}
+
+#[test]
 fn transformed_oversized_inline_iframe_uses_its_containing_block_percentage_basis() {
     let mut vm = new_storage_test_vm("https://inline-iframe-percentage-size.test/");
 

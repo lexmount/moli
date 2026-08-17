@@ -2,6 +2,7 @@ use dom::ElementState as StyloElementState;
 use style::{
     Atom,
     animation::DocumentAnimationSet,
+    computed_value_flags::ComputedValueFlags,
     context::{
         QuirksMode, RegisteredSpeculativePainter, RegisteredSpeculativePainters,
         SharedStyleContext, StyleContext, StyleSystemOptions, ThreadLocalStyleContext,
@@ -655,6 +656,7 @@ fn with_resolved_styles<R>(
                     pseudo_element,
                     None,
                 );
+                seed_root_font_relative_unit_state(&context, styles.primary());
                 std::mem::swap(
                     &mut context.thread_local.selector_caches,
                     &mut retained_selector_caches,
@@ -685,14 +687,50 @@ where
     }
 
     for ancestor in ancestors.into_iter().rev() {
-        if ancestor.borrow_data().is_some_and(|data| data.has_styles()) {
+        let retained_primary = ancestor
+            .borrow_data()
+            .and_then(|data| data.styles.get_primary().cloned());
+        if let Some(primary) = retained_primary {
+            seed_root_font_relative_unit_state(context, &primary);
             continue;
         }
         let styles = resolve_style(context, ancestor, RuleInclusion::All, None, None);
+        seed_root_font_relative_unit_state(context, styles.primary());
         unsafe {
             ancestor.ensure_data().styles = styles;
         }
     }
+}
+
+/// Keep Stylo's device-level root font-relative bases aligned with the root
+/// style materialized by Moli's synchronous observation traversal.
+///
+/// A normal Stylo traversal performs this update from `finish_restyle`. Moli
+/// resolves an exact ancestor chain with `resolve_style`, so it must publish
+/// the same state before cascading descendants that use rem/rlh/root-metric
+/// units. Retained root data must seed a freshly rebuilt device as well.
+fn seed_root_font_relative_unit_state<E>(
+    context: &StyleContext<E>,
+    style: &ServoArc<ComputedValues>,
+) where
+    E: TElement,
+{
+    if !style
+        .flags
+        .contains(ComputedValueFlags::IS_ROOT_ELEMENT_STYLE)
+    {
+        return;
+    }
+
+    let device = context.shared.stylist.device();
+    device.set_root_style(style);
+
+    let font = style.get_font();
+    let font_size = font.clone_font_size().computed_size();
+    device.set_root_font_size(style.effective_zoom.unzoom(font_size.px()));
+
+    let line_height = device.calc_line_height(font, style.writing_mode, None).0;
+    device.set_root_line_height(style.effective_zoom.unzoom(line_height.px()));
 }
 
 fn with_lazily_resolved_pseudo_style<R>(
