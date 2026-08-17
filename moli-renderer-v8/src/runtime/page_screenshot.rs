@@ -69,6 +69,12 @@ impl PageVm {
         &mut self,
         request: RendererCaptureScreenshotRequest,
     ) -> anyhow::Result<RendererCaptureScreenshotReply> {
+        let barrier = match request.purpose {
+            RendererScreenshotPurpose::Screenshot => moli_action_window::ActionBarrier::Screenshot,
+            RendererScreenshotPurpose::Screencast => moli_action_window::ActionBarrier::Screencast,
+            RendererScreenshotPurpose::Print { .. } => moli_action_window::ActionBarrier::Explicit,
+        };
+        self.flush_page_action_window(barrier)?;
         let restore_media = if matches!(request.purpose, RendererScreenshotPurpose::Print { .. })
             && self.emulated_media.media.is_none()
         {

@@ -2528,6 +2528,7 @@ dependencies = [
  "httpdate",
  "indexmap",
  "markup5ever",
+ "moli-action-window",
  "moli-broadcast-channel",
  "moli-browser-profile",
  "moli-canvas",

@@ -588,19 +588,27 @@ impl RendererOwnerLocalPageSlot {
         } = self;
         let entry = turn_scheduler.resident()?;
         let timer_deadline = entry.next_javascript_timer_deadline();
+        let action_window_deadline = entry.page_vm().next_action_window_deadline();
         let internal_loading_deadline = task_sources
             .next_internal_loading_deadline(entry.page_vm().current_page_internal_loading_owner());
-        earliest_deadline(timer_deadline, internal_loading_deadline)
+        earliest_deadline(
+            earliest_deadline(timer_deadline, action_window_deadline),
+            internal_loading_deadline,
+        )
     }
 
     #[cfg(debug_assertions)]
     fn local_page_task_deadline(&self) -> Option<std::time::Instant> {
         let entry = self.turn_scheduler.resident()?;
         let timer_deadline = entry.next_javascript_timer_deadline();
+        let action_window_deadline = entry.page_vm().next_action_window_deadline();
         let internal_loading_deadline = self
             .task_sources
             .local_internal_loading_deadline(entry.page_vm().current_page_internal_loading_owner());
-        earliest_deadline(timer_deadline, internal_loading_deadline)
+        earliest_deadline(
+            earliest_deadline(timer_deadline, action_window_deadline),
+            internal_loading_deadline,
+        )
     }
 }
 

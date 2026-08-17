@@ -185,17 +185,45 @@ pub(crate) fn queue_scroll_observable_effects(
     document: Option<DomHandle>,
     queue_document_events: bool,
 ) {
+    if unsafe { &mut *runtime_ptr }.defer_scroll_observable_effects(document, queue_document_events)
+    {
+        return;
+    }
+    apply_scroll_observable_effects(
+        scope,
+        runtime_ptr,
+        [crate::native_bridge::PendingScrollObservableEffects::new(
+            document,
+            queue_document_events,
+        )],
+    );
+}
+
+pub(crate) fn apply_scroll_observable_effects(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    effects: impl IntoIterator<Item = crate::native_bridge::PendingScrollObservableEffects>,
+) {
+    let effects = effects.into_iter().collect::<Vec<_>>();
+    if effects.is_empty() {
+        return;
+    }
     // Native lazy loading deliberately combines the retained pre-scroll
     // projection with live element offsets, so admit those requests before
     // retiring the sampled projection. Observable geometry and author
     // IntersectionObservers, on the other hand, must see a fresh projection.
-    if let Some(document) = document {
-        queue_revealed_lazy_image_loads(scope, runtime_ptr, document);
+    for effects in &effects {
+        if let Some(document) = effects.document() {
+            queue_revealed_lazy_image_loads(scope, runtime_ptr, document);
+        }
     }
     queue_revealed_lazy_media_loads(scope, runtime_ptr);
     unsafe { &*runtime_ptr }.invalidate_layout_after_interaction_state_change();
     crate::observer_runtime::queue_intersection_checks(scope, runtime_ptr);
-    if queue_document_events {
+    if effects
+        .iter()
+        .any(|effects| effects.queue_document_events())
+    {
         let _ = unsafe { &mut *runtime_ptr }.queue_document_scroll_events(scope);
     }
 }

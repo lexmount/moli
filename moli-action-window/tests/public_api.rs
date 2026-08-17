@@ -21,6 +21,26 @@ fn default_public_surface_starts_idle_with_one_second_policy() {
 }
 
 #[test]
+fn admissions_expose_the_sequence_retained_by_the_batch() {
+    let base = Instant::now();
+    let mut window = ActionWindow::<u8, ()>::new();
+    let admission = window.push(
+        7,
+        WindowAction::Scroll(ScrollAction::pixels(Point::new(1.0, 2.0), 3.0, 4.0)),
+        base,
+    );
+    let admitted_sequence = admission.sequence();
+
+    let batch = window
+        .flush(ActionBarrier::Explicit, base)
+        .expect("admitted action should flush");
+    let PlannedAction::Scroll { run, .. } = &batch.actions()[0] else {
+        panic!("scroll admission should retain a scroll run");
+    };
+    assert_eq!(run.steps()[0].sequence(), admitted_sequence);
+}
+
+#[test]
 fn public_api_accepts_owned_scope_and_non_clone_ordered_payload() {
     #[derive(Debug, PartialEq)]
     struct NonClonePayload(u32);

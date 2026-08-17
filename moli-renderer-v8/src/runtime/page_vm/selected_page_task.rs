@@ -19,6 +19,9 @@ impl PageVm {
         loader: &crate::network::ResourceRequestClient,
     ) -> Result<()> {
         match task {
+            RendererPageSchedulerTask::ActionWindow { deadline } => {
+                self.apply_selected_page_action_window_turn(deadline)
+            }
             RendererPageSchedulerTask::DomManipulation(task) => {
                 let outcome = self.apply_selected_page_dom_manipulation_turn(task)?;
                 self.finish_selected_page_dom_manipulation_task(outcome.action, loader)

@@ -240,6 +240,9 @@ pub(crate) struct RendererPageTaskProducerRoutes {
 /// executor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RendererPageReadyDescriptor {
+    ActionWindow {
+        deadline: Instant,
+    },
     DomManipulation {
         ready: RendererPageTaskReadyMetadata,
         owner: RendererPageDomManipulationOwner,
@@ -389,7 +392,7 @@ impl RendererPageReadyDescriptor {
             | Self::ModulepreloadStart { ready }
             | Self::Networking { ready, .. }
             | Self::WebSocket { ready, .. } => Some(ready),
-            Self::Timer { .. } => None,
+            Self::ActionWindow { .. } | Self::Timer { .. } => None,
         }
     }
 
@@ -440,6 +443,7 @@ impl RendererPageReadyDescriptor {
             Self::Networking { .. } | Self::WebSocket { .. } => {
                 RendererPageTaskSourceKind::Networking
             }
+            Self::ActionWindow { .. } => RendererPageTaskSourceKind::ActionWindow,
             Self::Timer { .. } => RendererPageTaskSourceKind::Timer,
         }
     }
@@ -474,7 +478,7 @@ impl RendererPageReadyDescriptor {
             | Self::ModulepreloadStart { ready }
             | Self::Networking { ready, .. }
             | Self::WebSocket { ready, .. } => ready.ready_at,
-            Self::Timer { deadline } => deadline,
+            Self::ActionWindow { deadline } | Self::Timer { deadline } => deadline,
         }
     }
 
@@ -488,6 +492,7 @@ impl RendererPageReadyDescriptor {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) enum RendererPageTaskSourceKind {
+    ActionWindow,
     Timer,
     DomManipulation,
     UserInteraction,
@@ -519,7 +524,8 @@ pub(crate) enum RendererPageTaskSourceKind {
 }
 
 impl RendererPageTaskSourceKind {
-    pub(crate) const ALL: [Self; 28] = [
+    pub(crate) const ALL: [Self; 29] = [
+        Self::ActionWindow,
         Self::Timer,
         Self::DomManipulation,
         Self::UserInteraction,
@@ -557,6 +563,9 @@ impl RendererPageTaskSourceKind {
 /// into an async executor.
 #[derive(Debug)]
 pub(crate) enum RendererPageSchedulerTask {
+    ActionWindow {
+        deadline: Instant,
+    },
     DomManipulation(RendererPageDomManipulationTask),
     UserInteraction(RendererPageUserInteractionTask),
     FileReading(RendererPageFileReadingTask),
@@ -1156,6 +1165,9 @@ impl RendererPageOwnedTaskSources {
         descriptor: RendererPageReadyDescriptor,
     ) -> RendererPageSchedulerTask {
         match descriptor {
+            RendererPageReadyDescriptor::ActionWindow { deadline } => {
+                RendererPageSchedulerTask::ActionWindow { deadline }
+            }
             RendererPageReadyDescriptor::DomManipulation { ready, .. } => {
                 let (actual, task) = self
                     .dom_manipulation

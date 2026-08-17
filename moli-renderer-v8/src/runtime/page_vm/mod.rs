@@ -68,6 +68,7 @@ mod dom_search;
 mod frontend_node_bindings;
 mod javascript_navigation_lifecycle;
 mod main_document_lifecycle_completion;
+mod page_action_window;
 mod page_broadcast_channel_delivery;
 mod page_callback_task_completion;
 mod page_child_classic_script_source_load_task_completion;
@@ -1541,6 +1542,7 @@ pub(crate) struct PageVm {
     // it is now a page resource rather than two unrelated local queues created in different
     // phases.
     pub(super) page_task_queue: PageTaskQueue,
+    page_action_window: page_action_window::RendererPageActionWindow,
     next_module_script_evaluation_reaction_id: u64,
     target_stage: PageVmInitStage,
     /// Page-level transport/policy view used by navigation and owner-loop
@@ -4790,6 +4792,7 @@ impl PageVm {
             last_published_document_title: String::new(),
             css_agent_sessions: HashMap::new(),
             page_task_queue,
+            page_action_window: page_action_window::RendererPageActionWindow::default(),
             next_module_script_evaluation_reaction_id: 0,
             target_stage: PageVmInitStage::Load,
             request_client: document_loader.request_client().clone(),

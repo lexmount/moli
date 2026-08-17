@@ -1064,6 +1064,9 @@ mod tests {
         order: u64,
     ) -> RendererPageReadyDescriptor {
         match source {
+            RendererPageTaskSourceKind::ActionWindow => RendererPageReadyDescriptor::ActionWindow {
+                deadline: runnable_since,
+            },
             RendererPageTaskSourceKind::Timer => RendererPageReadyDescriptor::Timer {
                 deadline: runnable_since,
             },

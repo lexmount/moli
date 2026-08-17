@@ -29,6 +29,7 @@ pub enum AdmissionState {
 pub struct ActionAdmission<S, O = ()> {
     state: AdmissionState,
     batch_id: ActionBatchId,
+    sequence: ActionSequence,
     deadline: Instant,
     compaction: ActionCompaction,
     ready_batch: Option<ActionBatch<S, O>>,
@@ -43,6 +44,15 @@ impl<S, O> ActionAdmission<S, O> {
     #[must_use]
     pub const fn batch_id(&self) -> ActionBatchId {
         self.batch_id
+    }
+
+    /// The stable sequence assigned to the newly admitted action.
+    ///
+    /// Hosts can use this to associate renderer-specific payloads with the
+    /// semantic action retained by the window.
+    #[must_use]
+    pub const fn sequence(&self) -> ActionSequence {
+        self.sequence
     }
 
     #[must_use]
@@ -284,6 +294,7 @@ impl<S: PartialEq, O> ActionWindow<S, O> {
         ActionAdmission {
             state,
             batch_id: window.id,
+            sequence,
             deadline: window.deadline,
             compaction,
             ready_batch,

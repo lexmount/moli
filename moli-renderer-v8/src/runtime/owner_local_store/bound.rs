@@ -734,12 +734,12 @@ pub(in crate::runtime) fn settle_owner_maintenance_task_on_bound_owner_local_sto
 pub(super) struct PageReadyDescriptorSnapshot {
     pub(super) eligible: Vec<crate::page_task_queue::RendererPageReadyDescriptor>,
     pub(super) stable_source_was_ready: bool,
-    due_timer_was_ready: bool,
+    due_deadline_was_ready: bool,
 }
 
 impl PageReadyDescriptorSnapshot {
     pub(super) const fn has_ready_ordinary_source(&self) -> bool {
-        self.stable_source_was_ready || self.due_timer_was_ready
+        self.stable_source_was_ready || self.due_deadline_was_ready
     }
 }
 
@@ -749,10 +749,17 @@ pub(super) fn page_ready_descriptor_snapshot(
 ) -> PageReadyDescriptorSnapshot {
     let mut descriptors = task_sources.ready_descriptors();
     let stable_source_was_ready = !descriptors.is_empty();
-    let mut due_timer_was_ready = false;
+    let mut due_deadline_was_ready = false;
     if let Some(timer) = entry.page_vm().due_page_timer_ready_descriptor() {
         descriptors.push(timer);
-        due_timer_was_ready = true;
+        due_deadline_was_ready = true;
+    }
+    if let Some(action_window) = entry
+        .page_vm()
+        .due_page_action_window_ready_descriptor(std::time::Instant::now())
+    {
+        descriptors.push(action_window);
+        due_deadline_was_ready = true;
     }
     descriptors.retain(|descriptor| {
         entry
@@ -762,7 +769,7 @@ pub(super) fn page_ready_descriptor_snapshot(
     PageReadyDescriptorSnapshot {
         eligible: descriptors,
         stable_source_was_ready,
-        due_timer_was_ready,
+        due_deadline_was_ready,
     }
 }
 

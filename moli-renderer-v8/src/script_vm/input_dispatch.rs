@@ -289,10 +289,7 @@ impl ScriptVm {
         }
     }
 
-    fn finish_input_event_dispatch_turn(
-        &mut self,
-        result: Result<RendererInputDispatchOutcome>,
-    ) -> Result<RendererInputDispatchOutcome> {
+    fn finish_input_event_dispatch_turn<T>(&mut self, result: Result<T>) -> Result<T> {
         let result = self.finish_input_command_checkpoint(result);
         if result.is_ok() {
             self.sync_child_browsing_context_records();
@@ -352,6 +349,71 @@ impl ScriptVm {
     }
 
     pub(crate) fn dispatch_mouse_event_at_point_with_pointer_and_modifiers(
+        &mut self,
+        x: f64,
+        y: f64,
+        event_name: &str,
+        button: i32,
+        buttons: Option<i32>,
+        click_count: i32,
+        delta_x: f64,
+        delta_y: f64,
+        pointer: RendererPointerEventProperties,
+        modifiers: u8,
+    ) -> Result<RendererInputDispatchOutcome> {
+        let result = self
+            .dispatch_mouse_event_at_point_with_pointer_and_modifiers_without_checkpoint(
+                x,
+                y,
+                event_name,
+                button,
+                buttons,
+                click_count,
+                delta_x,
+                delta_y,
+                pointer,
+                modifiers,
+            );
+        self.finish_input_event_dispatch_turn(result)
+    }
+
+    pub(crate) fn begin_batched_mouse_event_dispatch(&mut self) {
+        self._context_host
+            .borrow_mut()
+            .begin_scroll_observable_effect_batch();
+    }
+
+    pub(crate) fn finish_batched_mouse_event_dispatch(
+        &mut self,
+        dispatch_result: Result<()>,
+    ) -> Result<()> {
+        let effects = self
+            ._context_host
+            .borrow_mut()
+            .finish_scroll_observable_effect_batch();
+        let effects_result = match effects {
+            Some(effects) => self.with_default_context_scope(|scope, runtime_ptr| {
+                crate::native_bridge::element::apply_scroll_observable_effects(
+                    scope,
+                    runtime_ptr,
+                    effects,
+                );
+                Ok(())
+            }),
+            None => Ok(()),
+        };
+        let result = match (dispatch_result, effects_result) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(dispatch_error), Ok(())) => Err(dispatch_error),
+            (Ok(()), Err(effects_error)) => Err(effects_error),
+            (Err(dispatch_error), Err(effects_error)) => Err(anyhow::anyhow!(
+                "batched input dispatch failed ({dispatch_error:#}) and its derived scroll effects also failed ({effects_error:#})"
+            )),
+        };
+        self.finish_input_event_dispatch_turn(result)
+    }
+
+    pub(crate) fn dispatch_mouse_event_at_point_with_pointer_and_modifiers_without_checkpoint(
         &mut self,
         x: f64,
         y: f64,
@@ -866,7 +928,7 @@ impl ScriptVm {
             Ok(input_dispatch_outcome(true))
         });
         self.suppress_compat_mouse_events = suppress_compat_mouse_events;
-        self.finish_input_event_dispatch_turn(result)
+        result
     }
 
     pub(crate) fn dispatch_touch_event_at_point(

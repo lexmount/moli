@@ -336,6 +336,8 @@ impl JsContextHost {
             opfs_owner_state: None,
             history_queue: HistoryQueueState::default(),
             rendering_updates: super::rendering_updates::RenderingUpdateState::default(),
+            scroll_observable_effect_batch:
+                super::interaction_batch::ScrollObservableEffectBatchState::default(),
             view_transition_updates:
                 super::view_transition_updates::ViewTransitionUpdateState::default(),
             media_element_events: super::media_element_events::MediaElementEventState::default(),

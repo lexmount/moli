@@ -1,13 +1,14 @@
 use super::{
     ExternalRawDocumentBodyStream, JsLocalExecutor, JsRuntime, JsRuntimeOwner, PageVmInitStage,
     PreparedRendererDocument, RendererCaptureScreenshotReply, RendererDragData,
-    RendererDraggedDirectory, RendererDraggedFile, RendererInspectorProtocolConfiguration,
-    RendererInspectorSessionRestoreSnapshot, RendererOutputItem, RendererOutputPublication,
-    RendererOutputResidenceIdentity, RendererOutputTransportMessage,
-    RendererOutputTransportReceiver, RendererOutputTransportSender, RendererOwnerAction,
-    RendererPageCommand, RendererPageHandle, RendererPageReply, RendererPageTestingHandle,
-    RendererPendingPopupActivation, RendererPreparedDocumentCommitConfiguration,
-    RendererProtocolObservation, RendererRuntimeCommandOutput, RendererRuntimeInspectorMessage,
+    RendererDraggedDirectory, RendererDraggedFile, RendererInputDispatchOutcome,
+    RendererInspectorProtocolConfiguration, RendererInspectorSessionRestoreSnapshot,
+    RendererOutputItem, RendererOutputPublication, RendererOutputResidenceIdentity,
+    RendererOutputTransportMessage, RendererOutputTransportReceiver, RendererOutputTransportSender,
+    RendererOwnerAction, RendererPageCommand, RendererPageHandle, RendererPageReply,
+    RendererPageTestingHandle, RendererPendingPopupActivation, RendererPointerEventProperties,
+    RendererPreparedDocumentCommitConfiguration, RendererProtocolObservation,
+    RendererRuntimeCommandOutput, RendererRuntimeInspectorMessage,
     RendererRuntimeInspectorResponseSender,
 };
 use crate::local_executor::{is_on_script_execution_lane_for, scope_on_scaffold_js_local_executor};
@@ -1016,6 +1017,31 @@ async fn capture_screenshot_for_renderer_page(
             image
         }
         _ => panic!("expected captured screenshot reply"),
+    }
+}
+
+async fn dispatch_wheel_for_action_window_test(
+    page: &RendererPageHandle,
+    delta_y: f64,
+) -> RendererInputDispatchOutcome {
+    let (reply, _) = page
+        .run_async_command(RendererPageCommand::DispatchMouseEventAtPoint {
+            x: 10.0,
+            y: 10.0,
+            event_name: "wheel".to_owned(),
+            button: -1,
+            buttons: Some(0),
+            click_count: 0,
+            delta_x: 0.0,
+            delta_y,
+            pointer: RendererPointerEventProperties::default(),
+            modifiers: 0,
+        })
+        .await
+        .expect("wheel action should enter the renderer action window");
+    match reply {
+        RendererPageReply::InputDispatchOutcome(outcome) => outcome,
+        _ => panic!("wheel action should return an input dispatch outcome"),
     }
 }
 
@@ -12406,6 +12432,232 @@ document.addEventListener("scrollend", () => {
     page.close_async()
         .await
         .expect("rendering-update owner-liveness page should close");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn owner_scheduler_applies_a_wheel_batch_at_the_fixed_action_window_deadline() {
+    let runtime = initialize_layout_test_runtime();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
+        .expect("default resource request client");
+    let (base_url, effect_request_seen, release_effect_response, effect_server) =
+        spawn_owner_wake_gated_server_with_content_type(
+            "/action-window-intersection-applied",
+            "ok",
+            "text/plain; charset=utf-8",
+        )
+        .await;
+    let page_url = url::Url::parse(&format!("{base_url}/page")).expect("page URL");
+    let mut page = create_test_html_page(
+        &runtime,
+        &loader,
+        page_url,
+        r#"<!doctype html>
+<style>
+html, body { margin: 0; }
+body { height: 1200px; }
+#target { position: absolute; top: 250px; width: 20px; height: 20px; }
+</style>
+<div id="target"></div>
+<script>
+globalThis.__lmActionWindowWheelLog = [];
+globalThis.__lmActionWindowIoLog = [];
+addEventListener("wheel", event => {
+  __lmActionWindowWheelLog.push("event:" + event.deltaY);
+  Promise.resolve().then(() => {
+    __lmActionWindowWheelLog.push("microtask:" + event.deltaY);
+  });
+}, { capture: true });
+</script>"#,
+    )
+    .await;
+    page.run_async_command(RendererPageCommand::SetViewportSurface(Some(
+        crate::protocol_types::ViewportSurface {
+            inner_width: 200,
+            inner_height: 200,
+            outer_width: 200,
+            outer_height: 200,
+            device_pixel_ratio: 1.0,
+            screen_width: 200,
+            screen_height: 200,
+            screen_avail_width: 200,
+            screen_avail_height: 200,
+        },
+    )))
+    .await
+    .expect("action-window viewport should update");
+    let (observer_installed, _) = page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: r#"
+globalThis.__lmActionWindowObserver = new IntersectionObserver(entries => {
+  const entry = entries.find(candidate => candidate.target.id === "target");
+  if (!entry) return;
+  __lmActionWindowIoLog.push(entry.isIntersecting);
+  if (__lmActionWindowIoLog.length === 2) {
+    fetch("/action-window-intersection-applied");
+  }
+});
+__lmActionWindowObserver.observe(document.getElementById("target"));
+"installed"
+"#
+            .to_owned(),
+            await_promise: false,
+        })
+        .await
+        .expect("IntersectionObserver should install");
+    assert_eq!(
+        renderer_json_value(observer_installed),
+        Some(serde_json::json!("installed"))
+    );
+    let (initial_intersection, _) = page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: "JSON.stringify(__lmActionWindowIoLog)".to_owned(),
+            await_promise: false,
+        })
+        .await
+        .expect("initial intersection state should be observable");
+    assert_eq!(
+        renderer_json_value(initial_intersection),
+        Some(serde_json::json!("[false]"))
+    );
+
+    let opened_at = std::time::Instant::now();
+    for delta_y in [100.0, -100.0, 100.0] {
+        let outcome = dispatch_wheel_for_action_window_test(&page, delta_y).await;
+        assert!(outcome.handled, "wheel admission should be acknowledged");
+    }
+
+    tokio::time::timeout(Duration::from_secs(3), effect_request_seen)
+        .await
+        .expect("the owner scheduler should apply the wheel batch at its deadline")
+        .expect("IntersectionObserver effect signal should remain open");
+    assert!(
+        opened_at.elapsed() >= Duration::from_millis(900),
+        "the fixed one-second action window must not apply immediately"
+    );
+    release_effect_response
+        .send(())
+        .expect("intersection effect response should release once");
+    effect_server
+        .await
+        .expect("intersection effect server should finish");
+
+    let (state, _) = page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: r#"JSON.stringify({
+  scrollY,
+  wheelLog: __lmActionWindowWheelLog,
+  ioLog: __lmActionWindowIoLog
+})"#
+            .to_owned(),
+            await_promise: false,
+        })
+        .await
+        .expect("applied action-window state should remain observable");
+    assert_eq!(
+        renderer_json_value(state),
+        Some(serde_json::json!(
+            r#"{"scrollY":100,"wheelLog":["event:100","event:-100","event:100","microtask:100","microtask:-100","microtask:100"],"ioLog":[false,true]}"#
+        ))
+    );
+
+    page.close_async()
+        .await
+        .expect("action-window deadline page should close");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn screenshot_and_screencast_flush_pending_wheel_actions_before_paint() {
+    let runtime = initialize_layout_test_runtime();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
+        .expect("default resource request client");
+    let url = url::Url::parse("https://example.test/action-window-capture-barriers").unwrap();
+    let mut page = create_test_html_page(
+        &runtime,
+        &loader,
+        url,
+        r#"<!doctype html>
+<style>
+html, body { margin: 0; background: white; }
+body { height: 1200px; }
+#witness { position: fixed; inset: 0; background: white; }
+</style>
+<div id="witness"></div>
+<script>
+globalThis.__lmActionWindowCaptureDeltas = [];
+addEventListener("wheel", event => {
+  __lmActionWindowCaptureDeltas.push(event.deltaY);
+  document.getElementById("witness").style.background =
+    __lmActionWindowCaptureDeltas.length === 1 ? "rgb(255, 0, 0)" : "rgb(0, 255, 0)";
+}, { capture: true });
+</script>"#,
+    )
+    .await;
+    page.run_async_command(RendererPageCommand::SetViewportSurface(Some(
+        crate::protocol_types::ViewportSurface {
+            inner_width: 20,
+            inner_height: 20,
+            outer_width: 20,
+            outer_height: 20,
+            device_pixel_ratio: 1.0,
+            screen_width: 20,
+            screen_height: 20,
+            screen_avail_width: 20,
+            screen_avail_height: 20,
+        },
+    )))
+    .await
+    .expect("capture barrier viewport should update");
+
+    assert!(
+        dispatch_wheel_for_action_window_test(&page, 10.0)
+            .await
+            .handled
+    );
+    let screenshot = capture_screenshot_for_renderer_page(&page).await;
+    assert_eq!(
+        decoded_png_pixel(&screenshot.bytes, 10, 10),
+        [255, 0, 0, 255]
+    );
+
+    assert!(
+        dispatch_wheel_for_action_window_test(&page, 20.0)
+            .await
+            .handled
+    );
+    let screencast = capture_screenshot_with_request(
+        &page,
+        super::RendererCaptureScreenshotRequest {
+            purpose: super::RendererScreenshotPurpose::Screencast,
+            format: super::RendererScreenshotFormat::Png,
+            quality: 100,
+            region: super::RendererScreenshotRegion::Viewport,
+            optimize_for_speed: true,
+            max_width: None,
+            max_height: None,
+        },
+    )
+    .await;
+    assert_eq!(
+        decoded_png_pixel(&screencast.bytes, 10, 10),
+        [0, 255, 0, 255]
+    );
+
+    let (state, _) = page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: "JSON.stringify({ scrollY, deltas: __lmActionWindowCaptureDeltas })"
+                .to_owned(),
+            await_promise: false,
+        })
+        .await
+        .expect("capture barrier state should remain observable");
+    assert_eq!(
+        renderer_json_value(state),
+        Some(serde_json::json!(r#"{"scrollY":30,"deltas":[10,20]}"#))
+    );
+
+    page.close_async()
+        .await
+        .expect("capture barrier page should close");
 }
 
 #[tokio::test(flavor = "multi_thread")]

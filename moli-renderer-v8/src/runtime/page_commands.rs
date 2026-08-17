@@ -18,6 +18,9 @@ impl PageVm {
         &mut self,
         command: RendererPageCommand,
     ) -> Result<RendererPageReply> {
+        if let Some(barrier) = renderer_page_command_action_barrier(&command) {
+            self.flush_page_action_window(barrier)?;
+        }
         match command {
             RendererPageCommand::Inspector(command) => {
                 self.dispatch_renderer_inspector_command(command)
@@ -80,6 +83,30 @@ impl PageVm {
                 .vm_mut()
                 .navigate_top_level_same_document_from_browser(&url)
                 .map(RendererPageReply::Bool),
+            RendererPageCommand::DispatchMouseEventAtPoint {
+                x,
+                y,
+                event_name,
+                button,
+                buttons,
+                click_count,
+                delta_x,
+                delta_y,
+                pointer,
+                modifiers,
+            } if event_name == "wheel" => self
+                .queue_wheel_event(
+                    x,
+                    y,
+                    button,
+                    buttons,
+                    click_count,
+                    delta_x,
+                    delta_y,
+                    pointer,
+                    modifiers,
+                )
+                .map(RendererPageReply::InputDispatchOutcome),
             RendererPageCommand::DispatchMouseEventAtPoint {
                 x,
                 y,
@@ -1365,6 +1392,24 @@ impl PageVm {
             delay_secs.min(std::time::Duration::MAX.as_secs_f64()),
         ))
         .await;
+    }
+}
+
+fn renderer_page_command_action_barrier(
+    command: &RendererPageCommand,
+) -> Option<moli_action_window::ActionBarrier> {
+    match command {
+        RendererPageCommand::DispatchMouseEventAtPoint { event_name, .. }
+            if event_name == "wheel" =>
+        {
+            None
+        }
+        RendererPageCommand::CaptureScreenshot(request) => Some(match request.purpose {
+            RendererScreenshotPurpose::Screenshot => moli_action_window::ActionBarrier::Screenshot,
+            RendererScreenshotPurpose::Screencast => moli_action_window::ActionBarrier::Screencast,
+            RendererScreenshotPurpose::Print { .. } => moli_action_window::ActionBarrier::Explicit,
+        }),
+        _ => Some(moli_action_window::ActionBarrier::Explicit),
     }
 }
 

@@ -72,7 +72,8 @@ impl PageVm {
         descriptor: RendererPageReadyDescriptor,
     ) -> bool {
         match descriptor {
-            RendererPageReadyDescriptor::DomManipulation { .. }
+            RendererPageReadyDescriptor::ActionWindow { .. }
+            | RendererPageReadyDescriptor::DomManipulation { .. }
             | RendererPageReadyDescriptor::UserInteraction { .. }
             | RendererPageReadyDescriptor::FileReading { .. }
             | RendererPageReadyDescriptor::MiscPlatformApi { .. }

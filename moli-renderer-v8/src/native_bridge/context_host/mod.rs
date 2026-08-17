@@ -106,6 +106,8 @@ pub(crate) use image_resources::{
     ScannedImagePreloadAdmission,
 };
 mod indexed_db_tasks;
+mod interaction_batch;
+pub(crate) use interaction_batch::PendingScrollObservableEffects;
 mod internal_node_refs;
 mod layout;
 mod layout_snapshot;
@@ -941,6 +943,7 @@ pub(crate) struct JsContextHost {
     opfs_owner_state: Option<opfs_tasks::WindowOpfsOwnerState>,
     pub(super) history_queue: HistoryQueueState,
     rendering_updates: rendering_updates::RenderingUpdateState,
+    scroll_observable_effect_batch: interaction_batch::ScrollObservableEffectBatchState,
     view_transition_updates: view_transition_updates::ViewTransitionUpdateState,
     media_element_events: media_element_events::MediaElementEventState,
     element_toggle_events: element_toggle_events::ElementToggleEventState,
