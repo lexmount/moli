@@ -1128,6 +1128,16 @@ impl ResolvedLayoutStyle {
         self.display
     }
 
+    /// Used inner formatting context after browser layout-object adjustments.
+    ///
+    /// `display` retains the authored/computed outer+inner value for box-tree
+    /// semantics. Native controls can select a different internal algorithm
+    /// without changing that observable CSS value, just as Blink's menu-list
+    /// select has computed `inline-block` display but owns a LayoutFlexibleBox.
+    pub(crate) fn uses_flex_formatting_context(&self) -> bool {
+        self.taffy.display == TaffyDisplay::Flex
+    }
+
     /// Whether the box would have been inline-level before absolute/fixed
     /// positioning blockified its computed `display` value.
     ///
@@ -1814,11 +1824,7 @@ impl ResolvedLayoutStyle {
             .resolve(natural_ratio, self.taffy.box_sizing)
     }
 
-    pub(crate) fn mark_intrinsic_form_control_container(&mut self) {
-        // A button retains and lays out its real DOM children, but its
-        // block-level outer display still uses the same non-stretch intrinsic
-        // width exception as other native controls.
-        self.taffy.item_is_table = true;
+    pub(crate) fn adjust_button_flow_layout(&mut self) {
         // Blink's UA sheet gives <button> a private safe block-content center
         // alignment. Taffy's block algorithm already implements the standard
         // equivalent. Only flow buttons use that algorithm; author flex/grid
@@ -1832,6 +1838,14 @@ impl ResolvedLayoutStyle {
         ) {
             self.taffy.align_content = Some(taffy::AlignContent::SAFE_CENTER);
         }
+    }
+
+    pub(crate) fn mark_menu_list_formatting_context(&mut self) {
+        // Blink gives an appearance:auto menu-list select a LayoutFlexibleBox
+        // even though its computed display remains inline-block. Keep the
+        // observable display in `display` and select only the inner numeric
+        // formatting algorithm here.
+        self.taffy.display = TaffyDisplay::Flex;
     }
 }
 
