@@ -9,7 +9,10 @@
 
 use std::{collections::BTreeMap, fmt::Debug, hash::Hash, ops::Range};
 
-use parley::{BreakReason, InlineBox, InlineBoxKind, Layout, PositionedLayoutItem, TextStyle};
+use parley::{
+    BreakReason, InlineBox, InlineBoxKind, Layout, PositionedLayoutItem, TextStyle,
+    WhiteSpaceCollapse,
+};
 use taffy::{
     Direction, LogicalBoxStrut, LogicalOffset, LogicalSize, MaybeResolve as _, Point, Rect, Size,
     WritingDirection, WritingMode,
@@ -390,7 +393,6 @@ pub(crate) struct InlineTextUnit {
     pub(crate) ancestors: Vec<LayoutBoxId>,
     pub(crate) sources: Vec<SourceOrigin>,
     kind: InlineTextUnitKind,
-    pub(crate) break_spaces_opportunity: bool,
 }
 
 /// Semantic identity retained for one unit in Parley's shared text stream.
@@ -586,6 +588,23 @@ pub(crate) fn flow_relative_line_rect(
     )
 }
 
+fn line_box_rect_without_hanging(
+    mut rect: FlowRelativeRect,
+    trailing_whitespace: f32,
+    is_rtl: bool,
+) -> (FlowRelativeRect, bool) {
+    let hanging = if trailing_whitespace.is_finite() {
+        trailing_whitespace.clamp(0.0, rect.inline_size.max(0.0))
+    } else {
+        0.0
+    };
+    if is_rtl {
+        rect.inline_offset += hanging;
+    }
+    rect.inline_size = (rect.inline_size - hanging).max(0.0);
+    (rect, hanging > 0.0)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct InlineGlyphOffset {
     run_index: usize,
@@ -655,7 +674,7 @@ pub(crate) struct LineRelativeFragments {
 impl LineRelativeFragments {
     pub(crate) fn translate_block_axis(&mut self, offset: f32) {
         for line in &mut self.lines {
-            line.rect.block_offset += offset;
+            line.used_rect.block_offset += offset;
         }
     }
 
@@ -670,10 +689,10 @@ impl LineRelativeFragments {
             boxes,
             line_breaks,
         } = self;
-        let flow_lines = lines.iter().map(|line| line.rect).collect::<Vec<_>>();
+        let flow_lines = lines.iter().map(|line| line.used_rect).collect::<Vec<_>>();
         let physical_lines = lines
             .iter()
-            .map(|line| coordinates.to_physical_flow_rect(line.rect, content_box_size))
+            .map(|line| coordinates.to_physical_flow_rect(line.used_rect, content_box_size))
             .collect::<Vec<_>>();
         InlineFragments {
             lines: lines
@@ -681,7 +700,9 @@ impl LineRelativeFragments {
                 .zip(physical_lines)
                 .map(|(line, rect)| InlineLineFragment {
                     line_index: line.line_index,
-                    rect,
+                    used_rect: rect,
+                    has_hanging: line.has_hanging,
+                    inline_axis: coordinates.physical_inline_axis(),
                 })
                 .collect(),
             text: text
@@ -734,13 +755,55 @@ impl LineRelativeFragments {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct InlineLineFragment {
     pub(crate) line_index: usize,
-    pub(crate) rect: PaintRect,
+    /// The actual line-box fragment. Hanging trailing white space is outside
+    /// this rect, while its text/inline child fragments retain their geometry.
+    pub(crate) used_rect: PaintRect,
+    has_hanging: bool,
+    inline_axis: LayoutPhysicalAxis,
+}
+
+impl InlineLineFragment {
+    /// Mirrors Blink's `AdjustOverflowForHanging`: the full text and inline
+    /// box geometry remains available for paint and CSSOM, while scrollable
+    /// overflow is clipped only along the line's inline axis.
+    pub(crate) fn adjust_scrollable_overflow(self, mut overflow: PaintRect) -> PaintRect {
+        if !self.has_hanging {
+            return overflow;
+        }
+        match self.inline_axis {
+            LayoutPhysicalAxis::Horizontal => {
+                let line_start = self.used_rect.x;
+                let line_end = self.used_rect.right();
+                if overflow.x < line_start {
+                    // Blink moves an overflow rect whose start edge is in the
+                    // hanging area; it does not shrink that edge in place.
+                    overflow.x = line_start;
+                }
+                if overflow.right() > line_end {
+                    overflow.width = (line_end - overflow.x).max(0.0);
+                }
+            }
+            LayoutPhysicalAxis::Vertical => {
+                let line_start = self.used_rect.y;
+                let line_end = self.used_rect.bottom();
+                if overflow.y < line_start {
+                    overflow.y = line_start;
+                }
+                if overflow.bottom() > line_end {
+                    overflow.height = (line_end - overflow.y).max(0.0);
+                }
+            }
+        }
+        overflow
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct LineRelativeLineFragment {
     line_index: usize,
-    rect: FlowRelativeRect,
+    /// Used line-box geometry, excluding hanging trailing white space.
+    used_rect: FlowRelativeRect,
+    has_hanging: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -952,9 +1015,12 @@ pub(crate) fn build_inline_fragments(
             .get(line_index)
             .filter(|placement| placement.line_index == line_index);
         let line_rect = flow_relative_line_rect(&line, placement);
+        let (used_line_rect, has_hanging) =
+            line_box_rect_without_hanging(line_rect, metrics.trailing_whitespace, layout.is_rtl());
         fragments.lines.push(LineRelativeLineFragment {
             line_index,
-            rect: line_rect,
+            used_rect: used_line_rect,
+            has_hanging,
         });
         if let Some(placement) = placement {
             for box_placement in &placement.box_block_placements {
@@ -1085,7 +1151,7 @@ pub(crate) fn build_inline_fragments(
     fragments.boxes = box_fragments
         .into_iter()
         .filter_map(|((box_index, line_index), accumulator)| {
-            let line_rect = fragments.lines.get(line_index)?.rect;
+            let line_rect = fragments.lines.get(line_index)?.used_rect;
             Some(LineRelativeBoxFragment {
                 line_index,
                 box_id: LayoutBoxId::from_index(box_index),
@@ -1098,7 +1164,7 @@ pub(crate) fn build_inline_fragments(
     fragments.text = source_fragments
         .into_iter()
         .filter_map(|(key, accumulator)| {
-            let line_rect = fragments.lines.get(key.line_index)?.rect;
+            let line_rect = fragments.lines.get(key.line_index)?.used_rect;
             Some(LineRelativeSourceFragment {
                 line_index: key.line_index,
                 box_id: LayoutBoxId::from_index(key.box_index),
@@ -1113,7 +1179,7 @@ pub(crate) fn build_inline_fragments(
     fragments.line_breaks = line_break_fragments
         .into_iter()
         .filter_map(|((box_index, line_index), accumulator)| {
-            let line_rect = fragments.lines.get(line_index)?.rect;
+            let line_rect = fragments.lines.get(line_index)?.used_rect;
             Some(LineRelativeLineBreakFragment {
                 line_index,
                 box_id: LayoutBoxId::from_index(box_index),
@@ -1122,85 +1188,6 @@ pub(crate) fn build_inline_fragments(
         })
         .collect();
     fragments
-}
-
-/// Breaks a shared IFC text stream while preserving CSS `break-spaces`
-/// trailing-space semantics that Parley 0.10 does not model directly.
-pub(crate) fn break_inline_lines(
-    context: &InlineFormattingContext,
-    layout: &mut Layout<TextBrush>,
-    max_advance: Option<f32>,
-) {
-    layout.break_all_lines(max_advance);
-    let Some(width) = max_advance.filter(|width| width.is_finite() && *width > 0.0) else {
-        return;
-    };
-    if !context
-        .text_units
-        .iter()
-        .any(|unit| unit.break_spaces_opportunity)
-    {
-        return;
-    }
-
-    // Parley hangs an overflowing U+0020 on the preceding line. That is
-    // correct for normal whitespace but not for `break-spaces`, where every
-    // preserved space occupies line width. Identify only the lines where the
-    // initial break actually overflowed through trailing whitespace.
-    let tolerance = width.abs().max(1.0) * f32::EPSILON * 8.0;
-    let adjust_lines = layout
-        .lines()
-        .map(|line| {
-            let metrics = line.metrics();
-            let line_range = line.text_range();
-            metrics.trailing_whitespace > 0.0
-                && metrics.advance > width + tolerance
-                && context.text_units.iter().any(|unit| {
-                    unit.break_spaces_opportunity && ranges_overlap(&unit.output_range, &line_range)
-                })
-        })
-        .collect::<Vec<_>>();
-    if !adjust_lines.iter().any(|adjust| *adjust) {
-        return;
-    }
-
-    // Moving the affected line width one representable step inward makes the
-    // last fitting preserved space use Parley's normal overflowing-space
-    // commit. Restore the real CSS width on every committed line so alignment
-    // and fragments still observe the containing block, not the breaker shim.
-    let adjusted_width = (width - tolerance).max(0.0);
-    let mut breaker = layout.break_lines();
-    breaker.state_mut().set_layout_max_advance(width);
-    let mut line_index = 0;
-    let mut use_normal_breaking = false;
-    while !breaker.is_done() {
-        let line_width = if adjust_lines.get(line_index).copied().unwrap_or(false) {
-            adjusted_width
-        } else {
-            width
-        };
-        breaker.state_mut().set_line_max_advance(line_width);
-        match breaker.break_next() {
-            Some(parley::YieldData::LineBreak(_)) => {
-                breaker.set_prior_line_width(width);
-                line_index += 1;
-            }
-            Some(
-                parley::YieldData::MaxHeightExceeded(_) | parley::YieldData::InlineBoxBreak(_),
-            ) => {
-                // Neither condition is produced by Moli's rectangular
-                // IFC input. Fall back to the already supported normal
-                // breaker instead of looping or publishing a partial layout.
-                use_normal_breaking = true;
-                break;
-            }
-            None => break,
-        }
-    }
-    breaker.finish();
-    if use_normal_breaking {
-        layout.break_all_lines(Some(width));
-    }
 }
 
 /// Builds the pass-local vertical placement sidecar that Parley 0.10 does not
@@ -1963,31 +1950,50 @@ struct InlineBuildInput {
     root_style: LayoutBoxId,
 }
 
+struct ResolvedInlineTextStyle {
+    text: TextStyle<'static, 'static, TextBrush>,
+    white_space_collapse: InlineWhiteSpaceCollapse,
+    structural_parent: LayoutBoxId,
+    sample: Option<char>,
+}
+
 fn intern_resolved_inline_style(
-    styles: &mut Vec<TextStyle<'static, 'static, TextBrush>>,
-    style_parents: &mut Vec<LayoutBoxId>,
-    style_samples: &mut Vec<Option<char>>,
+    styles: &mut Vec<ResolvedInlineTextStyle>,
     style: TextStyle<'static, 'static, TextBrush>,
+    white_space_collapse: InlineWhiteSpaceCollapse,
     structural_parent: LayoutBoxId,
     sample: Option<char>,
 ) -> usize {
     let style_slot = styles
         .iter()
-        .enumerate()
-        .position(|(index, candidate)| {
-            *candidate == style && style_parents[index] == structural_parent
+        .position(|candidate| {
+            candidate.text == style
+                && candidate.white_space_collapse == white_space_collapse
+                && candidate.structural_parent == structural_parent
         })
         .unwrap_or_else(|| {
             let index = styles.len();
-            styles.push(style);
-            style_parents.push(structural_parent);
-            style_samples.push(None);
+            styles.push(ResolvedInlineTextStyle {
+                text: style,
+                white_space_collapse,
+                structural_parent,
+                sample: None,
+            });
             index
         });
-    if style_samples[style_slot].is_none() {
-        style_samples[style_slot] = sample;
+    if styles[style_slot].sample.is_none() {
+        styles[style_slot].sample = sample;
     }
     style_slot
+}
+
+const fn parley_white_space_collapse(mode: InlineWhiteSpaceCollapse) -> WhiteSpaceCollapse {
+    match mode {
+        InlineWhiteSpaceCollapse::Collapse => WhiteSpaceCollapse::Collapse,
+        InlineWhiteSpaceCollapse::Preserve => WhiteSpaceCollapse::Preserve,
+        InlineWhiteSpaceCollapse::PreserveBreaks => WhiteSpaceCollapse::PreserveBreaks,
+        InlineWhiteSpaceCollapse::BreakSpaces => WhiteSpaceCollapse::BreakSpaces,
+    }
 }
 
 fn append_resolved_inline_run(
@@ -2021,13 +2027,11 @@ impl InlineBuildInput {
         parley.resolve_font_families(&mut root_text_style, None);
         let quantize = true;
         let mut styles = Vec::new();
-        let mut style_parents = Vec::new();
-        let mut style_samples = Vec::new();
         let mut resolved_runs = Vec::<(Range<usize>, usize)>::new();
         for unit in &self.units {
-            let mut base_style = world.boxes[unit.style_box.index()]
-                .style
-                .parley_text_style();
+            let unit_style = &world.boxes[unit.style_box.index()].style;
+            let mut base_style = unit_style.parley_text_style();
+            let white_space_mode = unit_style.white_space_collapse();
             // `vertical-align` belongs to the structural inline box, not to
             // each descendant glyph. Keep glyphs baseline-aligned within their
             // direct box state; closing that state moves the complete subtree.
@@ -2040,9 +2044,8 @@ impl InlineBuildInput {
                 parley.resolve_font_families(&mut base_style, None);
                 let style_slot = intern_resolved_inline_style(
                     &mut styles,
-                    &mut style_parents,
-                    &mut style_samples,
                     base_style,
+                    white_space_mode,
                     structural_parent,
                     sample,
                 );
@@ -2060,9 +2063,8 @@ impl InlineBuildInput {
                 parley.resolve_font_families(&mut style, Some(character));
                 let style_slot = intern_resolved_inline_style(
                     &mut styles,
-                    &mut style_parents,
-                    &mut style_samples,
                     style,
+                    white_space_mode,
                     structural_parent,
                     (!unit.kind.is_control()).then_some(character),
                 );
@@ -2078,10 +2080,21 @@ impl InlineBuildInput {
         builder.set_initial_text_wrap_mode(root_text_style.text_wrap_mode);
         let style_indices = styles
             .iter()
-            .map(|style| builder.push_style(style.clone()))
+            .map(|style| {
+                builder.push_style_with_white_space_collapse(
+                    style.text.clone(),
+                    parley_white_space_collapse(style.white_space_collapse),
+                )
+            })
             .collect::<Vec<_>>();
         if resolved_runs.is_empty() {
-            let style_index = builder.push_style(root_text_style.clone());
+            let root_mode = world.boxes[self.root_style.index()]
+                .style
+                .white_space_collapse();
+            let style_index = builder.push_style_with_white_space_collapse(
+                root_text_style.clone(),
+                parley_white_space_collapse(root_mode),
+            );
             builder.push_style_run(style_index, 0..0);
         } else {
             for (range, style_slot) in &resolved_runs {
@@ -2126,9 +2139,9 @@ impl InlineBuildInput {
         let layout = builder.build(&self.text);
         let font_metrics = styles
             .iter()
-            .zip(style_samples)
-            .map(|(style, sample)| parley.inline_font_metrics(style, sample))
+            .map(|style| parley.inline_font_metrics(&style.text, style.sample))
             .collect();
+        let style_parents = styles.iter().map(|style| style.structural_parent).collect();
         let parent_strut = measure_inline_strut(parley, root_text_style.clone(), quantize);
         let mut structural_boxes = Vec::new();
         for (_, object, _) in &self.objects {
@@ -2587,21 +2600,6 @@ impl InlineNormalizer {
                         InlineTextUnitKind::Text
                     },
                 );
-                if mode == InlineWhiteSpaceCollapse::BreakSpaces && character == ' ' {
-                    // Parley 0.10 has no CSS `break-spaces` mode. U+200B adds
-                    // the required opportunity after every preserved space;
-                    // its control brush keeps it out of paint and source
-                    // fragments while the actual space remains measurable.
-                    let unit_index = self.units.len();
-                    self.append_unit(
-                        style_box,
-                        '\u{200B}',
-                        ancestors,
-                        Vec::new(),
-                        InlineTextUnitKind::Control,
-                    );
-                    self.units[unit_index].break_spaces_opportunity = true;
-                }
                 self.line_has_content = character != '\n';
             }
             InlineWhiteSpaceCollapse::Collapse | InlineWhiteSpaceCollapse::PreserveBreaks => {
@@ -2667,7 +2665,6 @@ impl InlineNormalizer {
                 ancestors: pending.ancestors,
                 sources: pending.sources,
                 kind: InlineTextUnitKind::Text,
-                break_spaces_opportunity: false,
             },
         );
     }
@@ -2791,7 +2788,6 @@ impl InlineNormalizer {
             ancestors: ancestors.to_vec(),
             sources,
             kind,
-            break_spaces_opportunity: false,
         });
     }
 
@@ -2866,6 +2862,86 @@ fn is_combining_mark(character: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hanging_whitespace_shrinks_the_used_line_box_at_the_trailing_edge() {
+        let full = FlowRelativeRect::new(10.0, 20.0, 30.0, 12.0);
+        assert_eq!(
+            line_box_rect_without_hanging(full, 6.0, false),
+            (FlowRelativeRect::new(10.0, 20.0, 24.0, 12.0), true)
+        );
+        assert_eq!(
+            line_box_rect_without_hanging(full, 6.0, true),
+            (FlowRelativeRect::new(16.0, 20.0, 24.0, 12.0), true)
+        );
+        assert_eq!(
+            line_box_rect_without_hanging(full, 0.0, false),
+            (full, false)
+        );
+    }
+
+    #[test]
+    fn hanging_children_stay_relative_to_the_used_line_fragment() {
+        let full_line = FlowRelativeRect::new(10.0, 20.0, 30.0, 12.0);
+        let child = FlowRelativeRect::new(11.0, 22.0, 8.0, 6.0);
+        let (used_line, has_hanging) = line_box_rect_without_hanging(full_line, 6.0, true);
+        assert!(has_hanging);
+
+        let full_relative = full_line.line_relative_rect(child);
+        let used_relative = used_line.line_relative_rect(child);
+        assert_eq!(used_relative.inline_offset, -5.0);
+
+        let outer = Size {
+            width: 150.0,
+            height: 225.0,
+        };
+        for writing_mode in [
+            WritingMode::HorizontalTb,
+            WritingMode::VerticalLr,
+            WritingMode::VerticalRl,
+        ] {
+            let coordinates = InlineCoordinateSpace::new(writing_mode);
+            assert_eq!(
+                coordinates.to_physical_line_rect(used_line, used_relative, outer),
+                coordinates.to_physical_line_rect(full_line, full_relative, outer),
+                "{writing_mode:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn hanging_line_clips_scrollable_overflow_only_on_its_inline_axis() {
+        let horizontal = InlineLineFragment {
+            line_index: 0,
+            used_rect: PaintRect::new(10.0, 20.0, 30.0, 12.0),
+            has_hanging: true,
+            inline_axis: LayoutPhysicalAxis::Horizontal,
+        };
+        assert_eq!(
+            horizontal.adjust_scrollable_overflow(PaintRect::new(5.0, 15.0, 40.0, 22.0)),
+            PaintRect::new(10.0, 15.0, 30.0, 22.0)
+        );
+        assert_eq!(
+            horizontal.adjust_scrollable_overflow(PaintRect::new(5.0, 15.0, 20.0, 22.0)),
+            PaintRect::new(10.0, 15.0, 20.0, 22.0),
+            "Blink moves a start-side hanging overflow rect without shrinking it",
+        );
+
+        let vertical = InlineLineFragment {
+            line_index: 0,
+            used_rect: PaintRect::new(10.0, 20.0, 12.0, 30.0),
+            has_hanging: true,
+            inline_axis: LayoutPhysicalAxis::Vertical,
+        };
+        assert_eq!(
+            vertical.adjust_scrollable_overflow(PaintRect::new(5.0, 15.0, 22.0, 40.0)),
+            PaintRect::new(5.0, 20.0, 22.0, 30.0)
+        );
+        assert_eq!(
+            vertical.adjust_scrollable_overflow(PaintRect::new(5.0, 15.0, 22.0, 20.0)),
+            PaintRect::new(5.0, 20.0, 22.0, 20.0),
+        );
+    }
 
     #[test]
     fn line_relative_rects_cross_the_physical_boundary_once() {
@@ -3252,7 +3328,7 @@ mod tests {
     }
 
     #[test]
-    fn break_spaces_inserts_non_source_break_controls_after_preserved_spaces() {
+    fn break_spaces_preserves_the_source_stream_without_synthetic_controls() {
         let text = LayoutBoxId::from_index(1);
         let input = normalize(
             &[(text, "A  B")],
@@ -3260,29 +3336,21 @@ mod tests {
             InlineTextTransform::None,
         );
 
-        assert_eq!(input.text, "A \u{200B} \u{200B}B");
+        assert_eq!(input.text, "A  B");
         assert_eq!(
             input
                 .units
                 .iter()
                 .filter(|unit| unit.kind == InlineTextUnitKind::Control)
                 .count(),
-            2
-        );
-        assert_eq!(
-            input
-                .units
-                .iter()
-                .filter(|unit| unit.break_spaces_opportunity)
-                .count(),
-            2
+            0
         );
         assert_eq!(input.source_map.len(), 4);
         assert!(
             input
                 .source_map
                 .iter()
-                .all(|entry| { &input.text[entry.output_range.clone()] != "\u{200B}" })
+                .all(|entry| { !input.text[entry.output_range.clone()].is_empty() })
         );
     }
 

@@ -168,7 +168,7 @@ where
     paint_order_count: usize,
     pub(crate) diagnostics: Vec<PaintDiagnostic>,
     resolved_transforms: Vec<ResolvedLayoutTransform>,
-    overflow: Vec<LayoutRect>,
+    scrollable_overflow: Vec<LayoutRect>,
     viewport_anchored: Vec<bool>,
     direct_fragments: Vec<Option<LayoutFragmentId>>,
     owner_paint_fragments: Vec<Vec<LayoutFragmentId>>,
@@ -213,7 +213,7 @@ where
             paint_order_count: 0,
             diagnostics: Vec::new(),
             resolved_transforms: vec![ResolvedLayoutTransform::IDENTITY; count],
-            overflow: vec![LayoutRect::ZERO; count],
+            scrollable_overflow: vec![LayoutRect::ZERO; count],
             viewport_anchored: vec![false; count],
             direct_fragments: vec![None; count],
             owner_paint_fragments: vec![Vec::new(); count],
@@ -280,12 +280,16 @@ where
                     PaintDiagnosticSeverity::Warning,
                 ));
             }
-            let mut overflow = border_box;
+            // Blink initializes layout/scrollable overflow from the padding
+            // rect. A box's own border is self visual geometry, not content
+            // reachable by scrolling; descendants still propagate their
+            // border and margin boxes into the parent's overflow below.
+            let mut overflow = padding_box;
             let content_extent = LayoutRect::new(
-                0.0,
-                0.0,
-                layout.size.width.max(layout.content_size.width).max(0.0),
-                layout.size.height.max(layout.content_size.height).max(0.0),
+                padding_box.x,
+                padding_box.y,
+                padding_box.width.max(layout.content_size.width).max(0.0),
+                padding_box.height.max(layout.content_size.height).max(0.0),
             );
             overflow = overflow.union(content_extent);
             if let Some(context) = layout_box.inline_layout.as_ref() {
@@ -294,16 +298,30 @@ where
                     layout.border.top + layout.padding.top,
                 );
                 for line in &context.fragments.lines {
-                    overflow = overflow.union(offset_rect(line.rect, origin));
+                    overflow = overflow.union(offset_rect(line.used_rect, origin));
                 }
                 for fragment in &context.fragments.text {
-                    overflow = overflow.union(offset_rect(fragment.rect, origin));
+                    let rect = context
+                        .fragments
+                        .lines
+                        .get(fragment.line_index)
+                        .map_or(fragment.rect, |line| {
+                            line.adjust_scrollable_overflow(fragment.rect)
+                        });
+                    overflow = overflow.union(offset_rect(rect, origin));
                 }
                 for fragment in &context.fragments.boxes {
-                    overflow = overflow.union(offset_rect(fragment.rect, origin));
+                    let rect = context
+                        .fragments
+                        .lines
+                        .get(fragment.line_index)
+                        .map_or(fragment.rect, |line| {
+                            line.adjust_scrollable_overflow(fragment.rect)
+                        });
+                    overflow = overflow.union(offset_rect(rect, origin));
                 }
             }
-            self.overflow[index] = overflow;
+            self.scrollable_overflow[index] = overflow;
             let source = layout_box.source.or_else(|| {
                 (layout_box.anonymous_reason
                     == Some(LayoutAnonymousReason::InlineSplitContinuation))
@@ -395,7 +413,7 @@ where
             let visual_overflow = if self.world.clips_overflow(LayoutBoxId::from_index(index)) {
                 child_geometry.border_box
             } else {
-                self.overflow[index]
+                self.scrollable_overflow[index]
             };
             let location = self.world.boxes[index].final_layout.location;
             let layout_translation = LayoutTransform2D::translation(location.x, location.y);
@@ -409,12 +427,13 @@ where
                         .map_rect(child_geometry.margin_box)
                         .bounding_rect(),
                 );
-            self.overflow[parent_id.index()] = self.overflow[parent_id.index()].union(mapped);
+            self.scrollable_overflow[parent_id.index()] =
+                self.scrollable_overflow[parent_id.index()].union(mapped);
         }
 
         for index in 0..self.world.boxes.len() {
             let geometry = &self.boxes[index];
-            let overflow = self.overflow[index];
+            let overflow = self.scrollable_overflow[index];
             let id = LayoutBoxId::from_index(index);
             let scrollport = geometry.padding_box;
             let scroll_size = LayoutSize::new(
@@ -596,7 +615,7 @@ where
                         owner: output_box,
                         line_index: line.line_index,
                     },
-                    rect: offset_rect(line.rect, content_origin),
+                    rect: offset_rect(line.used_rect, content_origin),
                     box_model: None,
                     coordinate_space,
                     clip_chain: None,
@@ -800,7 +819,7 @@ where
         let layout_translation = LayoutTransform2D::translation(root_layout.x, root_layout.y);
         layout_translation
             .concatenate(self.resolved_transforms[root].transform)
-            .map_rect(self.overflow[root])
+            .map_rect(self.scrollable_overflow[root])
             .bounding_rect()
             .union(
                 layout_translation
