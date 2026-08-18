@@ -50,7 +50,7 @@ pub(super) fn clear_input_dispatch_state(vm: &mut ScriptVm) {
     vm.pressed_mouse_buttons = 0;
     vm.pending_mouse_press = None;
     vm.hovered_mouse_handle = None;
-    vm.hovered_mouse_root_to_client = moli_layout::LayoutTransform2D::IDENTITY;
+    vm.hovered_mouse_root_to_frame = moli_layout::LayoutTransform2D::IDENTITY;
     vm._context_host
         .borrow()
         .dom_host()

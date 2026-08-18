@@ -924,11 +924,10 @@ pub(super) struct ScriptVm {
     pressed_mouse_buttons: i32,
     pending_mouse_press: Option<PendingMousePress>,
     hovered_mouse_handle: Option<DomHandle>,
-    /// Root-frame to client-coordinate transform for the Document that owns
-    /// `hovered_mouse_handle`. Blink keeps this conversion on LocalFrameView;
-    /// retaining the last affine map lets exit events use the old frame even
-    /// after the new hit has entered another frame.
-    hovered_mouse_root_to_client: moli_layout::LayoutTransform2D,
+    /// Root-frame to local-frame transform for `hovered_mouse_handle`. Blink
+    /// keeps this conversion on LocalFrameView; retaining the last affine map
+    /// lets exit events use the old frame after a new hit enters another one.
+    hovered_mouse_root_to_frame: moli_layout::LayoutTransform2D,
     active_touch_pointer_handle: Option<DomHandle>,
     active_touch_pointer_handles: BTreeMap<i32, DomHandle>,
     active_touch_event_handle: Option<DomHandle>,
@@ -2314,7 +2313,7 @@ impl ScriptVmDefaultWorldBootstrap {
             pressed_mouse_buttons: 0,
             pending_mouse_press: None,
             hovered_mouse_handle: None,
-            hovered_mouse_root_to_client: moli_layout::LayoutTransform2D::IDENTITY,
+            hovered_mouse_root_to_frame: moli_layout::LayoutTransform2D::IDENTITY,
             active_touch_pointer_handle: None,
             active_touch_pointer_handles: BTreeMap::new(),
             active_touch_event_handle: None,

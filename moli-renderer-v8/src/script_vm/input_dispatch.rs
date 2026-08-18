@@ -541,22 +541,22 @@ impl ScriptVm {
         let Some(handle) = capture_handle.or(hit_handle).or(wheel_fallback_handle) else {
             return Ok(input_dispatch_outcome(false));
         };
-        let root_to_client = hit
+        let root_to_frame = hit
             .filter(|hit| hit.handle == handle)
-            .map(|hit| hit.root_to_client)
+            .map(|hit| hit.root_to_frame)
             .unwrap_or(moli_layout::LayoutTransform2D::IDENTITY);
-        let client_point = root_to_client.map_point(root_point);
+        let client_point = root_to_frame.map_point(root_point);
         let client_x = f64::from(client_point.x);
         let client_y = f64::from(client_point.y);
         let hover_transition = if tracks_mouse_hover_for_event(event_name) {
             let previous = self.hovered_mouse_handle;
             if previous != Some(handle) {
-                let previous_root_to_client = self.hovered_mouse_root_to_client;
+                let previous_root_to_frame = self.hovered_mouse_root_to_frame;
                 self.hovered_mouse_handle = Some(handle);
-                self.hovered_mouse_root_to_client = root_to_client;
-                Some((previous, previous_root_to_client))
+                self.hovered_mouse_root_to_frame = root_to_frame;
+                Some((previous, previous_root_to_frame))
             } else {
-                self.hovered_mouse_root_to_client = root_to_client;
+                self.hovered_mouse_root_to_frame = root_to_frame;
                 None
             }
         } else {
@@ -600,8 +600,8 @@ impl ScriptVm {
 
         let result = self.with_default_context_scope(|scope, runtime_ptr| {
             let mut pointer_dispatch_handle = handle;
-            if let Some((Some(previous_handle), previous_root_to_client)) = hover_transition {
-                let previous_client_point = previous_root_to_client.map_point(root_point);
+            if let Some((Some(previous_handle), previous_root_to_frame)) = hover_transition {
+                let previous_client_point = previous_root_to_frame.map_point(root_point);
                 let previous_client_x = f64::from(previous_client_point.x);
                 let previous_client_y = f64::from(previous_client_point.y);
                 let related_target = related_target_value(scope, Some(handle));
@@ -699,8 +699,8 @@ impl ScriptVm {
                         .unwrap_or(pointer_dispatch_handle);
                 }
             }
-            if let Some((Some(previous_handle), previous_root_to_client)) = hover_transition {
-                let previous_client_point = previous_root_to_client.map_point(root_point);
+            if let Some((Some(previous_handle), previous_root_to_frame)) = hover_transition {
+                let previous_client_point = previous_root_to_frame.map_point(root_point);
                 let previous_client_x = f64::from(previous_client_point.x);
                 let previous_client_y = f64::from(previous_client_point.y);
                 let related_target = related_target_value(scope, Some(handle));

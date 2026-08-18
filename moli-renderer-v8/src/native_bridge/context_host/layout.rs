@@ -98,14 +98,11 @@ impl JsContextHost {
     /// resolution can run while the document layout state is already lent to
     /// a recursive paint pass, in which case the caller uses its ordinary
     /// authored-style fallback.
-    pub(crate) fn retained_iframe_layout_viewport(
-        &self,
-        frame: DomHandle,
-    ) -> Option<LayoutViewport> {
+    pub(crate) fn frame_viewport(&self, frame: DomHandle) -> Option<LayoutViewport> {
         self.document_layout_state
             .try_borrow()
             .ok()?
-            .embedded_frame_viewport(frame)
+            .frame_viewport(frame)
     }
 
     pub(crate) fn with_fresh_layout_pass_for_document<T>(
@@ -129,9 +126,7 @@ impl JsContextHost {
                 self.child_browsing_context_host_for_document_handle(candidate)
                     .is_some()
             });
-            state.retain_live_embedded_frame_viewports(|frame| {
-                self.child_browsing_context_is_live(frame)
-            });
+            state.retain_live_frame_viewports(|frame| self.child_browsing_context_is_live(frame));
             state.with_services_for_document(
                 document,
                 self.document_handle(),
@@ -156,7 +151,7 @@ impl JsContextHost {
         pass.validate_retention_budget()?;
         let consumed = consume(&mut pass)?;
         let metrics = pass.metrics;
-        let embedded_frame_viewports = self
+        let frame_viewports = self
             .child_browsing_context_handles_in_document_order()
             .into_iter()
             .filter(|frame| self.dom_host().owner_document_handle(*frame) == Some(document))
@@ -178,7 +173,7 @@ impl JsContextHost {
         {
             let mut state = self.document_layout_state.borrow_mut();
             state.publish_latest_layout(document, tree);
-            state.publish_embedded_frame_viewports(embedded_frame_viewports);
+            state.update_frame_viewports(frame_viewports);
         }
         self.last_layout_pass_metrics.set(Some(metrics));
         self.layout_snapshot_cache_publishes
@@ -193,7 +188,7 @@ impl JsContextHost {
         queries: &LayoutQueryBatch<DomHandle>,
     ) -> Result<LayoutAnswers<DomHandle>, LayoutError> {
         let viewport = self.layout_viewport_for_document(document);
-        self.answer_layout_for_document_with_viewport(document, reason, viewport, queries)
+        self.answer_layout(document, reason, viewport, queries, false)
     }
 
     pub(crate) fn can_answer_layout_from_snapshot(&self, document: DomHandle) -> bool {
@@ -222,37 +217,23 @@ impl JsContextHost {
         state.latest_layout(document).map(inspect)
     }
 
-    fn answer_layout_for_document_with_viewport(
+    pub(crate) fn answer_layout_at_viewport(
         &self,
         document: DomHandle,
         reason: LayoutFlushReason,
         viewport: LayoutViewport,
         queries: &LayoutQueryBatch<DomHandle>,
     ) -> Result<LayoutAnswers<DomHandle>, LayoutError> {
-        self.answer_layout_for_document_with_viewport_policy(
-            document, reason, viewport, queries, false,
-        )
+        self.answer_layout(document, reason, viewport, queries, true)
     }
 
-    pub(crate) fn answer_layout_for_document_with_exact_viewport(
+    fn answer_layout(
         &self,
         document: DomHandle,
         reason: LayoutFlushReason,
         viewport: LayoutViewport,
         queries: &LayoutQueryBatch<DomHandle>,
-    ) -> Result<LayoutAnswers<DomHandle>, LayoutError> {
-        self.answer_layout_for_document_with_viewport_policy(
-            document, reason, viewport, queries, true,
-        )
-    }
-
-    fn answer_layout_for_document_with_viewport_policy(
-        &self,
-        document: DomHandle,
-        reason: LayoutFlushReason,
-        viewport: LayoutViewport,
-        queries: &LayoutQueryBatch<DomHandle>,
-        require_exact_viewport: bool,
+        exact_viewport: bool,
     ) -> Result<LayoutAnswers<DomHandle>, LayoutError> {
         #[cfg(test)]
         let reuse_latest = !self.force_fresh_layout_reads_for_test;
@@ -262,7 +243,7 @@ impl JsContextHost {
             let state = self.document_layout_state.borrow();
             state
                 .latest_layout(document)
-                .filter(|tree| !require_exact_viewport || tree.viewport == viewport)
+                .filter(|tree| !exact_viewport || tree.viewport == viewport)
                 .and_then(|tree| {
                     self.last_layout_pass_metrics
                         .get()
@@ -453,7 +434,7 @@ impl GeometryProvider for JsContextHost {
         queries: &LayoutQueryBatch<Self::NodeId>,
     ) -> Result<LayoutAnswers<Self::NodeId>, LayoutError> {
         let document = self.document_handle();
-        self.answer_layout_for_document_with_viewport(document, reason, viewport, queries)
+        self.answer_layout(document, reason, viewport, queries, false)
     }
 }
 

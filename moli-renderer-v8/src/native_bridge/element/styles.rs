@@ -692,7 +692,7 @@ fn iframe_handle_viewport_with_depth(
         .filter(|parent_frame| *parent_frame != frame_handle)
         .and_then(|parent_frame| iframe_handle_viewport_with_depth(host, parent_frame, depth + 1));
     let parent_viewport = parent_viewport.unwrap_or_else(|| host.style_viewport());
-    if let Some(viewport) = host.retained_iframe_layout_viewport(frame_handle) {
+    if let Some(viewport) = host.frame_viewport(frame_handle) {
         return Some(
             StyleViewport::new(
                 Some(f64::from(viewport.css_width)),

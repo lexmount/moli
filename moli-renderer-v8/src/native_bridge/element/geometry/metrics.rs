@@ -300,6 +300,23 @@ enum ScrollIntoViewAlignment {
     Nearest,
 }
 
+#[derive(Clone, Copy)]
+struct ScrollIntoViewParams {
+    horizontal: ScrollIntoViewAlignment,
+    vertical: ScrollIntoViewAlignment,
+    center_if_fully_hidden: bool,
+}
+
+const SCROLL_INTO_VIEW_FRAME_DEPTH_LIMIT: usize = 16;
+
+fn resolve_scroll_target(runtime: &JsContextHost, handle: DomHandle) -> Option<DomHandle> {
+    let node = runtime.dom_host().node(handle)?;
+    if node.is_document() {
+        return runtime.dom_host().document_element_handle();
+    }
+    runtime.dom_host().is_connected(handle).then_some(handle)
+}
+
 fn aligned_scroll_position(
     target_start: f64,
     target_end: f64,
@@ -381,18 +398,7 @@ pub(crate) fn perform_wheel_scroll_default_action(
     }
 
     let runtime = unsafe { &*runtime_ptr };
-    let target = if runtime
-        .dom_host()
-        .node(handle)
-        .is_some_and(Node::is_document)
-    {
-        let Some(root) = runtime.dom_host().document_element_handle() else {
-            return Ok(false);
-        };
-        root
-    } else if runtime.dom_host().is_connected(handle) {
-        handle
-    } else {
+    let Some(target) = resolve_scroll_target(runtime, handle) else {
         return Ok(false);
     };
     let Some(mut geometry) = observable_scroll_into_view_geometry(
@@ -494,16 +500,16 @@ pub(crate) fn scroll_node_into_view_if_needed(
     handle: DomHandle,
     relative_rect: Option<DomScrollIntoViewRect>,
 ) -> Result<Option<bool>, moli_layout::LayoutError> {
-    scroll_node_into_view_with_geometry(
+    scroll_node_into_view(
         scope,
         runtime_ptr,
         handle,
         relative_rect,
-        None,
-        ScrollIntoViewAlignment::Nearest,
-        ScrollIntoViewAlignment::Nearest,
-        true,
-        0,
+        ScrollIntoViewParams {
+            horizontal: ScrollIntoViewAlignment::Nearest,
+            vertical: ScrollIntoViewAlignment::Nearest,
+            center_if_fully_hidden: true,
+        },
     )
 }
 
@@ -511,63 +517,11 @@ fn scroll_node_into_view(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
-    horizontal: ScrollIntoViewAlignment,
-    vertical: ScrollIntoViewAlignment,
-) -> Result<Option<bool>, moli_layout::LayoutError> {
-    scroll_node_into_view_with_geometry(
-        scope,
-        runtime_ptr,
-        handle,
-        None,
-        None,
-        horizontal,
-        vertical,
-        false,
-        0,
-    )
-}
-
-pub(crate) fn scroll_node_into_view_at_start(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
-    handle: DomHandle,
-) -> Result<Option<bool>, moli_layout::LayoutError> {
-    scroll_node_into_view(
-        scope,
-        runtime_ptr,
-        handle,
-        ScrollIntoViewAlignment::Nearest,
-        ScrollIntoViewAlignment::Start,
-    )
-}
-
-fn scroll_node_into_view_with_geometry(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
-    handle: DomHandle,
     relative_rect: Option<DomScrollIntoViewRect>,
-    target_rects_override: Option<Vec<moli_layout::LayoutQuad>>,
-    horizontal: ScrollIntoViewAlignment,
-    vertical: ScrollIntoViewAlignment,
-    center_if_fully_hidden: bool,
-    frame_depth: usize,
+    params: ScrollIntoViewParams,
 ) -> Result<Option<bool>, moli_layout::LayoutError> {
     let runtime = unsafe { &*runtime_ptr };
-    let target = if runtime
-        .dom_host()
-        .node(handle)
-        .is_some_and(Node::is_document)
-    {
-        let Some(root) = runtime.dom_host().document_element_handle() else {
-            return Ok(None);
-        };
-        root
-    } else if runtime.dom_host().is_connected(handle) && runtime.dom_host().node(handle).is_some() {
-        // CDP also accepts connected rendered Text nodes. Whether a concrete
-        // node owns fragments is a layout-output decision; this DOM boundary
-        // only rejects detached or stale handles.
-        handle
-    } else {
+    let Some(target) = resolve_scroll_target(runtime, handle) else {
         return Ok(None);
     };
     let Some(mut geometry) = observable_scroll_into_view_geometry(
@@ -592,17 +546,44 @@ fn scroll_node_into_view_with_geometry(
                 )),
             ];
     }
-    if let Some(target_rects) = target_rects_override {
-        if target_rects.is_empty() {
-            return Ok(None);
-        }
-        geometry.target_rects = target_rects;
-    }
     if geometry.target_rects.is_empty() {
         return Ok(None);
     }
+    perform_bubbling_scroll_into_view(scope, runtime_ptr, target, geometry, params, 0).map(Some)
+}
 
-    let target_document = runtime.dom_host().owner_document_handle(target);
+pub(crate) fn scroll_node_into_view_at_start(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+) -> Result<Option<bool>, moli_layout::LayoutError> {
+    scroll_node_into_view(
+        scope,
+        runtime_ptr,
+        handle,
+        None,
+        ScrollIntoViewParams {
+            horizontal: ScrollIntoViewAlignment::Nearest,
+            vertical: ScrollIntoViewAlignment::Start,
+            center_if_fully_hidden: false,
+        },
+    )
+}
+
+/// Blink's `PerformBubblingScrollIntoView` follows the same shape: scroll the
+/// local containers, convert the resulting target geometry into the parent
+/// frame, then continue with the frame owner.
+fn perform_bubbling_scroll_into_view(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    target: DomHandle,
+    mut geometry: moli_layout::LayoutScrollIntoViewGeometry<DomHandle>,
+    params: ScrollIntoViewParams,
+    frame_depth: usize,
+) -> Result<bool, moli_layout::LayoutError> {
+    let target_document = unsafe { &*runtime_ptr }
+        .dom_host()
+        .owner_document_handle(target);
     let mut changed = false;
     for container in geometry.scroll_containers {
         let metrics = &container.metrics;
@@ -610,7 +591,7 @@ fn scroll_node_into_view_with_geometry(
         else {
             continue;
         };
-        let desired_x = if center_if_fully_hidden {
+        let desired_x = if params.center_if_fully_hidden {
             scroll_axis_to_expose(
                 f64::from(target_bounds.x),
                 f64::from(target_bounds.right()),
@@ -623,10 +604,10 @@ fn scroll_node_into_view_with_geometry(
                 f64::from(target_bounds.right()),
                 f64::from(metrics.scroll_offset.x),
                 f64::from(metrics.client_size.width),
-                horizontal,
+                params.horizontal,
             )
         };
-        let desired_y = if center_if_fully_hidden {
+        let desired_y = if params.center_if_fully_hidden {
             scroll_axis_to_expose(
                 f64::from(target_bounds.y),
                 f64::from(target_bounds.bottom()),
@@ -639,7 +620,7 @@ fn scroll_node_into_view_with_geometry(
                 f64::from(target_bounds.bottom()),
                 f64::from(metrics.scroll_offset.y),
                 f64::from(metrics.client_size.height),
-                vertical,
+                params.vertical,
             )
         };
         let target_x = desired_x.clamp(
@@ -694,47 +675,64 @@ fn scroll_node_into_view_with_geometry(
             delta_y,
         );
     }
-    if frame_depth < 16
-        && let Some((document, frame)) = target_document.and_then(|document| {
-            let runtime = unsafe { &*runtime_ptr };
-            (document != runtime.document_handle())
-                .then(|| runtime.child_browsing_context_host_for_document_handle(document))
-                .flatten()
-                .map(|frame| (document, frame))
-        })
-        && let Some(frame_content) = observable_box_model(
-            unsafe { &*runtime_ptr },
-            frame,
-            moli_layout::LayoutFlushReason::SynchronousGeometry,
-        )?
-        .map(|model| model.content)
-        && let Some(parent_target_rects) = map_child_viewport_quads_to_parent(
-            &geometry.target_rects,
-            unsafe { &*runtime_ptr }.layout_viewport_for_document(document),
-            frame_content,
-        )
-        && let Some(parent_changed) = scroll_node_into_view_with_geometry(
-            scope,
-            runtime_ptr,
-            frame,
-            None,
-            Some(parent_target_rects),
-            ScrollIntoViewAlignment::Nearest,
-            ScrollIntoViewAlignment::Nearest,
-            center_if_fully_hidden,
-            frame_depth + 1,
-        )?
-    {
-        changed |= parent_changed;
+    if frame_depth >= SCROLL_INTO_VIEW_FRAME_DEPTH_LIMIT {
+        return Ok(changed);
     }
-    Ok(Some(changed))
+    let Some(document) = target_document else {
+        return Ok(changed);
+    };
+    let runtime = unsafe { &*runtime_ptr };
+    if document == runtime.document_handle() {
+        return Ok(changed);
+    }
+    let Some(frame) = runtime.child_browsing_context_host_for_document_handle(document) else {
+        return Ok(changed);
+    };
+    let Some(frame_content) = observable_box_model(
+        runtime,
+        frame,
+        moli_layout::LayoutFlushReason::SynchronousGeometry,
+    )?
+    .map(|model| model.content) else {
+        return Ok(changed);
+    };
+    let Some(parent_target_rects) = convert_quads_to_parent_frame(
+        &geometry.target_rects,
+        runtime.layout_viewport_for_document(document),
+        frame_content,
+    ) else {
+        return Ok(changed);
+    };
+    let Some(mut parent_geometry) = observable_scroll_into_view_geometry(
+        runtime,
+        frame,
+        moli_layout::LayoutFlushReason::SynchronousGeometry,
+    )?
+    else {
+        return Ok(changed);
+    };
+    parent_geometry.target_rects = parent_target_rects;
+    let parent_params = ScrollIntoViewParams {
+        horizontal: ScrollIntoViewAlignment::Nearest,
+        vertical: ScrollIntoViewAlignment::Nearest,
+        ..params
+    };
+    changed |= perform_bubbling_scroll_into_view(
+        scope,
+        runtime_ptr,
+        frame,
+        parent_geometry,
+        parent_params,
+        frame_depth + 1,
+    )?;
+    Ok(changed)
 }
 
 /// Convert a rectangle carried by a child frame into the parent document's
 /// viewport coordinates. This mirrors Blink's cross-frame scroll bubbling:
 /// the target rectangle is converted through the frame owner's content box,
 /// rather than replacing it with the bounds of the whole frame.
-fn map_child_viewport_quads_to_parent(
+fn convert_quads_to_parent_frame(
     child_quads: &[moli_layout::LayoutQuad],
     child_viewport: moli_layout::LayoutViewport,
     parent_content: moli_layout::LayoutQuad,
@@ -1329,8 +1327,17 @@ pub(in crate::native_bridge) fn node_scroll_into_view_callback(
 ) {
     if let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, args.this()) {
         let (horizontal, vertical) = element_scroll_into_view_alignments(scope, &args);
-        if let Err(error) = scroll_node_into_view(scope, runtime_ptr, handle, horizontal, vertical)
-        {
+        if let Err(error) = scroll_node_into_view(
+            scope,
+            runtime_ptr,
+            handle,
+            None,
+            ScrollIntoViewParams {
+                horizontal,
+                vertical,
+                center_if_fully_hidden: false,
+            },
+        ) {
             throw_scroll_layout_error(scope, "scrollIntoView", error);
         }
     }
@@ -1368,7 +1375,7 @@ fn reveal_lazy_images_for_scroll(
 
 #[cfg(test)]
 mod scroll_alignment_tests {
-    use super::{map_child_viewport_quads_to_parent, scroll_axis_to_expose};
+    use super::{convert_quads_to_parent_frame, scroll_axis_to_expose};
 
     #[test]
     fn center_if_needed_returns_the_unclamped_chromium_alignment_position() {
@@ -1398,7 +1405,7 @@ mod scroll_alignment_tests {
             ],
         };
 
-        let mapped = map_child_viewport_quads_to_parent(
+        let mapped = convert_quads_to_parent_frame(
             &[child_quad],
             moli_layout::LayoutViewport::new(200, 100, 1.0),
             parent_content,
@@ -1424,7 +1431,7 @@ mod scroll_alignment_tests {
             .map_rect(moli_layout::LayoutRect::new(0.0, 0.0, 10.0, 10.0));
 
         assert!(
-            map_child_viewport_quads_to_parent(
+            convert_quads_to_parent_frame(
                 &[child_quad],
                 moli_layout::LayoutViewport::new(0, 100, 1.0),
                 parent_content,

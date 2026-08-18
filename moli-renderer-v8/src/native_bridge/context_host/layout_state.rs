@@ -29,7 +29,7 @@ pub(super) struct DocumentLayoutState {
     /// parent layout. Blink keeps the equivalent size on LocalFrameView; it is
     /// separate from the single latest-tree slot because parent and child
     /// layout queries replace that slot while the frame view remains live.
-    embedded_frame_viewports: HashMap<DomHandle, LayoutViewport>,
+    frame_viewports: HashMap<DomHandle, LayoutViewport>,
 }
 
 impl Default for DocumentLayoutState {
@@ -40,7 +40,7 @@ impl Default for DocumentLayoutState {
             web_fonts: DocumentWebFontState::default(),
             web_font_sources_dirty: true,
             latest_layout: LatestLayoutTreeCache::default(),
-            embedded_frame_viewports: HashMap::new(),
+            frame_viewports: HashMap::new(),
         }
     }
 }
@@ -106,32 +106,31 @@ impl DocumentLayoutState {
         self.latest_layout.clear();
     }
 
-    pub(super) fn embedded_frame_viewport(&self, frame: DomHandle) -> Option<LayoutViewport> {
-        self.embedded_frame_viewports.get(&frame).copied()
+    pub(super) fn frame_viewport(&self, frame: DomHandle) -> Option<LayoutViewport> {
+        self.frame_viewports.get(&frame).copied()
     }
 
-    pub(super) fn publish_embedded_frame_viewports(
+    pub(super) fn update_frame_viewports(
         &mut self,
         updates: impl IntoIterator<Item = (DomHandle, Option<LayoutViewport>)>,
     ) {
         for (frame, viewport) in updates {
             match viewport {
                 Some(viewport) => {
-                    self.embedded_frame_viewports.insert(frame, viewport);
+                    self.frame_viewports.insert(frame, viewport);
                 }
                 None => {
-                    self.embedded_frame_viewports.remove(&frame);
+                    self.frame_viewports.remove(&frame);
                 }
             }
         }
     }
 
-    pub(super) fn retain_live_embedded_frame_viewports(
+    pub(super) fn retain_live_frame_viewports(
         &mut self,
         mut is_live: impl FnMut(DomHandle) -> bool,
     ) {
-        self.embedded_frame_viewports
-            .retain(|frame, _| is_live(*frame));
+        self.frame_viewports.retain(|frame, _| is_live(*frame));
     }
 
     #[cfg(test)]
