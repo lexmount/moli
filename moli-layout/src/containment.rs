@@ -7,7 +7,10 @@
 
 use std::{fmt::Debug, hash::Hash};
 
-use crate::world::{LayoutBox, LayoutBoxId, LayoutBoxKind, LayoutWorld};
+use crate::{
+    LayoutDisplay,
+    world::{LayoutBox, LayoutBoxId, LayoutBoxKind, LayoutWorld},
+};
 
 impl<N> LayoutBox<N> {
     /// Mirrors Blink's `LayoutObject::IsBox()` boundary.
@@ -70,6 +73,41 @@ impl<N> LayoutBox<N> {
             )
     }
 
+    /// Mirrors Blink's display-lock applicability check.
+    ///
+    /// This is deliberately narrower than paint/layout containment
+    /// eligibility. Blink rejects non-atomic inline boxes and every table
+    /// display type except table cells, after first exempting replaced content
+    /// and the atomic layout objects used by HTML form controls.
+    pub(crate) fn is_eligible_for_display_lock(&self) -> bool {
+        if !self.is_css_box() {
+            return false;
+        }
+        if self
+            .element_semantics
+            .as_ref()
+            .is_some_and(|semantics| semantics.bypasses_display_lock_display_type_check())
+        {
+            return true;
+        }
+        !matches!(
+            self.style.display(),
+            LayoutDisplay::None
+                | LayoutDisplay::Contents
+                | LayoutDisplay::Inline
+                | LayoutDisplay::InlineListItem
+                | LayoutDisplay::Table
+                | LayoutDisplay::InlineTable
+                | LayoutDisplay::TableCaption
+                | LayoutDisplay::TableRowGroup
+                | LayoutDisplay::TableHeaderGroup
+                | LayoutDisplay::TableFooterGroup
+                | LayoutDisplay::TableColumnGroup
+                | LayoutDisplay::TableColumn
+                | LayoutDisplay::TableRow
+        )
+    }
+
     pub(crate) fn applies_any_size_containment(&self) -> bool {
         let containment = self.used_size_containment();
         containment.axes.width || containment.axes.height
@@ -80,8 +118,7 @@ impl<N> LayoutBox<N> {
     /// non-atomic inline and internal table layout objects are not eligible
     /// and must keep constructing their descendants.
     pub(crate) fn used_content_visibility_skips_contents(&self) -> bool {
-        self.style.content_visibility_skips_contents()
-            && self.is_eligible_for_paint_or_layout_containment()
+        self.style.content_visibility_skips_contents() && self.is_eligible_for_display_lock()
     }
 
     /// Whether this box stops HTML/body style propagation to the viewport.

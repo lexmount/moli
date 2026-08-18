@@ -209,19 +209,11 @@ impl LayoutSizeContainmentState {
     fn new(
         authored_axes: LogicalSize<bool>,
         intrinsic_fallback: Size<Option<f32>>,
-        mut intrinsic_auto_axes: Size<bool>,
+        intrinsic_auto_axes: Size<bool>,
         content_visibility: LayoutContentVisibility,
         writing_mode: taffy::WritingMode,
         effective_zoom: f32,
     ) -> Self {
-        if content_visibility == LayoutContentVisibility::Auto {
-            // Blink's StyleAdjuster::SetContainIntrinsicSizeAuto preserves
-            // the authored fallback and makes both components stateful.
-            intrinsic_auto_axes = Size {
-                width: true,
-                height: true,
-            };
-        }
         let mut state = Self {
             authored_axes,
             intrinsic_fallback,
@@ -1605,6 +1597,12 @@ impl ResolvedLayoutStyle {
     /// computed-style adjustment, even while the current epoch stays visible.
     pub fn last_remembered_size_policy(&self) -> LayoutLastRememberedSizePolicy {
         self.size_containment.observer_policy(self.writing_mode)
+    }
+
+    /// Whether this computed style requests the viewport-driven display-lock
+    /// mode. Principal-box eligibility is resolved later by box construction.
+    pub fn content_visibility_is_auto(&self) -> bool {
+        self.size_containment.content_visibility == LayoutContentVisibility::Auto
     }
 
     pub(crate) const fn content_visibility_skips_contents(&self) -> bool {

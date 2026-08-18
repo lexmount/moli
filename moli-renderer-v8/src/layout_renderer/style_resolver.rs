@@ -11,14 +11,24 @@ use crate::{
     style_engine::{StyleViewport, StyloAnonymousBoxKind},
 };
 
-use super::remembered_size::IntrinsicSizeObserverState;
+use super::{
+    display_lock::{AutoDisplayLockState, DisplayLockStyleRequests},
+    remembered_size::IntrinsicSizeObserverState,
+};
 
 pub(super) struct NativeLayoutStyleResolver<'a> {
     runtime: &'a JsContextHost,
     reads: ComputedStyleReadScope<'a>,
     scripting_enabled: bool,
+    display_locks: &'a AutoDisplayLockState,
     remembered_sizes: IntrinsicSizeObserverState,
     remembered_size_policies: HashMap<DomHandle, LayoutLastRememberedSizePolicy>,
+    display_lock_requests: DisplayLockStyleRequests,
+}
+
+pub(super) struct NativeLayoutPassPolicies {
+    pub(super) remembered_sizes: HashMap<DomHandle, LayoutLastRememberedSizePolicy>,
+    pub(super) display_locks: DisplayLockStyleRequests,
 }
 
 impl<'a> NativeLayoutStyleResolver<'a> {
@@ -26,21 +36,25 @@ impl<'a> NativeLayoutStyleResolver<'a> {
         runtime: &'a JsContextHost,
         document: DomHandle,
         viewport: LayoutViewport,
+        display_locks: &'a AutoDisplayLockState,
         remembered_sizes: &IntrinsicSizeObserverState,
     ) -> Self {
         Self {
             runtime,
             reads: layout_style_read_scope(runtime, document, viewport),
             scripting_enabled: runtime.document_scripting_enabled(document),
+            display_locks,
             remembered_sizes: remembered_sizes.clone(),
             remembered_size_policies: HashMap::new(),
+            display_lock_requests: DisplayLockStyleRequests::default(),
         }
     }
 
-    pub(super) fn into_remembered_size_policies(
-        self,
-    ) -> HashMap<DomHandle, LayoutLastRememberedSizePolicy> {
-        self.remembered_size_policies
+    pub(super) fn into_pass_policies(self) -> NativeLayoutPassPolicies {
+        NativeLayoutPassPolicies {
+            remembered_sizes: self.remembered_size_policies,
+            display_locks: self.display_lock_requests,
+        }
     }
 }
 
@@ -124,7 +138,14 @@ impl LayoutStyleResolver<DomHandle> for NativeLayoutStyleResolver<'_> {
             return Ok(None);
         };
         let mut resolved = ResolvedLayoutStyle::from_stylo(computed);
-        resolved.resolve_content_visibility_state(false, self.remembered_sizes.get(node));
+        let requests_auto = resolved.content_visibility_is_auto();
+        if requests_auto || self.display_locks.contains(node) {
+            self.display_lock_requests.record(node, requests_auto);
+        }
+        resolved.resolve_content_visibility_state(
+            requests_auto && self.display_locks.is_locked_for_layout(node),
+            self.remembered_sizes.get(node),
+        );
         self.remembered_size_policies
             .insert(node, resolved.last_remembered_size_policy());
         if self

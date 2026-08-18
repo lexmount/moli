@@ -12,6 +12,7 @@ use style::{
     properties::{
         ComputedValues, PropertyId,
         longhands::{
+            content_visibility::computed_value::T as StyloContentVisibility,
             text_wrap_mode::computed_value::T as StyloTextWrapMode,
             visibility::computed_value::T as ComputedVisibility,
             white_space_collapse::computed_value::T as StyloWhiteSpaceCollapse,
@@ -69,6 +70,13 @@ pub(crate) enum ComputedDisplayKind {
     TableCell,
     ListItem,
     Other,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ComputedContentVisibilityKind {
+    Visible,
+    Hidden,
+    Auto,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,7 +139,8 @@ impl StyloAnonymousBoxKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ComputedRenderedStyleFacts {
     pub(crate) display: ComputedDisplayKind,
-    pub(crate) content_visibility_applicable: bool,
+    pub(crate) content_visibility: ComputedContentVisibilityKind,
+    pub(crate) display_type_allows_content_visibility: bool,
     pub(crate) visibility_visible: bool,
     pub(crate) opacity_zero: bool,
     pub(crate) text_transform: ComputedTextTransformKind,
@@ -146,7 +155,7 @@ impl StyloComputedStyleSnapshot {
 
     pub(crate) fn rendered_style_facts(&self) -> ComputedRenderedStyleFacts {
         let display = self.primary.clone_display();
-        let content_visibility_applicable = !display.is_none()
+        let display_type_allows_content_visibility = !display.is_none()
             && !display.is_contents()
             && !display.is_inline_flow()
             && display.outside() != DisplayOutside::TableCaption
@@ -225,7 +234,12 @@ impl StyloComputedStyleSnapshot {
         };
         ComputedRenderedStyleFacts {
             display,
-            content_visibility_applicable,
+            content_visibility: match self.primary.clone_content_visibility() {
+                StyloContentVisibility::Visible => ComputedContentVisibilityKind::Visible,
+                StyloContentVisibility::Hidden => ComputedContentVisibilityKind::Hidden,
+                StyloContentVisibility::Auto => ComputedContentVisibilityKind::Auto,
+            },
+            display_type_allows_content_visibility,
             visibility_visible: self.primary.clone_visibility() == ComputedVisibility::Visible,
             opacity_zero: self.primary.clone_opacity() == 0.0,
             text_transform,

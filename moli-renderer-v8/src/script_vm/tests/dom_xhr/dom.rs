@@ -7779,6 +7779,8 @@ fn content_visibility_only_locks_chromium_eligible_boxes() {
           <table><tbody><tr id="row" style="content-visibility: hidden"><td>row visible</td></tr></tbody></table>
           <table><tbody><tr><td id="cell" style="content-visibility: hidden">cell hidden</td></tr></tbody></table>
           <table><caption id="caption" style="content-visibility: hidden">caption visible</caption><tbody><tr><td>caption body</td></tr></tbody></table>
+          <button id="form" style="display:inline;content-visibility:hidden">form hidden</button>
+          <output id="output" style="display:inline;content-visibility:hidden">output visible</output>
         </body></html>"#,
     );
 
@@ -7794,7 +7796,9 @@ fn content_visibility_only_locks_chromium_eligible_boxes() {
     table: text('table'),
     row: text('row'),
     cell: text('cell'),
-    caption: text('caption')
+    caption: text('caption'),
+    form: text('form'),
+    output: text('output')
   });
 })()
 "#,
@@ -7803,8 +7807,42 @@ fn content_visibility_only_locks_chromium_eligible_boxes() {
 
     assert_eq!(
         result,
-        r#"{"inline":"inline visible","atomic":"","block":"","table":"","row":"row visible","cell":"","caption":""}"#,
-        "Blink locks LayoutTable, LayoutTableCaption, and table cells, while non-atomic inline content and internal table rows remain ineligible",
+        r#"{"inline":"inline visible","atomic":"","block":"","table":"table visible","row":"row visible","cell":"","caption":"caption visible","form":"","output":"output visible"}"#,
+        "Blink locks atomic inline, block, table-cell, and form-control boxes, while non-atomic inline content, table wrappers, captions, internal table rows, and output elements remain ineligible",
+    );
+}
+
+#[test]
+fn content_visibility_auto_adjusts_computed_contain_intrinsic_size() {
+    let mut vm = new_parsed_test_vm(
+        "https://content-visibility-computed-adjustment.test/",
+        r#"<!doctype html><html><head><style>
+          #rule { content-visibility: auto; contain-intrinsic-size: 12px 7px; }
+        </style></head><body>
+          <div id="rule"></div>
+          <div id="inline" style="content-visibility:auto;contain-intrinsic-size:12px 7px"></div>
+        </body></html>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+JSON.stringify(['rule', 'inline'].map(id => {
+  const style = getComputedStyle(document.getElementById(id));
+  return [
+    style.contentVisibility,
+    style.containIntrinsicWidth,
+    style.containIntrinsicHeight,
+    style.containIntrinsicSize
+  ];
+}))
+"#,
+        )
+        .expect("content-visibility computed adjustment should evaluate");
+
+    assert_eq!(
+        result,
+        r#"[["auto","auto 12px","auto 7px","auto 12px auto 7px"],["auto","auto 12px","auto 7px","auto 12px auto 7px"]]"#,
     );
 }
 

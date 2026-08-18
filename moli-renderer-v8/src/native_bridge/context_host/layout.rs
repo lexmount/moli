@@ -45,6 +45,15 @@ pub(crate) struct LayoutSnapshotCacheObservability {
 }
 
 impl JsContextHost {
+    /// Returns the display-lock result published by the latest rendering
+    /// lifecycle. Synchronous DOM reads deliberately do not force a new pass;
+    /// screenshots and other rendering demands advance this state.
+    pub(crate) fn auto_content_visibility_is_locked(&self, element: DomHandle) -> bool {
+        self.document_layout_state
+            .borrow()
+            .auto_display_lock_is_locked(element)
+    }
+
     pub(crate) fn set_layout_policy(&mut self, policy: moli_page_types::LayoutPolicy) {
         if !policy.uses_real_layout() {
             self.document_layout_state.get_mut().clear_latest_layout();
@@ -116,12 +125,16 @@ impl JsContextHost {
             state.with_layout_pass_state_for_document(
                 document,
                 self.document_handle(),
-                |services, embedded_document_services, intrinsic_size_observer| {
+                |services,
+                 embedded_document_services,
+                 auto_display_locks,
+                 intrinsic_size_observer| {
                     crate::layout_renderer::build_native_layout_pass(
                         self,
                         root,
                         services,
                         embedded_document_services,
+                        auto_display_locks,
                         intrinsic_size_observer,
                         request,
                     )

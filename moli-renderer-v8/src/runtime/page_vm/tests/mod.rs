@@ -118,6 +118,7 @@ mod child_realm_materialization_completion;
 mod command_checkpoint;
 mod computed_style_used_box_size;
 mod contain_intrinsic_remembered_size;
+mod content_visibility;
 mod cssom_zoom;
 mod dedicated_worker_client_event;
 mod document_script_completion;

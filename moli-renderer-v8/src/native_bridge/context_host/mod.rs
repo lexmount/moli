@@ -212,7 +212,8 @@ pub(crate) use runtime_observable::{
     current_runtime_observable_context_token, install_runtime_observable_context_token_for_context,
 };
 pub(crate) use selection_records::{
-    SelectionBoundaryRole, SelectionBoundarySnapshot, SelectionRecordHandle,
+    DocumentSelectionSnapshot, SelectionBoundaryRole, SelectionBoundarySnapshot,
+    SelectionRecordHandle,
 };
 use websockets::WebSocketConnectionState;
 pub(crate) use window_execution_context::{
