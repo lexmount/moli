@@ -4,10 +4,10 @@ use parley::{AlignmentOptions, PositionedLayoutItem, YieldData};
 use style::Atom;
 use taffy::{
     AlignContent, AutoSizeBehavior, AvailableSpace, BlockContext, BlockFormattingContext,
-    CacheTree, Clear, DetailedGridInfo, Dimension, Display, FloatDirection, IntrinsicSizeResult,
-    Layout, LayoutBlockContainer, LayoutFlexboxContainer, LayoutGridContainer, LayoutInput,
-    LayoutOutput, LayoutPartialTree, Line, LogicalBoxStrut, LogicalOffset, LogicalSize,
-    LogicalStaticPosition, MaybeMath, MaybeResolve, NodeId, OutOfFlowCandidate,
+    CacheTree, Clear, DetailedGridInfo, Dimension, Display, FloatDirection, FontBaseline,
+    IntrinsicSizeResult, Layout, LayoutBlockContainer, LayoutFlexboxContainer, LayoutGridContainer,
+    LayoutInput, LayoutOutput, LayoutPartialTree, Line, LogicalBoxStrut, LogicalOffset,
+    LogicalSize, LogicalStaticPosition, MaybeMath, MaybeResolve, NodeId, OutOfFlowCandidate,
     OutOfFlowContainingBlock, Point, ResolveOrZero, RoundTree, RunMode, Size, SizingMode,
     SizingPurpose, Style, TraversePartialTree, TraverseTree, WritingDirection,
     compute_block_layout, compute_cached_layout, compute_cached_size,
@@ -22,8 +22,9 @@ use crate::{
         InlineCoordinateSpace, InlineFormattingContext, InlineFragments, InlineLinePlacement,
         InlineObjectRole, LineRelativeFragments, LineRelativeOffset, build_inline_fragments,
         build_inline_line_placements, flow_relative_line_rect, relative_atomic_inset_offset,
+        synthesized_font_ascent,
     },
-    style::{InlineBaselineType, InlineDirection, resolve_stylo_calc_value},
+    style::{InlineDirection, resolve_stylo_calc_value},
     table::{compute_table_layout, prepare_table_layout_trees},
     world::{OutOfFlowCandidateChild, OutOfFlowStaticPosition},
 };
@@ -430,11 +431,10 @@ where
             .map(|line| coordinates.to_physical_line_baseline(line, parent_size));
         let marker_baseline = if output.first_baselines == Point::NONE {
             coordinates.to_physical_line_block_baseline(
-                Some(
-                    item_style
-                        .inline_baseline_type()
-                        .synthesized_ascent(logical_marker_size.block_size),
-                ),
+                Some(synthesized_font_ascent(
+                    item_style.font_baseline(),
+                    logical_marker_size.block_size,
+                )),
                 output.size,
             )
         } else {
@@ -933,6 +933,16 @@ where
             self.boxes[LayoutBoxId::from_taffy(node_id).index()]
                 .style
                 .writing_mode()
+        }
+    }
+
+    fn get_font_baseline(&self, node_id: NodeId) -> FontBaseline {
+        if self.is_viewport_taffy_node(node_id) {
+            FontBaseline::from_writing_mode(self.viewport_layout.writing_mode)
+        } else {
+            self.boxes[LayoutBoxId::from_taffy(node_id).index()]
+                .style
+                .font_baseline()
         }
     }
 
@@ -2843,7 +2853,7 @@ fn single_subject_block_alignment_offset(alignment: Option<AlignContent>, free_s
 fn empty_inline_context() -> InlineFormattingContext {
     InlineFormattingContext {
         root_style: LayoutBoxId::from_index(0),
-        baseline_type: InlineBaselineType::Alphabetic,
+        font_baseline: FontBaseline::Alphabetic,
         unbroken: parley::Layout::default(),
         laid_out: None,
         text_units: Vec::new(),

@@ -14,9 +14,9 @@ use std::{fmt::Debug, hash::Hash};
 use style::Atom;
 use taffy::{
     AutoSizeBehavior, AvailableSpace, CacheTree, DetailedGridInfo, Dimension, Display,
-    GridAutoFlow, IntrinsicSizeResult, Layout, LayoutGridContainer, LayoutInput, LayoutOutput,
-    LayoutPartialTree, Line, LogicalOffset, LogicalSize, MaybeResolve, NodeId, Point, Rect,
-    RequestedAxis, ResolveOrZero, RunMode, Size, SizingMode, SizingPurpose, Style,
+    FontBaseline, GridAutoFlow, IntrinsicSizeResult, Layout, LayoutGridContainer, LayoutInput,
+    LayoutOutput, LayoutPartialTree, Line, LogicalOffset, LogicalSize, MaybeResolve, NodeId, Point,
+    Rect, RequestedAxis, ResolveOrZero, RunMode, Size, SizingMode, SizingPurpose, Style,
     TraversePartialTree, TraverseTree, WritingDirection, compute_grid_layout, style_helpers,
 };
 
@@ -179,6 +179,7 @@ struct TableContext {
     inline_border_spacing: f32,
     outer_border_spacing: Size<f32>,
     writing_mode: taffy::WritingMode,
+    font_baseline: FontBaseline,
 }
 
 pub(crate) fn prepare_table_layout_trees<N>(world: &mut LayoutWorld<N>)
@@ -510,6 +511,7 @@ where
         inline_border_spacing: spacing.width,
         outer_border_spacing: spacing,
         writing_mode,
+        font_baseline: root_style.font_baseline(),
     }
 }
 
@@ -1695,6 +1697,10 @@ where
         // sizing and placement in the table root's coordinate system from
         // the start instead of repairing physical axes after layout.
         self.context.writing_mode
+    }
+
+    fn get_font_baseline(&self, _node_id: NodeId) -> FontBaseline {
+        self.context.font_baseline
     }
 
     fn get_size_containment(&self, _node_id: NodeId) -> taffy::SizeContainment {
