@@ -4502,7 +4502,7 @@ mod tests {
             RendererLifecycleEpoch(4),
         );
         let matching = DevToolsDocumentLifecycleWaitKey {
-            registration_id: 1,
+            registration_id: crate::conn::state::RendererDocumentLifecycleWaiterId::new_for_test(1),
             renderer_document: document,
             renderer_epoch: RendererLifecycleEpoch(4),
             milestone: RendererDocumentLifecycleMilestone::Load,

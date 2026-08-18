@@ -49,7 +49,10 @@ impl TargetNavigationHistoryState {
 
     pub(crate) fn allocate_entry_id(&mut self) -> i32 {
         let id = self.next_entry_id;
-        self.next_entry_id = self.next_entry_id.saturating_add(1);
+        self.next_entry_id = self
+            .next_entry_id
+            .checked_add(1)
+            .expect("Page navigation history entry id overflow");
         id
     }
 
@@ -63,7 +66,10 @@ impl TargetNavigationHistoryState {
 
     fn allocate_document_sequence_number(&mut self) -> u64 {
         let sequence_number = self.next_document_sequence_number;
-        self.next_document_sequence_number = self.next_document_sequence_number.saturating_add(1);
+        self.next_document_sequence_number = self
+            .next_document_sequence_number
+            .checked_add(1)
+            .expect("Page navigation Document sequence number overflow");
         sequence_number
     }
 

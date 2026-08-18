@@ -247,13 +247,31 @@ struct RendererDocumentLoadVisibility {
 
 #[derive(Debug)]
 struct RegisteredRendererDocumentLifecycleWaiter {
-    id: u64,
+    id: RendererDocumentLifecycleWaiterId,
     renderer_document: RendererDocumentToken,
     renderer_epoch: RendererLifecycleEpoch,
     frame_id: String,
     loader_id: String,
     waiter: RendererDocumentLifecycleWaiter,
     observer_publisher: Option<RendererDocumentLifecycleObservationPublisher>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct RendererDocumentLifecycleWaiterId(u64);
+
+impl RendererDocumentLifecycleWaiterId {
+    #[cfg(test)]
+    pub(crate) const fn new_for_test(id: u64) -> Self {
+        Self(id)
+    }
+
+    fn allocate_next(&mut self) -> Self {
+        self.0 = self
+            .0
+            .checked_add(1)
+            .expect("renderer Document lifecycle waiter id overflow");
+        *self
+    }
 }
 
 fn lifecycle_observation_from_wait_outcome(
@@ -359,7 +377,7 @@ pub(crate) struct TargetPageSlot {
     pending_navigation_request: Option<PendingNavigationRequest>,
     committed_document_navigation: Option<DocumentNavigationToken>,
     renderer_document_lifecycle: RendererDocumentLifecycleProtocolState,
-    next_renderer_document_lifecycle_waiter_id: u64,
+    next_renderer_document_lifecycle_waiter_id: RendererDocumentLifecycleWaiterId,
     renderer_document_lifecycle_waiters: Vec<RegisteredRendererDocumentLifecycleWaiter>,
     root_post_load_observation: Option<RootPostLoadObservation>,
     initial_document_page_build_completion: Option<watch::Sender<Option<Result<(), String>>>>,
@@ -1221,16 +1239,18 @@ impl TargetPageSlot {
         &mut self,
         milestone: RendererDocumentLifecycleMilestone,
         expected_loader_id: &str,
-    ) -> Option<(u64, CommittedRendererDocumentBinding)> {
+    ) -> Option<(
+        RendererDocumentLifecycleWaiterId,
+        CommittedRendererDocumentBinding,
+    )> {
         let binding = self.renderer_document_lifecycle.binding.clone()?;
         if binding.loader_id != expected_loader_id {
             return None;
         }
         let snapshot = self.renderer_document_lifecycle.authoritative.snapshot?;
-        self.next_renderer_document_lifecycle_waiter_id = self
+        let id = self
             .next_renderer_document_lifecycle_waiter_id
-            .wrapping_add(1);
-        let id = self.next_renderer_document_lifecycle_waiter_id;
+            .allocate_next();
         self.renderer_document_lifecycle_waiters
             .push(RegisteredRendererDocumentLifecycleWaiter {
                 id,
@@ -1268,9 +1288,9 @@ impl TargetPageSlot {
         let observation = lifecycle_observation_from_wait_outcome(waiter.outcome());
         let (publisher, observer) = RendererDocumentLifecycleObserver::channel(observation);
         if observation == RendererDocumentLifecycleObservation::Pending {
-            self.next_renderer_document_lifecycle_waiter_id = self
+            let id = self
                 .next_renderer_document_lifecycle_waiter_id
-                .wrapping_add(1);
+                .allocate_next();
             self.renderer_document_lifecycle_waiters
                 .retain(|registration| {
                     registration
@@ -1280,7 +1300,7 @@ impl TargetPageSlot {
                 });
             self.renderer_document_lifecycle_waiters.push(
                 RegisteredRendererDocumentLifecycleWaiter {
-                    id: self.next_renderer_document_lifecycle_waiter_id,
+                    id,
                     renderer_document: binding.renderer_document,
                     renderer_epoch: binding.renderer_epoch,
                     frame_id: binding.frame_id.clone(),
@@ -1317,7 +1337,7 @@ impl TargetPageSlot {
 
     pub(crate) fn renderer_document_lifecycle_waiter_outcome(
         &self,
-        id: u64,
+        id: RendererDocumentLifecycleWaiterId,
         renderer_document: RendererDocumentToken,
         renderer_epoch: RendererLifecycleEpoch,
         frame_id: &str,
@@ -1337,7 +1357,7 @@ impl TargetPageSlot {
 
     pub(crate) fn release_renderer_document_lifecycle_waiter(
         &mut self,
-        id: u64,
+        id: RendererDocumentLifecycleWaiterId,
         renderer_document: RendererDocumentToken,
         renderer_epoch: RendererLifecycleEpoch,
         frame_id: &str,

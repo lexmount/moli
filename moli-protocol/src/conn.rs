@@ -187,7 +187,7 @@ struct CommandResponseFlushDeferredReleases {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DevToolsDocumentLifecycleWaitKey {
-    registration_id: u64,
+    registration_id: state::RendererDocumentLifecycleWaiterId,
     renderer_document: moli_core::page::RendererDocumentToken,
     renderer_epoch: moli_core::page::RendererLifecycleEpoch,
     milestone: moli_core::page::RendererDocumentLifecycleMilestone,

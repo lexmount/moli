@@ -20,8 +20,31 @@ pub struct RuntimeCommandOutputBarrierPermit {
     command_id: u64,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 struct RuntimeCommandOutputBarrierId(u64);
+
+impl RuntimeCommandOutputBarrierId {
+    fn checked_next(self) -> Self {
+        Self(
+            self.0
+                .checked_add(1)
+                .expect("Runtime command output barrier id overflow"),
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct RuntimeCommandOutputHoldId(u64);
+
+impl RuntimeCommandOutputHoldId {
+    fn checked_next(self) -> Self {
+        Self(
+            self.0
+                .checked_add(1)
+                .expect("Runtime command held-output id overflow"),
+        )
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum RuntimeCommandCausalOwner {
@@ -54,7 +77,7 @@ enum HeldOutputReleaseMode {
 
 #[derive(Debug)]
 struct HeldRuntimeCommandOutput {
-    hold_order: u64,
+    id: RuntimeCommandOutputHoldId,
     renderer_output_cursor: Option<RendererOutputCursor>,
     predecessors: BTreeSet<RuntimeCommandOutputBarrierId>,
     release_mode: HeldOutputReleaseMode,
@@ -115,8 +138,8 @@ impl RuntimeCommandOutputBarrierCompletion {
 /// it; another pending command on the same Page is not a predecessor.
 #[derive(Debug, Default)]
 pub struct RuntimeCommandOutputBarriers {
-    next_barrier_id: u64,
-    next_hold_order: u64,
+    next_barrier_id: RuntimeCommandOutputBarrierId,
+    next_hold_id: RuntimeCommandOutputHoldId,
     active: BTreeMap<RuntimeCommandOutputBarrierId, ActiveRuntimeCommandOutputBarrier>,
     held_routes: Vec<HeldRuntimeCommandOutputRoute>,
 }
@@ -164,8 +187,8 @@ impl RuntimeCommandOutputBarriers {
             }),
             "an exact renderer Runtime command cause must have only one active response barrier"
         );
-        let id = RuntimeCommandOutputBarrierId(self.next_barrier_id);
-        self.next_barrier_id = self.next_barrier_id.wrapping_add(1);
+        let id = self.next_barrier_id;
+        self.next_barrier_id = self.next_barrier_id.checked_next();
         let replaced = self.active.insert(
             id,
             ActiveRuntimeCommandOutputBarrier {
@@ -264,10 +287,10 @@ impl RuntimeCommandOutputBarriers {
         else {
             return;
         };
-        let hold_order = self.next_hold_order;
-        self.next_hold_order = self.next_hold_order.wrapping_add(1);
+        let id = self.next_hold_id;
+        self.next_hold_id = self.next_hold_id.checked_next();
         let held = HeldRuntimeCommandOutput {
-            hold_order,
+            id,
             renderer_output_cursor,
             predecessors: BTreeSet::from([barrier_id]),
             release_mode: HeldOutputReleaseMode::All,
@@ -394,7 +417,7 @@ impl RuntimeCommandOutputBarriers {
                     tracing::info!(
                         target: "moli_cdp_runtime",
                         stage = "runtime_command_barrier_output_release",
-                        hold_order = held.hold_order,
+                        hold_id = held.id.0,
                         renderer_output_stream_epoch = ?held.renderer_output_cursor.map(|cursor| cursor.stream().epoch().get()),
                         renderer_output_sequence = ?held.renderer_output_cursor.map(RendererOutputCursor::sequence),
                         release_mode = ?held.release_mode,
