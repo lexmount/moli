@@ -292,7 +292,12 @@ where
     ) -> crate::LayoutBox<S::NodeId> {
         let form_control_size =
             form_control_intrinsic_size(&semantics, style.font_size(), style.line_height());
-        let replaced_context = build_replaced_context(&semantics, metrics, form_control_size);
+        let replaced_context = build_replaced_context(
+            &semantics,
+            metrics,
+            form_control_size,
+            style.effective_zoom(),
+        );
         let mut layout_box = LayoutWorld::new_box(
             Some(source_node),
             None,
@@ -1241,6 +1246,7 @@ fn build_replaced_context(
     semantics: &LayoutElementSemantics,
     metrics: Option<crate::ReplacedMetrics>,
     form_control_size: Option<Size<f32>>,
+    effective_zoom: f32,
 ) -> Option<ReplacedContext> {
     if !semantics.is_replaced() {
         return None;
@@ -1254,6 +1260,7 @@ fn build_replaced_context(
         return Some(ReplacedContext::for_element(
             crate::LayoutReplacedKind::Image,
             metrics,
+            effective_zoom,
         ));
     }
     form_control_size
@@ -1261,7 +1268,7 @@ fn build_replaced_context(
         .or_else(|| {
             semantics
                 .replaced_kind()
-                .map(|kind| ReplacedContext::for_element(kind, metrics))
+                .map(|kind| ReplacedContext::for_element(kind, metrics, effective_zoom))
         })
 }
 
