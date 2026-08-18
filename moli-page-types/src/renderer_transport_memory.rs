@@ -134,8 +134,7 @@ impl SubresourceResponseBody {
                 .saturating_add(storage.trailing_bytes.len())
                 .saturating_add(std::mem::size_of::<SubresourceResponseBodyInner>()),
             SubresourceResponseBodyInner::ParkableImage(image) => image
-                .diagnostics()
-                .retained_memory_bytes
+                .retained_memory_bytes()
                 .saturating_add(std::mem::size_of::<SubresourceResponseBodyInner>()),
         }
     }

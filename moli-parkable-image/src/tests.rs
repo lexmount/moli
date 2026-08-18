@@ -9,7 +9,10 @@ use std::{
 use moli_disk_pool::DiskPool;
 use parking_lot::Mutex;
 
-use crate::{ParkOutcome, ParkableImageManager, ParkableImagePolicy, ParkableImageStorageState};
+use crate::{
+    ParkableImageManager, ParkableImagePolicy,
+    image::{ParkOutcome, ParkableImageStorageState},
+};
 
 fn manager(policy: ParkableImagePolicy) -> (DiskPool, ParkableImageManager) {
     let pool = DiskPool::new(None).unwrap();
@@ -80,7 +83,7 @@ fn one_extent_round_trips_and_reparks_without_another_write() {
         ParkableImageStorageState::Parked
     );
     assert_eq!(pool.diagnostics().disk_footprint_bytes, bytes.len() as u64);
-    assert_eq!(image.data().unwrap(), bytes);
+    assert_eq!(image.snapshot().unwrap().as_ref(), bytes);
 }
 
 #[test]
@@ -158,7 +161,7 @@ fn below_minimum_and_capacity_failure_keep_memory() {
         large.diagnostics().storage,
         ParkableImageStorageState::Resident
     );
-    assert_eq!(large.data().unwrap(), vec![2; 8]);
+    assert_eq!(large.snapshot().unwrap().as_ref(), vec![2; 8]);
 }
 
 #[test]
@@ -168,7 +171,7 @@ fn failed_write_keeps_the_image_resident_and_disables_the_pool() {
     let image = manager.from_frozen_bytes(bytes.clone());
     pool.fail_next_write_for_test();
 
-    let report = manager.maybe_park_images();
+    let report = manager.park_images_now_with_report();
 
     assert_eq!(report.considered, 1);
     assert_eq!(report.write_failures, 1);
@@ -178,7 +181,7 @@ fn failed_write_keeps_the_image_resident_and_disables_the_pool() {
         image.diagnostics().storage,
         ParkableImageStorageState::Resident
     );
-    assert_eq!(image.data().unwrap(), bytes);
+    assert_eq!(image.snapshot().unwrap().as_ref(), bytes);
     assert_eq!(image.maybe_park().unwrap(), ParkOutcome::Unavailable);
 }
 
@@ -197,7 +200,7 @@ fn limited_capacity_is_reclaimed_for_the_next_image() {
 
     assert_eq!(second.maybe_park().unwrap(), ParkOutcome::Parked);
     assert_eq!(pool.diagnostics().disk_footprint_bytes, CAPACITY as u64);
-    assert_eq!(second.data().unwrap(), vec![2; CAPACITY]);
+    assert_eq!(second.snapshot().unwrap().as_ref(), vec![2; CAPACITY]);
 }
 
 #[test]
@@ -222,7 +225,7 @@ fn manager_sweeps_live_images_and_prunes_dead_entries() {
     let small = manager.from_frozen_bytes(Vec::new());
     drop(second);
 
-    let report = manager.maybe_park_images();
+    let report = manager.park_images_now_with_report();
     assert_eq!(report.considered, 1);
     assert_eq!(report.parked, 1);
     assert_eq!(report.ineligible, 0);
@@ -279,7 +282,7 @@ fn manager_without_a_pool_reports_unavailable_and_preserves_data() {
     let bytes = reference_bytes(4096);
     let image = manager.from_frozen_bytes(bytes.clone());
 
-    let report = manager.maybe_park_images();
+    let report = manager.park_images_now_with_report();
 
     assert_eq!(report.considered, 1);
     assert_eq!(report.unavailable, 1);
@@ -288,7 +291,7 @@ fn manager_without_a_pool_reports_unavailable_and_preserves_data() {
         image.diagnostics().storage,
         ParkableImageStorageState::Resident
     );
-    assert_eq!(image.data().unwrap(), bytes);
+    assert_eq!(image.snapshot().unwrap().as_ref(), bytes);
 }
 
 #[test]
@@ -345,7 +348,7 @@ fn concurrent_park_attempts_create_only_one_disk_extent() {
         ParkOutcome::Parked | ParkOutcome::AlreadyParked | ParkOutcome::InUse
     )));
     assert_eq!(pool.diagnostics().disk_footprint_bytes, bytes.len() as u64);
-    assert_eq!(image.data().unwrap(), bytes);
+    assert_eq!(image.snapshot().unwrap().as_ref(), bytes);
 }
 
 #[test]
@@ -364,7 +367,7 @@ fn concurrent_reads_unpark_once_and_preserve_every_copy() {
             let barrier = barrier.clone();
             std::thread::spawn(move || {
                 barrier.wait();
-                assert_eq!(image.data().unwrap(), bytes);
+                assert_eq!(image.snapshot().unwrap().as_ref(), bytes);
             })
         })
         .collect::<Vec<_>>();
@@ -500,7 +503,7 @@ fn concurrent_park_and_unpark_keep_storage_and_registry_aligned() {
 
     let snapshot = image.snapshot().unwrap();
     drop(snapshot);
-    let report = manager.park_images_due();
+    let report = manager.park_images_due_with_report();
     assert_eq!(report.considered, 1);
     assert_eq!(report.parked, 1);
     assert_eq!(manager.diagnostics().parked_count, 1);
@@ -511,12 +514,12 @@ fn parked_images_leave_the_resident_schedule_until_they_are_unparked() {
     let (_, manager) = manager(immediate_policy());
     let image = manager.from_frozen_bytes(vec![3; 4096]);
 
-    let report = manager.park_images_due();
+    let report = manager.park_images_due_with_report();
     assert_eq!(report.considered, 1);
     assert_eq!(report.parked, 1);
     assert_eq!(manager.next_parking_deadline(), None);
     assert_eq!(
-        manager.maybe_park_images().considered,
+        manager.park_images_now_with_report().considered,
         0,
         "the parked registry must not be part of resident sweeps"
     );
@@ -528,7 +531,7 @@ fn parked_images_leave_the_resident_schedule_until_they_are_unparked() {
     assert_eq!(manager.next_parking_deadline(), None);
     drop(snapshot);
 
-    let report = manager.park_images_due();
+    let report = manager.park_images_due_with_report();
     assert_eq!(report.considered, 1);
     assert_eq!(report.parked, 1);
     assert_eq!(manager.diagnostics().parked_count, 1);
@@ -543,12 +546,12 @@ fn capacity_failure_can_be_retried_after_an_extent_is_released() {
     let second = manager.from_frozen_bytes(vec![2; IMAGE_SIZE]);
     assert_eq!(first.maybe_park().unwrap(), ParkOutcome::Parked);
 
-    let report = manager.park_images_due();
+    let report = manager.park_images_due_with_report();
     assert_eq!(report.considered, 1);
     assert_eq!(report.unavailable, 1);
 
     drop(first);
-    assert_eq!(manager.park_images_due().parked, 1);
+    assert_eq!(manager.park_images_due_with_report().parked, 1);
     assert_eq!(
         second.diagnostics().storage,
         ParkableImageStorageState::Parked

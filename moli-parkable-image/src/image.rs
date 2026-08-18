@@ -16,7 +16,7 @@ pub struct ParkableImage {
     inner: Arc<ParkableImageInner>,
 }
 
-pub struct WeakParkableImage {
+pub(crate) struct WeakParkableImage {
     inner: Weak<ParkableImageInner>,
 }
 
@@ -54,7 +54,7 @@ pub struct ParkableImageSnapshot {
     // order, so the encoded-byte reference is released before the lease can
     // make the image eligible for parking and wake the scheduler.
     data: Arc<Vec<u8>>,
-    lease: Option<SnapshotLease>,
+    lease: SnapshotLease,
 }
 
 struct SnapshotLease {
@@ -71,7 +71,7 @@ enum ParkPreparation {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ParkOutcome {
+pub(crate) enum ParkOutcome {
     Parked,
     AlreadyParked,
     BelowMinimum,
@@ -81,7 +81,7 @@ pub enum ParkOutcome {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ParkableImageStorageState {
+pub(crate) enum ParkableImageStorageState {
     Resident,
     Parking,
     ResidentWithDiskBackup,
@@ -89,7 +89,7 @@ pub enum ParkableImageStorageState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ParkableImageDiagnostics {
+pub(crate) struct ParkableImageDiagnostics {
     pub len: usize,
     pub storage: ParkableImageStorageState,
     pub used: bool,
@@ -132,6 +132,11 @@ impl ParkableImage {
         self.len() == 0
     }
 
+    /// Memory retained by the encoded bytes, excluding the image handle.
+    pub fn retained_memory_bytes(&self) -> usize {
+        self.diagnostics().retained_memory_bytes
+    }
+
     /// Returns whether two handles refer to the same encoded image backing.
     pub fn shares_storage_with(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
@@ -168,17 +173,13 @@ impl ParkableImage {
                 .expect("parkable image reader count should fit usize");
             ParkableImageSnapshot {
                 data: bytes,
-                lease: Some(SnapshotLease {
+                lease: SnapshotLease {
                     owner: self.downgrade(),
-                }),
+                },
             }
         };
         self.inner.manager.notify_schedule_changed();
         Ok(snapshot)
-    }
-
-    pub fn data(&self) -> io::Result<Vec<u8>> {
-        self.snapshot().map(|snapshot| snapshot.to_vec())
     }
 
     pub fn read_range(&self, offset: usize, max_len: usize) -> io::Result<Vec<u8>> {
@@ -244,7 +245,7 @@ impl ParkableImage {
 
     /// Attempts to discard resident bytes according to the Blink parking
     /// policy. A successful first park writes exactly one disk extent.
-    pub fn maybe_park(&self) -> io::Result<ParkOutcome> {
+    pub(crate) fn maybe_park(&self) -> io::Result<ParkOutcome> {
         match self.prepare_parking() {
             ParkPreparation::Done(outcome) => {
                 if outcome == ParkOutcome::Parked {
@@ -355,7 +356,7 @@ impl ParkableImage {
         }
     }
 
-    pub fn diagnostics(&self) -> ParkableImageDiagnostics {
+    pub(crate) fn diagnostics(&self) -> ParkableImageDiagnostics {
         let frozen = self.inner.state.lock();
         let (storage, snapshot_count, retained_memory_bytes, retained_disk_bytes) =
             match &frozen.storage {
@@ -397,7 +398,7 @@ impl ParkableImage {
         }
     }
 
-    pub fn downgrade(&self) -> WeakParkableImage {
+    pub(crate) fn downgrade(&self) -> WeakParkableImage {
         WeakParkableImage {
             inner: Arc::downgrade(&self.inner),
         }
@@ -414,7 +415,7 @@ impl fmt::Debug for ParkableImage {
 }
 
 impl WeakParkableImage {
-    pub fn upgrade(&self) -> Option<ParkableImage> {
+    pub(crate) fn upgrade(&self) -> Option<ParkableImage> {
         self.inner.upgrade().map(|inner| ParkableImage { inner })
     }
 }

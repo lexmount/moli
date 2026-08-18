@@ -11,14 +11,9 @@ mod manager;
 mod policy;
 mod registry;
 
-pub use image::{
-    ParkOutcome, ParkableImage, ParkableImageDiagnostics, ParkableImageSnapshot,
-    ParkableImageStorageState, WeakParkableImage,
-};
-pub use manager::{
-    ParkableImageManager, ParkableImageManagerDiagnostics, ParkableImageSweepReport,
-};
-pub use policy::{DEFAULT_MIN_SIZE_TO_PARK, DEFAULT_PARKING_DELAY, ParkableImagePolicy};
+pub use image::{ParkableImage, ParkableImageSnapshot};
+pub use manager::{ParkableImageManager, ParkableImageManagerDiagnostics};
+pub use policy::ParkableImagePolicy;
 
 #[cfg(test)]
 mod tests;

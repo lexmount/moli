@@ -1737,7 +1737,9 @@ impl SubresourceResponseBody {
         match self.inner.as_ref() {
             SubresourceResponseBodyInner::Memory(bytes) => Ok(Cow::Borrowed(bytes)),
             SubresourceResponseBodyInner::Disk { .. } => self.materialize_bytes().map(Cow::Owned),
-            SubresourceResponseBodyInner::ParkableImage(image) => image.data().map(Cow::Owned),
+            SubresourceResponseBodyInner::ParkableImage(image) => image
+                .snapshot()
+                .map(|snapshot| Cow::Owned(snapshot.to_vec())),
         }
     }
 
@@ -4154,10 +4156,8 @@ mod tests {
         let encoded = manager.from_frozen_bytes(b"encoded image".to_vec());
         let body = SubresourceResponseBody::from_parkable_image(encoded.clone());
 
-        assert_eq!(
-            encoded.maybe_park().unwrap(),
-            moli_parkable_image::ParkOutcome::Parked
-        );
+        manager.park_images_now();
+        assert_eq!(manager.diagnostics().parked_count, 1);
         assert_eq!(pool.diagnostics().disk_footprint_bytes, 13);
         assert_eq!(body.read_chunk(8, 5).unwrap(), b"image");
         assert_eq!(body.materialize_bytes().unwrap(), b"encoded image");
