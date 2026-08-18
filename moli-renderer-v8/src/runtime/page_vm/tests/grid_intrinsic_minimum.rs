@@ -53,3 +53,45 @@ document.body.innerHTML = `<div id=grid><div id=contributor></div><div id=stretc
     .await
     .expect("Grid item minimum-width fixture should run");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_transfers_stretched_cross_size_to_grid_items_automatic_minimum() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/grid-ratio-automatic-minimum.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0}
+#grid{display:grid;width:200px;height:200px}
+#item{aspect-ratio:2;align-self:stretch;justify-self:stretch}
+</style>`;
+document.body.innerHTML = `<div id=grid><div id=item></div></div>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(500, 240, 1.0))?
+            .expect("ratio Grid automatic-minimum screenshot layout");
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(["grid","item"].map(id=>{const rect=document.getElementById(id).getBoundingClientRect();return [rect.width,rect.height]}))"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        assert_eq!(
+            geometry,
+            serde_json::json!([[200, 200], [400, 200]]),
+            "the definite 200px cross-axis stretch must transfer through the 2:1 ratio before the auto column consumes the item's automatic minimum",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("Grid ratio automatic-minimum fixture should run");
+}
