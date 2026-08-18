@@ -176,7 +176,206 @@ async def run_classic_scrollbar_group(state: SmokeState) -> None:
             "cdpNativeDrag": is_moli,
         },
     )
+    await _run_multi_scroller_drag_workflow(state, is_moli)
     await _run_root_scrollbar_workflow(state, is_moli)
+
+
+async def _run_multi_scroller_drag_workflow(state: SmokeState, is_moli: bool) -> None:
+    page = state.page
+    cdp = state.cdp
+    await page.set_viewport_size({"width": 800, "height": 600})
+    await page.set_content(
+        """
+        <!doctype html>
+        <style>
+          html, body { margin: 0; overflow: hidden; }
+          #outer {
+            position: absolute; left: 20px; top: 20px;
+            width: 280px; height: 200px; overflow: auto;
+          }
+          #outer-content { position: relative; width: 620px; height: 500px; }
+          #inner {
+            position: absolute; left: 30px; top: 30px;
+            width: 180px; height: 120px; overflow: auto;
+          }
+          .large { width: 420px; height: 320px; }
+          #sibling {
+            position: absolute; left: 340px; top: 20px;
+            width: 180px; height: 120px; overflow: auto;
+          }
+          #horizontal {
+            position: absolute; left: 340px; top: 180px;
+            width: 220px; height: 100px; overflow: auto;
+          }
+          #horizontal > div { width: 600px; height: 60px; }
+          #thin-child {
+            position: absolute; left: 600px; top: 20px;
+            width: 160px; height: 120px; overflow: auto; scrollbar-width: thin;
+          }
+          #rtl-child {
+            position: absolute; left: 600px; top: 180px;
+            width: 160px; height: 120px; overflow: auto; direction: rtl;
+          }
+        </style>
+        <div id="outer">
+          <div id="outer-content">
+            <div id="inner"><div class="large"></div></div>
+          </div>
+        </div>
+        <div id="sibling"><div class="large"></div></div>
+        <div id="horizontal"><div></div></div>
+        <div id="thin-child"><div style="width:400px;height:320px"></div></div>
+        <div id="rtl-child"><div style="width:400px;height:320px"></div></div>
+        <script>
+          window.__multiScrollbarDomEvents = [];
+          for (const name of [
+            "pointerdown", "pointermove", "pointerup",
+            "mousedown", "mousemove", "mouseup", "click"
+          ]) {
+            document.addEventListener(name, () => __multiScrollbarDomEvents.push(name), true);
+          }
+        </script>
+        """,
+        wait_until="domcontentloaded",
+    )
+    metrics = await page.evaluate(
+        """() => {
+          const outer = document.getElementById("outer");
+          const inner = document.getElementById("inner");
+          const sibling = document.getElementById("sibling");
+          const horizontal = document.getElementById("horizontal");
+          const thin = document.getElementById("thin-child");
+          const rtl = document.getElementById("rtl-child");
+          return [
+            outer.clientWidth, outer.clientHeight, outer.scrollWidth, outer.scrollHeight,
+            inner.clientWidth, inner.clientHeight, inner.scrollWidth, inner.scrollHeight,
+            sibling.clientWidth, sibling.clientHeight,
+            horizontal.clientWidth, horizontal.clientHeight,
+            horizontal.scrollWidth, horizontal.scrollHeight,
+            thin.clientWidth, thin.clientHeight,
+            rtl.clientWidth, rtl.clientHeight, rtl.clientLeft, rtl.scrollLeft,
+          ];
+        }"""
+    )
+    assert_equal(
+        metrics,
+        [
+            265, 185, 620, 500, 165, 105, 420, 320, 165, 105,
+            220, 85, 600, 85, 150, 110, 145, 105, 15, 0,
+        ],
+        "nested and sibling classic scrollbar geometry",
+    )
+
+    scroll = None
+    if is_moli:
+        async def mouse(event_type: str, x: int, y: int, *, pressed: bool) -> None:
+            await cdp.send(
+                "Input.dispatchMouseEvent",
+                {
+                    "type": event_type,
+                    "x": x,
+                    "y": y,
+                    "button": "left" if event_type != "mouseMoved" else "none",
+                    "buttons": 1 if pressed else 0,
+                    "clickCount": 1,
+                },
+            )
+
+        # Release over a sibling scrollbar: capture must remain on the inner
+        # thumb until mouseReleased and must not leak input into either DOM.
+        await mouse("mousePressed", 225, 75, pressed=True)
+        await mouse("mouseMoved", 515, 115, pressed=True)
+        await mouse("mouseReleased", 515, 115, pressed=False)
+        first_drag = await page.evaluate(
+            """() => [
+              document.getElementById("inner").scrollTop,
+              document.getElementById("outer").scrollTop,
+              document.getElementById("sibling").scrollTop,
+            ]"""
+        )
+        if first_drag[0] <= 180 or first_drag[1:] != [0, 0]:
+            raise SmokeError(f"nested scrollbar capture retargeted unexpectedly: {first_drag!r}")
+
+        await mouse("mousePressed", 515, 45, pressed=True)
+        await mouse("mouseMoved", 515, 85, pressed=True)
+        await mouse("mouseReleased", 515, 85, pressed=False)
+        await mouse("mousePressed", 370, 275, pressed=True)
+        await mouse("mouseMoved", 450, 275, pressed=True)
+        await mouse("mouseReleased", 450, 275, pressed=False)
+
+        await mouse("mousePressed", 755, 45, pressed=True)
+        await mouse("mouseMoved", 755, 75, pressed=True)
+        await mouse("mouseReleased", 755, 75, pressed=False)
+        await mouse("mousePressed", 630, 135, pressed=True)
+        await mouse("mouseMoved", 690, 135, pressed=True)
+        await mouse("mouseReleased", 690, 135, pressed=False)
+
+        await mouse("mousePressed", 607, 205, pressed=True)
+        await mouse("mouseMoved", 607, 235, pressed=True)
+        await mouse("mouseReleased", 607, 235, pressed=False)
+        await mouse("mousePressed", 720, 292, pressed=True)
+        await mouse("mouseMoved", 660, 292, pressed=True)
+        await mouse("mouseReleased", 660, 292, pressed=False)
+
+        await page.evaluate(
+            """() => {
+              document.getElementById("outer").scrollTop = 50;
+              document.getElementById("inner").scrollTop = 0;
+            }"""
+        )
+        await mouse("mousePressed", 225, 25, pressed=True)
+        await mouse("mouseMoved", 700, 45, pressed=True)
+        await mouse("mouseReleased", 700, 45, pressed=False)
+        await mouse("mousePressed", 295, 65, pressed=True)
+        await mouse("mouseMoved", 295, 125, pressed=True)
+        await mouse("mouseReleased", 295, 125, pressed=False)
+
+        state_after = await page.evaluate(
+            """() => ({
+              outer: document.getElementById("outer").scrollTop,
+              inner: document.getElementById("inner").scrollTop,
+              sibling: document.getElementById("sibling").scrollTop,
+              horizontal: document.getElementById("horizontal").scrollLeft,
+              thinLeft: document.getElementById("thin-child").scrollLeft,
+              thinTop: document.getElementById("thin-child").scrollTop,
+              rtlLeft: document.getElementById("rtl-child").scrollLeft,
+              rtlTop: document.getElementById("rtl-child").scrollTop,
+              events: __multiScrollbarDomEvents,
+            })"""
+        )
+        if (
+            state_after["outer"] <= 200
+            or state_after["inner"] <= 90
+            or state_after["sibling"] <= 180
+            or state_after["horizontal"] <= 250
+            or state_after["thinLeft"] <= 180
+            or state_after["thinTop"] <= 100
+            or state_after["rtlLeft"] >= -180
+            or state_after["rtlTop"] <= 130
+        ):
+            raise SmokeError(f"multi-scroller thumb drag matrix diverged: {state_after!r}")
+        assert_equal(
+            state_after["events"],
+            [],
+            "captured nested and sibling scrollbars stay outside DOM dispatch",
+        )
+        scroll = {
+            key: state_after[key]
+            for key in (
+                "outer", "inner", "sibling", "horizontal",
+                "thinLeft", "thinTop", "rtlLeft", "rtlTop",
+            )
+        }
+
+    state.record(
+        "nested_sibling_and_horizontal_scrollbar_drag_matrix",
+        {
+            "engine": "moli" if is_moli else "chromium",
+            "metrics": metrics,
+            "scroll": scroll,
+            "cdpNativeDrag": is_moli,
+        },
+    )
 
 
 async def _run_root_scrollbar_workflow(state: SmokeState, is_moli: bool) -> None:

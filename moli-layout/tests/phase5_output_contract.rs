@@ -1357,6 +1357,76 @@ fn transforms_and_semantic_paint_order_share_the_hit_test_projection() {
 }
 
 #[test]
+fn transformed_hit_retains_exact_local_content_box_and_inverse_mapping() {
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("embedded-content", Vec::new()),
+    ]);
+    let mut styles = Styles::default();
+    styles.0.insert(
+        0,
+        fixed_size(LayoutDisplay::Block, 320.0, 240.0)
+            .with_position(moli_layout::LayoutPosition::Relative),
+    );
+    styles.0.insert(
+        1,
+        resolved(
+            LayoutDisplay::Block,
+            Style {
+                box_sizing: BoxSizing::ContentBox,
+                position: Position::Absolute,
+                inset: Rect {
+                    left: length(20.0),
+                    right: LengthPercentageAuto::auto(),
+                    top: length(30.0),
+                    bottom: LengthPercentageAuto::auto(),
+                },
+                size: Size {
+                    width: length(100.0),
+                    height: length(60.0),
+                },
+                padding: Rect {
+                    left: length(5.0),
+                    right: length(5.0),
+                    top: length(5.0),
+                    bottom: length(5.0),
+                },
+                border: Rect {
+                    left: length(2.0),
+                    right: length(2.0),
+                    top: length(2.0),
+                    bottom: length(2.0),
+                },
+                ..Style::default()
+            },
+        )
+        .with_2d_transform(LayoutTransform2D::scale(0.5, 0.5)),
+    );
+
+    let output = build(&source, &mut styles);
+    let viewport_point = LayoutPoint::new(35.0, 45.0);
+    let hit = output
+        .hit_test(viewport_point, false)
+        .expect("scaled embedded content should be hit");
+    assert_eq!(hit.source, 1);
+    let mapped = hit.viewport_to_local.map_point(viewport_point);
+    assert_close(mapped.x, hit.local_point.x);
+    assert_close(mapped.y, hit.local_point.y);
+
+    let local_content = hit
+        .local_content_box
+        .expect("box hit should retain its unprojected content box");
+    assert_rect(local_content, LayoutRect::new(7.0, 7.0, 100.0, 60.0));
+    let projected_content = hit
+        .box_model
+        .expect("box hit should retain its projected protocol model")
+        .content
+        .bounding_rect();
+    assert_close(projected_content.width, 50.0);
+    assert_close(projected_content.height, 30.0);
+}
+
+#[test]
 fn viewport_fixed_geometry_does_not_move_with_root_scroll() {
     let mut source = Source(vec![
         Node::element("root", vec![1, 2]),

@@ -167,6 +167,9 @@ Covered well:
 - Chromium-derived proxy authentication coverage uses a real local proxy and per-browser-context proxy configuration. HTTP Basic authentication must expose the initial unauthenticated target request headers and final `200` response through ExtraInfo without leaking `Proxy-Authorization`; an HTTPS `CONNECT` challenge canceled through Fetch must expose proxy origin, a `407` response with `hasExtraInfo=false`, and `Network.loadingFailed` without treating CONNECT headers as target-request ExtraInfo.
 - Parser-discovered external script, link stylesheet, and parser-created `@import` stylesheet observation plus `Network.getResponseBody`; configured `20,000,000 / 2,000,000` inspector-cache budgets retain a small body while a `2,000,001`-byte body keeps its request identity and repeatedly returns the inspector-cache eviction error.
 - Classic WebSocket echo, WebSocket `Network.webSocket*` events, and blocked WebSocket handshake behavior.
+- Chromium-calibrated transformed-iframe input routing through raw CDP: exact
+  used child viewport, hover/click/wheel targets and child-local coordinates,
+  overflow-container scrolling, and cross-frame mouseout coordinates.
 - Dedicated default `Page.setDocumentContent` replacement coverage through
   Playwright and raw CDP: exact-once, ordered document-open/DOM/load projection
   to two attached sessions while one session has a pending Runtime command;
@@ -258,6 +261,9 @@ Runner layout:
 - `groups/network.py`: document/fetch/XHR routing, Network event observation, parser script and stylesheet body capture, WebSocket, and downloads.
 - `groups/workers.py`: dedicated worker `postMessage`, SharedWorker port reuse, worker fetch routing/auth, and worker XHR routing.
 - `groups/dom_input.py`: `set_content`, file upload, file chooser, scripted picker, click navigation, locator/input workflows, Playwright upstream derived locator composition, `page.type()`, layout-backed mouse/touch/tap/raw-drag input, `fill()`, `check()` / `uncheck()` / `setChecked()`, and `selectOption()` workflows, DOM/handle workflows, plus the explicit high-level drag-interception boundary.
+- `groups/iframe_input.py`: a Chromium-calibrated raw-CDP regression for
+  transformed iframe hover, click, wheel, child-local event coordinates, and
+  exact used frame viewport propagation.
 - `groups/emulation_storage.py`: viewport and Playwright screenshot-clip boundary, storage/cookie isolation, IndexedDB baseline, and browser-context profile overrides.
 - `groups/browser_semantics.py`: raw-target and page/runtime cross-engine
   contracts calibrated against Chromium before they are applied to Moli.

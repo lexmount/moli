@@ -37,6 +37,7 @@ from .groups.emulation_storage import run_emulation_storage_group
 from .groups.error_document import run_error_document_group
 from .groups.fetch_runtime_teardown import run_fetch_runtime_teardown_group
 from .groups.inspector_routing import run_inspector_routing_group
+from .groups.iframe_input import run_iframe_input_group
 from .groups.layout_screenshot import run_layout_screenshot_group
 from .groups.multi_client import run_multi_client_group
 from .groups.multi_context import run_multi_context_group
@@ -156,6 +157,12 @@ RAW_GROUPS: tuple[SmokeGroup, ...] = (
 )
 
 PAGE_GROUPS: tuple[SmokeGroup, ...] = (
+    SmokeGroup(
+        "iframe-input",
+        "Cross-engine transformed iframe hover, click, wheel, and target-Document coordinate routing.",
+        "page",
+        run_iframe_input_group,
+    ),
     SmokeGroup(
         "classic-scrollbar",
         "Cross-engine classic scrollbar layout, paint, and raw CDP thumb dragging.",

@@ -419,6 +419,485 @@ fn wheel_default_action_scrolls_the_innermost_container_then_chains_to_the_root(
 }
 
 #[test]
+fn transformed_constrained_iframe_routes_hover_click_and_wheel_in_child_coordinates() {
+    let mut vm = new_storage_test_vm("https://iframe-input-coordinates.test/");
+    vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+        inner_width: 1200,
+        inner_height: 800,
+        outer_width: 1200,
+        outer_height: 800,
+        device_pixel_ratio: 1.0,
+        screen_width: 1200,
+        screen_height: 800,
+        screen_avail_width: 1200,
+        screen_avail_height: 800,
+    }))
+    .expect("iframe input viewport should update");
+    vm.force_fresh_layout_reads_for_test();
+
+    vm.eval(
+        r#"
+        if (!document.documentElement) {
+          document.appendChild(document.createElement('html'));
+        }
+        if (!document.head) {
+          document.documentElement.appendChild(document.createElement('head'));
+        }
+        if (!document.body) {
+          document.documentElement.appendChild(document.createElement('body'));
+        }
+        document.documentElement.style.cssText = 'margin:0;padding:0';
+        document.body.style.cssText = 'margin:0;padding:0';
+
+        const container = document.createElement('div');
+        container.id = 'input-frame-clip';
+        container.style.cssText = 'position:absolute;left:100px;top:120px;width:720px;height:500px;overflow:hidden';
+        const frame = document.createElement('iframe');
+        frame.id = 'input-frame';
+        frame.style.cssText = 'display:block;width:calc(100% / 0.78);height:calc(500px / 0.78);margin:0;border:0;padding:0;transform:scale(0.78);transform-origin:0 0';
+        container.appendChild(frame);
+        document.body.appendChild(container);
+
+        const child = frame.contentDocument;
+        child.documentElement.style.cssText = 'margin:0;padding:0';
+        child.body.style.cssText = 'margin:0;padding:0';
+        const style = child.createElement('style');
+        style.textContent = `
+          #hover-target { position:fixed;left:220px;top:50px;width:40px;height:80px;background:red }
+          #hover-target:hover { background:lime }
+          #wheel-target { position:fixed;left:500px;top:180px;width:120px;height:120px;overflow:auto }
+          #wheel-content { width:100px;height:900px }
+        `;
+        child.head.appendChild(style);
+        child.body.innerHTML = `
+          <div id="hover-target"></div>
+          <div id="wheel-target"><div id="wheel-content"></div></div>
+        `;
+        frame.contentWindow.__inputEvents = [];
+        for (const type of ['pointerover', 'mouseover', 'mousemove', 'mousedown', 'mouseup', 'click', 'wheel']) {
+          child.addEventListener(type, event => {
+            frame.contentWindow.__inputEvents.push({
+              type,
+              target: event.target.id,
+              clientX: event.clientX,
+              clientY: event.clientY,
+              deltaY: event.deltaY || 0
+            });
+          }, true);
+        }
+        'installed'
+        "#,
+    )
+    .expect("transformed iframe input fixture should initialize");
+
+    let geometry = vm
+        .eval(
+            r#"
+            (() => {
+              const frame = document.getElementById('input-frame');
+              const rect = frame.getBoundingClientRect();
+              return JSON.stringify({
+                offset: [frame.offsetWidth, frame.offsetHeight],
+                rect: [rect.left, rect.top, rect.width, rect.height],
+                childViewport: [frame.contentWindow.innerWidth, frame.contentWindow.innerHeight]
+              });
+            })()
+            "#,
+        )
+        .expect("transformed iframe geometry should evaluate");
+    let geometry: serde_json::Value =
+        serde_json::from_str(&geometry).expect("iframe geometry should be JSON");
+    assert_eq!(geometry["offset"], serde_json::json!([923, 641]));
+    assert_eq!(geometry["childViewport"], serde_json::json!([923, 641]));
+    let rect = geometry["rect"]
+        .as_array()
+        .expect("iframe rect should be an array");
+    assert!((rect[0].as_f64().unwrap() - 100.0).abs() < 0.01);
+    assert!((rect[1].as_f64().unwrap() - 120.0).abs() < 0.01);
+    assert!((rect[2].as_f64().unwrap() - 719.94).abs() < 0.1);
+    assert!((rect[3].as_f64().unwrap() - 499.98).abs() < 0.1);
+
+    // Child point (240, 90) is the visible center of #hover-target. The
+    // iframe's 0.78 transform maps it to root-frame point (287.2, 190.2).
+    vm.dispatch_mouse_event_at_point(287.2, 190.2, "mousemove", -1, Some(0), 0.0, 0.0)
+        .expect("child hover move should dispatch");
+    vm.dispatch_mouse_event_at_point(287.2, 190.2, "mousedown", 0, Some(1), 0.0, 0.0)
+        .expect("child mouse down should dispatch");
+    vm.dispatch_mouse_event_at_point(287.2, 190.2, "mouseup", 0, Some(0), 0.0, 0.0)
+        .expect("child mouse up should dispatch");
+
+    // Child point (560, 240) lies in the inner overflow container.
+    vm.dispatch_mouse_event_at_point(536.8, 307.2, "wheel", -1, Some(0), 0.0, 100.0)
+        .expect("child wheel should dispatch");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const frame = document.getElementById('input-frame');
+              const child = frame.contentDocument;
+              return JSON.stringify({
+                hovered: child.getElementById('hover-target').matches(':hover'),
+                wheelTop: child.getElementById('wheel-target').scrollTop,
+                rootTop: document.scrollingElement.scrollTop,
+                events: frame.contentWindow.__inputEvents
+              });
+            })()
+            "#,
+        )
+        .expect("child input result should evaluate");
+    let result: serde_json::Value =
+        serde_json::from_str(&result).expect("child input result should be JSON");
+    assert_eq!(result["hovered"], true);
+    assert_eq!(result["wheelTop"], 100);
+    assert_eq!(result["rootTop"], 0);
+
+    let events = result["events"]
+        .as_array()
+        .expect("child events should be an array");
+    for event_type in ["mousemove", "mousedown", "mouseup", "click"] {
+        let event = events
+            .iter()
+            .find(|event| event["type"] == event_type)
+            .unwrap_or_else(|| panic!("missing {event_type} event: {events:?}"));
+        assert_eq!(event["target"], "hover-target");
+        assert!((event["clientX"].as_f64().unwrap() - 240.0).abs() < 0.1);
+        assert!((event["clientY"].as_f64().unwrap() - 90.0).abs() < 0.1);
+    }
+    let wheel = events
+        .iter()
+        .find(|event| event["type"] == "wheel")
+        .unwrap_or_else(|| panic!("missing wheel event: {events:?}"));
+    assert_eq!(wheel["target"], "wheel-content");
+    assert!((wheel["clientX"].as_f64().unwrap() - 560.0).abs() < 0.1);
+    assert!((wheel["clientY"].as_f64().unwrap() - 240.0).abs() < 0.1);
+
+    assert_eq!(
+        vm.eval(
+            r#"
+            (() => {
+              document.getElementById('input-frame-clip').style.width = '624px';
+              const frame = document.getElementById('input-frame');
+              return [frame.offsetWidth, frame.contentWindow.innerWidth].join('|');
+            })()
+            "#,
+        )
+        .expect("resized iframe viewport should evaluate"),
+        "800|800"
+    );
+}
+
+#[test]
+fn focusing_visible_child_target_does_not_scroll_partially_hidden_transformed_iframe() {
+    let mut vm = new_storage_test_vm("https://iframe-focus-scroll.test/");
+    vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+        inner_width: 800,
+        inner_height: 600,
+        outer_width: 800,
+        outer_height: 600,
+        device_pixel_ratio: 1.0,
+        screen_width: 800,
+        screen_height: 600,
+        screen_avail_width: 800,
+        screen_avail_height: 600,
+    }))
+    .expect("iframe focus viewport should update");
+    vm.force_fresh_layout_reads_for_test();
+
+    vm.eval(
+        r#"
+        if (!document.documentElement) {
+          document.appendChild(document.createElement('html'));
+        }
+        if (!document.body) {
+          document.documentElement.appendChild(document.createElement('body'));
+        }
+        document.documentElement.style.cssText = 'margin:0;padding:0';
+        document.body.style.cssText = 'margin:0;padding:0;min-height:1200px';
+
+        const clip = document.createElement('div');
+        clip.style.cssText = 'position:absolute;left:100px;top:400px;width:720px;height:500px;overflow:hidden';
+        const frame = document.createElement('iframe');
+        frame.id = 'focus-frame';
+        frame.style.cssText = 'display:block;width:calc(100% / .78);height:calc(500px / .78);margin:0;border:0;padding:0;transform:scale(.78);transform-origin:0 0';
+        clip.appendChild(frame);
+        document.body.appendChild(clip);
+
+        const child = frame.contentDocument;
+        child.documentElement.style.cssText = 'margin:0;padding:0';
+        child.body.style.cssText = 'margin:0;padding:0';
+        child.body.innerHTML = '<button id="focus-target" style="position:fixed;left:20px;top:20px;width:80px;height:40px">Run</button>';
+        frame.contentWindow.__focusEvents = [];
+        for (const type of ['mousemove', 'mousedown', 'focus', 'mouseup', 'click']) {
+          child.addEventListener(type, event => {
+            frame.contentWindow.__focusEvents.push({
+              type,
+              target: event.target.id,
+              clientX: event.clientX || 0,
+              clientY: event.clientY || 0
+            });
+          }, true);
+        }
+        'installed'
+        "#,
+    )
+    .expect("iframe focus fixture should initialize");
+
+    // Child point (60, 40), the button center, maps through scale(.78) to
+    // root-frame point (146.8, 431.2). The button is visible, while the frame
+    // continues below the 600px-high top viewport.
+    vm.dispatch_mouse_event_at_point(146.8, 431.2, "mousemove", -1, Some(0), 0.0, 0.0)
+        .expect("child hover should dispatch");
+    vm.dispatch_mouse_event_at_point(146.8, 431.2, "mousedown", 0, Some(1), 0.0, 0.0)
+        .expect("child press should dispatch");
+
+    assert_eq!(
+        vm.eval("String(window.scrollY)")
+            .expect("parent scroll after child focus should evaluate"),
+        "0",
+        "focusing a visible child target must not reveal the whole iframe"
+    );
+
+    vm.dispatch_mouse_event_at_point(146.8, 431.2, "mouseup", 0, Some(0), 0.0, 0.0)
+        .expect("child release should dispatch");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const frame = document.getElementById('focus-frame');
+              const child = frame.contentDocument;
+              return JSON.stringify({
+                parentScroll: window.scrollY,
+                parentActive: document.activeElement === frame,
+                childActive: child.activeElement === child.getElementById('focus-target'),
+                hovered: child.getElementById('focus-target').matches(':hover'),
+                events: frame.contentWindow.__focusEvents
+              });
+            })()
+            "#,
+        )
+        .expect("iframe focus result should evaluate");
+    let result: serde_json::Value =
+        serde_json::from_str(&result).expect("iframe focus result should be JSON");
+    assert_eq!(result["parentScroll"], 0);
+    assert_eq!(result["parentActive"], true);
+    assert_eq!(result["childActive"], true);
+    assert_eq!(result["hovered"], true);
+
+    let events = result["events"]
+        .as_array()
+        .expect("iframe focus events should be an array");
+    for event_type in ["mousemove", "mousedown", "mouseup", "click"] {
+        let event = events
+            .iter()
+            .find(|event| event["type"] == event_type)
+            .unwrap_or_else(|| panic!("missing child {event_type}: {events:?}"));
+        assert_eq!(event["target"], "focus-target");
+        assert!((event["clientX"].as_f64().unwrap() - 60.0).abs() < 0.1);
+        assert!((event["clientY"].as_f64().unwrap() - 40.0).abs() < 0.1);
+    }
+}
+
+#[test]
+fn nested_transformed_iframe_input_composes_scroll_border_padding_and_exit_coordinates() {
+    let mut vm = new_storage_test_vm("https://nested-iframe-input.test/");
+    vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+        inner_width: 800,
+        inner_height: 600,
+        outer_width: 800,
+        outer_height: 600,
+        device_pixel_ratio: 1.0,
+        screen_width: 800,
+        screen_height: 600,
+        screen_avail_width: 800,
+        screen_avail_height: 600,
+    }))
+    .expect("nested iframe viewport should update");
+    vm.force_fresh_layout_reads_for_test();
+
+    vm.eval(
+        r#"
+        if (!document.documentElement) {
+          document.appendChild(document.createElement('html'));
+        }
+        if (!document.body) {
+          document.documentElement.appendChild(document.createElement('body'));
+        }
+        document.documentElement.style.cssText = 'margin:0;padding:0';
+        document.body.style.cssText = 'margin:0;padding:0';
+
+        const outside = document.createElement('div');
+        outside.id = 'outside';
+        outside.style.cssText = 'position:fixed;left:0;top:0;width:30px;height:30px';
+        document.body.appendChild(outside);
+
+        const parentScroller = document.createElement('div');
+        parentScroller.id = 'parent-scroller';
+        parentScroller.style.cssText = 'position:absolute;left:40px;top:30px;width:400px;height:300px;overflow:auto';
+        const canvas = document.createElement('div');
+        canvas.style.cssText = 'position:relative;width:800px;height:600px';
+        const outerFrame = document.createElement('iframe');
+        outerFrame.id = 'outer-frame';
+        outerFrame.style.cssText = 'position:absolute;left:100px;top:80px;display:block;box-sizing:border-box;width:240px;height:180px;margin:0;border:4px solid black;padding:6px;transform:scale(.75);transform-origin:0 0';
+        canvas.appendChild(outerFrame);
+        parentScroller.appendChild(canvas);
+        document.body.appendChild(parentScroller);
+
+        const child = outerFrame.contentDocument;
+        child.documentElement.style.cssText = 'margin:0;padding:0';
+        child.body.style.cssText = 'margin:0;padding:0';
+        const nestedFrame = child.createElement('iframe');
+        nestedFrame.id = 'nested-frame';
+        nestedFrame.style.cssText = 'position:absolute;left:40px;top:30px;display:block;box-sizing:border-box;width:100px;height:80px;margin:0;border:2px solid black;padding:3px;transform:scale(.5);transform-origin:0 0';
+        child.body.appendChild(nestedFrame);
+
+        const nested = nestedFrame.contentDocument;
+        nested.documentElement.style.cssText = 'margin:0;padding:0';
+        nested.body.style.cssText = 'margin:0;padding:0';
+        nested.body.innerHTML = `
+          <div id="nested-target" style="position:fixed;left:10px;top:10px;width:20px;height:20px"></div>
+          <div id="nested-scroll" style="position:fixed;left:10px;top:30px;width:50px;height:40px;overflow:auto">
+            <div id="nested-scroll-content" style="width:200px;height:200px"></div>
+          </div>
+        `;
+        nestedFrame.contentWindow.__nestedEvents = [];
+        for (const type of ['pointerover', 'pointerout', 'mouseover', 'mouseout', 'mousemove', 'mousedown', 'mouseup', 'click', 'wheel']) {
+          nested.addEventListener(type, event => {
+            nestedFrame.contentWindow.__nestedEvents.push({
+              type,
+              target: event.target.id,
+              clientX: event.clientX,
+              clientY: event.clientY
+            });
+          }, true);
+        }
+        parentScroller.scrollTo(50, 40);
+        'installed'
+        "#,
+    )
+    .expect("nested transformed iframe fixture should initialize");
+
+    // The exact used content viewports exclude each frame's border and
+    // padding: 240 - 2*(4+6) = 220, then 100 - 2*(2+3) = 90.
+    assert_eq!(
+        vm.eval(
+            r#"
+            (() => {
+              const outer = document.getElementById('outer-frame');
+              const nested = outer.contentDocument.getElementById('nested-frame');
+              return JSON.stringify([
+                outer.clientWidth - 12, outer.clientHeight - 12,
+                nested.clientWidth - 6, nested.clientHeight - 6,
+                document.getElementById('parent-scroller').scrollLeft,
+                document.getElementById('parent-scroller').scrollTop
+              ]);
+            })()
+            "#,
+        )
+        .expect("nested frame geometry should evaluate"),
+        "[220,160,90,70,50,40]"
+    );
+
+    // Nested client point (20, 20) maps through scale(.5), the inner frame's
+    // 5px border+padding edge, scale(.75), the outer frame's 10px edge, and
+    // the scrolled parent to root point (136.875, 109.375).
+    for event_name in ["mousemove", "mousedown", "mouseup"] {
+        let (button, buttons) = match event_name {
+            "mousedown" => (0, Some(1)),
+            "mouseup" => (0, Some(0)),
+            _ => (-1, Some(0)),
+        };
+        vm.dispatch_mouse_event_at_point(136.875, 109.375, event_name, button, buttons, 0.0, 0.0)
+            .unwrap_or_else(|error| panic!("nested {event_name} should dispatch: {error:#}"));
+    }
+
+    // Nested client point (20, 35) is inside the scroll content.
+    vm.dispatch_mouse_event_at_point(136.875, 115.0, "wheel", -1, Some(0), 0.0, 30.0)
+        .expect("nested wheel should dispatch");
+    let events_before_scrollbar = vm
+        .eval(
+            "String(document.getElementById('outer-frame').contentDocument.getElementById('nested-frame').contentWindow.__nestedEvents.length)",
+        )
+        .expect("nested event count should evaluate")
+        .parse::<usize>()
+        .expect("nested event count should be numeric");
+    // Nested client point (52, 50) is the vertical scrollbar's forward
+    // button. UA scrollbar input is routed through the same two frame maps and
+    // remains outside DOM mouse dispatch.
+    vm.dispatch_mouse_event_at_point(148.875, 120.625, "mousedown", 0, Some(1), 0.0, 0.0)
+        .expect("nested scrollbar press should dispatch");
+    vm.dispatch_mouse_event_at_point(148.875, 120.625, "mouseup", 0, Some(0), 0.0, 0.0)
+        .expect("nested scrollbar release should dispatch");
+    assert_eq!(
+        vm.eval(
+            r#"
+            (() => {
+              const nestedFrame = document.getElementById('outer-frame').contentDocument.getElementById('nested-frame');
+              return JSON.stringify([
+                nestedFrame.contentDocument.getElementById('nested-scroll').scrollTop,
+                nestedFrame.contentWindow.__nestedEvents.length
+              ]);
+            })()
+            "#,
+        )
+        .expect("nested scrollbar result should evaluate"),
+        format!("[70,{events_before_scrollbar}]")
+    );
+    // Move to a top-document element. The outgoing events must still convert
+    // this new root point through the previous nested frame chain.
+    vm.dispatch_mouse_event_at_point(10.0, 10.0, "mousemove", -1, Some(0), 0.0, 0.0)
+        .expect("nested hover exit should dispatch");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const outer = document.getElementById('outer-frame');
+              const nestedFrame = outer.contentDocument.getElementById('nested-frame');
+              const nested = nestedFrame.contentDocument;
+              return JSON.stringify({
+                events: nestedFrame.contentWindow.__nestedEvents,
+                scrollTop: nested.getElementById('nested-scroll').scrollTop,
+                parentTop: document.getElementById('parent-scroller').scrollTop
+              });
+            })()
+            "#,
+        )
+        .expect("nested iframe input result should evaluate");
+    let result: serde_json::Value =
+        serde_json::from_str(&result).expect("nested iframe result should be JSON");
+    assert_eq!(result["scrollTop"], 70);
+    assert_eq!(result["parentTop"], 40);
+    let events = result["events"]
+        .as_array()
+        .expect("nested events should be an array");
+    for event_type in ["mousemove", "mousedown", "mouseup", "click"] {
+        let event = events
+            .iter()
+            .find(|event| event["type"] == event_type && event["target"] == "nested-target")
+            .unwrap_or_else(|| panic!("missing nested {event_type}: {events:?}"));
+        assert!((event["clientX"].as_f64().unwrap() - 20.0).abs() < 0.1);
+        assert!((event["clientY"].as_f64().unwrap() - 20.0).abs() < 0.1);
+    }
+    let wheel = events
+        .iter()
+        .find(|event| event["type"] == "wheel")
+        .unwrap_or_else(|| panic!("missing nested wheel: {events:?}"));
+    assert_eq!(wheel["target"], "nested-scroll-content");
+    assert!((wheel["clientX"].as_f64().unwrap() - 20.0).abs() < 0.1);
+    assert!((wheel["clientY"].as_f64().unwrap() - 35.0).abs() < 0.1);
+    let mouseout = events
+        .iter()
+        .rev()
+        .find(|event| event["type"] == "mouseout")
+        .unwrap_or_else(|| panic!("missing nested mouseout: {events:?}"));
+    assert_eq!(mouseout["target"], "nested-target");
+    assert!((mouseout["clientX"].as_f64().unwrap() + 318.333).abs() < 0.2);
+    assert!((mouseout["clientY"].as_f64().unwrap() + 245.0).abs() < 0.2);
+}
+
+#[test]
 fn classic_scrollbar_metrics_and_thumb_drag_match_chromium_without_dom_mouse_events() {
     let mut vm = new_storage_test_vm("https://classic-scrollbar-input.test/");
     vm.eval(
@@ -548,6 +1027,366 @@ fn classic_scrollbar_metrics_and_thumb_drag_match_chromium_without_dom_mouse_eve
     assert!(result["left"].as_f64().is_some_and(|value| value > 50.0));
     assert!(result["top"].as_f64().is_some_and(|value| value > 100.0));
     assert_eq!(result["events"], serde_json::json!([]));
+}
+
+#[test]
+fn nested_and_sibling_scrollbar_drags_stay_bound_to_the_pressed_scroller() {
+    let mut vm = new_storage_test_vm("https://nested-classic-scrollbar-input.test/");
+    vm.eval(
+        r#"
+        (() => {
+          if (!document.documentElement) {
+            document.appendChild(document.createElement("html"));
+          }
+          if (!document.body) {
+            document.documentElement.appendChild(document.createElement("body"));
+          }
+          document.documentElement.style.margin = "0";
+          document.body.style.margin = "0";
+          document.body.innerHTML = `
+            <div id="outer" style="position:absolute;left:20px;top:20px;width:280px;height:200px;overflow:auto">
+              <div style="position:relative;width:620px;height:500px">
+                <div id="inner" style="position:absolute;left:30px;top:30px;width:180px;height:120px;overflow:auto">
+                  <div style="width:420px;height:320px"></div>
+                </div>
+              </div>
+            </div>
+            <div id="sibling" style="position:absolute;left:340px;top:20px;width:180px;height:120px;overflow:auto">
+              <div style="width:420px;height:320px"></div>
+            </div>
+            <div id="horizontal" style="position:absolute;left:340px;top:180px;width:220px;height:100px;overflow:auto">
+              <div style="width:600px;height:60px"></div>
+            </div>
+            <div id="thin-child" style="position:absolute;left:600px;top:20px;width:160px;height:120px;overflow:auto;scrollbar-width:thin">
+              <div style="width:400px;height:320px"></div>
+            </div>
+            <div id="rtl-child" style="position:absolute;left:600px;top:180px;width:160px;height:120px;overflow:auto;direction:rtl">
+              <div style="width:400px;height:320px"></div>
+            </div>`;
+          window.__nestedScrollbarDomEvents = [];
+          for (const name of ["pointerdown", "pointermove", "pointerup", "mousedown", "mousemove", "mouseup", "click"]) {
+            document.addEventListener(name, () => __nestedScrollbarDomEvents.push(name), true);
+          }
+        })()
+        "#,
+    )
+    .expect("nested scrollbar fixture should initialize");
+    refresh_layout_for_test(&mut vm);
+
+    assert_eq!(
+        vm.eval(
+            r#"JSON.stringify([
+              outer.clientWidth, outer.clientHeight, outer.scrollWidth, outer.scrollHeight,
+              inner.clientWidth, inner.clientHeight, inner.scrollWidth, inner.scrollHeight,
+              sibling.clientWidth, sibling.clientHeight,
+              horizontal.clientWidth, horizontal.clientHeight,
+              horizontal.scrollWidth, horizontal.scrollHeight,
+              document.getElementById("thin-child").clientWidth,
+              document.getElementById("thin-child").clientHeight,
+              document.getElementById("rtl-child").clientWidth,
+              document.getElementById("rtl-child").clientHeight,
+              document.getElementById("rtl-child").clientLeft,
+              document.getElementById("rtl-child").scrollLeft
+            ])"#,
+        )
+        .expect("multi-scroller metrics should evaluate"),
+        "[265,185,620,500,165,105,420,320,165,105,220,85,600,85,150,110,145,105,15,0]"
+    );
+
+    // Start on the nested vertical thumb, then move and release over the
+    // sibling's scrollbar. Native dragging captures the originally pressed
+    // scrollbar instead of retargeting every move by viewport hit testing.
+    vm.dispatch_mouse_event_at_point(225.0, 75.0, "mousedown", 0, Some(1), 0.0, 0.0)
+        .expect("nested thumb press should dispatch");
+    vm.dispatch_mouse_event_at_point(515.0, 115.0, "mousemove", -1, Some(1), 0.0, 0.0)
+        .expect("captured nested thumb move should dispatch");
+    vm.dispatch_mouse_event_at_point(515.0, 115.0, "mouseup", 0, Some(0), 0.0, 0.0)
+        .expect("captured nested thumb release should dispatch");
+    let after_nested: serde_json::Value = serde_json::from_str(
+        &vm.eval("JSON.stringify([inner.scrollTop, outer.scrollTop, sibling.scrollTop])")
+            .expect("nested drag state should evaluate"),
+    )
+    .expect("nested drag state should be JSON");
+    assert!(
+        after_nested[0].as_f64().is_some_and(|value| value > 180.0),
+        "nested thumb should move its own element: {after_nested}"
+    );
+    assert_eq!(after_nested[1], 0);
+    assert_eq!(after_nested[2], 0);
+
+    vm.dispatch_mouse_event_at_point(515.0, 45.0, "mousedown", 0, Some(1), 0.0, 0.0)
+        .expect("sibling thumb press should dispatch after captured release");
+    vm.dispatch_mouse_event_at_point(515.0, 85.0, "mousemove", -1, Some(1), 0.0, 0.0)
+        .expect("sibling thumb move should dispatch");
+    vm.dispatch_mouse_event_at_point(515.0, 85.0, "mouseup", 0, Some(0), 0.0, 0.0)
+        .expect("sibling thumb release should dispatch");
+
+    vm.dispatch_mouse_event_at_point(370.0, 275.0, "mousedown", 0, Some(1), 0.0, 0.0)
+        .expect("horizontal child thumb press should dispatch");
+    vm.dispatch_mouse_event_at_point(450.0, 275.0, "mousemove", -1, Some(1), 0.0, 0.0)
+        .expect("horizontal child thumb move should dispatch");
+    vm.dispatch_mouse_event_at_point(450.0, 275.0, "mouseup", 0, Some(0), 0.0, 0.0)
+        .expect("horizontal child thumb release should dispatch");
+
+    vm.dispatch_mouse_event_at_point(755.0, 45.0, "mousedown", 0, Some(1), 0.0, 0.0)
+        .expect("thin vertical thumb press should dispatch");
+    vm.dispatch_mouse_event_at_point(755.0, 75.0, "mousemove", -1, Some(1), 0.0, 0.0)
+        .expect("thin vertical thumb move should dispatch");
+    vm.dispatch_mouse_event_at_point(755.0, 75.0, "mouseup", 0, Some(0), 0.0, 0.0)
+        .expect("thin vertical thumb release should dispatch");
+    vm.dispatch_mouse_event_at_point(630.0, 135.0, "mousedown", 0, Some(1), 0.0, 0.0)
+        .expect("thin horizontal thumb press should dispatch");
+    vm.dispatch_mouse_event_at_point(690.0, 135.0, "mousemove", -1, Some(1), 0.0, 0.0)
+        .expect("thin horizontal thumb move should dispatch");
+    vm.dispatch_mouse_event_at_point(690.0, 135.0, "mouseup", 0, Some(0), 0.0, 0.0)
+        .expect("thin horizontal thumb release should dispatch");
+
+    vm.dispatch_mouse_event_at_point(607.0, 205.0, "mousedown", 0, Some(1), 0.0, 0.0)
+        .expect("RTL left-edge vertical thumb press should dispatch");
+    vm.dispatch_mouse_event_at_point(607.0, 235.0, "mousemove", -1, Some(1), 0.0, 0.0)
+        .expect("RTL left-edge vertical thumb move should dispatch");
+    vm.dispatch_mouse_event_at_point(607.0, 235.0, "mouseup", 0, Some(0), 0.0, 0.0)
+        .expect("RTL left-edge vertical thumb release should dispatch");
+    vm.dispatch_mouse_event_at_point(720.0, 292.0, "mousedown", 0, Some(1), 0.0, 0.0)
+        .expect("RTL horizontal thumb press should dispatch");
+    vm.dispatch_mouse_event_at_point(660.0, 292.0, "mousemove", -1, Some(1), 0.0, 0.0)
+        .expect("RTL horizontal thumb move should dispatch toward the negative range");
+    vm.dispatch_mouse_event_at_point(660.0, 292.0, "mouseup", 0, Some(0), 0.0, 0.0)
+        .expect("RTL horizontal thumb release should dispatch");
+
+    // Move the nested scroller partly above its parent's clip, then prove the
+    // remaining visible piece of its thumb is hittable in the new space.
+    vm.eval("outer.scrollTop = 50; inner.scrollTop = 0")
+        .expect("ancestor and nested scroll positions should reset");
+    refresh_layout_for_test(&mut vm);
+    vm.dispatch_mouse_event_at_point(225.0, 25.0, "mousedown", 0, Some(1), 0.0, 0.0)
+        .expect("partly clipped nested thumb press should dispatch");
+    vm.dispatch_mouse_event_at_point(700.0, 45.0, "mousemove", -1, Some(1), 0.0, 0.0)
+        .expect("partly clipped captured move should dispatch outside the scroller");
+    vm.dispatch_mouse_event_at_point(700.0, 45.0, "mouseup", 0, Some(0), 0.0, 0.0)
+        .expect("partly clipped captured release should dispatch");
+
+    vm.dispatch_mouse_event_at_point(295.0, 65.0, "mousedown", 0, Some(1), 0.0, 0.0)
+        .expect("outer thumb press should dispatch");
+    vm.dispatch_mouse_event_at_point(295.0, 125.0, "mousemove", -1, Some(1), 0.0, 0.0)
+        .expect("outer thumb move should dispatch");
+    vm.dispatch_mouse_event_at_point(295.0, 125.0, "mouseup", 0, Some(0), 0.0, 0.0)
+        .expect("outer thumb release should dispatch");
+
+    let result: serde_json::Value = serde_json::from_str(
+        &vm.eval(
+            "JSON.stringify([outer.scrollTop, inner.scrollTop, sibling.scrollTop, horizontal.scrollLeft, document.getElementById('thin-child').scrollLeft, document.getElementById('thin-child').scrollTop, document.getElementById('rtl-child').scrollLeft, document.getElementById('rtl-child').scrollTop, __nestedScrollbarDomEvents])",
+        )
+        .expect("multi-scroller drag state should evaluate"),
+    )
+    .expect("multi-scroller drag state should be JSON");
+    assert!(result[0].as_f64().is_some_and(|value| value > 200.0));
+    assert!(result[1].as_f64().is_some_and(|value| value > 90.0));
+    assert!(result[2].as_f64().is_some_and(|value| value > 180.0));
+    assert!(result[3].as_f64().is_some_and(|value| value > 250.0));
+    assert!(result[4].as_f64().is_some_and(|value| value > 180.0));
+    assert!(result[5].as_f64().is_some_and(|value| value > 100.0));
+    assert!(result[6].as_f64().is_some_and(|value| value < -180.0));
+    assert!(result[7].as_f64().is_some_and(|value| value > 130.0));
+    assert_eq!(result[8], serde_json::json!([]));
+}
+
+#[test]
+fn transformed_scrollbar_drag_uses_local_motion_clamps_and_cancels_on_button_loss() {
+    let mut vm = new_storage_test_vm("https://transformed-classic-scrollbar-input.test/");
+    vm.eval(
+        r#"
+        (() => {
+          if (!document.documentElement) {
+            document.appendChild(document.createElement("html"));
+          }
+          if (!document.body) {
+            document.documentElement.appendChild(document.createElement("body"));
+          }
+          document.documentElement.style.margin = "0";
+          document.body.style.margin = "0";
+          document.body.innerHTML = `
+            <div id="scaled" style="position:absolute;left:50px;top:350px;width:160px;height:100px;overflow:auto;transform:scale(2);transform-origin:0 0">
+              <div style="width:400px;height:300px"></div>
+            </div>
+            <div id="releaseTarget" style="position:absolute;left:650px;top:350px;width:140px;height:220px"></div>`;
+          window.__transformedScrollbarDomEvents = [];
+          for (const name of ["pointermove", "mousemove"]) {
+            document.addEventListener(name, () => __transformedScrollbarDomEvents.push(name), true);
+          }
+        })()
+        "#,
+    )
+    .expect("transformed scrollbar fixture should initialize");
+    refresh_layout_for_test(&mut vm);
+
+    let hit = crate::native_bridge::element::observable_scrollbar_hit_test(
+        &vm._context_host.borrow(),
+        vm.document_runtime.document_handle(),
+        moli_layout::LayoutPoint::new(355.0, 400.0),
+    )
+    .expect("transformed scrollbar hit test should succeed")
+    .expect("scaled vertical thumb should be hit");
+    assert_eq!(hit.part, moli_layout::LayoutScrollbarPart::Thumb);
+    assert_eq!(
+        hit.scrollbar.axis,
+        moli_layout::LayoutScrollbarAxis::Vertical
+    );
+
+    // Cross-axis motion does nothing. Each later move is absolute from the
+    // original press, and forty viewport pixels are twenty local pixels under
+    // scale(2), rather than forty CSS pixels or a sum of prior move deltas.
+    vm.dispatch_mouse_event_at_point(355.0, 400.0, "mousedown", 0, Some(1), 0.0, 0.0)
+        .expect("scaled thumb press should dispatch");
+    vm.dispatch_mouse_event_at_point(700.0, 400.0, "mousemove", -1, Some(1), 0.0, 0.0)
+        .expect("scaled cross-axis-only captured move should dispatch");
+    assert_eq!(
+        vm.eval("scaled.scrollTop")
+            .expect("cross-axis-only scaled scrollTop should evaluate"),
+        "0"
+    );
+    vm.dispatch_mouse_event_at_point(700.0, 420.0, "mousemove", -1, Some(1), 0.0, 0.0)
+        .expect("first scaled incremental thumb move should dispatch");
+    let first_move = vm
+        .eval("scaled.scrollTop")
+        .expect("first scaled scrollTop should evaluate")
+        .parse::<f64>()
+        .expect("first scaled scrollTop should be numeric");
+    assert!(
+        (first_move - 67.1875).abs() < 0.01,
+        "scrollTop={first_move}"
+    );
+    vm.dispatch_mouse_event_at_point(700.0, 440.0, "mousemove", -1, Some(1), 0.0, 0.0)
+        .expect("scaled captured thumb move should dispatch outside its element");
+    vm.dispatch_mouse_event_at_point(700.0, 440.0, "mouseup", 0, Some(0), 0.0, 0.0)
+        .expect("scaled captured thumb release should dispatch");
+    let moderate = vm
+        .eval("scaled.scrollTop")
+        .expect("scaled scrollTop should evaluate")
+        .parse::<f64>()
+        .expect("scaled scrollTop should be numeric");
+    assert!((moderate - 134.375).abs() < 0.01, "scrollTop={moderate}");
+
+    vm.eval("scaled.scrollTop = 0")
+        .expect("scaled scrollTop should reset");
+    refresh_layout_for_test(&mut vm);
+    vm.dispatch_mouse_event_at_point(355.0, 400.0, "mousedown", 0, Some(1), 0.0, 0.0)
+        .expect("scaled lower-clamp thumb press should dispatch");
+    vm.dispatch_mouse_event_at_point(700.0, 590.0, "mousemove", -1, Some(1), 0.0, 0.0)
+        .expect("scaled lower-clamp thumb move should dispatch");
+    vm.dispatch_mouse_event_at_point(700.0, 590.0, "mouseup", 0, Some(0), 0.0, 0.0)
+        .expect("scaled lower-clamp thumb release should dispatch");
+    assert_eq!(
+        vm.eval("scaled.scrollTop")
+            .expect("maximum scaled scrollTop should evaluate"),
+        "215"
+    );
+
+    refresh_layout_for_test(&mut vm);
+    vm.dispatch_mouse_event_at_point(355.0, 460.0, "mousedown", 0, Some(1), 0.0, 0.0)
+        .expect("scaled upper-clamp thumb press should dispatch");
+    vm.dispatch_mouse_event_at_point(700.0, 300.0, "mousemove", -1, Some(1), 0.0, 0.0)
+        .expect("scaled upper-clamp thumb move should dispatch");
+    vm.dispatch_mouse_event_at_point(700.0, 300.0, "mouseup", 0, Some(0), 0.0, 0.0)
+        .expect("scaled upper-clamp thumb release should dispatch");
+    assert_eq!(
+        vm.eval("scaled.scrollTop")
+            .expect("minimum scaled scrollTop should evaluate"),
+        "0"
+    );
+
+    // Losing the primary-button bit cancels native capture. Later moves must
+    // return to DOM dispatch and must not continue scrolling the old element.
+    refresh_layout_for_test(&mut vm);
+    vm.dispatch_mouse_event_at_point(355.0, 400.0, "mousedown", 0, Some(1), 0.0, 0.0)
+        .expect("cancelable scaled thumb press should dispatch");
+    vm.dispatch_mouse_event_at_point(700.0, 440.0, "mousemove", -1, Some(0), 0.0, 0.0)
+        .expect("primary-button loss should cancel native drag");
+    vm.dispatch_mouse_event_at_point(700.0, 500.0, "mousemove", -1, Some(1), 0.0, 0.0)
+        .expect("post-cancel DOM move should dispatch");
+    let cancelled: serde_json::Value = serde_json::from_str(
+        &vm.eval("JSON.stringify([scaled.scrollTop, __transformedScrollbarDomEvents])")
+            .expect("cancelled transformed drag state should evaluate"),
+    )
+    .expect("cancelled transformed drag state should be JSON");
+    assert_eq!(cancelled[0], 0);
+    assert!(
+        cancelled[1]
+            .as_array()
+            .is_some_and(|events| events.iter().any(|event| event == "mousemove")),
+        "post-cancel moves should return to the DOM: {cancelled}"
+    );
+}
+
+#[test]
+fn document_replacement_cancels_old_scrollbar_capture_and_allows_a_new_drag() {
+    let mut vm = new_storage_test_vm("https://replacement-classic-scrollbar-input.test/");
+    vm.eval(
+        r#"
+        (() => {
+          if (!document.documentElement) {
+            document.appendChild(document.createElement("html"));
+          }
+          if (!document.body) {
+            document.documentElement.appendChild(document.createElement("body"));
+          }
+          document.documentElement.style.margin = "0";
+          document.body.style.margin = "0";
+          document.body.innerHTML = `
+            <div id="retiringScroller" style="width:200px;height:100px;overflow:auto">
+              <div style="width:400px;height:300px"></div>
+            </div>`;
+          window.__retiredScroller = retiringScroller;
+        })()
+        "#,
+    )
+    .expect("retiring scrollbar fixture should initialize");
+    refresh_layout_for_test(&mut vm);
+    vm.dispatch_mouse_event_at_point(190.0, 30.0, "mousedown", 0, Some(1), 0.0, 0.0)
+        .expect("retiring thumb press should dispatch");
+
+    vm.eval(
+        r#"
+        document.open();
+        document.write(`<!doctype html><style>html,body{margin:0}</style>
+          <div id="replacementScroller" style="width:200px;height:100px;overflow:auto">
+            <div style="width:400px;height:300px"></div>
+          </div>
+          <div id="replacementTarget" style="position:absolute;left:300px;top:0;width:100px;height:100px"></div>`);
+        document.close();
+        window.__replacementMoves = [];
+        replacementTarget.addEventListener("pointermove", () => __replacementMoves.push("pointermove"));
+        replacementTarget.addEventListener("mousemove", () => __replacementMoves.push("mousemove"));
+        "#,
+    )
+    .expect("document.open should install the replacement input fixture");
+    refresh_layout_for_test(&mut vm);
+
+    vm.dispatch_mouse_event_at_point(320.0, 20.0, "mousemove", -1, Some(1), 0.0, 0.0)
+        .expect("replacement-document move should dispatch normally");
+    let replacement_move: serde_json::Value = serde_json::from_str(
+        &vm.eval("JSON.stringify([__retiredScroller.scrollTop, __replacementMoves])")
+            .expect("replacement move state should evaluate"),
+    )
+    .expect("replacement move state should be JSON");
+    assert_eq!(replacement_move[0], 0);
+    assert_eq!(
+        replacement_move[1],
+        serde_json::json!(["pointermove", "mousemove"])
+    );
+
+    vm.dispatch_mouse_event_at_point(190.0, 30.0, "mousedown", 0, Some(1), 0.0, 0.0)
+        .expect("replacement thumb press should start a fresh drag");
+    vm.dispatch_mouse_event_at_point(190.0, 50.0, "mousemove", -1, Some(1), 0.0, 0.0)
+        .expect("replacement thumb move should dispatch");
+    vm.dispatch_mouse_event_at_point(190.0, 50.0, "mouseup", 0, Some(0), 0.0, 0.0)
+        .expect("replacement thumb release should dispatch");
+    let replacement_scroll = vm
+        .eval("replacementScroller.scrollTop")
+        .expect("replacement scroller state should evaluate")
+        .parse::<f64>()
+        .expect("replacement scrollTop should be numeric");
+    assert!(replacement_scroll > 130.0, "scrollTop={replacement_scroll}");
 }
 
 #[test]
