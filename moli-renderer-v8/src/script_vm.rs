@@ -912,9 +912,12 @@ pub(super) struct ScriptVm {
     pub(super) document_runtime: Box<DocumentRuntime>,
     post_domcontentloaded_page_task_tx: PageTaskSender,
     page_runtime_wake_tx: PageRuntimeWakeSender,
-    queued_main_document_runtime_continuation_generation: Option<u64>,
-    queued_main_document_module_continuation_generation: Option<u64>,
-    queued_main_document_parser_module_continuation_generation: Option<u64>,
+    queued_main_document_runtime_continuation_owner:
+        Option<crate::frame_owner_model::FrameDocumentTaskOwner>,
+    queued_main_document_module_continuation_owner:
+        Option<crate::frame_owner_model::FrameDocumentTaskOwner>,
+    queued_main_document_parser_module_continuation_owner:
+        Option<crate::frame_owner_model::FrameDocumentTaskOwner>,
     script_execution_memory: ScriptExecutionMemoryCounters,
     runtime_observable_source_queue: RendererRuntimeObservableSourceQueue,
     page_context_cancel_tx: RendererPageContextCancelSender,
@@ -2269,9 +2272,9 @@ impl ScriptVmDefaultWorldBootstrap {
             page_context_cancel_tx,
             post_domcontentloaded_page_task_tx,
             page_runtime_wake_tx,
-            queued_main_document_runtime_continuation_generation: None,
-            queued_main_document_module_continuation_generation: None,
-            queued_main_document_parser_module_continuation_generation: None,
+            queued_main_document_runtime_continuation_owner: None,
+            queued_main_document_module_continuation_owner: None,
+            queued_main_document_parser_module_continuation_owner: None,
             script_execution_memory: ScriptExecutionMemoryCounters::default(),
             runtime_observable_source_queue: RendererRuntimeObservableSourceQueue::default(),
             pressed_mouse_buttons: 0,

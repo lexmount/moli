@@ -473,15 +473,14 @@ impl ScriptVm {
             ));
             return;
         };
-        let runtime_generation = self.document_runtime.runtime_reset_generation();
-        if self.queued_main_document_runtime_continuation_generation == Some(runtime_generation) {
+        if self.queued_main_document_runtime_continuation_owner == Some(document_owner) {
             return;
         }
         let continuation = self
             .page_runtime_wake_tx
             .bind_main_document_runtime_continuation(document_owner);
         if continuation.send_runtime_script_continuation().is_ok() {
-            self.queued_main_document_runtime_continuation_generation = Some(runtime_generation);
+            self.queued_main_document_runtime_continuation_owner = Some(document_owner);
         } else {
             self.record_runtime_warning(format_args!(
                 "main-Document runtime route closed before its continuation was accepted"
@@ -496,7 +495,7 @@ impl ScriptVm {
     /// token authorizes one action. When a ready tail remains, the body
     /// executor may publish its next token before the current selected-task
     /// checkpoint; the scheduler cannot select that token until the current
-    /// dispatcher returns. The generation guard prevents repeated readiness
+    /// dispatcher returns. The exact-owner guard prevents repeated readiness
     /// observations from duplicating the same head.
     pub(crate) fn enqueue_parser_owned_module_continuation(&mut self) -> bool {
         let Some(document_owner) = self.current_main_document_task_owner() else {
@@ -505,10 +504,7 @@ impl ScriptVm {
             ));
             return false;
         };
-        let runtime_generation = self.document_runtime.runtime_reset_generation();
-        if self.queued_main_document_parser_module_continuation_generation
-            == Some(runtime_generation)
-        {
+        if self.queued_main_document_parser_module_continuation_owner == Some(document_owner) {
             return true;
         }
         let queued = self
@@ -517,8 +513,7 @@ impl ScriptVm {
             .send_parser_owned_module_continuation()
             .is_ok();
         if queued {
-            self.queued_main_document_parser_module_continuation_generation =
-                Some(runtime_generation);
+            self.queued_main_document_parser_module_continuation_owner = Some(document_owner);
         } else {
             self.record_runtime_warning(format_args!(
                 "main-Document runtime route closed before parser module continuation admission"
@@ -527,11 +522,12 @@ impl ScriptVm {
         queued
     }
 
-    pub(crate) fn begin_parser_owned_module_continuation_turn(&mut self, runtime_generation: u64) {
-        if self.queued_main_document_parser_module_continuation_generation
-            == Some(runtime_generation)
-        {
-            self.queued_main_document_parser_module_continuation_generation = None;
+    pub(crate) fn begin_parser_owned_module_continuation_turn(
+        &mut self,
+        document_owner: crate::frame_owner_model::FrameDocumentTaskOwner,
+    ) {
+        if self.queued_main_document_parser_module_continuation_owner == Some(document_owner) {
+            self.queued_main_document_parser_module_continuation_owner = None;
         }
     }
 

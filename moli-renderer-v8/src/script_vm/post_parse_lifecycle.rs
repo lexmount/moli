@@ -458,8 +458,7 @@ impl ScriptVm {
             ));
             return false;
         };
-        let runtime_generation = self.document_runtime.runtime_reset_generation();
-        if self.queued_main_document_module_continuation_generation == Some(runtime_generation) {
+        if self.queued_main_document_module_continuation_owner == Some(document_owner) {
             return true;
         }
         let queued = self
@@ -468,7 +467,7 @@ impl ScriptVm {
             .send_runtime_module_continuation()
             .is_ok();
         if queued {
-            self.queued_main_document_module_continuation_generation = Some(runtime_generation);
+            self.queued_main_document_module_continuation_owner = Some(document_owner);
         } else {
             self.record_runtime_warning(format_args!(
                 "main-Document runtime route closed before module continuation admission"
@@ -477,9 +476,12 @@ impl ScriptVm {
         queued
     }
 
-    pub(crate) fn begin_runtime_owned_module_continuation_turn(&mut self, runtime_generation: u64) {
-        if self.queued_main_document_module_continuation_generation == Some(runtime_generation) {
-            self.queued_main_document_module_continuation_generation = None;
+    pub(crate) fn begin_runtime_owned_module_continuation_turn(
+        &mut self,
+        document_owner: crate::frame_owner_model::FrameDocumentTaskOwner,
+    ) {
+        if self.queued_main_document_module_continuation_owner == Some(document_owner) {
+            self.queued_main_document_module_continuation_owner = None;
         }
     }
 
@@ -609,7 +611,7 @@ impl ScriptVm {
             return self.prepare_rebuilt_post_parse_round_page_owned_work();
         }
         let mut work = self.prepare_main_document_lifecycle_page_owned_work(work);
-        self.bind_post_parse_page_owned_work_runtime_generation(&mut work);
+        self.bind_post_parse_page_owned_script_handles(&mut work);
         work
     }
 
@@ -625,7 +627,7 @@ impl ScriptVm {
         // new-owner work before this invalidation is observed.
         self.refresh_script_vm_local_document_state();
         let mut work = self.prepare_main_document_lifecycle_page_owned_work(Vec::new());
-        self.bind_post_parse_page_owned_work_runtime_generation(&mut work);
+        self.bind_post_parse_page_owned_script_handles(&mut work);
         work
     }
 
@@ -923,13 +925,13 @@ impl ScriptVm {
         }
     }
 
-    pub(super) fn bind_post_parse_page_owned_work_runtime_generation(
+    pub(super) fn bind_post_parse_page_owned_script_handles(
         &mut self,
         work: &mut [PostParsePageOwnedWork],
     ) {
         for item in work {
             if let Some(script) = item.as_script_mut() {
-                self.bind_prepared_script_if_needed(script, ScriptHandleSource::ParserOwned);
+                self.bind_prepared_script_handle_if_needed(script, ScriptHandleSource::ParserOwned);
             }
         }
     }
@@ -2273,7 +2275,7 @@ impl ScriptVm {
         true
     }
 
-    pub(crate) fn bind_prepared_script_if_needed(
+    pub(crate) fn bind_prepared_script_handle_if_needed(
         &mut self,
         script: &mut PreparedScript,
         source: ScriptHandleSource,

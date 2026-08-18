@@ -413,7 +413,7 @@ async fn external_module_prepared_script_hides_root_graph_fetch_in_owner_state()
     .expect("script vm bootstrap")
     .finish()
     .expect("script vm finish");
-    vm.bind_prepared_script_if_needed(&mut prepared, ScriptHandleSource::ParserOwned);
+    vm.bind_prepared_script_handle_if_needed(&mut prepared, ScriptHandleSource::ParserOwned);
 
     let task_owner = vm
         .current_main_document_task_owner()
@@ -2338,7 +2338,7 @@ async fn pre_domcontentloaded_runtime_source_wait_yields_to_stable_page_continua
     let mut script = vm.test_pending_runtime_source_load_script();
     script.node_id = script_node;
     script.mode = ScriptMode::InOrder;
-    vm.bind_prepared_script_if_needed(&mut script, ScriptHandleSource::DocumentWriteOwned);
+    vm.bind_prepared_script_handle_if_needed(&mut script, ScriptHandleSource::DocumentWriteOwned);
     let handle = script
         .host_script_handle
         .as_deref()
@@ -3931,7 +3931,7 @@ fn document_write_owned_inline_normal_defers_already_started_until_execution_wit
             .is_some_and(|element| element.script_already_started())
     );
 
-    vm.bind_prepared_script_if_needed(&mut prepared, ScriptHandleSource::DocumentWriteOwned);
+    vm.bind_prepared_script_handle_if_needed(&mut prepared, ScriptHandleSource::DocumentWriteOwned);
 
     assert!(
         prepared.host_script_handle.is_none(),

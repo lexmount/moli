@@ -56,21 +56,19 @@ impl ScriptVm {
     /// the successor it publishes.
     pub(crate) fn continue_main_document_runtime_script_task_body(
         &mut self,
-        continuation_generation: u64,
+        document_owner: crate::frame_owner_model::FrameDocumentTaskOwner,
     ) -> RuntimeScriptContinuationBodyEffect {
         self.document_runtime
             .runtime_script_work_mut()
             .dynamic_scripts
             .begin_continuation_turn();
-        if self.queued_main_document_runtime_continuation_generation
-            == Some(continuation_generation)
-        {
-            self.queued_main_document_runtime_continuation_generation = None;
+        if self.queued_main_document_runtime_continuation_owner == Some(document_owner) {
+            self.queued_main_document_runtime_continuation_owner = None;
         }
         assert_eq!(
-            continuation_generation,
-            self.document_runtime.runtime_reset_generation(),
-            "an exact-owner-authorized runtime continuation must target the current runtime generation"
+            Some(document_owner),
+            self.current_main_document_task_owner(),
+            "an exact-owner-authorized runtime continuation must target the current Document"
         );
 
         self.resume_runtime_script_work_after_deferred_page_tasks();
