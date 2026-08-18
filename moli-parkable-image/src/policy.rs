@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-pub const DEFAULT_MIN_SIZE_TO_PARK: usize = 1024;
-pub const DEFAULT_PARKING_DELAY: Duration = Duration::from_secs(30);
+const DEFAULT_MIN_SIZE_TO_PARK: usize = 1024;
+const DEFAULT_PARKING_DELAY: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ParkableImagePolicy {

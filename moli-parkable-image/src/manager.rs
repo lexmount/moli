@@ -44,7 +44,7 @@ pub struct ParkableImageManagerDiagnostics {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct ParkableImageSweepReport {
+pub(crate) struct ParkableImageSweepReport {
     pub considered: usize,
     pub parked: usize,
     pub already_parked: usize,
@@ -87,7 +87,7 @@ impl ParkableImageManager {
         }
     }
 
-    pub fn policy(&self) -> ParkableImagePolicy {
+    pub(crate) fn policy(&self) -> ParkableImagePolicy {
         self.inner.policy
     }
 
@@ -114,7 +114,11 @@ impl ParkableImageManager {
     ///
     /// Disk I/O is synchronous. Call this from a blocking worker after waiting
     /// for [`Self::next_parking_deadline`].
-    pub fn park_images_due(&self) -> ParkableImageSweepReport {
+    pub fn park_images_due(&self) {
+        self.park_images_due_with_report();
+    }
+
+    pub(crate) fn park_images_due_with_report(&self) -> ParkableImageSweepReport {
         let now = Instant::now();
         let due = self
             .resident_images()
@@ -132,7 +136,11 @@ impl ParkableImageManager {
     ///
     /// This is retained for explicit memory-pressure sweeps and tests. The
     /// normal renderer path is deadline driven through [`Self::park_images_due`].
-    pub fn maybe_park_images(&self) -> ParkableImageSweepReport {
+    pub fn park_images_now(&self) {
+        self.park_images_now_with_report();
+    }
+
+    pub(crate) fn park_images_now_with_report(&self) -> ParkableImageSweepReport {
         let images = self.resident_images();
         self.sweep(images)
     }

@@ -426,7 +426,8 @@ async fn memory_diagnostics_reports_resource_runtime_storage() {
         .expect("resident image bytes should be readable");
     assert_eq!(snapshot.len(), parked_image_bytes);
     drop(snapshot);
-    assert_eq!(parkable_images.maybe_park_images().parked, 1);
+    parkable_images.park_images_now();
+    assert_eq!(parkable_images.diagnostics().parked_count, 1);
 
     let pending_diagnostics = conn
         .start_moli_diagnostics()

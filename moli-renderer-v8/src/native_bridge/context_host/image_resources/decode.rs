@@ -218,9 +218,6 @@ impl ImageDecodeCoordinator {
                     Ok::<_, String>((content, decoded_bytes_permit))
                 })();
                 drop(snapshot);
-                if let Err(error) = encoded.maybe_park() {
-                    tracing::debug!(%error, "failed to park encoded image after decode");
-                }
                 result.map(|(content, decoded_bytes_permit)| ReadyDecodedImage {
                     content,
                     decoded_bytes_permit,
@@ -284,14 +281,12 @@ mod tests {
     use std::time::Duration;
 
     use moli_disk_pool::DiskPool;
-    use moli_parkable_image::{
-        ParkableImageManager, ParkableImagePolicy, ParkableImageStorageState,
-    };
+    use moli_parkable_image::{ParkableImageManager, ParkableImagePolicy};
 
     use super::*;
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn decode_uses_snapshot_then_parks_the_shared_encoded_image() {
+    async fn decode_releases_its_snapshot_for_manager_parking() {
         let pixels = moli_image::RgbaImage::try_new(1, 1, vec![255, 0, 0, 255]).unwrap();
         let bytes = moli_image::encode_png(&pixels).unwrap().bytes;
         let metadata = moli_image::probe_raster_image(&bytes).unwrap();
@@ -323,12 +318,10 @@ mod tests {
             .expect("image decode should complete")
             .expect("decode callback should send its result");
         assert!(matches!(result, ImageDecodeResult::Ready(_)));
-        assert_eq!(
-            encoded.diagnostics().storage,
-            ParkableImageStorageState::Parked
-        );
+        manager.park_images_now();
+        assert_eq!(manager.diagnostics().parked_count, 1);
         assert_eq!(manager.diagnostics().retained_memory_bytes, 0);
         assert_eq!(pool.diagnostics().disk_footprint_bytes, bytes.len() as u64);
-        assert_eq!(encoded.data().unwrap(), bytes);
+        assert_eq!(encoded.snapshot().unwrap().as_ref(), bytes);
     }
 }

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::{ParkableImage, WeakParkableImage};
+use crate::image::{ParkableImage, WeakParkableImage};
 
 #[derive(Default)]
 pub(crate) struct ParkableImageRegistry {

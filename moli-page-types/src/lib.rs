@@ -1782,7 +1782,7 @@ impl SubresourceResponseBody {
                 Ok(ResponseBody::materialized_text(text, bytes))
             }
             SubresourceResponseBodyInner::ParkableImage(image) => {
-                let bytes = image.data()?;
+                let bytes = image.snapshot()?.to_vec();
                 let text = String::from_utf8_lossy(&bytes).into_owned();
                 Ok(ResponseBody::materialized_text(text, bytes))
             }
@@ -1813,7 +1813,7 @@ impl SubresourceResponseBody {
                 Ok(Cow::Owned(cache.as_deref().unwrap_or_default().to_owned()))
             }
             SubresourceResponseBodyInner::ParkableImage(image) => Ok(Cow::Owned(
-                String::from_utf8_lossy(&image.data()?).into_owned(),
+                String::from_utf8_lossy(&image.snapshot()?).into_owned(),
             )),
         }
     }
@@ -1832,7 +1832,9 @@ impl SubresourceResponseBody {
         match self.inner.as_ref() {
             SubresourceResponseBodyInner::Memory { bytes, .. } => Ok(Cow::Borrowed(bytes)),
             SubresourceResponseBodyInner::Disk { .. } => self.materialize_bytes().map(Cow::Owned),
-            SubresourceResponseBodyInner::ParkableImage(image) => image.data().map(Cow::Owned),
+            SubresourceResponseBodyInner::ParkableImage(image) => image
+                .snapshot()
+                .map(|snapshot| Cow::Owned(snapshot.to_vec())),
         }
     }
 
@@ -4111,10 +4113,8 @@ mod tests {
         let encoded = manager.from_frozen_bytes(b"encoded image".to_vec());
         let body = SubresourceResponseBody::from_parkable_image(encoded.clone());
 
-        assert_eq!(
-            encoded.maybe_park().unwrap(),
-            moli_parkable_image::ParkOutcome::Parked
-        );
+        manager.park_images_now();
+        assert_eq!(manager.diagnostics().parked_count, 1);
         assert_eq!(pool.diagnostics().disk_footprint_bytes, 13);
         assert_eq!(body.read_chunk(8, 5).unwrap(), b"image");
         assert_eq!(body.materialize_bytes().unwrap(), b"encoded image");

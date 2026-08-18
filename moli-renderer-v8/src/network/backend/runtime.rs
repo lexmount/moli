@@ -708,9 +708,7 @@ mod tests {
         let snapshot = image.snapshot()?;
         drop(snapshot);
         timeout(Duration::from_secs(5), async {
-            while image.diagnostics().storage
-                != moli_parkable_image::ParkableImageStorageState::Parked
-            {
+            while manager.diagnostics().parked_count == 0 {
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
         })
