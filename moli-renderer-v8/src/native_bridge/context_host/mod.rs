@@ -196,7 +196,8 @@ pub(crate) use messages::{
     PendingWindowMessage, PendingWindowMessageEndpoint, PendingWindowMessageSource,
 };
 pub(crate) use moli_page_types::{
-    NavigationActivationSeed, NavigationHistoryEntrySeed, NavigationHistorySerializedEntry,
+    NavigationActivationSeed, NavigationHistoryDocumentId, NavigationHistoryEntrySeed,
+    NavigationHistorySerializedEntry,
 };
 pub(crate) use navigation::{PendingLocationNavigation, PendingTopLevelNavigation};
 pub(crate) use popups::{

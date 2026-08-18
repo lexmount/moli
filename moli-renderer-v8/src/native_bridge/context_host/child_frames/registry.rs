@@ -158,13 +158,7 @@ impl JsContextHost {
                     existing
                         .as_ref()
                         .map(|entry| entry.committed_navigation_entry_seed())
-                        .unwrap_or_else(|| {
-                            if is_new {
-                                Self::child_browsing_context_single_entry_seed(&live_bootstrap)
-                            } else {
-                                navigation_entry_seed.clone()
-                            }
-                        })
+                        .unwrap_or_else(|| navigation_entry_seed.clone())
                 };
                 let performance_time_origin = if is_new {
                     ChildPerformanceTimeOrigin::now()

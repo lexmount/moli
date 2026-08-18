@@ -20,6 +20,20 @@ function wait_for(promise, description) {
   ]);
 }
 
+function wait_for_hashchange(childWindow, expectedHash, action) {
+  return new Promise(function (resolve) {
+    function onHashchange() {
+      if (childWindow.location.hash !== expectedHash) {
+        return;
+      }
+      childWindow.removeEventListener("hashchange", onHashchange);
+      resolve();
+    }
+    childWindow.addEventListener("hashchange", onHashchange);
+    action();
+  });
+}
+
 promise_test(async function () {
   const iframe = document.getElementById("child");
   const topOrder = [];
@@ -39,7 +53,8 @@ promise_test(async function () {
         if (
           childWindow &&
           childWindow.location.href === childBaseUrl &&
-          childWindow.navigation.currentEntry?.url === childBaseUrl
+          childWindow.navigation.currentEntry?.url === childBaseUrl &&
+          childWindow.document.readyState === "complete"
         ) {
           resolve();
           return;
@@ -51,79 +66,67 @@ promise_test(async function () {
     "child iframe initial navigation commit",
   );
 
-  const snapshot = await wait_for(
-    new Promise(function (resolve) {
-      const childWindow = iframe.contentWindow;
-      const childOrder = [];
+  const childWindow = iframe.contentWindow;
+  const childOrder = [];
 
-      childWindow.history.pushState({ step: 1 }, "", "#one");
-      childWindow.history.pushState({ step: 2 }, "", "#two");
-
-      childWindow.addEventListener(
-        "hashchange",
-        function onHashchange() {
-          if (childWindow.location.hash !== "#one") {
-            return;
-          }
-
-          let committedSettled = false;
-          let finishedSettled = false;
-          let committedValue = null;
-          let finishedValue = null;
-
-          const result = childWindow.navigation.forward();
-          result.committed.then(function (entry) {
-            committedSettled = true;
-            committedValue = entry;
-            childOrder.push("child-committed:" + childWindow.location.hash);
-          });
-          result.finished.then(function (entry) {
-            finishedSettled = true;
-            finishedValue = entry;
-            childOrder.push("child-finished:" + childWindow.location.hash);
-          });
-
-          const syncHash = childWindow.location.hash;
-          const syncState = String(childWindow.history.state?.step ?? "null");
-          const syncCommitted = String(committedSettled);
-          const syncFinished = String(finishedSettled);
-          const syncKeys = Object.keys(result).join(",");
-          const syncProps = Object.getOwnPropertyNames(result).join(",");
-
-          childWindow.removeEventListener("hashchange", onHashchange);
-          setTimeout(function () {
-            resolve({
-              syncHash,
-              syncState,
-              syncCommitted,
-              syncFinished,
-              syncKeys,
-              syncProps,
-              timeoutHash: childWindow.location.hash,
-              timeoutState: String(childWindow.history.state?.step ?? "null"),
-              timeoutCommitted: String(committedSettled),
-              timeoutFinished: String(finishedSettled),
-              timeoutCommittedType: Object.prototype.toString.call(committedValue),
-              timeoutFinishedType: Object.prototype.toString.call(finishedValue),
-              timeoutCommittedUrl: committedValue ? committedValue.url : "",
-              timeoutFinishedUrl: finishedValue ? finishedValue.url : "",
-              timeoutCurrentSameCommitted: String(
-                committedValue === childWindow.navigation.currentEntry,
-              ),
-              timeoutCurrentSameFinished: String(
-                finishedValue === childWindow.navigation.currentEntry,
-              ),
-              order: childOrder.join(","),
-            });
-          }, 50);
-        },
-        { once: false },
-      );
-
+  childWindow.history.pushState({ step: 1 }, "", "#one");
+  childWindow.history.pushState({ step: 2 }, "", "#two");
+  await wait_for_hashchange(
+    childWindow,
+    "#one",
+    function () {
       childWindow.history.back();
-    }),
-    "child forward result promises",
+    },
   );
+
+  let committedSettled = false;
+  let finishedSettled = false;
+  let committedValue = null;
+  let finishedValue = null;
+
+  const result = childWindow.navigation.forward();
+  result.committed.then(function (entry) {
+    committedSettled = true;
+    committedValue = entry;
+    childOrder.push("child-committed:" + childWindow.location.hash);
+  });
+  result.finished.then(function (entry) {
+    finishedSettled = true;
+    finishedValue = entry;
+    childOrder.push("child-finished:" + childWindow.location.hash);
+  });
+
+  const syncHash = childWindow.location.hash;
+  const syncState = String(childWindow.history.state?.step ?? "null");
+  const syncCommitted = String(committedSettled);
+  const syncFinished = String(finishedSettled);
+  const syncKeys = Object.keys(result).join(",");
+  const syncProps = Object.getOwnPropertyNames(result).join(",");
+
+  await Promise.all([result.committed, result.finished]);
+  const snapshot = {
+    syncHash,
+    syncState,
+    syncCommitted,
+    syncFinished,
+    syncKeys,
+    syncProps,
+    timeoutHash: childWindow.location.hash,
+    timeoutState: String(childWindow.history.state?.step ?? "null"),
+    timeoutCommitted: String(committedSettled),
+    timeoutFinished: String(finishedSettled),
+    timeoutCommittedType: Object.prototype.toString.call(committedValue),
+    timeoutFinishedType: Object.prototype.toString.call(finishedValue),
+    timeoutCommittedUrl: committedValue ? committedValue.url : "",
+    timeoutFinishedUrl: finishedValue ? finishedValue.url : "",
+    timeoutCurrentSameCommitted: String(
+      committedValue === childWindow.navigation.currentEntry,
+    ),
+    timeoutCurrentSameFinished: String(
+      finishedValue === childWindow.navigation.currentEntry,
+    ),
+    order: childOrder.join(","),
+  };
 
   assert_array_equals(topOrder, [], "top-level traversal events should stay window-local to the child");
   assert_equals(snapshot.syncHash, "#one", "child should be back on the first fragment synchronously");

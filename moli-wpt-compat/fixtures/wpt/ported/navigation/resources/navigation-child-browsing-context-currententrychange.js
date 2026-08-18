@@ -27,7 +27,8 @@
           if (
             childWindow &&
             childWindow.location.href === childBaseUrl &&
-            childWindow.navigation.currentEntry?.url === childBaseUrl
+            childWindow.navigation.currentEntry?.url === childBaseUrl &&
+            childWindow.document.readyState === "complete"
           ) {
             resolve();
             return;
@@ -83,12 +84,11 @@
       childPropertyNavigationTypes.push(String(event.navigationType));
     };
 
-    childWindow.navigation.navigate("#one", {
+    const result = childWindow.navigation.navigate("#one", {
       history: "push",
       state: { from: "child" },
     });
-
-    await wait(0);
+    await result.finished;
 
     assert_equals(
       topChanges,
@@ -143,60 +143,42 @@
 
     childWindow.history.pushState({ n: 1 }, "", "#one");
     childWindow.history.pushState({ n: 2 }, "", "#two");
-    await wait(0);
+    await wait_for_hashchange(childWindow, "#one", function () {
+      childWindow.history.back();
+    });
 
-    const snapshot = await wait_for(
-      new Promise(function (resolve) {
-        childWindow.addEventListener(
-          "hashchange",
-          function onHashchange() {
-            if (childWindow.location.hash !== "#one") {
-              return;
-            }
+    const order = [];
+    let fired = false;
+    let fromUrl = "null";
+    let navigationType = "null";
+    const currentEntryChange = new Promise(function (resolve) {
+      childWindow.navigation.oncurrententrychange = function (event) {
+        fired = true;
+        fromUrl = event.from?.url ?? "null";
+        navigationType = String(event.navigationType);
+        order.push("currententrychange");
+        queueMicrotask(function () {
+          order.push("currententrychange-microtask:" + childWindow.location.hash);
+          resolve();
+        });
+      };
+    });
 
-            childWindow.removeEventListener("hashchange", onHashchange);
-
-            const order = [];
-            let fired = false;
-            let fromUrl = "null";
-            let navigationType = "null";
-            let syncHash = "";
-            let syncState = "";
-
-            childWindow.navigation.oncurrententrychange = function (event) {
-              fired = true;
-              fromUrl = event.from?.url ?? "null";
-              navigationType = String(event.navigationType);
-              order.push("currententrychange");
-              queueMicrotask(function () {
-                order.push("currententrychange-microtask:" + childWindow.location.hash);
-              });
-              setTimeout(function () {
-                resolve({
-                  fired: String(fired),
-                  topChanges: String(topChanges),
-                  syncHash: syncHash,
-                  syncState: syncState,
-                  timeoutHash: childWindow.location.hash,
-                  timeoutState: JSON.stringify(childWindow.history.state),
-                  fromUrl: fromUrl,
-                  navigationType: navigationType,
-                  order: order.join(","),
-                });
-              }, 0);
-            };
-
-            childWindow.navigation.forward();
-            syncHash = childWindow.location.hash;
-            syncState = JSON.stringify(childWindow.history.state);
-          },
-          { once: false },
-        );
-
-        childWindow.history.back();
-      }),
-      "child forward currententrychange traverse snapshot",
-    );
+    const result = childWindow.navigation.forward();
+    const syncHash = childWindow.location.hash;
+    const syncState = JSON.stringify(childWindow.history.state);
+    await Promise.all([currentEntryChange, result.finished]);
+    const snapshot = {
+      fired: String(fired),
+      topChanges: String(topChanges),
+      syncHash,
+      syncState,
+      timeoutHash: childWindow.location.hash,
+      timeoutState: JSON.stringify(childWindow.history.state),
+      fromUrl,
+      navigationType,
+      order: order.join(","),
+    };
 
     assert_equals(
       snapshot.topChanges,
@@ -243,5 +225,19 @@
       "currententrychange,currententrychange-microtask:#two",
       "child oncurrententrychange should observe the traversed fragment by microtask time",
     );
+  }
+
+  function wait_for_hashchange(childWindow, expectedHash, action) {
+    return new Promise(function (resolve) {
+      function onHashchange() {
+        if (childWindow.location.hash !== expectedHash) {
+          return;
+        }
+        childWindow.removeEventListener("hashchange", onHashchange);
+        resolve();
+      }
+      childWindow.addEventListener("hashchange", onHashchange);
+      action();
+    });
   }
 })();

@@ -1,7 +1,8 @@
 use super::{
     ChildBrowsingContextBootstrap, ChildBrowsingContextSnapshot, ChildFrameAttachmentSnapshot,
-    JsContextHost, NavigationActivationSeed, NavigationHistoryEntrySeed,
-    NavigationHistorySerializedEntry, child_documents::CompletedFrameOwnerResourceTiming,
+    JsContextHost, NavigationActivationSeed, NavigationHistoryDocumentId,
+    NavigationHistoryEntrySeed, NavigationHistorySerializedEntry,
+    child_documents::CompletedFrameOwnerResourceTiming,
 };
 use crate::{
     context_bootstrap::set_top_level_history_length_at_least_for_runtime_owner,
@@ -622,16 +623,16 @@ impl ChildBrowsingContextEntry {
             .map(|snapshot| snapshot.document_id.clone());
         for snapshot in &mut self.navigation_entry_seed.entries {
             if current_document_id
-                .as_deref()
-                .is_some_and(|document_id| snapshot.document_id == document_id)
+                .as_ref()
+                .is_some_and(|document_id| &snapshot.document_id == document_id)
             {
                 snapshot.referrer_policy = Some(policy.clone());
             }
         }
         if let Some(activation) = self.navigation_entry_seed.activation.as_mut()
             && current_document_id
-                .as_deref()
-                .is_some_and(|document_id| activation.entry.document_id == document_id)
+                .as_ref()
+                .is_some_and(|document_id| &activation.entry.document_id == document_id)
         {
             activation.entry.referrer_policy = Some(policy);
         }
@@ -745,7 +746,7 @@ impl ChildBrowsingContextEntry {
                 history_state_json: None,
                 navigation_state_json: None,
                 referrer_policy: None,
-                document_id: "document-1".to_owned(),
+                document_id: NavigationHistoryDocumentId::allocate(),
                 history_index: 1,
                 index: 0,
                 id: "entry-1".to_owned(),

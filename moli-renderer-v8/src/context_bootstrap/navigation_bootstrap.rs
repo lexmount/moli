@@ -53,11 +53,12 @@ pub(crate) fn install_window_location_history_navigation_runtime_state<'s>(
     install_location_runtime_state(scope, location, href)?;
     set_private_value(scope, window, WINDOW_LOCATION_SLOT, location.into());
 
-    let history = build_history_runtime_state(scope, window)?;
+    let initial_seed = initial_navigation_history_seed(scope, window, href);
+    let history = build_history_runtime_state(scope, window, &initial_seed)?;
     set_runtime_window_owner(scope, history, window);
     set_private_value(scope, window, WINDOW_HISTORY_SLOT, history.into());
 
-    let navigation = build_navigation_runtime_state(scope, window)?;
+    let navigation = build_navigation_runtime_state(scope, window, &initial_seed)?;
     set_runtime_window_owner(scope, navigation, window);
     set_private_value(scope, window, WINDOW_NAVIGATION_SLOT, navigation.into());
     if !window.strict_equals(scope.get_current_context().global(scope).into()) {
@@ -84,14 +85,14 @@ pub(crate) fn reset_window_location_history_navigation_runtime_state<'s>(
         .map_err(|error| anyhow::anyhow!("failed to initialize Location object: {error}"))?;
     install_location_runtime_state(scope, location, href)?;
 
+    let initial_seed = initial_navigation_history_seed(scope, window, href);
     let history = match window_runtime_object(scope, window, WINDOW_HISTORY_SLOT) {
         Some(history) => history,
-        None => build_history_runtime_state(scope, window)?,
+        None => build_history_runtime_state(scope, window, &initial_seed)?,
     };
     set_runtime_window_owner(scope, history, window);
     install_history_scroll_restoration_runtime_state(scope, history, "auto");
     install_history_state_runtime_state(scope, history, v8::null(scope).into());
-    let initial_seed = initial_navigation_history_seed(scope, window, href);
     let entries = build_history_entries_array_from_seed(scope, window, &initial_seed);
     let current_entry = entries
         .get_index(scope, initial_seed.current_index)
@@ -111,7 +112,7 @@ pub(crate) fn reset_window_location_history_navigation_runtime_state<'s>(
 
     let navigation = match window_runtime_object(scope, window, WINDOW_NAVIGATION_SLOT) {
         Some(navigation) => navigation,
-        None => build_navigation_runtime_state(scope, window)?,
+        None => build_navigation_runtime_state(scope, window, &initial_seed)?,
     };
     set_runtime_window_owner(scope, navigation, window);
     set_navigation_current_entry(scope, navigation, current_entry);

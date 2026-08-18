@@ -1,6 +1,19 @@
+[test-groups.navigation-child-browser-runtime]
+max-threads = 1
+
+[[profile.default.overrides]]
+filter = 'package(moli-core) & binary(wpt_compat) & test(/navigation_child_browsing_context/)'
+test-group = 'navigation-child-browser-runtime'
+threads-required = "num-test-threads"
+
 [profile.ci]
 fail-fast = false
 retries = 2
 status-level = "fail"          
 final-status-level = "fail"    
 success-output = "never"       
+
+[[profile.ci.overrides]]
+filter = 'package(moli-core) & binary(wpt_compat) & test(/navigation_child_browsing_context/)'
+test-group = 'navigation-child-browser-runtime'
+threads-required = "num-test-threads"

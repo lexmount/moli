@@ -45,7 +45,7 @@ pub(crate) fn install_navigation_bootstrap_entry_for_holder<'s>(
             &snapshot.id,
             &snapshot.key,
         );
-        set_navigation_entry_document_id(scope, entry, &snapshot.document_id);
+        set_navigation_entry_document_id(scope, entry, snapshot.document_id.as_str());
         bind_navigation_entry_runtime_owner(scope, entry, owner);
         let _ = entries.set_index(scope, snapshot.history_index, entry.into());
         if snapshot.history_index == entry_seed.current_index {
@@ -58,7 +58,8 @@ pub(crate) fn install_navigation_bootstrap_entry_for_holder<'s>(
     let current_entry = current_entry.unwrap_or_else(|| {
         current_state = Some(v8::null(scope).into());
         let entry = create_navigation_entry(scope, "about:blank", None, None, None, 0, "", "");
-        set_navigation_entry_document_id(scope, entry, "document-0");
+        let document_id = moli_page_types::NavigationHistoryDocumentId::allocate();
+        set_navigation_entry_document_id(scope, entry, document_id.as_str());
         bind_navigation_entry_runtime_owner(scope, entry, owner);
         entry
     });

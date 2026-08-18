@@ -5,6 +5,7 @@ use super::accessors::{
     install_history_prototype_accessors, install_navigation_prototype_accessors,
 };
 use super::*;
+use crate::native_bridge::NavigationHistoryEntrySeed;
 use crate::util::get_private_value;
 use moli_webapi_declare::WebApiObject;
 
@@ -49,16 +50,12 @@ struct NavigationRuntimeObjectDeclaration<'scope> {
 pub(in crate::context_bootstrap) fn build_history_runtime_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: v8::Local<'s, v8::Object>,
+    initial_seed: &NavigationHistoryEntrySeed,
 ) -> Result<v8::Local<'s, v8::Object>> {
     if let Some(prototype) = global_constructor_prototype(scope, "History") {
         install_history_prototype_accessors(scope, prototype);
     }
-    let current_href = window_location_runtime_object(scope, window)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        .and_then(|location| location_href_slot(scope, location))
-        .unwrap_or_else(|| "about:blank".to_owned());
-    let initial_seed = initial_navigation_history_seed(scope, window, &current_href);
-    let entries = build_history_entries_array_from_seed(scope, window, &initial_seed);
+    let entries = build_history_entries_array_from_seed(scope, window, initial_seed);
     let history = HistoryRuntimeObjectDeclaration::new(
         v8::null(scope).into(),
         "auto",
@@ -75,15 +72,11 @@ pub(in crate::context_bootstrap) fn build_history_runtime_state<'s>(
 pub(in crate::context_bootstrap) fn build_navigation_runtime_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: v8::Local<'s, v8::Object>,
+    initial_seed: &NavigationHistoryEntrySeed,
 ) -> Result<v8::Local<'s, v8::Object>> {
     if let Some(prototype) = global_constructor_prototype(scope, "Navigation") {
         install_navigation_prototype_accessors(scope, prototype);
     }
-    let current_href = window_location_runtime_object(scope, window)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        .and_then(|location| location_href_slot(scope, location))
-        .unwrap_or_else(|| "about:blank".to_owned());
-    let initial_seed = initial_navigation_history_seed(scope, window, &current_href);
     let current_entry = window_runtime_object(scope, window, WINDOW_HISTORY_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
         .and_then(|history| {
@@ -97,7 +90,7 @@ pub(in crate::context_bootstrap) fn build_navigation_runtime_state<'s>(
             build_current_navigation_entry_from_seed(
                 scope,
                 window,
-                &initial_seed,
+                initial_seed,
                 v8::null(scope).into(),
             )
         });
@@ -117,13 +110,6 @@ pub(in crate::context_bootstrap) fn build_navigation_runtime_state<'s>(
         initial_seed.activation.as_ref(),
     );
     Ok(navigation)
-}
-
-fn window_location_runtime_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    window: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Value>> {
-    window_runtime_object(scope, window, WINDOW_LOCATION_SLOT)
 }
 
 fn window_runtime_object<'s>(

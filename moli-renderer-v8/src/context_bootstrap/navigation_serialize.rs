@@ -12,7 +12,8 @@ use super::navigation_window::{
 };
 use super::*;
 use crate::native_bridge::{
-    NavigationActivationSeed, NavigationHistoryEntrySeed, NavigationHistorySerializedEntry,
+    NavigationActivationSeed, NavigationHistoryDocumentId, NavigationHistoryEntrySeed,
+    NavigationHistorySerializedEntry,
 };
 use crate::{
     document_runtime::DomHandle, native_bridge::node_runtime_and_handle_from_object,
@@ -124,7 +125,7 @@ pub(super) fn serialize_navigation_entry_object<'s>(
         history_state_json,
         navigation_state_json,
         referrer_policy: navigation_entry_referrer_policy_value(scope, entry),
-        document_id,
+        document_id: NavigationHistoryDocumentId::from_serialized(document_id),
         history_index: entry_index,
         index: entry_index,
         id,
@@ -228,7 +229,7 @@ pub(super) fn serialize_history_entries<'s>(
             history_state_json,
             navigation_state_json,
             referrer_policy: navigation_entry_referrer_policy_value(scope, entry),
-            document_id,
+            document_id: NavigationHistoryDocumentId::from_serialized(document_id),
             history_index: index,
             index: entry_index,
             id,

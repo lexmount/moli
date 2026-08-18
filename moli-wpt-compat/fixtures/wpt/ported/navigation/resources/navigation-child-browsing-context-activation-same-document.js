@@ -42,31 +42,31 @@
     await wait_for_value(function () {
       return (
         childWindow.location.href === childUrl &&
-        childWindow.navigation.currentEntry?.url === childUrl
+        childWindow.navigation.currentEntry?.url === childUrl &&
+        childWindow.document.readyState === "complete"
       );
     }, "child initial navigation commit");
 
     const initial = snapshotChildActivation(iframe);
 
-    childWindow.navigation.navigate("#one", {
-      history: "push",
-      state: { step: 1 },
+    let pushResult;
+    const pushHashchange = wait_for_hashchange(childWindow, "#one", function () {
+      pushResult = childWindow.navigation.navigate("#one", {
+        history: "push",
+        state: { step: 1 },
+      });
     });
-    await wait_for_value(function () {
-      return childWindow.location.hash === "#one";
-    }, "child same-document push");
+    await Promise.all([pushResult.finished, pushHashchange]);
     const afterPush = snapshotChildActivation(iframe);
 
-    childWindow.history.back();
-    await wait_for_value(function () {
-      return childWindow.location.hash === "";
-    }, "child history back");
+    await wait_for_hashchange(childWindow, "", function () {
+      childWindow.history.back();
+    });
     const afterBack = snapshotChildActivation(iframe);
 
-    childWindow.history.forward();
-    await wait_for_value(function () {
-      return childWindow.location.hash === "#one";
-    }, "child history forward");
+    await wait_for_hashchange(childWindow, "#one", function () {
+      childWindow.history.forward();
+    });
     const afterForward = snapshotChildActivation(iframe);
 
     assert_equals(
@@ -101,5 +101,19 @@
       String(childWindow.navigation.currentEntry?.url ?? ""),
       String(childWindow.navigation.transition === null),
     ].join("|");
+  }
+
+  function wait_for_hashchange(childWindow, expectedHash, action) {
+    return new Promise(function (resolve) {
+      function onHashchange() {
+        if (childWindow.location.hash !== expectedHash) {
+          return;
+        }
+        childWindow.removeEventListener("hashchange", onHashchange);
+        resolve();
+      }
+      childWindow.addEventListener("hashchange", onHashchange);
+      action();
+    });
   }
 })();

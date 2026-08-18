@@ -44,7 +44,7 @@ pub(super) fn build_history_entries_array_from_seed<'s>(
             &snapshot.id,
             &snapshot.key,
         );
-        set_navigation_entry_document_id(scope, entry, &snapshot.document_id);
+        set_navigation_entry_document_id(scope, entry, snapshot.document_id.as_str());
         bind_navigation_entry_runtime_owner(scope, entry, owner);
         let _ = entries.set_index(scope, snapshot.history_index, entry.into());
     }
@@ -73,7 +73,8 @@ pub(super) fn build_current_navigation_entry_from_seed<'s>(
             "",
             "",
         );
-        set_navigation_entry_document_id(scope, entry, "document-0");
+        let document_id = moli_page_types::NavigationHistoryDocumentId::allocate();
+        set_navigation_entry_document_id(scope, entry, document_id.as_str());
         bind_navigation_entry_runtime_owner(scope, entry, owner);
         return entry;
     };
@@ -87,7 +88,7 @@ pub(super) fn build_current_navigation_entry_from_seed<'s>(
         &snapshot.id,
         &snapshot.key,
     );
-    set_navigation_entry_document_id(scope, entry, &snapshot.document_id);
+    set_navigation_entry_document_id(scope, entry, snapshot.document_id.as_str());
     bind_navigation_entry_runtime_owner(scope, entry, owner);
     entry
 }

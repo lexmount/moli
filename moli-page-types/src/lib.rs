@@ -186,8 +186,9 @@ pub use inspector_state::{
     renderer_inspector_protocol_configuration_command_from_method,
 };
 pub use navigation_history::{
-    NavigationActivationSeed, NavigationHistoryEntrySeed, NavigationHistoryMutation,
-    NavigationHistorySerializedEntry, NavigationTraversalSeedCandidate, SameDocumentHistoryUpdate,
+    NavigationActivationSeed, NavigationHistoryDocumentId, NavigationHistoryEntrySeed,
+    NavigationHistoryMutation, NavigationHistorySerializedEntry, NavigationTraversalSeedCandidate,
+    SameDocumentHistoryUpdate,
     apply_child_browsing_context_javascript_url_navigation_to_entry_seed,
     apply_child_browsing_context_navigation_to_entry_seed,
     child_browsing_context_single_entry_seed, cross_document_navigation_seed,

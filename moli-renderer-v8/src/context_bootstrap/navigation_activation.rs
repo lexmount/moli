@@ -145,7 +145,7 @@ pub(super) fn navigation_entry_object_from_snapshot<'s>(
         &snapshot.id,
         &snapshot.key,
     );
-    set_navigation_entry_document_id(scope, entry, &snapshot.document_id);
+    set_navigation_entry_document_id(scope, entry, snapshot.document_id.as_str());
     bind_navigation_entry_runtime_owner(scope, entry, owner);
     entry
 }
