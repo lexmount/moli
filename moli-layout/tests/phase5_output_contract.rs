@@ -973,6 +973,13 @@ fn scroll_is_sampled_per_pass_and_updates_geometry_clip_and_hit_testing() {
     );
     assert_eq!(
         first
+            .element_metrics_for_source(2)
+            .expect("the scrolled child has element metrics")
+            .border_origin_in_viewport_ignoring_css_transforms,
+        LayoutPoint::new(-40.0, -30.0),
+    );
+    assert_eq!(
+        first
             .hit_test(LayoutPoint::new(10.0, 10.0), false)
             .unwrap()
             .source,
@@ -1055,6 +1062,14 @@ fn transforms_and_semantic_paint_order_share_the_hit_test_projection() {
     );
     assert_eq!(
         output
+            .element_metrics_for_source(2)
+            .expect("the transformed box has element metrics")
+            .border_origin_in_viewport_ignoring_css_transforms,
+        LayoutPoint::new(20.0, 20.0),
+        "transform-free mapping must retain layout placement while skipping CSS transforms",
+    );
+    assert_eq!(
+        output
             .hit_test(LayoutPoint::new(40.0, 40.0), false)
             .unwrap()
             .source,
@@ -1130,6 +1145,14 @@ fn viewport_fixed_geometry_does_not_move_with_root_scroll() {
         .bounding_rect();
     assert_close(fixed.x, 10.0);
     assert_close(fixed.y, 15.0);
+    assert_eq!(
+        output
+            .element_metrics_for_source(2)
+            .expect("the fixed box has element metrics")
+            .border_origin_in_viewport_ignoring_css_transforms,
+        LayoutPoint::new(10.0, 15.0),
+        "transform-free viewport mapping must preserve fixed positioning",
+    );
     assert_close(
         output
             .box_model_for_source(1)

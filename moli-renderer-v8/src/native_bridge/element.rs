@@ -514,6 +514,7 @@ pub(in crate::native_bridge) use images::{
     image_height_getter_function, image_height_setter_function, image_is_map_getter_function,
     image_is_map_setter_function, image_natural_height_getter_function,
     image_natural_width_getter_function, image_width_getter_function, image_width_setter_function,
+    image_x_getter_function, image_y_getter_function,
 };
 pub(in crate::native_bridge) use media::queue_text_track_load_if_source;
 pub(crate) use media::{
@@ -3593,6 +3594,10 @@ struct HtmlImageElementUrlPrototypeDeclaration {
     natural_width: (),
     #[webapi(accessor_property = "naturalHeight", getter = image_natural_height_getter_function)]
     natural_height: (),
+    #[webapi(accessor_property, getter = image_x_getter_function)]
+    x: (),
+    #[webapi(accessor_property, getter = image_y_getter_function)]
+    y: (),
     #[webapi(
         accessor_property = "isMap",
         getter = image_is_map_getter_function,

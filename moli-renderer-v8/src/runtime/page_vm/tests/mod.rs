@@ -126,6 +126,7 @@ mod flex_percentage_gap;
 mod hash_change_delivery;
 mod history_traversal;
 mod image_load_event;
+mod image_root_coordinates;
 mod indexed_db;
 mod inline_svg_paint;
 mod inline_wrap;
