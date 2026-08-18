@@ -7803,7 +7803,8 @@ fn content_visibility_only_locks_chromium_eligible_boxes() {
 
     assert_eq!(
         result,
-        r#"{"inline":"inline visible","atomic":"","block":"","table":"table visible","row":"row visible","cell":"","caption":"caption visible"}"#
+        r#"{"inline":"inline visible","atomic":"","block":"","table":"","row":"row visible","cell":"","caption":""}"#,
+        "Blink locks LayoutTable, LayoutTableCaption, and table cells, while non-atomic inline content and internal table rows remain ineligible",
     );
 }
 

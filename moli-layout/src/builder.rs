@@ -136,6 +136,7 @@ where
             root_style.display(),
             LayoutDisplay::None | LayoutDisplay::Contents
         ) && !is_leaf_element(&root_semantics, root_kind, &root_style)
+            && !world.boxes[root_box.index()].used_content_visibility_skips_contents()
         {
             self.populate_root(
                 &mut world,
@@ -266,7 +267,9 @@ where
                     let id = world.allocate(box_node);
                     world.map_source(source_node, id);
 
-                    if is_leaf_element(&semantics, kind, &style) {
+                    if is_leaf_element(&semantics, kind, &style)
+                        || world.boxes[id.index()].used_content_visibility_skips_contents()
+                    {
                         return Ok(vec![id]);
                     }
 

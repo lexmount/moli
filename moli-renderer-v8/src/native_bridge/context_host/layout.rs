@@ -113,15 +113,16 @@ impl JsContextHost {
                 self.child_browsing_context_host_for_document_handle(candidate)
                     .is_some()
             });
-            state.with_services_for_document(
+            state.with_layout_pass_state_for_document(
                 document,
                 self.document_handle(),
-                |services, embedded_document_services| {
+                |services, embedded_document_services, intrinsic_size_observer| {
                     crate::layout_renderer::build_native_layout_pass(
                         self,
                         root,
                         services,
                         embedded_document_services,
+                        intrinsic_size_observer,
                         request,
                     )
                 },

@@ -6,6 +6,7 @@ use super::layout_snapshot::LatestLayoutTreeCache;
 use crate::{
     css_resource_urls::{CompletedStylesheetWebFont, StylesheetLoadBlockingResource},
     document_runtime::DomHandle,
+    layout_renderer::IntrinsicSizeObserverState,
     script_vm::web_fonts::{
         DocumentWebFontCompletion, DocumentWebFontLoadCycleId, DocumentWebFontState,
     },
@@ -16,7 +17,8 @@ use crate::{
 /// `ScriptVm` outlives `document.open()`, so the main-document owner
 /// transition replaces this value explicitly. Full layout passes borrow the
 /// services and discard every working tree/cache. Only the latest frozen
-/// layout tree and document-owned font/text sidecars survive a pass.
+/// layout tree and document-owned font/text/intrinsic-size state survive a
+/// pass.
 /// Embedded documents receive separate Parley services so a main-document
 /// `@font-face` registration cannot leak across the browsing-context boundary.
 /// The single snapshot slot may describe any exact Document in the current
@@ -24,6 +26,7 @@ use crate::{
 pub(super) struct DocumentLayoutState {
     services: DocumentLayoutServices,
     embedded_document_services: HashMap<DomHandle, DocumentLayoutServices>,
+    intrinsic_size_observer: IntrinsicSizeObserverState,
     web_fonts: DocumentWebFontState,
     web_font_sources_dirty: bool,
     latest_layout: LatestLayoutTreeCache,
@@ -34,6 +37,7 @@ impl Default for DocumentLayoutState {
         Self {
             services: DocumentLayoutServices::default(),
             embedded_document_services: HashMap::new(),
+            intrinsic_size_observer: IntrinsicSizeObserverState::default(),
             web_fonts: DocumentWebFontState::default(),
             web_font_sources_dirty: true,
             latest_layout: LatestLayoutTreeCache::default(),
@@ -50,17 +54,22 @@ impl DocumentLayoutState {
         std::mem::take(&mut self.web_font_sources_dirty)
     }
 
-    pub(crate) fn with_services_for_document<T>(
+    pub(crate) fn with_layout_pass_state_for_document<T>(
         &mut self,
         document: DomHandle,
         main_document: DomHandle,
         consume: impl FnOnce(
             &mut DocumentLayoutServices,
             &mut HashMap<DomHandle, DocumentLayoutServices>,
+            &mut IntrinsicSizeObserverState,
         ) -> T,
     ) -> T {
         if document == main_document {
-            return consume(&mut self.services, &mut self.embedded_document_services);
+            return consume(
+                &mut self.services,
+                &mut self.embedded_document_services,
+                &mut self.intrinsic_size_observer,
+            );
         }
 
         // Remove the exact child service while its recursive pass runs so the
@@ -70,7 +79,11 @@ impl DocumentLayoutState {
             .embedded_document_services
             .remove(&document)
             .unwrap_or_default();
-        let output = consume(&mut services, &mut self.embedded_document_services);
+        let output = consume(
+            &mut services,
+            &mut self.embedded_document_services,
+            &mut self.intrinsic_size_observer,
+        );
         self.embedded_document_services.insert(document, services);
         output
     }

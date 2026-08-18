@@ -1,6 +1,9 @@
 mod inline_svg;
+mod remembered_size;
 mod source_view;
 mod style_resolver;
+
+pub(crate) use remembered_size::IntrinsicSizeObserverState;
 
 use std::collections::HashMap;
 
@@ -110,17 +113,25 @@ pub(crate) fn build_native_layout_pass(
     root: DomHandle,
     services: &mut DocumentLayoutServices,
     embedded_document_services: &mut HashMap<DomHandle, DocumentLayoutServices>,
+    intrinsic_size_observer: &mut IntrinsicSizeObserverState,
     request: LayoutPassRequest,
 ) -> Result<LayoutPassResult<DomHandle>, moli_layout::LayoutError> {
     let mut document_stack = Vec::new();
-    build_native_layout_pass_recursive(
+    let mut working_intrinsic_size_observer = intrinsic_size_observer.clone();
+    working_intrinsic_size_observer.retain_connected(runtime);
+    let result = build_native_layout_pass_recursive(
         runtime,
         root,
         services,
         embedded_document_services,
+        &mut working_intrinsic_size_observer,
         request,
         &mut document_stack,
-    )
+    );
+    if result.is_ok() {
+        *intrinsic_size_observer = working_intrinsic_size_observer;
+    }
+    result
 }
 
 fn build_native_layout_pass_recursive(
@@ -128,6 +139,7 @@ fn build_native_layout_pass_recursive(
     root: DomHandle,
     services: &mut DocumentLayoutServices,
     embedded_document_services: &mut HashMap<DomHandle, DocumentLayoutServices>,
+    intrinsic_size_observer: &mut IntrinsicSizeObserverState,
     request: LayoutPassRequest,
     document_stack: &mut Vec<DomHandle>,
 ) -> Result<LayoutPassResult<DomHandle>, moli_layout::LayoutError> {
@@ -136,14 +148,24 @@ fn build_native_layout_pass_recursive(
         .owner_document_handle(root)
         .unwrap_or_else(|| runtime.document_handle());
     style_resolver::prepare_layout_style_inputs(runtime, root, document, request.viewport);
+    style_resolver::reconcile_remembered_size_policies(
+        runtime,
+        document,
+        request.viewport,
+        intrinsic_size_observer,
+    );
     document_stack.push(document);
     let source = source_view::NativeLayoutSourceView::with_paint_resources(
         runtime,
         root,
         request.requests_paint(),
     );
-    let mut styles =
-        style_resolver::NativeLayoutStyleResolver::new(runtime, document, request.viewport);
+    let mut styles = style_resolver::NativeLayoutStyleResolver::new(
+        runtime,
+        document,
+        request.viewport,
+        intrinsic_size_observer,
+    );
     let result = {
         let mut frames = NativeEmbeddedFrameRenderer {
             runtime,
@@ -151,9 +173,14 @@ fn build_native_layout_pass_recursive(
             include_backgrounds: request.includes_backgrounds(),
             document_stack,
             embedded_document_services,
+            intrinsic_size_observer,
         };
         build_layout_pass_with_embedded_frames(&source, &mut styles, services, request, &mut frames)
     };
+    let remembered_size_policies = styles.into_remembered_size_policies();
+    if let Ok(pass) = &result {
+        intrinsic_size_observer.observe_layout(&pass.tree, &remembered_size_policies);
+    }
     document_stack.pop();
     result
 }
@@ -164,6 +191,7 @@ struct NativeEmbeddedFrameRenderer<'a> {
     include_backgrounds: bool,
     document_stack: &'a mut Vec<DomHandle>,
     embedded_document_services: &'a mut HashMap<DomHandle, DocumentLayoutServices>,
+    intrinsic_size_observer: &'a mut IntrinsicSizeObserverState,
 }
 
 impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
@@ -202,6 +230,7 @@ impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
             root,
             &mut services,
             self.embedded_document_services,
+            self.intrinsic_size_observer,
             LayoutPassRequest::with_capture(viewport, self.reason, capture),
             self.document_stack,
         );
@@ -223,6 +252,12 @@ pub(crate) fn build_normalized_native_box_tree_for_test(
     let viewport = runtime.layout_viewport_for_document(document);
     style_resolver::prepare_layout_style_inputs(runtime, root, document, viewport);
     let source = source_view::NativeLayoutSourceView::new(runtime, root);
-    let mut styles = style_resolver::NativeLayoutStyleResolver::new(runtime, document, viewport);
+    let remembered_sizes = IntrinsicSizeObserverState::default();
+    let mut styles = style_resolver::NativeLayoutStyleResolver::new(
+        runtime,
+        document,
+        viewport,
+        &remembered_sizes,
+    );
     moli_layout::build_layout_world(&source, &mut styles).map(|world| world.normalized_tree())
 }

@@ -52,7 +52,7 @@ use taffy::{
 };
 
 use crate::{
-    LayoutElementContent, LayoutPoint, LayoutRect, LayoutTransform2D, PaintBlendMode,
+    LayoutElementContent, LayoutPoint, LayoutRect, LayoutSize, LayoutTransform2D, PaintBlendMode,
     PaintBorderColors, PaintBorderStyle, PaintBorderStyles, PaintBoxShadow, PaintColor,
     PaintCornerRadii, PaintCornerRadius, PaintEdgeSizes, PaintFragment,
 };
@@ -96,19 +96,197 @@ fn stylo_blend_mode(mode: StyloMixBlendMode) -> PaintBlendMode {
     }
 }
 
-/// Select the fallback component of a computed `contain-intrinsic-*` value.
-///
-/// The optional remembered size behind `auto` is layout-object lifetime state,
-/// not computed style. Moli does not yet skip `content-visibility:auto`
-/// subtrees, so there is no active remembered-size source and both length
-/// forms select their authored fallback. `auto none` remains indefinite.
-fn contain_intrinsic_fallback(
+/// Splits one physical `contain-intrinsic-*` component into the authored
+/// fallback and the stateful `auto` selector.
+fn contain_intrinsic_component(
     value: &style::values::computed::ContainIntrinsicSize,
-) -> Option<f32> {
+) -> (Option<f32>, bool) {
     match value {
-        GenericContainIntrinsicSize::Length(length)
-        | GenericContainIntrinsicSize::AutoLength(length) => Some(length.px()),
-        GenericContainIntrinsicSize::None | GenericContainIntrinsicSize::AutoNone => None,
+        GenericContainIntrinsicSize::Length(length) => (Some(length.px()), false),
+        GenericContainIntrinsicSize::AutoLength(length) => (Some(length.px()), true),
+        GenericContainIntrinsicSize::None => (None, false),
+        GenericContainIntrinsicSize::AutoNone => (None, true),
+    }
+}
+
+/// Last content-box size recorded for an element with an `auto`
+/// `contain-intrinsic-*` component.
+///
+/// Values are logical CSS pixels. The browser owns their lifetime and passes
+/// them into a new layout epoch; layout converts them back into the element's
+/// current physical writing mode and effective zoom.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LayoutLastRememberedSize {
+    pub inline_size: Option<f32>,
+    pub block_size: Option<f32>,
+}
+
+impl LayoutLastRememberedSize {
+    pub const fn is_empty(self) -> bool {
+        self.inline_size.is_none() && self.block_size.is_none()
+    }
+}
+
+/// Axis and writing-mode policy used by the browser's intrinsic-size observer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LayoutLastRememberedSizePolicy {
+    auto_inline_size: bool,
+    auto_block_size: bool,
+    horizontal_writing_mode: bool,
+}
+
+impl LayoutLastRememberedSizePolicy {
+    pub const fn records_inline_size(self) -> bool {
+        self.auto_inline_size
+    }
+
+    pub const fn records_block_size(self) -> bool {
+        self.auto_block_size
+    }
+
+    pub const fn records_any_size(self) -> bool {
+        self.auto_inline_size || self.auto_block_size
+    }
+
+    /// Converts an unzoomed physical content box into the logical axes that
+    /// remain meaningful if the element later changes writing mode.
+    pub fn observe(self, physical_size: LayoutSize) -> LayoutLastRememberedSize {
+        let (inline_size, block_size) = if self.horizontal_writing_mode {
+            (physical_size.width, physical_size.height)
+        } else {
+            (physical_size.height, physical_size.width)
+        };
+        LayoutLastRememberedSize {
+            inline_size: self.auto_inline_size.then_some(inline_size),
+            block_size: self.auto_block_size.then_some(block_size),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum LayoutContentVisibility {
+    #[default]
+    Visible,
+    Hidden,
+    Auto,
+}
+
+/// One style's complete path from authored containment to the used value
+/// consumed by Taffy. Browser state is injected once per layout epoch; all
+/// writing-mode and zoom projection remains owned by this object.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct LayoutSizeContainmentState {
+    authored_axes: LogicalSize<bool>,
+    intrinsic_fallback: Size<Option<f32>>,
+    intrinsic_auto_axes: Size<bool>,
+    content_visibility: LayoutContentVisibility,
+    contents_skipped: bool,
+    remembered_size: LayoutLastRememberedSize,
+    used: SizeContainment,
+}
+
+impl Default for LayoutSizeContainmentState {
+    fn default() -> Self {
+        Self {
+            authored_axes: LogicalSize {
+                inline_size: false,
+                block_size: false,
+            },
+            intrinsic_fallback: Size::NONE,
+            intrinsic_auto_axes: Size {
+                width: false,
+                height: false,
+            },
+            content_visibility: LayoutContentVisibility::Visible,
+            contents_skipped: false,
+            remembered_size: LayoutLastRememberedSize::default(),
+            used: SizeContainment::NONE,
+        }
+    }
+}
+
+impl LayoutSizeContainmentState {
+    fn new(
+        authored_axes: LogicalSize<bool>,
+        intrinsic_fallback: Size<Option<f32>>,
+        mut intrinsic_auto_axes: Size<bool>,
+        content_visibility: LayoutContentVisibility,
+        writing_mode: taffy::WritingMode,
+        effective_zoom: f32,
+    ) -> Self {
+        if content_visibility == LayoutContentVisibility::Auto {
+            // Blink's StyleAdjuster::SetContainIntrinsicSizeAuto preserves
+            // the authored fallback and makes both components stateful.
+            intrinsic_auto_axes = Size {
+                width: true,
+                height: true,
+            };
+        }
+        let mut state = Self {
+            authored_axes,
+            intrinsic_fallback,
+            intrinsic_auto_axes,
+            content_visibility,
+            contents_skipped: content_visibility == LayoutContentVisibility::Hidden,
+            remembered_size: LayoutLastRememberedSize::default(),
+            used: SizeContainment::NONE,
+        };
+        state.recompute(writing_mode, effective_zoom);
+        state
+    }
+
+    fn resolve_browser_state(
+        &mut self,
+        auto_contents_skipped: bool,
+        remembered_size: LayoutLastRememberedSize,
+        writing_mode: taffy::WritingMode,
+        effective_zoom: f32,
+    ) {
+        self.contents_skipped = match self.content_visibility {
+            LayoutContentVisibility::Visible => false,
+            LayoutContentVisibility::Hidden => true,
+            LayoutContentVisibility::Auto => auto_contents_skipped,
+        };
+        self.remembered_size = remembered_size;
+        self.recompute(writing_mode, effective_zoom);
+    }
+
+    fn recompute(&mut self, writing_mode: taffy::WritingMode, effective_zoom: f32) {
+        let logical_axes = LogicalSize {
+            inline_size: self.authored_axes.inline_size || self.contents_skipped,
+            block_size: self.authored_axes.block_size || self.contents_skipped,
+        };
+        let mut intrinsic_content_size = self.intrinsic_fallback;
+        if self.contents_skipped {
+            let to_layout_space = |size: Option<f32>| {
+                size.filter(|size| size.is_finite())
+                    .map(|size| (size.max(0.0) * effective_zoom).max(0.0))
+                    .filter(|size| size.is_finite())
+            };
+            let remembered = writing_mode.to_physical(LogicalSize {
+                inline_size: to_layout_space(self.remembered_size.inline_size),
+                block_size: to_layout_space(self.remembered_size.block_size),
+            });
+            if self.intrinsic_auto_axes.width && remembered.width.is_some() {
+                intrinsic_content_size.width = remembered.width;
+            }
+            if self.intrinsic_auto_axes.height && remembered.height.is_some() {
+                intrinsic_content_size.height = remembered.height;
+            }
+        }
+        self.used = SizeContainment::new(
+            writing_mode.to_physical(logical_axes),
+            intrinsic_content_size,
+        );
+    }
+
+    fn observer_policy(self, writing_mode: taffy::WritingMode) -> LayoutLastRememberedSizePolicy {
+        let auto_axes = writing_mode.to_logical(self.intrinsic_auto_axes);
+        LayoutLastRememberedSizePolicy {
+            auto_inline_size: auto_axes.inline_size,
+            auto_block_size: auto_axes.block_size,
+            horizontal_writing_mode: writing_mode.is_horizontal(),
+        }
     }
 }
 
@@ -497,7 +675,7 @@ pub struct ResolvedLayoutStyle {
     has_clip_path: bool,
     has_mask: bool,
     isolation: bool,
-    size_containment: SizeContainment,
+    size_containment: LayoutSizeContainmentState,
     style_containment: bool,
     layout_containment: bool,
     paint_containment: bool,
@@ -690,33 +868,48 @@ impl ResolvedLayoutStyle {
             .any(|image| !matches!(image, GenericImage::None));
         let isolation = computed.clone_isolation() == StyloIsolation::Isolate;
         let contain = computed.clone_contain();
-        let content_visibility = computed.clone_content_visibility();
+        let stylo_content_visibility = computed.clone_content_visibility();
+        let content_visibility = match stylo_content_visibility {
+            StyloContentVisibility::Visible => LayoutContentVisibility::Visible,
+            StyloContentVisibility::Hidden => LayoutContentVisibility::Hidden,
+            StyloContentVisibility::Auto => LayoutContentVisibility::Auto,
+        };
         // Blink's EffectiveContainment folds authored containment,
         // container-type, and content-visibility:hidden into the size axes.
-        // `content-visibility:auto` only adds size containment while Blink is
-        // actively skipping the subtree; Moli does not currently skip auto
-        // subtrees, so it must not claim that dynamic state here.
+        // `content-visibility:auto` only adds size containment while the
+        // browser's display-lock policy actively skips the subtree.
         let container_type = computed.clone_container_type();
-        let logical_size_containment_axes = LogicalSize {
+        let authored_size_containment_axes = LogicalSize {
             inline_size: contain.contains(style::values::computed::Contain::INLINE_SIZE)
                 || container_type.intersects(ContainerType::INLINE_SIZE)
-                || container_type.intersects(ContainerType::SIZE)
-                || content_visibility == StyloContentVisibility::Hidden,
+                || container_type.intersects(ContainerType::SIZE),
             block_size: contain.contains(style::values::computed::Contain::BLOCK_SIZE)
-                || container_type.intersects(ContainerType::SIZE)
-                || content_visibility == StyloContentVisibility::Hidden,
+                || container_type.intersects(ContainerType::SIZE),
         };
-        let size_containment = SizeContainment::new(
-            writing_mode.to_physical(logical_size_containment_axes),
-            Size {
-                width: contain_intrinsic_fallback(&computed.clone_contain_intrinsic_width()),
-                height: contain_intrinsic_fallback(&computed.clone_contain_intrinsic_height()),
-            },
+        let (contain_intrinsic_width_fallback, contain_intrinsic_width_auto) =
+            contain_intrinsic_component(&computed.clone_contain_intrinsic_width());
+        let (contain_intrinsic_height_fallback, contain_intrinsic_height_auto) =
+            contain_intrinsic_component(&computed.clone_contain_intrinsic_height());
+        let contain_intrinsic_fallback = Size {
+            width: contain_intrinsic_width_fallback,
+            height: contain_intrinsic_height_fallback,
+        };
+        let contain_intrinsic_auto_axes = Size {
+            width: contain_intrinsic_width_auto,
+            height: contain_intrinsic_height_auto,
+        };
+        let size_containment = LayoutSizeContainmentState::new(
+            authored_size_containment_axes,
+            contain_intrinsic_fallback,
+            contain_intrinsic_auto_axes,
+            content_visibility,
+            writing_mode,
+            computed.effective_zoom.value(),
         );
         let style_containment = contain.contains(style::values::computed::Contain::STYLE);
         let mut layout_containment = contain.contains(style::values::computed::Contain::LAYOUT);
         let mut paint_containment = contain.contains(style::values::computed::Contain::PAINT);
-        if content_visibility != StyloContentVisibility::Visible {
+        if stylo_content_visibility != StyloContentVisibility::Visible {
             // Blink folds `content-visibility:auto/hidden` into effective
             // layout and paint containment before asking the LayoutObject
             // whether containment applies to its principal box. Standalone
@@ -957,7 +1150,7 @@ impl ResolvedLayoutStyle {
             has_clip_path: false,
             has_mask: false,
             isolation: false,
-            size_containment: SizeContainment::NONE,
+            size_containment: LayoutSizeContainmentState::default(),
             style_containment: false,
             layout_containment: false,
             paint_containment: false,
@@ -1010,6 +1203,9 @@ impl ResolvedLayoutStyle {
     /// Overrides the flow-relative axes used by deterministic layout tests.
     pub fn with_writing_mode(mut self, writing_mode: taffy::WritingMode) -> Self {
         self.writing_mode = writing_mode;
+        let effective_zoom = self.effective_zoom();
+        self.size_containment
+            .recompute(self.writing_mode, effective_zoom);
         self
     }
 
@@ -1039,6 +1235,9 @@ impl ResolvedLayoutStyle {
         self.writing_mode = writing_direction.mode;
         self.direction = InlineDirection::from_taffy(writing_direction.direction);
         self.taffy.direction = writing_direction.direction;
+        let effective_zoom = self.effective_zoom();
+        self.size_containment
+            .recompute(self.writing_mode, effective_zoom);
     }
 
     pub(crate) fn inline_baseline_type(&self) -> InlineBaselineType {
@@ -1381,8 +1580,39 @@ impl ResolvedLayoutStyle {
         self.style_containment
     }
 
+    /// Resolves the browser-owned display-lock decision for this layout epoch.
+    ///
+    /// `content-visibility:hidden` always skips. `auto_contents_skipped` is the
+    /// viewport/display-lock decision for `content-visibility:auto`; it is
+    /// ignored for other computed values. Remembered sizes are logical,
+    /// unzoomed CSS pixels and are selected only while contents are skipped.
+    pub fn resolve_content_visibility_state(
+        &mut self,
+        auto_contents_skipped: bool,
+        remembered: LayoutLastRememberedSize,
+    ) {
+        let effective_zoom = self.effective_zoom();
+        self.size_containment.resolve_browser_state(
+            auto_contents_skipped,
+            remembered,
+            self.writing_mode,
+            effective_zoom,
+        );
+    }
+
+    /// Returns the axis policy for the document's intrinsic-size observer.
+    /// `content-visibility:auto` makes both axes stateful, matching Blink's
+    /// computed-style adjustment, even while the current epoch stays visible.
+    pub fn last_remembered_size_policy(&self) -> LayoutLastRememberedSizePolicy {
+        self.size_containment.observer_policy(self.writing_mode)
+    }
+
+    pub(crate) const fn content_visibility_skips_contents(&self) -> bool {
+        self.size_containment.contents_skipped
+    }
+
     pub(crate) const fn size_containment(&self) -> SizeContainment {
-        self.size_containment
+        self.size_containment.used
     }
 
     /// Returns the accumulated CSS `zoom` applied to this box's layout values.
@@ -1746,7 +1976,7 @@ impl ResolvedLayoutStyle {
             has_clip_path: false,
             has_mask: false,
             isolation: false,
-            size_containment: SizeContainment::NONE,
+            size_containment: LayoutSizeContainmentState::default(),
             style_containment: false,
             layout_containment: false,
             paint_containment: false,
@@ -1809,7 +2039,7 @@ impl ResolvedLayoutStyle {
             has_clip_path: false,
             has_mask: false,
             isolation: false,
-            size_containment: SizeContainment::NONE,
+            size_containment: LayoutSizeContainmentState::default(),
             style_containment: false,
             layout_containment: false,
             paint_containment: false,
@@ -2522,6 +2752,92 @@ mod sizing_projection_tests {
         assert!(project(GenericFlexBasis::Size(GenericSize::FitContent)).is_fit_content());
         assert!(project(GenericFlexBasis::Size(GenericSize::Stretch)).is_stretch());
         assert!(project(GenericFlexBasis::Size(GenericSize::Auto)).is_auto());
+    }
+
+    #[test]
+    fn remembered_containment_size_stays_logical_and_reenters_zoomed_layout_space() {
+        let mut state = LayoutSizeContainmentState::new(
+            LogicalSize {
+                inline_size: false,
+                block_size: false,
+            },
+            Size {
+                width: Some(2.0),
+                height: Some(1.0),
+            },
+            Size {
+                width: true,
+                height: true,
+            },
+            LayoutContentVisibility::Hidden,
+            taffy::WritingMode::HorizontalTb,
+            1.0,
+        );
+        assert_eq!(
+            state.used.axes,
+            Size {
+                width: true,
+                height: true,
+            }
+        );
+        assert_eq!(
+            state.used.intrinsic_content_size,
+            Size {
+                width: Some(2.0),
+                height: Some(1.0),
+            }
+        );
+
+        state.resolve_browser_state(
+            false,
+            LayoutLastRememberedSize {
+                inline_size: Some(100.0),
+                block_size: Some(50.0),
+            },
+            taffy::WritingMode::HorizontalTb,
+            2.0,
+        );
+        assert_eq!(
+            state.used.intrinsic_content_size,
+            Size {
+                width: Some(200.0),
+                height: Some(100.0),
+            }
+        );
+
+        state.recompute(taffy::WritingMode::VerticalLr, 2.0);
+        assert_eq!(
+            state.used.intrinsic_content_size,
+            Size {
+                width: Some(100.0),
+                height: Some(200.0),
+            }
+        );
+    }
+
+    #[test]
+    fn physical_auto_components_map_to_the_current_logical_observer_axis() {
+        let state = LayoutSizeContainmentState::new(
+            LogicalSize {
+                inline_size: false,
+                block_size: false,
+            },
+            Size::NONE,
+            Size {
+                width: true,
+                height: false,
+            },
+            LayoutContentVisibility::Visible,
+            taffy::WritingMode::HorizontalTb,
+            1.0,
+        );
+        let horizontal = state.observer_policy(taffy::WritingMode::HorizontalTb);
+        assert!(horizontal.records_inline_size());
+        assert!(!horizontal.records_block_size());
+
+        let vertical = state.observer_policy(taffy::WritingMode::VerticalLr);
+        assert!(!vertical.records_inline_size());
+        assert!(vertical.records_block_size());
     }
 }
 

@@ -389,6 +389,9 @@ pub struct LayoutBoxGeometry {
     pub is_table_offset_parent: bool,
     pub establishes_positioned_containing_block: bool,
     pub establishes_fixed_containing_block: bool,
+    /// Whether this box's descendants were display-locked for this layout
+    /// epoch. This is used state, not merely computed `content-visibility`.
+    pub contents_skipped: bool,
     pub visible: bool,
     pub pointer_events: bool,
 }
