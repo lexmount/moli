@@ -126,6 +126,7 @@ mod file_entry_file_callback;
 mod file_system_directory_reader;
 mod flex_percentage_gap;
 mod float_bfc_stretch;
+mod grid_size_containment;
 mod hash_change_delivery;
 mod history_traversal;
 mod image_load_event;
