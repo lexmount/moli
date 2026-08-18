@@ -33,7 +33,7 @@ use crate::runtime::{
 };
 use crate::structured_clone::V8StructuredClonePayload;
 use crate::types::{BroadcastChannelId, DedicatedWorkerId, MessagePortId, NetworkBodySourceId};
-use crate::worker::inspector_task_runner::WorkerInspectorTaskRunner;
+use crate::worker::inspector_task_runner::{WorkerInspectorTaskMode, WorkerInspectorTaskRunner};
 use moli_crypto::sha256_hex;
 use moli_fetch::{RequestCredentialsMode, ResponseHead};
 use moli_shared_worker::SharedWorkerInstanceId;
@@ -144,10 +144,8 @@ pub(crate) enum WorkerMessage {
         worker_id: DedicatedWorkerId,
         message: Box<WorkerToParentMessage>,
     },
-    /// Owner-thread fallback for one queued interrupting Inspector task.
-    RunInterruptingInspectorTask,
-    /// Owner-thread dispatch for one Inspector task that may run JavaScript.
-    RunInspectorTaskDontInterrupt,
+    /// Owner-thread dispatch or fallback for one queued Inspector task.
+    RunInspectorTask(WorkerInspectorTaskMode),
     #[cfg(test)]
     /// Inspect worker resource-owner V8 slots from inside the worker thread.
     ResourceOwnerSlotDiagnostics {

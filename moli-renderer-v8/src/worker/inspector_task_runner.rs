@@ -132,14 +132,12 @@ impl WorkerInspectorTask {
 }
 
 struct WorkerInspectorTaskEntry {
-    sequence: u64,
+    mode: WorkerInspectorTaskMode,
     task: WorkerInspectorTask,
 }
 
 struct WorkerInspectorTaskRunnerState {
-    interrupting_tasks: VecDeque<WorkerInspectorTaskEntry>,
-    non_interrupting_tasks: VecDeque<WorkerInspectorTaskEntry>,
-    next_sequence: u64,
+    tasks: VecDeque<WorkerInspectorTaskEntry>,
     disposed: bool,
     isolate_ready: bool,
     pause_loop_active: bool,
@@ -174,9 +172,7 @@ impl WorkerInspectorTaskRunner {
         Self {
             shared: Arc::new(WorkerInspectorTaskRunnerShared {
                 state: Mutex::new(WorkerInspectorTaskRunnerState {
-                    interrupting_tasks: VecDeque::new(),
-                    non_interrupting_tasks: VecDeque::new(),
-                    next_sequence: 1,
+                    tasks: VecDeque::new(),
                     disposed: false,
                     isolate_ready: false,
                     pause_loop_active: false,
@@ -255,25 +251,17 @@ impl WorkerInspectorTaskRunner {
             task.fail("Worker Inspector task runner is disposed");
             return false;
         }
-        let sequence = state.next_sequence;
-        state.next_sequence = state
-            .next_sequence
-            .checked_add(1)
-            .expect("worker Inspector task sequence exhausted");
-        let entry = WorkerInspectorTaskEntry { sequence, task };
-        match mode {
-            WorkerInspectorTaskMode::Interrupt => state.interrupting_tasks.push_back(entry),
-            WorkerInspectorTaskMode::DontInterrupt => {
-                state.non_interrupting_tasks.push_back(entry);
-            }
-        }
+        state
+            .tasks
+            .push_back(WorkerInspectorTaskEntry { mode, task });
         drop(state);
 
-        let wake = match mode {
-            WorkerInspectorTaskMode::Interrupt => WorkerMessage::RunInterruptingInspectorTask,
-            WorkerInspectorTaskMode::DontInterrupt => WorkerMessage::RunInspectorTaskDontInterrupt,
-        };
-        if self.shared.wake_tx.send(wake).is_err() {
+        if self
+            .shared
+            .wake_tx
+            .send(WorkerMessage::RunInspectorTask(mode))
+            .is_err()
+        {
             self.dispose("Worker Inspector owner is unavailable");
             return false;
         }
@@ -294,22 +282,10 @@ impl WorkerInspectorTaskRunner {
         self.request_interrupt_if_needed();
     }
 
-    pub(crate) fn claim_interrupting_task(&self) -> Option<WorkerInspectorTask> {
-        self.shared
-            .state
-            .lock()
-            .interrupting_tasks
-            .pop_front()
-            .map(|entry| entry.task)
-    }
-
-    pub(crate) fn claim_non_interrupting_task(&self) -> Option<WorkerInspectorTask> {
-        self.shared
-            .state
-            .lock()
-            .non_interrupting_tasks
-            .pop_front()
-            .map(|entry| entry.task)
+    pub(crate) fn claim_task(&self, mode: WorkerInspectorTaskMode) -> Option<WorkerInspectorTask> {
+        let mut state = self.shared.state.lock();
+        let index = state.tasks.iter().position(|entry| entry.mode == mode)?;
+        state.tasks.remove(index).map(|entry| entry.task)
     }
 
     pub(crate) fn interrupt_callback_started(&self) {
@@ -319,7 +295,12 @@ impl WorkerInspectorTaskRunner {
     pub(crate) fn request_interrupt_if_needed(&self) {
         let should_request = {
             let state = self.shared.state.lock();
-            !state.disposed && state.isolate_ready && !state.interrupting_tasks.is_empty()
+            !state.disposed
+                && state.isolate_ready
+                && state
+                    .tasks
+                    .iter()
+                    .any(|entry| entry.mode == WorkerInspectorTaskMode::Interrupt)
         };
         if !should_request
             || self
@@ -365,38 +346,10 @@ impl WorkerInspectorTaskRunner {
             if state.disposed || state.quit_pause_loop {
                 return None;
             }
-            let interrupt_sequence = state.interrupting_tasks.front().map(|entry| entry.sequence);
-            let non_interrupt_sequence = state
-                .non_interrupting_tasks
-                .front()
-                .map(|entry| entry.sequence);
-            match (interrupt_sequence, non_interrupt_sequence) {
-                (Some(interrupt), Some(non_interrupt)) if interrupt <= non_interrupt => {
-                    let task = state
-                        .interrupting_tasks
-                        .pop_front()
-                        .expect("front worker Inspector interrupt task disappeared")
-                        .task;
-                    return Some(task);
-                }
-                (Some(_), Some(_)) | (None, Some(_)) => {
-                    let task = state
-                        .non_interrupting_tasks
-                        .pop_front()
-                        .expect("front worker Inspector non-interrupt task disappeared")
-                        .task;
-                    return Some(task);
-                }
-                (Some(_), None) => {
-                    let task = state
-                        .interrupting_tasks
-                        .pop_front()
-                        .expect("front worker Inspector interrupt task disappeared")
-                        .task;
-                    return Some(task);
-                }
-                (None, None) => self.shared.pause_work.wait(&mut state),
+            if let Some(entry) = state.tasks.pop_front() {
+                return Some(entry.task);
             }
+            self.shared.pause_work.wait(&mut state);
         }
     }
 
@@ -428,18 +381,11 @@ impl WorkerInspectorTaskRunner {
             state.disposed = true;
             state.isolate_ready = false;
             state.quit_pause_loop = true;
-            let mut tasks = state
-                .interrupting_tasks
+            state
+                .tasks
                 .drain(..)
                 .map(|entry| entry.task)
-                .collect::<Vec<_>>();
-            tasks.extend(
-                state
-                    .non_interrupting_tasks
-                    .drain(..)
-                    .map(|entry| entry.task),
-            );
-            tasks
+                .collect::<Vec<_>>()
         };
         self.shared.pause_work.notify_all();
         for task in tasks {
@@ -454,11 +400,7 @@ impl std::fmt::Debug for WorkerInspectorTaskRunner {
         formatter
             .debug_struct("WorkerInspectorTaskRunner")
             .field("route_id", &self.route_id())
-            .field("interrupting_tasks", &state.interrupting_tasks.len())
-            .field(
-                "non_interrupting_tasks",
-                &state.non_interrupting_tasks.len(),
-            )
+            .field("tasks", &state.tasks.len())
             .field("disposed", &state.disposed)
             .field("isolate_ready", &state.isolate_ready)
             .finish()
@@ -543,24 +485,65 @@ mod tests {
 
         assert!(matches!(
             wake_rx.try_recv(),
-            Ok(super::WorkerMessage::RunInspectorTaskDontInterrupt)
+            Ok(super::WorkerMessage::RunInspectorTask(
+                WorkerInspectorTaskMode::DontInterrupt
+            ))
         ));
         assert!(matches!(
             wake_rx.try_recv(),
-            Ok(super::WorkerMessage::RunInterruptingInspectorTask)
+            Ok(super::WorkerMessage::RunInspectorTask(
+                WorkerInspectorTaskMode::Interrupt
+            ))
         ));
         assert!(matches!(
-            runner.claim_interrupting_task(),
+            runner.claim_task(WorkerInspectorTaskMode::Interrupt),
             Some(WorkerInspectorTask::DispatchProtocolMessage { raw_json, .. })
                 if raw_json.contains("Runtime.terminateExecution")
         ));
         assert!(matches!(
-            runner.claim_non_interrupting_task(),
+            runner.claim_task(WorkerInspectorTaskMode::DontInterrupt),
             Some(WorkerInspectorTask::DispatchProtocolMessage { raw_json, .. })
                 if raw_json.contains("Runtime.evaluate")
         ));
-        assert!(runner.claim_interrupting_task().is_none());
-        assert!(runner.claim_non_interrupting_task().is_none());
+        assert!(
+            runner
+                .claim_task(WorkerInspectorTaskMode::Interrupt)
+                .is_none()
+        );
+        assert!(
+            runner
+                .claim_task(WorkerInspectorTaskMode::DontInterrupt)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn pause_loop_preserves_fifo_across_task_modes() {
+        let (runner, _wake_rx) = runner();
+        let _evaluate = append_protocol(&runner, 1, "Runtime.evaluate");
+        let _terminate = append_protocol(&runner, 2, "Runtime.terminateExecution");
+
+        assert!(runner.begin_pause_loop());
+        let first = runner
+            .wait_for_pause_task()
+            .expect("pause loop should claim the first task");
+        let second = runner
+            .wait_for_pause_task()
+            .expect("pause loop should claim the second task");
+        runner.request_quit_pause_loop();
+        assert!(runner.wait_for_pause_task().is_none());
+        runner.finish_pause_loop();
+
+        assert!(matches!(
+            first,
+            WorkerInspectorTask::DispatchProtocolMessage { raw_json, .. }
+                if raw_json.contains("Runtime.evaluate")
+        ));
+        assert!(matches!(
+            second,
+            WorkerInspectorTask::DispatchProtocolMessage { raw_json, .. }
+                if raw_json.contains("Runtime.terminateExecution")
+        ));
     }
 
     #[test]
@@ -570,12 +553,16 @@ mod tests {
         let _second = append_protocol(&runner, 2, "Debugger.resume");
 
         let first = runner
-            .claim_interrupting_task()
+            .claim_task(WorkerInspectorTaskMode::Interrupt)
             .expect("owner fallback should claim first task");
         let second = runner
-            .claim_interrupting_task()
+            .claim_task(WorkerInspectorTaskMode::Interrupt)
             .expect("interrupt callback should claim second task");
-        assert!(runner.claim_interrupting_task().is_none());
+        assert!(
+            runner
+                .claim_task(WorkerInspectorTaskMode::Interrupt)
+                .is_none()
+        );
         assert!(matches!(
             first,
             WorkerInspectorTask::DispatchProtocolMessage { raw_json, .. }

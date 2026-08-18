@@ -11,8 +11,9 @@ use crate::runtime::{RendererRuntimeInspectorMessage, RendererRuntimeInspectorRe
 use crate::worker::{
     handle::{WorkerRuntimeInspectorMessageBatch, WorkerToParentMessage},
     inspector_task_runner::{
-        WorkerInspectorInterruptExecutor, WorkerInspectorTask, WorkerInspectorTaskRunner,
-        register_worker_inspector_executor, unregister_worker_inspector_executor,
+        WorkerInspectorInterruptExecutor, WorkerInspectorTask, WorkerInspectorTaskMode,
+        WorkerInspectorTaskRunner, register_worker_inspector_executor,
+        unregister_worker_inspector_executor,
     },
 };
 use tokio::sync::mpsc;
@@ -367,7 +368,10 @@ impl WorkerInspectorExecutor {
 impl WorkerInspectorInterruptExecutor for WorkerInspectorExecutor {
     fn dispatch_interrupt(&self, isolate: v8::UnsafeRawIsolatePtr) {
         self.task_runner.interrupt_callback_started();
-        let Some(task) = self.task_runner.claim_interrupting_task() else {
+        let Some(task) = self
+            .task_runner
+            .claim_task(WorkerInspectorTaskMode::Interrupt)
+        else {
             self.task_runner.request_interrupt_if_needed();
             return;
         };

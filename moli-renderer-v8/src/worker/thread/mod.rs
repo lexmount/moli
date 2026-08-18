@@ -98,7 +98,9 @@ use super::handle::{
     WorkerRuntimeInspectorMessageBatch, WorkerScriptResource, WorkerScriptResourceKind,
     WorkerToParentMessage,
 };
-use super::inspector_task_runner::{WorkerInspectorTask, WorkerInspectorTaskRunner};
+use super::inspector_task_runner::{
+    WorkerInspectorTask, WorkerInspectorTaskMode, WorkerInspectorTaskRunner,
+};
 use super::module_runtime::{
     WorkerBootstrapError, WorkerDynamicModuleImportAdvance, WorkerModuleBootstrapResume,
     WorkerModuleBootstrapStart, WorkerModuleEvaluationCompletion, WorkerModuleFetchedSource,
@@ -1009,8 +1011,8 @@ async fn run_worker_pre_bootstrap_debugger_pause(
             return true;
         }
         match rx.recv().await {
-            Some(WorkerMessage::RunInterruptingInspectorTask) => {
-                if let Some(task) = inspector_task_runner.claim_interrupting_task() {
+            Some(WorkerMessage::RunInspectorTask(mode)) => {
+                if let Some(task) = inspector_task_runner.claim_task(mode) {
                     dispatch_worker_inspector_task(
                         worker_isolate,
                         context,
@@ -1019,20 +1021,8 @@ async fn run_worker_pre_bootstrap_debugger_pause(
                         module_graph_fetch_tx,
                     );
                 }
-                inspector_task_runner.request_interrupt_if_needed();
-                if inspector_task_runner.take_resume_requested() {
-                    return true;
-                }
-            }
-            Some(WorkerMessage::RunInspectorTaskDontInterrupt) => {
-                if let Some(task) = inspector_task_runner.claim_non_interrupting_task() {
-                    dispatch_worker_inspector_task(
-                        worker_isolate,
-                        context,
-                        task,
-                        state,
-                        module_graph_fetch_tx,
-                    );
+                if mode == WorkerInspectorTaskMode::Interrupt {
+                    inspector_task_runner.request_interrupt_if_needed();
                 }
                 if inspector_task_runner.take_resume_requested() {
                     return true;
@@ -2673,8 +2663,8 @@ async fn worker_main(
                     drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
                 }
             }
-            WorkerLoopWake::Message(Some(WorkerMessage::RunInterruptingInspectorTask)) => {
-                if let Some(task) = inspector_task_runner.claim_interrupting_task() {
+            WorkerLoopWake::Message(Some(WorkerMessage::RunInspectorTask(mode))) => {
+                if let Some(task) = inspector_task_runner.claim_task(mode) {
                     dispatch_worker_inspector_task(
                         &mut worker_isolate,
                         &context,
@@ -2683,17 +2673,8 @@ async fn worker_main(
                         &module_graph_fetch_tx,
                     );
                 }
-                inspector_task_runner.request_interrupt_if_needed();
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::RunInspectorTaskDontInterrupt)) => {
-                if let Some(task) = inspector_task_runner.claim_non_interrupting_task() {
-                    dispatch_worker_inspector_task(
-                        &mut worker_isolate,
-                        &context,
-                        task,
-                        &state,
-                        &module_graph_fetch_tx,
-                    );
+                if mode == WorkerInspectorTaskMode::Interrupt {
+                    inspector_task_runner.request_interrupt_if_needed();
                 }
             }
             #[cfg(test)]
