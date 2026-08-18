@@ -532,7 +532,6 @@ impl MainDocumentRuntimeLane {
         sender
             .send_for_source_contract_test(
                 task_owner(sequence + 200),
-                sequence,
                 RendererPageMainDocumentRuntimeAction::ContinueRuntimeScriptWork,
             )
             .is_ok()
@@ -2474,7 +2473,6 @@ fn unified_ready_descriptors_expose_one_fifo_head_per_typed_source() {
         .main_document_runtime_sender(document_token(1))
         .send_for_source_contract_test(
             task_owner(90),
-            1,
             RendererPageMainDocumentRuntimeAction::ContinueRuntimeScriptWork,
         )
         .expect("main-Document runtime task should enter the unified source set");

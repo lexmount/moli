@@ -28,7 +28,6 @@ impl PageVm {
             owner.root_document() == self.document_lifecycle.identity().document;
         let target_effect = if root_document_is_current
             && self.vm().current_main_document_task_owner() == Some(owner.document_owner())
-            && self.vm().document_runtime.runtime_reset_generation() == owner.runtime_generation()
             && self
                 .vm_mut()
                 .document_runtime

@@ -1052,7 +1052,6 @@ mod tests {
                     LocalWindowId(order + 1),
                     DocumentId(order + 2),
                 ),
-                order + 3,
             ),
         }
     }

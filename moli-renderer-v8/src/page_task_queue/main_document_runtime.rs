@@ -90,15 +90,10 @@ impl RendererPageMainDocumentRuntimeTask {
     fn new(
         root_document: RendererDocumentToken,
         document_owner: FrameDocumentTaskOwner,
-        runtime_generation: u64,
         action: RendererPageMainDocumentRuntimeAction,
     ) -> Self {
         Self {
-            owner: RendererPageMainDocumentRuntimeOwner::new(
-                root_document,
-                document_owner,
-                runtime_generation,
-            ),
+            owner: RendererPageMainDocumentRuntimeOwner::new(root_document, document_owner),
             action,
         }
     }
@@ -144,7 +139,7 @@ impl RendererPageMainDocumentRuntimeRoute {
 }
 
 /// PageVm-stamped producer. Callers must additionally provide the exact
-/// main-Document owner and runtime generation captured at task production.
+/// main-Document owner captured at task production.
 #[derive(Clone, Debug)]
 pub(crate) struct RendererPageMainDocumentRuntimeSender {
     task_route: OwnerReadyTaskRoute<
@@ -158,7 +153,6 @@ impl RendererPageMainDocumentRuntimeSender {
     fn send(
         &self,
         document_owner: FrameDocumentTaskOwner,
-        runtime_generation: u64,
         action: RendererPageMainDocumentRuntimeAction,
     ) -> Result<(), RendererPageMainDocumentRuntimeRouteClosed> {
         self.task_route
@@ -166,7 +160,6 @@ impl RendererPageMainDocumentRuntimeSender {
                 RendererPageMainDocumentRuntimeTask::new(
                     self.root_document,
                     document_owner,
-                    runtime_generation,
                     action,
                 ),
             ))
@@ -188,7 +181,6 @@ impl RendererPageMainDocumentRuntimeSender {
     fn send_runtime_script_admission(
         &self,
         document_owner: FrameDocumentTaskOwner,
-        runtime_generation: u64,
         admission: RuntimeScriptAdmission,
     ) -> Result<(), RuntimeScriptAdmission> {
         debug_assert_eq!(
@@ -199,7 +191,6 @@ impl RendererPageMainDocumentRuntimeSender {
         let task = ReadyPageTask::new(RendererPageMainDocumentRuntimeTask::new(
             self.root_document,
             document_owner,
-            runtime_generation,
             RendererPageMainDocumentRuntimeAction::AdmitRuntimeScript(admission),
         ));
         self.task_route
@@ -219,19 +210,20 @@ impl RendererPageMainDocumentRuntimeSender {
     pub(crate) fn send_for_source_contract_test(
         &self,
         document_owner: FrameDocumentTaskOwner,
-        runtime_generation: u64,
         action: RendererPageMainDocumentRuntimeAction,
     ) -> Result<(), RendererPageMainDocumentRuntimeRouteClosed> {
-        self.send(document_owner, runtime_generation, action)
+        self.send(document_owner, action)
     }
 }
 
-/// Producer bound to one exact main Document/runtime generation.
+/// Producer bound to one exact main Document.
 ///
 /// Asynchronous runtime state may retain this value, and the Document-owned
 /// host scheduler replaces its current producer only at the synchronous
 /// `document.open()` owner transition. Already-created producers therefore
-/// cannot rebind work to a later Document epoch.
+/// cannot rebind work to a later Document. `runtime_generation` remains only
+/// as transitional metadata for binding pending `PreparedScript` payloads; it
+/// is not part of the Page task's authorization identity.
 #[derive(Clone, Debug)]
 pub(crate) struct RendererPageMainDocumentRuntimeProducer {
     sender: RendererPageMainDocumentRuntimeSender,
@@ -244,8 +236,7 @@ impl RendererPageMainDocumentRuntimeProducer {
         &self,
         action: RendererPageMainDocumentRuntimeAction,
     ) -> Result<(), RendererPageMainDocumentRuntimeRouteClosed> {
-        self.sender
-            .send(self.document_owner, self.runtime_generation, action)
+        self.sender.send(self.document_owner, action)
     }
 
     pub(crate) fn send_runtime_script_continuation(
@@ -258,11 +249,8 @@ impl RendererPageMainDocumentRuntimeProducer {
         &self,
         admission: RuntimeScriptAdmission,
     ) -> Result<(), RuntimeScriptAdmission> {
-        self.sender.send_runtime_script_admission(
-            self.document_owner,
-            self.runtime_generation,
-            admission,
-        )
+        self.sender
+            .send_runtime_script_admission(self.document_owner, admission)
     }
 
     pub(crate) fn send_parser_async_module_admission(
@@ -1041,7 +1029,6 @@ mod tests {
             .pop_front()
             .expect("one ready parser continuation should retain one task");
         assert_eq!(task.owner().document_owner(), owner);
-        assert_eq!(task.owner().runtime_generation(), runtime_generation);
         assert_eq!(
             task.action_kind(),
             PageMainDocumentRuntimeActionKind::ParserOwnedModuleContinuation
@@ -1068,7 +1055,6 @@ mod tests {
             .pop_front()
             .expect("one native module owner event should retain one task");
         assert_eq!(task.owner().document_owner(), owner);
-        assert_eq!(task.owner().runtime_generation(), runtime_generation);
         assert_eq!(
             task.action_kind(),
             PageMainDocumentRuntimeActionKind::NativeModuleOwnerEvent
@@ -1111,7 +1097,6 @@ mod tests {
             .pop_front()
             .expect("completed source work should enter the ready source once");
         assert_eq!(task.owner().document_owner(), owner);
-        assert_eq!(task.owner().runtime_generation(), runtime_generation);
         let RendererPageMainDocumentRuntimeAction::ExecuteReadyPostParseWork(work) =
             task.into_action()
         else {

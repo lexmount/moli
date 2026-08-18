@@ -40,11 +40,8 @@ impl MainParserContinuationState {
 
 impl DocumentRuntime {
     pub(crate) fn bind_main_parser_continuation_producer(&mut self, owner: FrameDocumentTaskOwner) {
-        self.main_parser_continuation.producer = Some(
-            self.main_parser_continuation
-                .sender
-                .bind_producer(owner, self.runtime_reset_generation()),
-        );
+        self.main_parser_continuation.producer =
+            Some(self.main_parser_continuation.sender.bind_producer(owner));
         self.main_parser_continuation.admitted = false;
     }
 
@@ -60,11 +57,6 @@ impl DocumentRuntime {
             producer.owner().document_owner(),
             owner,
             "phase-one parser owner must match its bound continuation producer"
-        );
-        assert_eq!(
-            producer.owner().runtime_generation(),
-            self.runtime_reset_generation(),
-            "phase-one parser generation must match its continuation producer"
         );
         self.main_parser_continuation.phase_one_active = true;
         self.main_parser_continuation.admitted = false;

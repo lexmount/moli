@@ -98,20 +98,15 @@ impl RendererPageStylesheetTaskSender {
     pub(crate) fn bind_producer(
         &self,
         document_owner: FrameDocumentTaskOwner,
-        runtime_generation: u64,
     ) -> RendererPageStylesheetTaskProducer {
         RendererPageStylesheetTaskProducer {
             sender: self.clone(),
-            owner: RendererPageStylesheetTaskOwner::new(
-                self.root_document,
-                document_owner,
-                runtime_generation,
-            ),
+            owner: RendererPageStylesheetTaskOwner::new(self.root_document, document_owner),
         }
     }
 }
 
-/// Producer bound to one exact main Document/runtime generation.
+/// Producer bound to one exact main Document.
 ///
 /// Async fetches clone this value at start. Rebinding the current Document
 /// therefore cannot retarget an already-running fetch to its replacement.
@@ -299,7 +294,7 @@ impl RendererPageStylesheetTaskTestResidence {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PageStylesheetNetworkingTargetEffect {
-    /// The exact main Document/runtime generation accepted the terminal and
+    /// The exact main Document accepted the terminal and
     /// may have published a later parser continuation or element event.
     AppliedToCurrentOwner,
     /// The retired task retained its historical network accounting without
@@ -378,7 +373,7 @@ mod tests {
     #[test]
     fn captured_element_kind_selects_the_normative_event_task_source() {
         let mut residence = RendererPageStylesheetTaskTestResidence::new();
-        let producer = residence.sender().bind_producer(document_owner(), 4);
+        let producer = residence.sender().bind_producer(document_owner());
 
         producer
             .send_connected_style_event(ReadyConnectedStyleLoad::for_owner(

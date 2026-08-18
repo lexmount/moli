@@ -23,7 +23,6 @@ impl ScriptVm {
     ) -> bool {
         owner.root_document() == root_document
             && self.current_main_document_task_owner() == Some(owner.document_owner())
-            && self.document_runtime.runtime_reset_generation() == owner.runtime_generation()
     }
 
     pub(crate) fn apply_page_stylesheet_networking_task(

@@ -72,8 +72,6 @@ impl PageVm {
     ) -> Option<RendererPageMainDocumentRuntimeOwner> {
         if expected.root_document() != self.document_lifecycle.identity().document
             || self.vm().current_main_document_task_owner() != Some(expected.document_owner())
-            || self.vm().document_runtime.runtime_reset_generation()
-                != expected.runtime_generation()
         {
             return None;
         }
@@ -119,11 +117,10 @@ impl PageVm {
                     )
                 }
                 RendererPageMainDocumentRuntimeAction::ContinueRuntimeScriptWork => {
+                    let runtime_generation = self.vm().document_runtime.runtime_reset_generation();
                     let body_effect = self
                         .vm_mut()
-                        .continue_main_document_runtime_script_task_body(
-                            owner.runtime_generation(),
-                        );
+                        .continue_main_document_runtime_script_task_body(runtime_generation);
                     PageMainDocumentRuntimeTurnAction::runtime_script_continuation(
                         owner,
                         PageRuntimeScriptContinuationTargetEffect::AppliedToCurrentOwner(
@@ -141,8 +138,9 @@ impl PageVm {
                     )
                 }
                 RendererPageMainDocumentRuntimeAction::ContinueRuntimeOwnedModule => {
+                    let runtime_generation = self.vm().document_runtime.runtime_reset_generation();
                     self.vm_mut()
-                        .begin_runtime_owned_module_continuation_turn(owner.runtime_generation());
+                        .begin_runtime_owned_module_continuation_turn(runtime_generation);
                     let made_progress = self
                         .run_ready_runtime_owned_module_script_continuation(loader)
                         .await?;
@@ -157,8 +155,9 @@ impl PageVm {
                     )
                 }
                 RendererPageMainDocumentRuntimeAction::ContinueParserOwnedModule => {
+                    let runtime_generation = self.vm().document_runtime.runtime_reset_generation();
                     self.vm_mut()
-                        .begin_parser_owned_module_continuation_turn(owner.runtime_generation());
+                        .begin_parser_owned_module_continuation_turn(runtime_generation);
                     let task_effect = self
                         .run_next_ready_parser_owned_document_script_action(loader)
                         .await?;

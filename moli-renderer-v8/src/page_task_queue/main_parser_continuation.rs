@@ -25,7 +25,7 @@ pub(crate) enum MainParserContinuationRequest {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RendererPageMainParserContinuationRouteClosed;
 
-/// Page-scoped route that can be bound to one exact main parser epoch.
+/// Page-scoped route that can be bound to one exact main parser Document.
 #[derive(Clone, Debug)]
 pub(crate) struct RendererPageMainParserContinuationSender {
     networking: RendererPageNetworkingRoute,
@@ -46,15 +46,10 @@ impl RendererPageMainParserContinuationSender {
     pub(crate) fn bind_producer(
         &self,
         document_owner: FrameDocumentTaskOwner,
-        runtime_generation: u64,
     ) -> RendererPageMainParserContinuationProducer {
         RendererPageMainParserContinuationProducer {
             networking: self.networking.clone(),
-            owner: RendererPageMainDocumentTaskOwner::new(
-                self.root_document,
-                document_owner,
-                runtime_generation,
-            ),
+            owner: RendererPageMainDocumentTaskOwner::new(self.root_document, document_owner),
             admission: Arc::new(MainParserContinuationAdmission::default()),
         }
     }
@@ -220,7 +215,7 @@ mod tests {
             ),
         );
         let producer = RendererPageMainParserContinuationSender::new(source.route(), root_document)
-            .bind_producer(test_document_owner(), 5);
+            .bind_producer(test_document_owner());
         (source, producer)
     }
 

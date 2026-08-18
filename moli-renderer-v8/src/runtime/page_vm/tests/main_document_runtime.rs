@@ -19,7 +19,6 @@ async fn document_open_discards_an_already_queued_main_runtime_task() {
             .vm()
             .current_main_document_task_owner()
             .expect("old main Document owner");
-        let old_runtime_generation = page_vm.vm().document_runtime.runtime_reset_generation();
 
         page_vm.vm_mut().eval(
             r#"
@@ -39,9 +38,7 @@ document.body.appendChild(staleScript);
             .vm()
             .current_main_document_task_owner()
             .expect("replacement main Document owner");
-        let new_runtime_generation = page_vm.vm().document_runtime.runtime_reset_generation();
         assert_ne!(new_document_owner, old_document_owner);
-        assert_ne!(new_runtime_generation, old_runtime_generation);
 
         let outcome = page_vm
             .run_page_main_document_runtime_body_for_test(&loader)
@@ -49,10 +46,6 @@ document.body.appendChild(staleScript);
             .expect("the old runtime task must remain durable until its stale-discard turn");
         assert_eq!(outcome.action.owner().root_document(), old_root);
         assert_eq!(outcome.action.owner().document_owner(), old_document_owner);
-        assert_eq!(
-            outcome.action.owner().runtime_generation(),
-            old_runtime_generation
-        );
         assert_eq!(
             outcome.action.kind(),
             crate::page_task_queue::PageMainDocumentRuntimeActionKind::RuntimeScriptAdmission
@@ -88,7 +81,6 @@ async fn document_open_discards_an_already_ready_parser_module_action() {
             .vm()
             .current_main_document_task_owner()
             .expect("old main Document owner");
-        let old_generation = page_vm.vm().document_runtime.runtime_reset_generation();
         let mut script = prepared_inline_module_for_page_vm_test(
             &page_vm,
             9091,
@@ -107,8 +99,8 @@ async fn document_open_discards_an_already_ready_parser_module_action() {
             "document.open(); document.write('<!doctype html><body>replacement</body>'); document.close(); 'replaced'",
         )?;
         assert_ne!(
-            page_vm.vm().document_runtime.runtime_reset_generation(),
-            old_generation
+            page_vm.vm().current_main_document_task_owner(),
+            Some(old_owner)
         );
 
         let outcome = page_vm
@@ -120,7 +112,6 @@ async fn document_open_discards_an_already_ready_parser_module_action() {
             crate::page_task_queue::PageMainDocumentRuntimeActionKind::ParserOwnedModuleContinuation
         );
         assert_eq!(outcome.action.owner().document_owner(), old_owner);
-        assert_eq!(outcome.action.owner().runtime_generation(), old_generation);
         assert_eq!(
             outcome.action.target_effect(),
             crate::page_task_queue::PageMainDocumentRuntimeTargetEffect::IgnoredStaleOwner
@@ -229,8 +220,6 @@ fn page_vm_replacement_discards_the_old_root_before_running_the_colliding_new_ta
                     .vm()
                     .current_main_document_task_owner()
                     .expect("retired PageVm main Document owner");
-                let retired_runtime_generation =
-                    page_vm.vm().document_runtime.runtime_reset_generation();
                 page_vm.vm_mut().eval(
                     r#"
 globalThis.__retiredMainRuntimeTaskRan = 0;
@@ -266,18 +255,11 @@ document.body.appendChild(retiredScript);
                     .vm()
                     .current_main_document_task_owner()
                     .expect("replacement PageVm main Document owner");
-                let current_runtime_generation =
-                    page_vm.vm().document_runtime.runtime_reset_generation();
                 assert_ne!(retired_root, current_root);
                 assert_eq!(
                     retired_owner, current_owner,
                     "fresh PageVm owner stores should naturally reuse the same local main-Document ids"
                 );
-                assert_eq!(
-                    retired_runtime_generation, current_runtime_generation,
-                    "fresh PageVms should naturally reuse the same runtime generation"
-                );
-
                 // `follow_pending_location_navigation_one_turn_async()` may
                 // return at the replacement's post-parse continuation rather
                 // than after DCL. Establish the post-DCL producer boundary
@@ -306,10 +288,6 @@ document.body.appendChild(replacementScript);
                 assert_eq!(stale.action.owner().root_document(), retired_root);
                 assert_eq!(stale.action.owner().document_owner(), retired_owner);
                 assert_eq!(
-                    stale.action.owner().runtime_generation(),
-                    retired_runtime_generation
-                );
-                assert_eq!(
                     stale.action.target_effect(),
                     crate::page_task_queue::PageMainDocumentRuntimeTargetEffect::IgnoredStaleOwner
                 );
@@ -321,10 +299,6 @@ document.body.appendChild(replacementScript);
                     .expect("replacement PageVm task must remain behind the retired head");
                 assert_eq!(current.action.owner().root_document(), current_root);
                 assert_eq!(current.action.owner().document_owner(), current_owner);
-                assert_eq!(
-                    current.action.owner().runtime_generation(),
-                    current_runtime_generation
-                );
                 assert_eq!(
                     current.action.kind(),
                     crate::page_task_queue::PageMainDocumentRuntimeActionKind::RuntimeScriptAdmission

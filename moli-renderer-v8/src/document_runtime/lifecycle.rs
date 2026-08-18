@@ -65,7 +65,7 @@ impl DocumentRuntime {
         owner: crate::frame_owner_model::FrameDocumentTaskOwner,
     ) {
         let sender = self.stylesheet_lifecycle.task_sender.clone();
-        let producer = sender.bind_producer(owner, self.runtime_reset_generation());
+        let producer = sender.bind_producer(owner);
         let completion_producer = producer.clone();
         self.stylesheet_lifecycle
             .fetches

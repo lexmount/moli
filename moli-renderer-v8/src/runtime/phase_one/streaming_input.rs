@@ -167,14 +167,11 @@ mod tests {
         );
         let continuation =
             RendererPageMainParserContinuationSender::new(networking.route(), root_document)
-                .bind_producer(
-                    FrameDocumentTaskOwner::new(
-                        FrameSchedulerLaneId(1),
-                        LocalWindowId(2),
-                        DocumentId(3),
-                    ),
-                    0,
-                );
+                .bind_producer(FrameDocumentTaskOwner::new(
+                    FrameSchedulerLaneId(1),
+                    LocalWindowId(2),
+                    DocumentId(3),
+                ));
         (networking, continuation, wake_rx)
     }
 
