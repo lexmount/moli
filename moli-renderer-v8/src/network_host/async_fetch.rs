@@ -539,10 +539,6 @@ pub(crate) fn spawn_async_subresource_fetch(
                     .expect("an image transport selection must retain its parkable manager"),
             )
             .await;
-            let (result, parkable_image) = match result {
-                Ok((response, image)) => (Ok(response), Some(image)),
-                Err(error) => (Err(error), None),
-            };
             let _ = completion_tx.send_async_subresource(AsyncSubresourceFetchCompletion {
                 internal_id,
                 request_url,
@@ -553,8 +549,7 @@ pub(crate) fn spawn_async_subresource_fetch(
                 skip_fetch_security_validation: false,
                 response_filter: None,
                 network_error_text: None,
-                parkable_image,
-                result,
+                result: crate::types::AsyncSubresourceFetchResult::from_image_result(result),
             });
             return;
         }
@@ -584,8 +579,7 @@ pub(crate) fn spawn_async_subresource_fetch(
                 skip_fetch_security_validation: false,
                 response_filter: None,
                 network_error_text: None,
-                parkable_image: None,
-                result,
+                result: result.into(),
             });
             return;
         }
@@ -619,8 +613,7 @@ pub(crate) fn spawn_async_subresource_fetch(
                 skip_fetch_security_validation: false,
                 response_filter: None,
                 network_error_text: None,
-                parkable_image: None,
-                result: Err(error),
+                result: crate::types::AsyncSubresourceFetchResult::Failure(error),
             });
         }
     });
@@ -1366,8 +1359,8 @@ mod tests {
         assert_eq!(response.status, 200);
         assert!(response.body_bytes().is_empty());
         let encoded = completion
-            .parkable_image
-            .as_ref()
+            .result
+            .encoded()
             .expect("image completion must carry its encoded backing");
         assert_eq!(encoded.snapshot()?.as_ref(), b"firsttail");
 

@@ -519,13 +519,13 @@ fn borrowed_fetch_uses_receiver_realm_and_keeps_reaction_realm_independent() {
         skip_fetch_security_validation: true,
         response_filter: None,
         network_error_text: None,
-        parkable_image: None,
         result: Ok(crate::types::NavigationResponse::from_text_body(
             completion_url,
             200,
             vec![("content-type".to_owned(), "text/plain".to_owned())],
             "borrowed completion".to_owned(),
-        )),
+        ))
+        .into(),
     })
     .expect("borrowed Fetch completion should enter the receiver Promise realm");
     vm.eval("0")
