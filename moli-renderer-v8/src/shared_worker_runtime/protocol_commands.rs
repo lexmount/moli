@@ -1,9 +1,7 @@
 use tokio::sync::oneshot;
 
-use crate::runtime::{RendererRuntimeInspectorMessage, RendererRuntimeInspectorResponseSender};
-use crate::worker::WorkerMessage;
-
 use super::host::RendererSharedWorkerHost;
+use crate::runtime::{RendererRuntimeInspectorMessage, RendererRuntimeInspectorResponseSender};
 
 impl RendererSharedWorkerHost {
     pub(super) async fn dispatch_runtime_protocol_message(
@@ -39,13 +37,16 @@ impl RendererSharedWorkerHost {
         raw_json: String,
         deferred_response: Option<RendererRuntimeInspectorResponseSender>,
     ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
+        let Some(handle) = self.running_devtools_handle() else {
+            return Err("SharedWorkerRuntimeUnavailable".to_owned());
+        };
         let (response_tx, response_rx) = oneshot::channel();
-        if !self.send_worker_message(WorkerMessage::DispatchRuntimeProtocolMessage {
+        if !handle.dispatch_runtime_protocol_message(
             inspector_session_id,
             raw_json,
             deferred_response,
             response_tx,
-        }) {
+        ) {
             return Err("SharedWorkerRuntimeUnavailable".to_owned());
         }
         response_rx
@@ -57,8 +58,7 @@ impl RendererSharedWorkerHost {
         &self,
         inspector_session_id: Option<String>,
     ) -> bool {
-        self.send_worker_message(WorkerMessage::DetachRuntimeInspectorSession {
-            inspector_session_id,
-        })
+        self.running_devtools_handle()
+            .is_some_and(|handle| handle.detach_runtime_inspector_session(inspector_session_id))
     }
 }

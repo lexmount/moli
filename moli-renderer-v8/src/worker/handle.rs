@@ -33,6 +33,7 @@ use crate::runtime::{
 };
 use crate::structured_clone::V8StructuredClonePayload;
 use crate::types::{BroadcastChannelId, DedicatedWorkerId, MessagePortId, NetworkBodySourceId};
+use crate::worker::inspector_task_runner::WorkerInspectorTaskRunner;
 use moli_crypto::sha256_hex;
 use moli_fetch::{RequestCredentialsMode, ResponseHead};
 use moli_shared_worker::SharedWorkerInstanceId;
@@ -143,23 +144,10 @@ pub(crate) enum WorkerMessage {
         worker_id: DedicatedWorkerId,
         message: Box<WorkerToParentMessage>,
     },
-    /// Dispatch a CDP Runtime protocol message inside this worker's V8 inspector session.
-    DispatchRuntimeProtocolMessage {
-        inspector_session_id: Option<String>,
-        raw_json: String,
-        deferred_response: Option<RendererRuntimeInspectorResponseSender>,
-        response_tx: oneshot::Sender<Result<Vec<RendererRuntimeInspectorMessage>, String>>,
-    },
-    /// Attach one renderer-side V8 inspector session before its first command.
-    AttachRuntimeInspectorSession {
-        inspector_session_id: Option<String>,
-    },
-    /// Release a pre-bootstrap debugger pause already acknowledged by the owner.
-    RunIfWaitingForDebuggerForDevtools,
-    /// Detach one renderer-side V8 inspector session from this worker.
-    DetachRuntimeInspectorSession {
-        inspector_session_id: Option<String>,
-    },
+    /// Owner-thread fallback for one queued interrupting Inspector task.
+    RunInterruptingInspectorTask,
+    /// Owner-thread dispatch for one Inspector task that may run JavaScript.
+    RunInspectorTaskDontInterrupt,
     #[cfg(test)]
     /// Inspect worker resource-owner V8 slots from inside the worker thread.
     ResourceOwnerSlotDiagnostics {
@@ -691,6 +679,70 @@ impl WorkerRuntimeEvent {
 
 /// Handle held by the parent (main-frame) context to communicate with a
 /// running worker.
+#[derive(Clone, Debug)]
+pub(crate) struct WorkerDevToolsHandle {
+    worker_tx: mpsc::UnboundedSender<WorkerMessage>,
+    inspector_tasks: WorkerInspectorTaskRunner,
+}
+
+impl WorkerDevToolsHandle {
+    pub(crate) fn new(
+        wake_tx: mpsc::UnboundedSender<WorkerMessage>,
+        isolate_handle: Arc<Mutex<Option<v8::IsolateHandle>>>,
+    ) -> Self {
+        Self {
+            inspector_tasks: WorkerInspectorTaskRunner::new(wake_tx.clone(), isolate_handle),
+            worker_tx: wake_tx,
+        }
+    }
+
+    pub(crate) fn inspector_tasks(&self) -> &WorkerInspectorTaskRunner {
+        &self.inspector_tasks
+    }
+
+    pub(crate) fn dispatch_runtime_protocol_message(
+        &self,
+        inspector_session_id: Option<String>,
+        raw_json: String,
+        deferred_response: Option<RendererRuntimeInspectorResponseSender>,
+        response_tx: oneshot::Sender<Result<Vec<RendererRuntimeInspectorMessage>, String>>,
+    ) -> bool {
+        self.inspector_tasks.append_protocol_message(
+            inspector_session_id,
+            raw_json,
+            deferred_response,
+            response_tx,
+        )
+    }
+
+    pub(crate) fn attach_runtime_inspector_session(
+        &self,
+        inspector_session_id: Option<String>,
+    ) -> bool {
+        self.inspector_tasks.append_attach(inspector_session_id)
+    }
+
+    pub(crate) fn detach_runtime_inspector_session(
+        &self,
+        inspector_session_id: Option<String>,
+    ) -> bool {
+        self.inspector_tasks.append_detach(inspector_session_id)
+    }
+
+    pub(crate) fn run_if_waiting_for_debugger(&self) -> bool {
+        self.inspector_tasks.append_run_if_waiting_for_debugger()
+    }
+
+    pub(crate) fn dispose(&self, message: &str) {
+        self.inspector_tasks.dispose(message);
+    }
+
+    pub(crate) fn terminate_for_devtools(&self) -> bool {
+        self.dispose("Worker closed before Inspector task dispatch");
+        self.worker_tx.send(WorkerMessage::Terminate).is_ok()
+    }
+}
+
 pub(crate) struct WorkerHandle {
     /// Send messages *to* the worker.
     pub(crate) tx: mpsc::UnboundedSender<WorkerMessage>,
@@ -700,6 +752,7 @@ pub(crate) struct WorkerHandle {
     join_handle: Option<std::thread::JoinHandle<()>>,
     isolate_handle: Arc<Mutex<Option<v8::IsolateHandle>>>,
     termination_requested: Arc<AtomicBool>,
+    devtools: WorkerDevToolsHandle,
 }
 
 impl WorkerHandle {
@@ -719,6 +772,7 @@ impl WorkerHandle {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn new_with_termination_requested(
         tx: mpsc::UnboundedSender<WorkerMessage>,
         rx: mpsc::UnboundedReceiver<WorkerToParentMessage>,
@@ -726,12 +780,32 @@ impl WorkerHandle {
         isolate_handle: Arc<Mutex<Option<v8::IsolateHandle>>>,
         termination_requested: Arc<AtomicBool>,
     ) -> Self {
+        let devtools = WorkerDevToolsHandle::new(tx.clone(), Arc::clone(&isolate_handle));
+        Self::new_with_termination_requested_and_devtools(
+            tx,
+            rx,
+            join_handle,
+            isolate_handle,
+            termination_requested,
+            devtools,
+        )
+    }
+
+    pub(crate) fn new_with_termination_requested_and_devtools(
+        tx: mpsc::UnboundedSender<WorkerMessage>,
+        rx: mpsc::UnboundedReceiver<WorkerToParentMessage>,
+        join_handle: std::thread::JoinHandle<()>,
+        isolate_handle: Arc<Mutex<Option<v8::IsolateHandle>>>,
+        termination_requested: Arc<AtomicBool>,
+        devtools: WorkerDevToolsHandle,
+    ) -> Self {
         Self {
             tx,
             rx: Some(rx),
             join_handle: Some(join_handle),
             isolate_handle,
             termination_requested,
+            devtools,
         }
     }
 
@@ -745,6 +819,8 @@ impl WorkerHandle {
         // Publish the lifecycle transition before interrupting V8. The worker
         // event loop can then reject an already-selected task without relying
         // on ordering between cloned mpsc senders.
+        self.devtools
+            .dispose("Worker terminated before Inspector task dispatch");
         self.termination_requested.store(true, Ordering::Release);
         self.terminate_execution_if_ready();
         let _ = self.tx.send(WorkerMessage::Terminate);
@@ -776,31 +852,37 @@ impl WorkerHandle {
         deferred_response: Option<RendererRuntimeInspectorResponseSender>,
         response_tx: oneshot::Sender<Result<Vec<RendererRuntimeInspectorMessage>, String>>,
     ) -> bool {
-        self.tx
-            .send(WorkerMessage::DispatchRuntimeProtocolMessage {
-                inspector_session_id,
-                raw_json,
-                deferred_response,
-                response_tx,
-            })
-            .is_ok()
+        self.devtools.dispatch_runtime_protocol_message(
+            inspector_session_id,
+            raw_json,
+            deferred_response,
+            response_tx,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn attach_runtime_inspector_session(
+        &self,
+        inspector_session_id: Option<String>,
+    ) -> bool {
+        self.devtools
+            .attach_runtime_inspector_session(inspector_session_id)
     }
 
     pub(crate) fn detach_runtime_inspector_session(
         &self,
         inspector_session_id: Option<String>,
     ) -> bool {
-        self.tx
-            .send(WorkerMessage::DetachRuntimeInspectorSession {
-                inspector_session_id,
-            })
-            .is_ok()
+        self.devtools
+            .detach_runtime_inspector_session(inspector_session_id)
     }
 
     pub(crate) fn run_if_waiting_for_debugger_for_devtools(&self) -> bool {
-        self.tx
-            .send(WorkerMessage::RunIfWaitingForDebuggerForDevtools)
-            .is_ok()
+        self.devtools.run_if_waiting_for_debugger()
+    }
+
+    pub(crate) fn devtools_handle(&self) -> WorkerDevToolsHandle {
+        self.devtools.clone()
     }
 
     pub(crate) fn set_extra_http_headers(&self, headers: &[(String, String)]) {

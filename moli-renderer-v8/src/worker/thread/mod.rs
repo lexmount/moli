@@ -30,7 +30,7 @@ use crate::network::{
     context::{WorkerResourceLoader, WorkerResourceOwner},
     loads::{ResourceLoadDisposition, ResourceLoadKind},
 };
-use crate::runtime::{RendererRuntimeInspectorMessage, RendererWorkerContextRuntime};
+use crate::runtime::RendererWorkerContextRuntime;
 use crate::service_worker_runtime::{
     ServiceWorkerClientId, ServiceWorkerClientType, ServiceWorkerRuntimeService,
 };
@@ -92,11 +92,13 @@ use super::global_scope::{
     service_worker_fetch_handler_type,
 };
 use super::handle::{
-    WorkerBootstrapCompletion, WorkerBootstrapFailure, WorkerBootstrapSuccess, WorkerErrorPhase,
-    WorkerErrorSource, WorkerFetchHandlerType, WorkerHandle, WorkerMessage, WorkerNetworkPolicy,
-    WorkerParentErrorEventKind, WorkerRuntimeInspectorMessageBatch, WorkerScriptResource,
-    WorkerScriptResourceKind, WorkerToParentMessage,
+    WorkerBootstrapCompletion, WorkerBootstrapFailure, WorkerBootstrapSuccess,
+    WorkerDevToolsHandle, WorkerErrorPhase, WorkerErrorSource, WorkerFetchHandlerType,
+    WorkerHandle, WorkerMessage, WorkerNetworkPolicy, WorkerParentErrorEventKind,
+    WorkerRuntimeInspectorMessageBatch, WorkerScriptResource, WorkerScriptResourceKind,
+    WorkerToParentMessage,
 };
+use super::inspector_task_runner::{WorkerInspectorTask, WorkerInspectorTaskRunner};
 use super::module_runtime::{
     WorkerBootstrapError, WorkerDynamicModuleImportAdvance, WorkerModuleBootstrapResume,
     WorkerModuleBootstrapStart, WorkerModuleEvaluationCompletion, WorkerModuleFetchedSource,
@@ -975,36 +977,21 @@ fn drain_worker_dynamic_module_imports_for_context(
     drain_worker_dynamic_module_imports(scope, state, module_graph_fetch_tx);
 }
 
-fn dispatch_worker_runtime_protocol_message(
-    isolate: &mut v8::OwnedIsolate,
+fn dispatch_worker_inspector_task(
+    worker_isolate: &mut WorkerIsolateState,
     context: &v8::Global<v8::Context>,
-    inspector: &mut WorkerRuntimeInspector,
-    inspector_session_id: Option<&str>,
-    raw_json: &str,
-    mut deferred_response: Option<crate::runtime::RendererRuntimeInspectorResponseSender>,
+    task: WorkerInspectorTask,
     state: &Rc<RefCell<WorkerGlobalState>>,
     module_graph_fetch_tx: &mpsc::UnboundedSender<WorkerModuleGraphFetchCompletion>,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
-) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
-    if matches!(state.borrow().global_kind, WorkerGlobalKind::Shared { .. }) {
-        deferred_response = deferred_response
-            .map(|response| response.defer_publication_to_shared_worker_parent(parent_tx.clone()));
-    }
+) {
+    let (isolate, inspector) = worker_isolate.worker_isolate_and_runtime_inspector();
+    inspector.execute_task(isolate, task);
     let scope = pin!(v8::HandleScope::new(isolate));
     let scope = &mut scope.init();
     let ctx = v8::Local::new(scope, context);
     let scope = &mut v8::ContextScope::new(scope, ctx);
-    let messages = match deferred_response {
-        Some(callback) => inspector.dispatch_protocol_message_with_deferred_response(
-            scope,
-            inspector_session_id,
-            raw_json,
-            callback,
-        )?,
-        None => inspector.dispatch_protocol_message(scope, inspector_session_id, raw_json)?,
-    };
+    perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
     drain_worker_dynamic_module_imports(scope, state, module_graph_fetch_tx);
-    Ok(messages)
 }
 
 async fn run_worker_pre_bootstrap_debugger_pause(
@@ -1012,64 +999,44 @@ async fn run_worker_pre_bootstrap_debugger_pause(
     context: &v8::Global<v8::Context>,
     state: &Rc<RefCell<WorkerGlobalState>>,
     module_graph_fetch_tx: &mpsc::UnboundedSender<WorkerModuleGraphFetchCompletion>,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
     script_url: &str,
     rx: &mut mpsc::UnboundedReceiver<WorkerMessage>,
     pending_bootstrap_messages: &mut VecDeque<WorkerMessage>,
+    inspector_task_runner: &WorkerInspectorTaskRunner,
 ) -> bool {
     loop {
+        if inspector_task_runner.take_resume_requested() {
+            return true;
+        }
         match rx.recv().await {
-            Some(WorkerMessage::DispatchRuntimeProtocolMessage {
-                inspector_session_id,
-                raw_json,
-                deferred_response,
-                response_tx,
-            }) => {
-                let should_resume =
-                    worker_runtime_protocol_message_is_run_if_waiting_for_debugger(&raw_json);
-                let (isolate, runtime_inspector) =
-                    worker_isolate.worker_isolate_and_runtime_inspector_mut();
-                let result = dispatch_worker_runtime_protocol_message(
-                    isolate,
-                    context,
-                    runtime_inspector,
-                    inspector_session_id.as_deref(),
-                    &raw_json,
-                    deferred_response,
-                    state,
-                    module_graph_fetch_tx,
-                    parent_tx,
-                );
-                let did_resume = should_resume && result.is_ok();
-                let _ = response_tx.send(result);
-                forward_pending_worker_runtime_protocol_messages(
-                    worker_isolate.worker_runtime_inspector_mut(),
-                    parent_tx,
-                );
-                if did_resume {
+            Some(WorkerMessage::RunInterruptingInspectorTask) => {
+                if let Some(task) = inspector_task_runner.claim_interrupting_task() {
+                    dispatch_worker_inspector_task(
+                        worker_isolate,
+                        context,
+                        task,
+                        state,
+                        module_graph_fetch_tx,
+                    );
+                }
+                inspector_task_runner.request_interrupt_if_needed();
+                if inspector_task_runner.take_resume_requested() {
                     return true;
                 }
             }
-            Some(WorkerMessage::AttachRuntimeInspectorSession {
-                inspector_session_id,
-            }) => {
-                worker_isolate
-                    .worker_runtime_inspector_mut()
-                    .attach_session(inspector_session_id.as_deref());
-            }
-            Some(WorkerMessage::RunIfWaitingForDebuggerForDevtools) => {
-                return true;
-            }
-            Some(WorkerMessage::DetachRuntimeInspectorSession {
-                inspector_session_id,
-            }) => {
-                worker_isolate
-                    .worker_runtime_inspector_mut()
-                    .detach_session(inspector_session_id.as_deref());
-                forward_pending_worker_runtime_protocol_messages(
-                    worker_isolate.worker_runtime_inspector_mut(),
-                    parent_tx,
-                );
+            Some(WorkerMessage::RunInspectorTaskDontInterrupt) => {
+                if let Some(task) = inspector_task_runner.claim_non_interrupting_task() {
+                    dispatch_worker_inspector_task(
+                        worker_isolate,
+                        context,
+                        task,
+                        state,
+                        module_graph_fetch_tx,
+                    );
+                }
+                if inspector_task_runner.take_resume_requested() {
+                    return true;
+                }
             }
             Some(WorkerMessage::SetExtraHttpHeaders(headers)) => {
                 let (loader, headers_for_loader) = {
@@ -1122,17 +1089,8 @@ async fn run_worker_pre_bootstrap_debugger_pause(
     }
 }
 
-fn worker_runtime_protocol_message_is_run_if_waiting_for_debugger(raw_json: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(raw_json).is_ok_and(|value| {
-        value
-            .get("method")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|method| method == "Runtime.runIfWaitingForDebugger")
-    })
-}
-
 fn drain_worker_runtime_protocol_messages(
-    inspector: &mut WorkerRuntimeInspector,
+    inspector: &WorkerRuntimeInspector,
 ) -> Vec<WorkerRuntimeInspectorMessageBatch> {
     inspector.take_pending_messages()
 }
@@ -1176,7 +1134,7 @@ fn worker_resource_owner_slot_diagnostics(
 }
 
 fn forward_pending_worker_runtime_protocol_messages(
-    inspector: &mut WorkerRuntimeInspector,
+    inspector: &WorkerRuntimeInspector,
     parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
 ) {
     let messages = drain_worker_runtime_protocol_messages(inspector);
@@ -1186,7 +1144,7 @@ fn forward_pending_worker_runtime_protocol_messages(
 }
 
 fn forward_worker_script_loaded(
-    inspector: &mut WorkerRuntimeInspector,
+    inspector: &WorkerRuntimeInspector,
     parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
 ) {
     // Blink notifies each attached worker Inspector agent only after top-level
@@ -1410,6 +1368,9 @@ pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHa
     let worker_wake_tx = parent_to_worker_tx.clone();
     let isolate_handle = Arc::new(Mutex::new(None));
     let worker_isolate_handle = Arc::clone(&isolate_handle);
+    let devtools =
+        WorkerDevToolsHandle::new(parent_to_worker_tx.clone(), Arc::clone(&isolate_handle));
+    let worker_inspector_tasks = devtools.inspector_tasks().clone();
     let termination_requested = Arc::new(AtomicBool::new(false));
     let worker_termination_requested = Arc::clone(&termination_requested);
 
@@ -1454,16 +1415,18 @@ pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHa
                 worker_to_parent_tx,
                 worker_isolate_handle,
                 worker_termination_requested,
+                worker_inspector_tasks,
             ));
         })
         .expect("failed to spawn worker thread");
 
-    WorkerHandle::new_with_termination_requested(
+    WorkerHandle::new_with_termination_requested_and_devtools(
         parent_to_worker_tx,
         worker_to_parent_rx,
         join_handle,
         isolate_handle,
         termination_requested,
+        devtools,
     )
 }
 
@@ -1583,6 +1546,7 @@ async fn worker_main(
     parent_tx: mpsc::UnboundedSender<WorkerToParentMessage>,
     isolate_handle: Arc<Mutex<Option<v8::IsolateHandle>>>,
     termination_requested: Arc<AtomicBool>,
+    inspector_task_runner: WorkerInspectorTaskRunner,
 ) {
     debug!(url = %script_url, "worker started");
     let mut bootstrap_completion = WorkerBootstrapCompletionReporter::new(bootstrap_completion_tx);
@@ -1613,6 +1577,9 @@ async fn worker_main(
     let resource_owner_id = crate::resource_owner::ResourceOwnerId::new();
     let mut worker_isolate = WorkerIsolateState::new(
         crate::v8_platform::V8ForegroundTaskWake::worker(worker_runtime_wake_tx.clone()),
+        inspector_task_runner.clone(),
+        parent_tx.clone(),
+        matches!(global_kind, WorkerGlobalKind::Shared { .. }),
     );
     install_worker_promise_rejection_dispatch(
         worker_isolate.worker_isolate_mut(),
@@ -1781,8 +1748,7 @@ async fn worker_main(
     let mut bootstrap_failed = false;
     let mut install_global_failed = false;
     {
-        let (isolate, runtime_inspector) =
-            worker_isolate.worker_isolate_and_runtime_inspector_mut();
+        let (isolate, runtime_inspector) = worker_isolate.worker_isolate_and_runtime_inspector();
         let scope = pin!(v8::HandleScope::new(isolate));
         let scope = &mut scope.init();
         *isolate_handle.lock() = Some(scope.thread_safe_handle());
@@ -1819,9 +1785,14 @@ async fn worker_main(
         }
     }
     if install_global_failed {
+        inspector_task_runner.dispose("Worker global installation failed");
+        *isolate_handle.lock() = None;
         worker_isolate.unregister_worker_isolate_platform();
         return;
     }
+    // Commands can queue before the isolate exists. Arm V8 interrupts only
+    // after the worker context and its Inspector routing are fully installed.
+    inspector_task_runner.activate_isolate();
 
     let mut terminated_before_bootstrap = false;
     if pause_evaluation_until_debugger
@@ -1830,10 +1801,10 @@ async fn worker_main(
             &context,
             &state,
             &module_graph_fetch_tx,
-            &parent_tx,
             &script_url,
             &mut rx,
             &mut pending_bootstrap_messages,
+            &inspector_task_runner,
         )
         .await
     {
@@ -1842,7 +1813,7 @@ async fn worker_main(
     }
 
     if !terminated_before_bootstrap {
-        let (isolate, _) = worker_isolate.worker_isolate_and_runtime_inspector_mut();
+        let (isolate, _) = worker_isolate.worker_isolate_and_runtime_inspector();
         let scope = pin!(v8::HandleScope::new(isolate));
         let scope = &mut scope.init();
         let ctx = v8::Local::new(scope, &context);
@@ -1907,7 +1878,7 @@ async fn worker_main(
         drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
     }
     if !terminated_before_bootstrap && pending_module_bootstrap.is_none() {
-        forward_worker_script_loaded(worker_isolate.worker_runtime_inspector_mut(), &parent_tx);
+        forward_worker_script_loaded(worker_isolate.worker_runtime_inspector(), &parent_tx);
     }
     if bootstrap_failed {
         state.borrow_mut().closed = true;
@@ -2702,60 +2673,28 @@ async fn worker_main(
                     drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
                 }
             }
-            WorkerLoopWake::Message(Some(WorkerMessage::DispatchRuntimeProtocolMessage {
-                inspector_session_id,
-                raw_json,
-                deferred_response,
-                response_tx,
-            })) => {
-                if pending_module_bootstrap.is_some() {
-                    pending_bootstrap_messages.push_back(
-                        WorkerMessage::DispatchRuntimeProtocolMessage {
-                            inspector_session_id,
-                            raw_json,
-                            deferred_response,
-                            response_tx,
-                        },
+            WorkerLoopWake::Message(Some(WorkerMessage::RunInterruptingInspectorTask)) => {
+                if let Some(task) = inspector_task_runner.claim_interrupting_task() {
+                    dispatch_worker_inspector_task(
+                        &mut worker_isolate,
+                        &context,
+                        task,
+                        &state,
+                        &module_graph_fetch_tx,
                     );
-                    continue;
                 }
-                let (isolate, runtime_inspector) =
-                    worker_isolate.worker_isolate_and_runtime_inspector_mut();
-                let result = dispatch_worker_runtime_protocol_message(
-                    isolate,
-                    &context,
-                    runtime_inspector,
-                    inspector_session_id.as_deref(),
-                    &raw_json,
-                    deferred_response,
-                    &state,
-                    &module_graph_fetch_tx,
-                    &parent_tx,
-                );
-                let _ = response_tx.send(result);
+                inspector_task_runner.request_interrupt_if_needed();
             }
-            WorkerLoopWake::Message(Some(WorkerMessage::AttachRuntimeInspectorSession {
-                inspector_session_id,
-            })) => {
-                worker_isolate
-                    .worker_runtime_inspector_mut()
-                    .attach_session(inspector_session_id.as_deref());
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::RunIfWaitingForDebuggerForDevtools)) => {}
-            WorkerLoopWake::Message(Some(WorkerMessage::DetachRuntimeInspectorSession {
-                inspector_session_id,
-            })) => {
-                if pending_module_bootstrap.is_some() {
-                    pending_bootstrap_messages.push_back(
-                        WorkerMessage::DetachRuntimeInspectorSession {
-                            inspector_session_id,
-                        },
+            WorkerLoopWake::Message(Some(WorkerMessage::RunInspectorTaskDontInterrupt)) => {
+                if let Some(task) = inspector_task_runner.claim_non_interrupting_task() {
+                    dispatch_worker_inspector_task(
+                        &mut worker_isolate,
+                        &context,
+                        task,
+                        &state,
+                        &module_graph_fetch_tx,
                     );
-                    continue;
                 }
-                worker_isolate
-                    .worker_runtime_inspector_mut()
-                    .detach_session(inspector_session_id.as_deref());
             }
             #[cfg(test)]
             WorkerLoopWake::Message(Some(WorkerMessage::ResourceOwnerSlotDiagnostics {
@@ -3095,7 +3034,7 @@ async fn worker_main(
             }
             WorkerLoopWake::ModuleGraphFetch(Some(completion)) => {
                 let (isolate, runtime_inspector) =
-                    worker_isolate.worker_isolate_and_runtime_inspector_mut();
+                    worker_isolate.worker_isolate_and_runtime_inspector();
                 let scope = pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
                 let ctx = v8::Local::new(scope, &context);
@@ -3157,7 +3096,7 @@ async fn worker_main(
                                 &state,
                                 &module_graph_fetch_tx,
                             );
-                            forward_worker_script_loaded(runtime_inspector, &parent_tx);
+                            forward_worker_script_loaded(&runtime_inspector, &parent_tx);
                         }
                         WorkerModuleBootstrapResume::NeedFetches(requests) => {
                             start_worker_module_graph_fetch_batch(
@@ -3190,7 +3129,7 @@ async fn worker_main(
                                 &parent_tx,
                                 &script_url,
                             );
-                            forward_worker_script_loaded(runtime_inspector, &parent_tx);
+                            forward_worker_script_loaded(&runtime_inspector, &parent_tx);
                             break;
                         }
                     }
@@ -3218,7 +3157,7 @@ async fn worker_main(
             }
             WorkerLoopWake::ModuleEvaluation(Some(completion)) => {
                 let (isolate, runtime_inspector) =
-                    worker_isolate.worker_isolate_and_runtime_inspector_mut();
+                    worker_isolate.worker_isolate_and_runtime_inspector();
                 let scope = pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
                 let ctx = v8::Local::new(scope, &context);
@@ -3242,7 +3181,7 @@ async fn worker_main(
                                 &state,
                                 &module_graph_fetch_tx,
                             );
-                            forward_worker_script_loaded(runtime_inspector, &parent_tx);
+                            forward_worker_script_loaded(&runtime_inspector, &parent_tx);
                         }
                         WorkerModuleBootstrapResume::NeedFetches(requests) => {
                             start_worker_module_graph_fetch_batch(
@@ -3275,7 +3214,7 @@ async fn worker_main(
                                 &parent_tx,
                                 &script_url,
                             );
-                            forward_worker_script_loaded(runtime_inspector, &parent_tx);
+                            forward_worker_script_loaded(&runtime_inspector, &parent_tx);
                             break;
                         }
                     }
@@ -3353,7 +3292,7 @@ async fn worker_main(
         }
 
         forward_pending_worker_runtime_protocol_messages(
-            worker_isolate.worker_runtime_inspector_mut(),
+            worker_isolate.worker_runtime_inspector(),
             &parent_tx,
         );
 
@@ -3368,14 +3307,14 @@ async fn worker_main(
     // routes are destroyed. Ordinary transports are cancelled here;
     // explicitly keepalive loads are reduced to browser-runtime network-only
     // records and therefore cannot retain this WorkerGlobalScope.
+    inspector_task_runner.dispose("Worker exited before Inspector task dispatch");
     let resource_loader = state.borrow().loader.clone();
     resource_loader.begin_detach();
     if matches!(state.borrow().global_kind, WorkerGlobalKind::Shared { .. }) {
         let _ = parent_tx.send(WorkerToParentMessage::SharedWorkerClosed);
     }
     {
-        let (isolate, runtime_inspector) =
-            worker_isolate.worker_isolate_and_runtime_inspector_mut();
+        let (isolate, runtime_inspector) = worker_isolate.worker_isolate_and_runtime_inspector();
         let scope = pin!(v8::HandleScope::new(isolate));
         let scope = &mut scope.init();
         let ctx = v8::Local::new(scope, &context);

@@ -363,14 +363,10 @@ async fn worker_attach_before_runtime_enable_preserves_script_loaded_after_resum
         .with_pause_evaluation_until_debugger(true),
     );
 
-    handle
-        .tx
-        .send(
-            crate::worker::WorkerMessage::AttachRuntimeInspectorSession {
-                inspector_session_id: Some("SID-worker-attached".to_owned()),
-            },
-        )
-        .expect("worker should accept its Inspector session before the first command");
+    assert!(
+        handle.attach_runtime_inspector_session(Some("SID-worker-attached".to_owned())),
+        "worker should accept its Inspector session before the first command"
+    );
     assert!(
         handle.run_if_waiting_for_debugger_for_devtools(),
         "worker should accept debugger resume after the Inspector session is attached"
@@ -409,6 +405,137 @@ async fn worker_attach_before_runtime_enable_preserves_script_loaded_after_resum
                 });
             }
             other => panic!("unexpected attached worker message: {other:?}"),
+        }
+    }
+    handle.terminate_and_join();
+}
+
+#[tokio::test]
+async fn worker_inspector_interrupt_overtakes_js_running_command_during_active_javascript() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        r#"
+        let deliveries = 0;
+        self.onmessage = () => {
+            deliveries += 1;
+            postMessage(deliveries === 1 ? "entered" : "recovered");
+            if (deliveries === 1) {
+                while (true) {}
+            }
+        };
+        postMessage("ready");
+        "#
+        .to_owned(),
+        "https://example.test/app/interruptible-worker.js".to_owned(),
+    );
+
+    fn dispatch_runtime(
+        handle: &WorkerHandle,
+        id: i64,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> oneshot::Receiver<Result<Vec<crate::runtime::RendererRuntimeInspectorMessage>, String>>
+    {
+        let (response_tx, response_rx) = oneshot::channel();
+        let mut message = serde_json::json!({
+            "id": id,
+            "method": method,
+        });
+        if let Some(params) = params {
+            message["params"] = params;
+        }
+        assert!(
+            handle.dispatch_runtime_protocol_message(
+                Some("SID-worker-interrupt".to_owned()),
+                message.to_string(),
+                None,
+                response_tx,
+            ),
+            "worker should accept {method}"
+        );
+        response_rx
+    }
+
+    let ready = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("timed out waiting for worker readiness")
+        .expect("worker closed before readiness");
+    assert!(matches!(
+        ready,
+        WorkerToParentMessage::Post(ref payload) if stringify_payload(payload) == r#""ready""#
+    ));
+
+    let enable = dispatch_runtime(&handle, 1, "Runtime.enable", None);
+    timeout(TIMEOUT, enable)
+        .await
+        .expect("timed out enabling worker Runtime")
+        .expect("worker Runtime enable response channel closed")
+        .expect("worker Runtime.enable failed");
+
+    handle.post_message(serialize_test_string("start"));
+    let entered = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("timed out waiting for active worker JavaScript")
+        .expect("worker closed before entering active JavaScript");
+    assert!(matches!(
+        entered,
+        WorkerToParentMessage::Post(ref payload) if stringify_payload(payload) == r#""entered""#
+    ));
+
+    let mut evaluate = dispatch_runtime(
+        &handle,
+        2,
+        "Runtime.evaluate",
+        Some(serde_json::json!({
+            "expression": "40 + 2",
+            "returnByValue": true,
+        })),
+    );
+    assert!(
+        timeout(Duration::from_millis(100), &mut evaluate)
+            .await
+            .is_err(),
+        "Runtime.evaluate must not interrupt active worker JavaScript"
+    );
+
+    let terminate = dispatch_runtime(&handle, 3, "Runtime.terminateExecution", None);
+    timeout(TIMEOUT, terminate)
+        .await
+        .expect("Runtime.terminateExecution did not interrupt active worker JavaScript")
+        .expect("worker Runtime termination response channel closed")
+        .expect("worker Runtime.terminateExecution failed");
+
+    let evaluate_messages = timeout(TIMEOUT, &mut evaluate)
+        .await
+        .expect("queued Runtime.evaluate did not run after termination")
+        .expect("queued Runtime.evaluate response channel closed")
+        .expect("queued Runtime.evaluate failed after termination");
+    let evaluate_response = evaluate_messages
+        .into_iter()
+        .map(crate::runtime::RendererRuntimeInspectorMessage::into_v8_inspector_message)
+        .find(|message| message["id"] == 2)
+        .expect("queued Runtime.evaluate response");
+    assert_eq!(evaluate_response["result"]["result"]["value"], 42);
+
+    handle.post_message(serialize_test_string("again"));
+    loop {
+        let recovered = timeout(TIMEOUT, handle.recv())
+            .await
+            .expect("timed out waiting for worker recovery")
+            .expect("worker closed instead of recovering");
+        match recovered {
+            WorkerToParentMessage::Post(payload) => {
+                assert_eq!(stringify_payload(&payload), r#""recovered""#);
+                break;
+            }
+            WorkerToParentMessage::RuntimeInspectorMessages(_) => {}
+            WorkerToParentMessage::Error { message, .. } => {
+                assert_eq!(
+                    message, "null",
+                    "worker emitted an unexpected error while recovering"
+                );
+            }
+            other => panic!("unexpected worker output while checking recovery: {other:?}"),
         }
     }
     handle.terminate_and_join();

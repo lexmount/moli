@@ -1,15 +1,23 @@
 use std::{
-    cell::{RefCell, UnsafeCell},
-    collections::{HashMap, VecDeque},
-    rc::Rc,
+    cell::{Cell, RefCell, UnsafeCell},
+    collections::{HashMap, HashSet, VecDeque},
+    rc::{Rc, Weak},
 };
 
 use serde_json::{Value, json};
 
 use crate::inspector_microtasks::with_scoped_inspector_microtasks;
 use crate::runtime::{RendererRuntimeInspectorMessage, RendererRuntimeInspectorResponseSender};
-use crate::worker::handle::WorkerRuntimeInspectorMessageBatch;
+use crate::worker::{
+    handle::{WorkerRuntimeInspectorMessageBatch, WorkerToParentMessage},
+    inspector_task_runner::{
+        WorkerInspectorInterruptExecutor, WorkerInspectorTask, WorkerInspectorTaskRunner,
+        register_worker_inspector_executor, unregister_worker_inspector_executor,
+    },
+};
+use tokio::sync::mpsc;
 
+#[cfg(test)]
 use super::dispatch::perform_worker_microtask_checkpoint_and_report_pending_promise_rejections;
 
 const WORKER_INSPECTOR_CONTEXT_GROUP_ID: i32 = 1;
@@ -216,6 +224,26 @@ impl WorkerInspectorOutbound {
         )
     }
 
+    fn take_active_dispatch_notifications(&self) -> Vec<WorkerInspectorPendingMessageBatch> {
+        let mut state = self.0.borrow_mut();
+        let mut messages = Vec::new();
+        for scope in &mut state.active_dispatch_scopes {
+            let mut responses = Vec::new();
+            for message in scope.messages.drain(..) {
+                if message.has_v8_inspector_method() {
+                    messages.push(WorkerInspectorPendingMessage {
+                        session_key: scope.session_key.clone(),
+                        message,
+                    });
+                } else {
+                    responses.push(message);
+                }
+            }
+            scope.messages = responses;
+        }
+        coalesce_worker_inspector_messages(messages)
+    }
+
     fn push_dispatch_scope(&self, session_key: &str) -> WorkerInspectorDispatchScopeGuard {
         self.0
             .borrow_mut()
@@ -252,21 +280,32 @@ impl v8::inspector::ChannelImpl for WorkerInspectorChannel {
 struct WorkerInspectorClient {
     isolate: UnsafeCell<v8::UnsafeRawIsolatePtr>,
     default_context: Rc<RefCell<Option<v8::Global<v8::Context>>>>,
+    executor: Rc<WorkerInspectorExecutor>,
 }
 
 impl WorkerInspectorClient {
     fn new(
         isolate: v8::UnsafeRawIsolatePtr,
         default_context: Rc<RefCell<Option<v8::Global<v8::Context>>>>,
+        executor: Rc<WorkerInspectorExecutor>,
     ) -> Self {
         Self {
             isolate: UnsafeCell::new(isolate),
             default_context,
+            executor,
         }
     }
 }
 
 impl v8::inspector::V8InspectorClientImpl for WorkerInspectorClient {
+    fn run_message_loop_on_pause(&self, _context_group_id: i32) {
+        self.executor.run_pause_loop();
+    }
+
+    fn quit_message_loop_on_pause(&self) {
+        self.executor.task_runner.request_quit_pause_loop();
+    }
+
     fn ensure_default_context_in_group(
         &self,
         context_group_id: i32,
@@ -283,36 +322,113 @@ impl v8::inspector::V8InspectorClientImpl for WorkerInspectorClient {
     }
 }
 
-struct WorkerInspectorSessionState {
-    session: v8::inspector::V8InspectorSession,
-}
-
 pub(super) struct WorkerRuntimeInspector {
-    sessions: HashMap<String, WorkerInspectorSessionState>,
+    sessions: RefCell<HashMap<String, Rc<v8::inspector::V8InspectorSession>>>,
+    detached_sessions: RefCell<HashSet<String>>,
     inspector: v8::inspector::V8Inspector,
     outbound: WorkerInspectorOutbound,
     default_context: Rc<RefCell<Option<v8::Global<v8::Context>>>>,
-    default_execution_context_id: Option<i64>,
+    default_execution_context_id: Cell<Option<i64>>,
+    task_runner: WorkerInspectorTaskRunner,
+    parent_tx: mpsc::UnboundedSender<WorkerToParentMessage>,
+    shared_worker: bool,
+}
+
+struct WorkerInspectorExecutor {
+    isolate: UnsafeCell<v8::UnsafeRawIsolatePtr>,
+    inspector: Weak<WorkerRuntimeInspector>,
+    task_runner: WorkerInspectorTaskRunner,
+}
+
+impl Drop for WorkerInspectorExecutor {
+    fn drop(&mut self) {
+        unregister_worker_inspector_executor(self.task_runner.route_id());
+    }
+}
+
+impl WorkerInspectorExecutor {
+    fn run_pause_loop(&self) {
+        let Some(inspector) = self.inspector.upgrade() else {
+            return;
+        };
+        inspector.forward_active_dispatch_messages();
+        if !self.task_runner.begin_pause_loop() {
+            return;
+        }
+        while let Some(task) = self.task_runner.wait_for_pause_task() {
+            let isolate = unsafe { &mut *self.isolate.get() };
+            let isolate = unsafe { v8::Isolate::ref_from_raw_isolate_ptr_mut(isolate) };
+            inspector.execute_task(isolate, task);
+        }
+        self.task_runner.finish_pause_loop();
+    }
+}
+
+impl WorkerInspectorInterruptExecutor for WorkerInspectorExecutor {
+    fn dispatch_interrupt(&self, isolate: v8::UnsafeRawIsolatePtr) {
+        self.task_runner.interrupt_callback_started();
+        let Some(task) = self.task_runner.claim_interrupting_task() else {
+            self.task_runner.request_interrupt_if_needed();
+            return;
+        };
+        if let Some(inspector) = self.inspector.upgrade() {
+            let mut isolate_ptr = isolate;
+            let isolate = unsafe { v8::Isolate::ref_from_raw_isolate_ptr_mut(&mut isolate_ptr) };
+            inspector.execute_task(isolate, task);
+        }
+        self.task_runner.request_interrupt_if_needed();
+    }
 }
 
 impl WorkerRuntimeInspector {
-    pub(super) fn new(isolate: &mut v8::Isolate) -> Self {
+    pub(super) fn new(
+        isolate: &mut v8::Isolate,
+        task_runner: WorkerInspectorTaskRunner,
+        parent_tx: mpsc::UnboundedSender<WorkerToParentMessage>,
+        shared_worker: bool,
+    ) -> Rc<Self> {
         let isolate_ptr = unsafe { isolate.as_raw_isolate_ptr() };
         let default_context = Rc::new(RefCell::new(None));
-        let inspector_client = v8::inspector::V8InspectorClient::new(Box::new(
-            WorkerInspectorClient::new(isolate_ptr, Rc::clone(&default_context)),
-        ));
-        Self {
-            inspector: v8::inspector::V8Inspector::create(isolate, inspector_client),
-            sessions: HashMap::new(),
-            outbound: WorkerInspectorOutbound::default(),
-            default_context,
-            default_execution_context_id: None,
-        }
+        Rc::new_cyclic(|weak_inspector| {
+            let executor = Rc::new(WorkerInspectorExecutor {
+                isolate: UnsafeCell::new(isolate_ptr),
+                inspector: weak_inspector.clone(),
+                task_runner: task_runner.clone(),
+            });
+            let interrupt_executor: Rc<dyn WorkerInspectorInterruptExecutor> = executor.clone();
+            register_worker_inspector_executor(task_runner.route_id(), &interrupt_executor);
+            let inspector_client =
+                v8::inspector::V8InspectorClient::new(Box::new(WorkerInspectorClient::new(
+                    isolate_ptr,
+                    Rc::clone(&default_context),
+                    executor.clone(),
+                )));
+            Self {
+                inspector: v8::inspector::V8Inspector::create(isolate, inspector_client),
+                sessions: RefCell::new(HashMap::new()),
+                detached_sessions: RefCell::new(HashSet::new()),
+                outbound: WorkerInspectorOutbound::default(),
+                default_context,
+                default_execution_context_id: Cell::new(None),
+                task_runner,
+                parent_tx,
+                shared_worker,
+            }
+        })
+    }
+
+    #[cfg(test)]
+    fn new_for_test(isolate: &mut v8::Isolate) -> Rc<Self> {
+        let (wake_tx, _wake_rx) = mpsc::unbounded_channel();
+        let (parent_tx, _parent_rx) = mpsc::unbounded_channel();
+        let isolate_handle =
+            std::sync::Arc::new(parking_lot::Mutex::new(Some(isolate.thread_safe_handle())));
+        let task_runner = WorkerInspectorTaskRunner::new(wake_tx, isolate_handle);
+        Self::new(isolate, task_runner, parent_tx, false)
     }
 
     pub(super) fn attach_context<'s>(
-        &mut self,
+        &self,
         context: v8::Local<'s, v8::Context>,
         default_context: v8::Global<v8::Context>,
         script_url: &str,
@@ -325,27 +441,30 @@ impl WorkerRuntimeInspector {
             v8::inspector::StringView::from(script_url.as_bytes()),
             v8::inspector::StringView::from(&br#"{"isDefault":true,"type":"worker"}"#[..]),
         );
-        self.default_execution_context_id = Some(i64::from(
+        self.default_execution_context_id.set(Some(i64::from(
             v8::inspector::V8Inspector::execution_context_id(context),
-        ));
+        )));
     }
 
     pub(super) fn context_destroyed<'s>(&self, context: v8::Local<'s, v8::Context>) {
         self.inspector.context_destroyed(context);
     }
 
-    pub(super) fn detach_session(&mut self, inspector_session_id: Option<&str>) {
+    pub(super) fn detach_session(&self, inspector_session_id: Option<&str>) {
         let session_key = worker_inspector_session_key(inspector_session_id);
-        self.sessions.remove(&session_key);
+        self.sessions.borrow_mut().remove(&session_key);
+        self.detached_sessions.borrow_mut().insert(session_key);
     }
 
-    pub(super) fn attach_session(&mut self, inspector_session_id: Option<&str>) {
+    pub(super) fn attach_session(&self, inspector_session_id: Option<&str>) {
         let session_key = worker_inspector_session_key(inspector_session_id);
+        self.detached_sessions.borrow_mut().remove(&session_key);
         let _ = self.ensure_session(&session_key);
     }
 
+    #[cfg(test)]
     pub(super) fn dispatch_protocol_message(
-        &mut self,
+        &self,
         scope: &mut v8::PinScope<'_, '_>,
         inspector_session_id: Option<&str>,
         raw_json: &str,
@@ -358,45 +477,86 @@ impl WorkerRuntimeInspector {
         )
     }
 
-    pub(super) fn dispatch_protocol_message_with_deferred_response(
-        &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        inspector_session_id: Option<&str>,
-        raw_json: &str,
-        deferred_response: RendererRuntimeInspectorResponseSender,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
-        self.dispatch_protocol_message_with_optional_deferred_response(
-            scope,
-            inspector_session_id,
-            raw_json,
-            Some(deferred_response),
-        )
-    }
-
+    #[cfg(test)]
     fn dispatch_protocol_message_with_optional_deferred_response(
-        &mut self,
+        &self,
         scope: &mut v8::PinScope<'_, '_>,
         inspector_session_id: Option<&str>,
         raw_json: &str,
         deferred_response: Option<RendererRuntimeInspectorResponseSender>,
     ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
+        let messages = with_scoped_inspector_microtasks(scope, || {
+            self.dispatch_protocol_message_scoped(inspector_session_id, raw_json, deferred_response)
+        })?;
+        perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+        Ok(messages)
+    }
+
+    fn dispatch_protocol_message_scoped(
+        &self,
+        inspector_session_id: Option<&str>,
+        raw_json: &str,
+        deferred_response: Option<RendererRuntimeInspectorResponseSender>,
+    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
         let session_key = worker_inspector_session_key(inspector_session_id);
+        if self.detached_sessions.borrow().contains(&session_key) {
+            return Err("Worker Inspector session has been detached".to_owned());
+        }
         if let Some(callback) = deferred_response {
             self.outbound
                 .register_response_callback(&session_key, callback);
         }
         let dispatch_scope = self.outbound.push_dispatch_scope(&session_key);
         let session = self.ensure_session(&session_key);
-        with_scoped_inspector_microtasks(scope, || {
-            session.dispatch_protocol_message(v8::inspector::StringView::from(raw_json.as_bytes()));
-        });
-        perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+        session.dispatch_protocol_message(v8::inspector::StringView::from(raw_json.as_bytes()));
         let messages = dispatch_scope.finish();
         self.record_execution_context_state(&messages);
         Ok(messages)
     }
 
-    pub(super) fn take_pending_messages(&mut self) -> Vec<WorkerRuntimeInspectorMessageBatch> {
+    pub(super) fn execute_task(&self, isolate: &mut v8::Isolate, task: WorkerInspectorTask) {
+        match task {
+            WorkerInspectorTask::DispatchProtocolMessage {
+                inspector_session_id,
+                raw_json,
+                deferred_response,
+                response_tx,
+            } => {
+                let deferred_response = if self.shared_worker {
+                    deferred_response.map(|response| {
+                        response.defer_publication_to_shared_worker_parent(self.parent_tx.clone())
+                    })
+                } else {
+                    deferred_response
+                };
+                let result = with_scoped_inspector_microtasks(isolate, || {
+                    self.dispatch_protocol_message_scoped(
+                        inspector_session_id.as_deref(),
+                        &raw_json,
+                        deferred_response,
+                    )
+                });
+                if result.is_ok()
+                    && worker_runtime_protocol_message_is_run_if_waiting_for_debugger(&raw_json)
+                {
+                    self.task_runner.request_resume();
+                }
+                let _ = response_tx.send(result);
+            }
+            WorkerInspectorTask::AttachSession {
+                inspector_session_id,
+            } => self.attach_session(inspector_session_id.as_deref()),
+            WorkerInspectorTask::DetachSession {
+                inspector_session_id,
+            } => self.detach_session(inspector_session_id.as_deref()),
+            WorkerInspectorTask::RunIfWaitingForDebugger => {
+                self.task_runner.request_resume();
+            }
+        }
+        self.forward_pending_messages();
+    }
+
+    pub(super) fn take_pending_messages(&self) -> Vec<WorkerRuntimeInspectorMessageBatch> {
         let batches = self.outbound.take_all();
         for batch in &batches {
             self.record_execution_context_state(&batch.messages);
@@ -408,7 +568,8 @@ impl WorkerRuntimeInspector {
     }
 
     pub(super) fn worker_script_loaded_messages(&self) -> Vec<WorkerRuntimeInspectorMessageBatch> {
-        let mut session_keys = self.sessions.keys().collect::<Vec<_>>();
+        let sessions = self.sessions.borrow();
+        let mut session_keys = sessions.keys().collect::<Vec<_>>();
         session_keys.sort_unstable();
         session_keys
             .into_iter()
@@ -424,12 +585,12 @@ impl WorkerRuntimeInspector {
             .collect()
     }
 
-    fn ensure_session(&mut self, session_key: &str) -> &v8::inspector::V8InspectorSession {
-        &self
-            .sessions
+    fn ensure_session(&self, session_key: &str) -> Rc<v8::inspector::V8InspectorSession> {
+        self.sessions
+            .borrow_mut()
             .entry(session_key.to_owned())
-            .or_insert_with(|| WorkerInspectorSessionState {
-                session: self.inspector.connect(
+            .or_insert_with(|| {
+                Rc::new(self.inspector.connect(
                     WORKER_INSPECTOR_CONTEXT_GROUP_ID,
                     v8::inspector::Channel::new(Box::new(WorkerInspectorChannel {
                         outbound: self.outbound.clone(),
@@ -437,12 +598,12 @@ impl WorkerRuntimeInspector {
                     })),
                     v8::inspector::StringView::from(&b"{}"[..]),
                     v8::inspector::V8InspectorClientTrustLevel::FullyTrusted,
-                ),
+                ))
             })
-            .session
+            .clone()
     }
 
-    fn record_execution_context_state(&mut self, messages: &[RendererRuntimeInspectorMessage]) {
+    fn record_execution_context_state(&self, messages: &[RendererRuntimeInspectorMessage]) {
         for message in messages {
             match message {
                 RendererRuntimeInspectorMessage::RuntimeContext(
@@ -451,25 +612,59 @@ impl WorkerRuntimeInspector {
                     if event.context_type.as_deref() == Some("worker")
                         && let Some(id) = event.context_id
                     {
-                        self.default_execution_context_id = Some(id);
+                        self.default_execution_context_id.set(Some(id));
                     }
                 }
                 RendererRuntimeInspectorMessage::RuntimeContext(
                     crate::protocol_types::RuntimeContextRestoreEvent::Destroyed(event),
                 ) => {
-                    if event.context_id == self.default_execution_context_id {
-                        self.default_execution_context_id = None;
+                    if event.context_id == self.default_execution_context_id.get() {
+                        self.default_execution_context_id.set(None);
                     }
                 }
                 RendererRuntimeInspectorMessage::RuntimeContext(
                     crate::protocol_types::RuntimeContextRestoreEvent::Cleared(_),
                 ) => {
-                    self.default_execution_context_id = None;
+                    self.default_execution_context_id.set(None);
                 }
                 _ => {}
             }
         }
     }
+
+    fn forward_pending_messages(&self) {
+        let messages = self.take_pending_messages();
+        if !messages.is_empty() {
+            let _ = self
+                .parent_tx
+                .send(WorkerToParentMessage::RuntimeInspectorMessages(messages));
+        }
+    }
+
+    fn forward_active_dispatch_messages(&self) {
+        let batches = self.outbound.take_active_dispatch_notifications();
+        for batch in &batches {
+            self.record_execution_context_state(&batch.messages);
+        }
+        let messages = batches
+            .into_iter()
+            .map(worker_runtime_inspector_message_batch)
+            .collect::<Vec<_>>();
+        if !messages.is_empty() {
+            let _ = self
+                .parent_tx
+                .send(WorkerToParentMessage::RuntimeInspectorMessages(messages));
+        }
+    }
+}
+
+fn worker_runtime_protocol_message_is_run_if_waiting_for_debugger(raw_json: &str) -> bool {
+    serde_json::from_str::<Value>(raw_json).is_ok_and(|value| {
+        value
+            .get("method")
+            .and_then(Value::as_str)
+            .is_some_and(|method| method == "Runtime.runIfWaitingForDebugger")
+    })
 }
 
 fn worker_inspector_session_key(inspector_session_id: Option<&str>) -> String {
@@ -558,7 +753,7 @@ mod tests {
         crate::ensure_v8_for_test();
         let mut isolate = v8::Isolate::new(Default::default());
         isolate.set_microtasks_policy(v8::MicrotasksPolicy::Explicit);
-        let mut inspector = WorkerRuntimeInspector::new(&mut isolate);
+        let inspector = WorkerRuntimeInspector::new_for_test(&mut isolate);
         let context = {
             let scope = pin!(v8::HandleScope::new(&mut isolate));
             let scope = &mut scope.init();
@@ -770,6 +965,48 @@ mod tests {
                     "method": "Runtime.executionContextCreated"
                 }))],
             }]
+        );
+    }
+
+    #[test]
+    fn worker_pause_flushes_active_notifications_but_retains_command_response() {
+        let outbound = WorkerInspectorOutbound::default();
+        let dispatch_scope = outbound.push_dispatch_scope("SID-1");
+        outbound.push_value("SID-1", json!({"method": "Debugger.paused", "params": {}}));
+        outbound.push_response_value("SID-1", 7, json!({"id": 7, "result": {}}));
+
+        assert_eq!(
+            outbound.take_active_dispatch_notifications(),
+            vec![WorkerInspectorPendingMessageBatch {
+                inspector_session_id: Some("SID-1".to_owned()),
+                messages: vec![inspector_message(
+                    json!({"method": "Debugger.paused", "params": {}})
+                )],
+            }]
+        );
+        assert_eq!(
+            dispatch_scope.finish(),
+            vec![inspector_message(json!({"id": 7, "result": {}}))],
+        );
+    }
+
+    #[test]
+    fn detached_worker_inspector_session_is_not_lazily_recreated() {
+        crate::ensure_v8_for_test();
+        let mut isolate = v8::Isolate::new(Default::default());
+        let inspector = WorkerRuntimeInspector::new_for_test(&mut isolate);
+        inspector.attach_session(Some("SID-detached"));
+        inspector.detach_session(Some("SID-detached"));
+
+        assert_eq!(
+            inspector
+                .dispatch_protocol_message_scoped(
+                    Some("SID-detached"),
+                    &json!({"id": 1, "method": "Runtime.enable"}).to_string(),
+                    None,
+                )
+                .expect_err("detached session must reject a queued late command"),
+            "Worker Inspector session has been detached"
         );
     }
 }

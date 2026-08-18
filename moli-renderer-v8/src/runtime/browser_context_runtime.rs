@@ -181,8 +181,7 @@ struct RendererBrowserContextRuntimeInner {
     next_child_document_loader_id: AtomicU64,
     next_detached_parser_script_fetch_id: AtomicU64,
     next_dedicated_worker_instance_id: AtomicU64,
-    dedicated_worker_devtools_senders:
-        Mutex<HashMap<u64, tokio::sync::mpsc::UnboundedSender<crate::worker::WorkerMessage>>>,
+    dedicated_worker_devtools_handles: Mutex<HashMap<u64, crate::worker::WorkerDevToolsHandle>>,
     dedicated_worker_pause_on_start_for_devtools: AtomicBool,
     javascript_dialog_handler_enabled: AtomicBool,
     renderer_output_transport_tx: RendererOutputTransportSenderSlot,
@@ -310,10 +309,10 @@ impl Drop for RendererBrowserContextRuntimeInner {
 }
 
 fn terminate_browser_context_resource_producers(inner: &RendererBrowserContextRuntimeInner) {
-    let dedicated_worker_senders =
-        std::mem::take(&mut *inner.dedicated_worker_devtools_senders.lock());
-    for sender in dedicated_worker_senders.into_values() {
-        let _ = sender.send(crate::worker::WorkerMessage::Terminate);
+    let dedicated_worker_handles =
+        std::mem::take(&mut *inner.dedicated_worker_devtools_handles.lock());
+    for handle in dedicated_worker_handles.into_values() {
+        let _ = handle.terminate_for_devtools();
     }
     inner
         .shared_worker_runtime
@@ -521,7 +520,7 @@ impl RendererBrowserContextRuntime {
                 next_child_document_loader_id: AtomicU64::default(),
                 next_detached_parser_script_fetch_id: AtomicU64::default(),
                 next_dedicated_worker_instance_id: AtomicU64::default(),
-                dedicated_worker_devtools_senders: Mutex::new(HashMap::new()),
+                dedicated_worker_devtools_handles: Mutex::new(HashMap::new()),
                 dedicated_worker_pause_on_start_for_devtools: AtomicBool::new(false),
                 javascript_dialog_handler_enabled: AtomicBool::new(false),
                 renderer_output_transport_tx,

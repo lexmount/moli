@@ -1,7 +1,7 @@
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 
 use crate::runtime::{RendererRuntimeInspectorMessage, RendererRuntimeInspectorResponseSender};
-use crate::worker::{WorkerHandle, WorkerMessage};
+use crate::worker::{WorkerDevToolsHandle, WorkerHandle};
 
 use super::RendererBrowserContextRuntime;
 
@@ -21,23 +21,15 @@ impl RendererBrowserContextRuntime {
         instance_id: u64,
         handle: &WorkerHandle,
     ) {
-        self.attach_dedicated_worker_devtools_sender(instance_id, handle.tx.clone());
-    }
-
-    fn attach_dedicated_worker_devtools_sender(
-        &self,
-        instance_id: u64,
-        sender: mpsc::UnboundedSender<WorkerMessage>,
-    ) {
         self.inner
-            .dedicated_worker_devtools_senders
+            .dedicated_worker_devtools_handles
             .lock()
-            .insert(instance_id, sender);
+            .insert(instance_id, handle.devtools_handle());
     }
 
     pub(crate) fn unregister_dedicated_worker_devtools_handle(&self, instance_id: u64) {
         self.inner
-            .dedicated_worker_devtools_senders
+            .dedicated_worker_devtools_handles
             .lock()
             .remove(&instance_id);
     }
@@ -54,12 +46,9 @@ impl RendererBrowserContextRuntime {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    fn dedicated_worker_devtools_sender(
-        &self,
-        instance_id: u64,
-    ) -> Option<mpsc::UnboundedSender<WorkerMessage>> {
+    fn dedicated_worker_devtools_handle(&self, instance_id: u64) -> Option<WorkerDevToolsHandle> {
         self.inner
-            .dedicated_worker_devtools_senders
+            .dedicated_worker_devtools_handles
             .lock()
             .get(&instance_id)
             .cloned()
@@ -103,18 +92,18 @@ impl RendererBrowserContextRuntime {
         raw_json: String,
         deferred_response: Option<RendererRuntimeInspectorResponseSender>,
     ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
-        let Some(sender) = self.dedicated_worker_devtools_sender(instance_id) else {
+        let Some(handle) = self.dedicated_worker_devtools_handle(instance_id) else {
             return Err("DedicatedWorkerRuntimeUnavailable".to_owned());
         };
         let (response_tx, response_rx) = oneshot::channel();
-        sender
-            .send(WorkerMessage::DispatchRuntimeProtocolMessage {
-                inspector_session_id,
-                raw_json,
-                deferred_response,
-                response_tx,
-            })
-            .map_err(|_| "DedicatedWorkerRuntimeUnavailable".to_owned())?;
+        if !handle.dispatch_runtime_protocol_message(
+            inspector_session_id,
+            raw_json,
+            deferred_response,
+            response_tx,
+        ) {
+            return Err("DedicatedWorkerRuntimeUnavailable".to_owned());
+        }
         response_rx
             .await
             .map_err(|_| "DedicatedWorkerRuntimeUnavailable".to_owned())?
@@ -125,14 +114,8 @@ impl RendererBrowserContextRuntime {
         instance_id: u64,
         inspector_session_id: Option<String>,
     ) -> bool {
-        self.dedicated_worker_devtools_sender(instance_id)
-            .is_some_and(|sender| {
-                sender
-                    .send(WorkerMessage::AttachRuntimeInspectorSession {
-                        inspector_session_id,
-                    })
-                    .is_ok()
-            })
+        self.dedicated_worker_devtools_handle(instance_id)
+            .is_some_and(|handle| handle.attach_runtime_inspector_session(inspector_session_id))
     }
 
     pub fn detach_dedicated_worker_runtime_inspector_session(
@@ -140,30 +123,20 @@ impl RendererBrowserContextRuntime {
         instance_id: u64,
         inspector_session_id: Option<String>,
     ) -> bool {
-        self.dedicated_worker_devtools_sender(instance_id)
-            .is_some_and(|sender| {
-                sender
-                    .send(WorkerMessage::DetachRuntimeInspectorSession {
-                        inspector_session_id,
-                    })
-                    .is_ok()
-            })
+        self.dedicated_worker_devtools_handle(instance_id)
+            .is_some_and(|handle| handle.detach_runtime_inspector_session(inspector_session_id))
     }
 
     pub fn run_dedicated_worker_if_waiting_for_debugger_for_devtools(
         &self,
         instance_id: u64,
     ) -> bool {
-        self.dedicated_worker_devtools_sender(instance_id)
-            .is_some_and(|sender| {
-                sender
-                    .send(WorkerMessage::RunIfWaitingForDebuggerForDevtools)
-                    .is_ok()
-            })
+        self.dedicated_worker_devtools_handle(instance_id)
+            .is_some_and(|handle| handle.run_if_waiting_for_debugger())
     }
 
     pub fn close_dedicated_worker_for_devtools(&self, instance_id: u64) -> bool {
-        self.dedicated_worker_devtools_sender(instance_id)
-            .is_some_and(|sender| sender.send(WorkerMessage::Terminate).is_ok())
+        self.dedicated_worker_devtools_handle(instance_id)
+            .is_some_and(|handle| handle.terminate_for_devtools())
     }
 }

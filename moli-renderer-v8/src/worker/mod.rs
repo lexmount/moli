@@ -14,6 +14,7 @@ pub(crate) mod abort;
 mod data_url;
 mod global_scope;
 mod handle;
+mod inspector_task_runner;
 mod module_mime;
 mod module_runtime;
 mod script_loading;
@@ -56,7 +57,7 @@ pub(crate) use handle::{
     WorkerScriptResource, WorkerScriptResourceKind, WorkerToParentMessage,
     WorkerWebSocketFrameEvent, WorkerWebSocketLifecycleEvent, worker_secure_context_for_script_url,
 };
-pub(crate) use handle::{WorkerHandle, WorkerNetworkPolicy};
+pub(crate) use handle::{WorkerDevToolsHandle, WorkerHandle, WorkerNetworkPolicy};
 pub(crate) use module_mime::{
     ensure_worker_css_module_mime, ensure_worker_json_module_mime, ensure_worker_text_module_mime,
     ensure_worker_wasm_module_mime,
