@@ -3570,7 +3570,7 @@ fn computed_horizontal_margin_reads_preserve_retained_style_viewport_context() {
     assert_eq!(
         vm.retained_style_system_rebuild_count_for_document_for_test(document),
         1,
-        "nested width resolution must not replace the 800x600 viewport with a width-only key",
+        "a layout-backed margin read must not replace the complete viewport cache key",
     );
 }
 
@@ -3632,7 +3632,7 @@ fn child_computed_horizontal_margin_reads_preserve_retained_style_viewport_conte
     assert_eq!(
         vm.retained_style_system_rebuild_count_for_document_for_test(child_document),
         1,
-        "nested child width resolution must preserve the iframe viewport height and screen",
+        "a child layout-backed margin read must preserve the iframe viewport cache key",
     );
 }
 
@@ -5509,7 +5509,7 @@ fn computed_line_height_resolves_numbers_and_percentages() {
     assert_eq!(result, "normal|16px|10px|1.6px");
 }
 #[test]
-fn computed_horizontal_auto_margins_resolve_to_pixels() {
+fn computed_auto_margins_remain_computed_without_a_layout_box() {
     let mut vm = new_storage_test_vm("https://computed-auto-margin.test/");
 
     let result = vm
@@ -5537,9 +5537,9 @@ fn computed_horizontal_auto_margins_resolve_to_pixels() {
 })()
 "#,
         )
-        .expect("computed auto margins should resolve against containing block width");
+        .expect("computed auto margins should retain their computed value without layout");
 
-    assert_eq!(result, "10px|10px|0px|0px");
+    assert_eq!(result, "auto|auto|0px|0px");
 }
 #[test]
 fn computed_insets_absolutize_font_relative_lengths() {

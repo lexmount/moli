@@ -117,6 +117,7 @@ mod child_realm_materialization;
 mod child_realm_materialization_completion;
 mod command_checkpoint;
 mod computed_style_used_box_size;
+mod computed_style_used_margin;
 mod contain_intrinsic_remembered_size;
 mod content_visibility;
 mod cssom_zoom;

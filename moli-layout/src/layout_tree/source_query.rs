@@ -7,8 +7,8 @@ use crate::LayoutPosition;
 use super::{
     model::{
         LayoutBoxModel, LayoutCoordinateSpaceId, LayoutFragmentBoxModel, LayoutFragmentKind,
-        LayoutGridGeometry, LayoutOutputBoxId, LayoutPhysicalAxis, LayoutPoint, LayoutQuad,
-        LayoutRect, LayoutSize, LayoutTransform2D,
+        LayoutGridGeometry, LayoutOutputBoxId, LayoutPhysicalAxis, LayoutPhysicalBoxStrut,
+        LayoutPoint, LayoutQuad, LayoutRect, LayoutSize, LayoutTransform2D,
     },
     query::{LayoutElementMetrics, LayoutNodeOutput},
     tree::FrozenLayoutTree,
@@ -220,8 +220,17 @@ where
     pub fn used_box_size_for_source(&self, source: N) -> Option<LayoutSize> {
         let output = self.source_output(source)?;
         let geometry = self.box_geometry(output.principal_box?)?;
-        let size = geometry.used_box_size?;
+        let size = geometry.used_values?.size;
         Some(CssomAbsoluteZoom::new(geometry.effective_zoom).size(size))
+    }
+
+    /// Returns layout-dependent physical margins for one principal CSS box,
+    /// normalized out of the box's effective CSS zoom.
+    pub fn used_margin_for_source(&self, source: N) -> Option<LayoutPhysicalBoxStrut> {
+        let output = self.source_output(source)?;
+        let geometry = self.box_geometry(output.principal_box?)?;
+        let margin = geometry.used_values?.margin;
+        Some(CssomAbsoluteZoom::new(geometry.effective_zoom).strut(margin))
     }
 
     /// Returns used Grid tracks from the same frozen epoch as other CSSOM
@@ -533,6 +542,15 @@ impl CssomAbsoluteZoom {
 
     fn size(self, size: LayoutSize) -> LayoutSize {
         LayoutSize::new(size.width / self.0, size.height / self.0)
+    }
+
+    fn strut(self, strut: LayoutPhysicalBoxStrut) -> LayoutPhysicalBoxStrut {
+        LayoutPhysicalBoxStrut::new(
+            self.scalar(strut.top),
+            self.scalar(strut.right),
+            self.scalar(strut.bottom),
+            self.scalar(strut.left),
+        )
     }
 }
 

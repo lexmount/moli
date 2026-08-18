@@ -74,7 +74,7 @@ impl IntrinsicSizeObserverState {
             };
             if !policy.records_any_size()
                 || layout_box.contents_skipped
-                || layout_box.used_box_size.is_none()
+                || layout_box.used_values.is_none()
             {
                 continue;
             }

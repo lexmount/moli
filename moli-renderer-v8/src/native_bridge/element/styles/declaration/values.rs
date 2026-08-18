@@ -16,7 +16,7 @@ use crate::{
         document_runtime::DomHandle,
         native_bridge::element::geometry::{
             ClientRect, observable_bounding_client_rect, observable_bounding_client_rects,
-            observable_used_box_size, observable_used_grid_tracks,
+            observable_used_box_size, observable_used_grid_tracks, observable_used_margin,
         },
         style_engine::{
             ComputedDisplayKind, ComputedRenderedStyleFacts, StyleSourceId, StyleViewport,
@@ -3719,21 +3719,6 @@ fn css_numeric_context_with_viewport(
     )
 }
 
-fn css_numeric_context_with_viewport_and_inputs(
-    runtime: &JsContextHost,
-    handle: DomHandle,
-    viewport: StyleViewport,
-    inputs: &StyloComputedStyleInputs,
-    context: StyleComputationContext,
-) -> moli_css_parse::CssNumericContext {
-    css_numeric_context_with_viewport_and_resolution(
-        runtime,
-        handle,
-        viewport,
-        StyleResolutionContext::prepared(context, inputs),
-    )
-}
-
 fn css_numeric_context_with_viewport_and_resolution(
     runtime: &JsContextHost,
     handle: DomHandle,
@@ -5779,8 +5764,8 @@ fn resolve_moli_computed_style_value(
     }
     if matches!(property, "width" | "height") {
         match resolved_layout_box_dimension(runtime, handle, property, context) {
-            Some(ResolvedLayoutBoxDimension::Used(size)) => return size,
-            Some(ResolvedLayoutBoxDimension::Computed) => return value.to_owned(),
+            Some(ResolvedLayoutValue::Used(size)) => return size,
+            Some(ResolvedLayoutValue::Computed) => return value.to_owned(),
             None => {}
         }
     }
@@ -5804,24 +5789,15 @@ fn resolve_moli_computed_style_value(
     {
         return line_height;
     }
-    // Horizontal used-value resolution recursively reads the containing block
-    // and the element's own width. Keep those reads on this exact prepared
-    // context: reconstructing it from only `viewport.width` drops viewport
-    // height and screen dimensions, which makes the retained style key
-    // oscillate and is especially wrong for child-frame viewports.
-    if matches!(property, "margin-left" | "margin-right")
-        && let Some(margin) = resolve_computed_horizontal_auto_margin(
-            runtime, handle, property, value, inputs, context,
-        )
-    {
-        return margin;
-    }
-    if matches!(property, "margin-left" | "margin-right")
-        && let Some(margin) = resolve_computed_horizontal_margin_with_inline_fallback(
-            runtime, handle, property, value, inputs, context,
-        )
-    {
-        return margin;
+    if matches!(
+        property,
+        "margin-top" | "margin-right" | "margin-bottom" | "margin-left"
+    ) {
+        match resolved_layout_margin(runtime, handle, property, value, context) {
+            Some(ResolvedLayoutValue::Used(margin)) => return margin,
+            Some(ResolvedLayoutValue::Computed) => return value.to_owned(),
+            None => {}
+        }
     }
     if matches!(property, "left" | "right" | "top" | "bottom")
         && let Some(inset) = resolve_computed_inset(runtime, handle, property, value, resolution)
@@ -5913,9 +5889,46 @@ fn serialize_used_grid_track_list(tracks: &moli_layout::LayoutGridTrackGeometry)
     (size_index == tracks.sizes.len()).then(|| components.join(" "))
 }
 
-enum ResolvedLayoutBoxDimension {
+enum ResolvedLayoutValue {
     Used(String),
     Computed,
+}
+
+fn resolved_layout_margin(
+    runtime: &JsContextHost,
+    handle: DomHandle,
+    property: &str,
+    value: &str,
+    context: StyleComputationContext,
+) -> Option<ResolvedLayoutValue> {
+    // Blink consults LayoutBox only for non-fixed Length values. Keep fixed
+    // pixel values in computed-style space so layout subpixel quantization
+    // cannot change their serialization.
+    if parse_css_px(value).is_some()
+        || !context.reads_resolved_values()
+        || !runtime.layout_policy().uses_real_layout()
+    {
+        return None;
+    }
+    let margin = observable_used_margin(
+        runtime,
+        handle,
+        moli_layout::LayoutFlushReason::SynchronousGeometry,
+    )
+    .ok()?;
+    let Some(margin) = margin else {
+        // Non-box layout objects expose the computed value, matching Blink's
+        // DynamicTo<LayoutBox> boundary.
+        return Some(ResolvedLayoutValue::Computed);
+    };
+    let value = match property {
+        "margin-top" => margin.top,
+        "margin-right" => margin.right,
+        "margin-bottom" => margin.bottom,
+        "margin-left" => margin.left,
+        _ => return None,
+    };
+    Some(ResolvedLayoutValue::Used(format_css_px(f64::from(value))))
 }
 
 fn resolved_layout_box_dimension(
@@ -5923,7 +5936,7 @@ fn resolved_layout_box_dimension(
     handle: DomHandle,
     property: &str,
     context: StyleComputationContext,
-) -> Option<ResolvedLayoutBoxDimension> {
+) -> Option<ResolvedLayoutValue> {
     if !context.reads_resolved_values() || !runtime.layout_policy().uses_real_layout() {
         return None;
     }
@@ -5937,16 +5950,16 @@ fn resolved_layout_box_dimension(
         // The published tree has no principal CSS-box used value (for
         // example, for a non-replaced inline or a box-suppressed element).
         // Do not reconstruct one from declarations and ancestor sizes.
-        return Some(ResolvedLayoutBoxDimension::Computed);
+        return Some(ResolvedLayoutValue::Computed);
     };
     let value = match property {
         "width" => size.width,
         "height" => size.height,
         _ => return None,
     };
-    Some(ResolvedLayoutBoxDimension::Used(
-        format_non_negative_used_css_px(f64::from(value)),
-    ))
+    Some(ResolvedLayoutValue::Used(format_non_negative_used_css_px(
+        f64::from(value),
+    )))
 }
 
 fn computed_axis_position_shorthand_value(
@@ -6937,95 +6950,6 @@ fn computed_auto_inset_own_size(
         resolve_computed_font_relative_length(runtime, handle, &value)
             .and_then(|value| parse_css_px(&value))
     })
-}
-
-fn resolve_computed_horizontal_auto_margin(
-    runtime: &JsContextHost,
-    handle: DomHandle,
-    property: &str,
-    value: &str,
-    inputs: &StyloComputedStyleInputs,
-    context: StyleComputationContext,
-) -> Option<String> {
-    if !value.eq_ignore_ascii_case("auto") {
-        return None;
-    }
-    let parent_width = containing_block_width_with_inputs(runtime, handle, inputs, context, 0)?;
-    let own_width = parse_css_px(&computed_style_property_value_with_prepared_inputs(
-        runtime, handle, "width", inputs, context, None,
-    ))?;
-    let other_property = if property == "margin-left" {
-        "margin-right"
-    } else {
-        "margin-left"
-    };
-    let other = raw_stylo_computed_style_value_with_inputs(
-        runtime,
-        handle,
-        other_property,
-        inputs,
-        context,
-    );
-    let other_margin = if other.eq_ignore_ascii_case("auto") {
-        None
-    } else {
-        parse_css_px(&other).or(Some(0.0))
-    };
-    let available = parent_width - own_width - other_margin.unwrap_or(0.0);
-    let resolved = if other_margin.is_none() {
-        available / 2.0
-    } else {
-        available
-    };
-    Some(format_css_px(resolved))
-}
-
-fn resolve_computed_horizontal_margin(
-    runtime: &JsContextHost,
-    handle: DomHandle,
-    value: &str,
-    inputs: &StyloComputedStyleInputs,
-    context: StyleComputationContext,
-) -> Option<String> {
-    if value.eq_ignore_ascii_case("auto") {
-        return None;
-    }
-    let parent_width = containing_block_width_with_inputs(runtime, handle, inputs, context, 0)?;
-    let resolved = resolve_length_percentage_with_context(
-        value,
-        parent_width,
-        css_numeric_context_with_viewport_and_inputs(
-            runtime,
-            handle,
-            context.viewport(),
-            inputs,
-            context,
-        ),
-    )?;
-    Some(format_css_px(resolved))
-}
-
-fn resolve_computed_horizontal_margin_with_inline_fallback(
-    runtime: &JsContextHost,
-    handle: DomHandle,
-    property: &str,
-    value: &str,
-    inputs: &StyloComputedStyleInputs,
-    context: StyleComputationContext,
-) -> Option<String> {
-    if computed_length_percentage_value_needs_moli_context(value) {
-        inline_style_entry_for_inline_style(runtime, handle, property)
-            .and_then(|entry| {
-                resolve_computed_horizontal_margin(runtime, handle, &entry.value, inputs, context)
-            })
-            .or_else(|| resolve_computed_horizontal_margin(runtime, handle, value, inputs, context))
-    } else {
-        resolve_computed_horizontal_margin(runtime, handle, value, inputs, context).or_else(|| {
-            inline_style_entry_for_inline_style(runtime, handle, property).and_then(|entry| {
-                resolve_computed_horizontal_margin(runtime, handle, &entry.value, inputs, context)
-            })
-        })
-    }
 }
 
 fn resolve_computed_line_height_with_resolution(

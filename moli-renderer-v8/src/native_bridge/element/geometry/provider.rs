@@ -3,9 +3,10 @@ use std::{collections::HashSet, time::Duration};
 use moli_layout::{
     LayoutAnswers, LayoutBoxModel, LayoutCaretPosition, LayoutDocumentMetrics,
     LayoutDocumentScrollMetrics, LayoutElementMetrics, LayoutError, LayoutFlushReason,
-    LayoutGridGeometry, LayoutHit, LayoutIntersectionGeometry, LayoutPassMetrics, LayoutPoint,
-    LayoutQuad, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutScrollContainerKind,
-    LayoutScrollContainerMetrics, LayoutScrollIntoViewGeometry, LayoutSize,
+    LayoutGridGeometry, LayoutHit, LayoutIntersectionGeometry, LayoutPassMetrics,
+    LayoutPhysicalBoxStrut, LayoutPoint, LayoutQuad, LayoutQuery, LayoutQueryAnswer,
+    LayoutQueryBatch, LayoutScrollContainerKind, LayoutScrollContainerMetrics,
+    LayoutScrollIntoViewGeometry, LayoutSize,
 };
 
 use super::layout::{
@@ -236,6 +237,29 @@ pub(crate) fn observable_used_box_size(
     match answers.answers.into_iter().next() {
         Some(LayoutQueryAnswer::UsedBoxSize(size)) => Ok(size),
         _ => Err(provider_contract_error("used box size")),
+    }
+}
+
+pub(crate) fn observable_used_margin(
+    runtime: &JsContextHost,
+    source: DomHandle,
+    reason: LayoutFlushReason,
+) -> Result<Option<LayoutPhysicalBoxStrut>, LayoutError> {
+    if !runtime.dom_host().is_connected(source) {
+        return Ok(None);
+    }
+    let Some(document) = runtime.layout_document_for_source(source) else {
+        return Ok(None);
+    };
+    let answers = observable_geometry_batch(
+        runtime,
+        document,
+        reason,
+        &LayoutQueryBatch::new(vec![LayoutQuery::UsedMargin { source }]),
+    )?;
+    match answers.answers.into_iter().next() {
+        Some(LayoutQueryAnswer::UsedMargin(margin)) => Ok(margin),
+        _ => Err(provider_contract_error("used margin")),
     }
 }
 
@@ -632,6 +656,7 @@ fn answer_mock_queries(
                 LayoutQueryAnswer::ElementMetrics(mock_element_metrics(runtime, *source))
             }
             LayoutQuery::UsedBoxSize { .. } => LayoutQueryAnswer::UsedBoxSize(None),
+            LayoutQuery::UsedMargin { .. } => LayoutQueryAnswer::UsedMargin(None),
             LayoutQuery::UsedGridTracks { .. } => LayoutQueryAnswer::UsedGridTracks(None),
             LayoutQuery::ScrollIntoViewGeometry { source } => {
                 LayoutQueryAnswer::ScrollIntoViewGeometry(mock_scroll_into_view_geometry(
