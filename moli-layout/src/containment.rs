@@ -75,6 +75,15 @@ impl<N> LayoutBox<N> {
         containment.axes.width || containment.axes.height
     }
 
+    /// Whether this exact principal box owns an active display lock for the
+    /// current epoch. Computed `content-visibility` alone is insufficient:
+    /// non-atomic inline and internal table layout objects are not eligible
+    /// and must keep constructing their descendants.
+    pub(crate) fn used_content_visibility_skips_contents(&self) -> bool {
+        self.style.content_visibility_skips_contents()
+            && self.is_eligible_for_paint_or_layout_containment()
+    }
+
     /// Whether this box stops HTML/body style propagation to the viewport.
     ///
     /// Style containment applies independently of principal-box eligibility;

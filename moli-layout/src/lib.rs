@@ -87,8 +87,8 @@ pub use source::{
     LayoutTextSelection, ReplacedMetrics, ReplacedObjectSize,
 };
 pub use style::{
-    LayoutDisplay, LayoutInlineAlignment, LayoutListMarkerPosition, LayoutListMarkerType,
-    LayoutPosition, ResolvedLayoutStyle,
+    LayoutDisplay, LayoutInlineAlignment, LayoutLastRememberedSize, LayoutLastRememberedSizePolicy,
+    LayoutListMarkerPosition, LayoutListMarkerType, LayoutPosition, ResolvedLayoutStyle,
 };
 pub use text::{
     DocumentLayoutServices, SystemFontPolicy, WebFontFace, WebFontRegistration,
