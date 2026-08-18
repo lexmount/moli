@@ -265,11 +265,8 @@ mod tests {
         RendererPageTaskTestResidence,
     };
 
-    fn document_token(page_id: PageId, generation: u64) -> RendererDocumentToken {
-        RendererDocumentToken {
-            page_id,
-            generation,
-        }
+    fn document_token(page_id: PageId, lifecycle_document_id: u64) -> RendererDocumentToken {
+        RendererDocumentToken::new_for_testing(page_id, lifecycle_document_id)
     }
 
     fn start_task(
@@ -306,7 +303,7 @@ mod tests {
     }
 
     #[test]
-    fn page_generation_senders_share_one_route_but_stamp_distinct_root_documents() {
+    fn lifecycle_document_senders_share_one_route_but_stamp_distinct_root_documents() {
         let page_id = PageId::new_for_testing(41);
         let (wake_tx, mut wake_rx) = tokio::sync::mpsc::unbounded_channel();
         let wake =

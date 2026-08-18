@@ -13,10 +13,7 @@ fn lifecycle_event(sequence: u64) -> RendererDocumentLifecycleEvent {
     let page_id = PageId::new_for_testing(7);
     RendererDocumentLifecycleEvent {
         frame: RendererFrameToken { page_id },
-        document: RendererDocumentToken {
-            page_id,
-            generation: 3,
-        },
+        document: RendererDocumentToken::new_for_testing(page_id, 3),
         epoch: RendererLifecycleEpoch(2),
         sequence,
         timestamp_micros: sequence,

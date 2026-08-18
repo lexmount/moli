@@ -38,10 +38,7 @@ fn renderer_dialog_source_document_for_test() -> RendererDocumentLifecycleIdenti
     let page_id = moli_core::PageId::new_for_testing(77);
     RendererDocumentLifecycleIdentity {
         frame: RendererFrameToken { page_id },
-        document: RendererDocumentToken {
-            page_id,
-            generation: 1,
-        },
+        document: RendererDocumentToken::new_for_testing(page_id, 1),
         epoch: RendererLifecycleEpoch(1),
     }
 }

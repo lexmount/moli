@@ -278,11 +278,8 @@ mod tests {
         RendererPageTaskTestResidence,
     };
 
-    fn document_token(page_id: PageId, generation: u64) -> RendererDocumentToken {
-        RendererDocumentToken {
-            page_id,
-            generation,
-        }
+    fn document_token(page_id: PageId, lifecycle_document_id: u64) -> RendererDocumentToken {
+        RendererDocumentToken::new_for_testing(page_id, lifecycle_document_id)
     }
 
     fn prepared_action(

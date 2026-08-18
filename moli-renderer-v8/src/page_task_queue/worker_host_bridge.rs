@@ -198,11 +198,11 @@ mod tests {
 
     use super::{RendererWorkerHostBridgeEventSender, RendererWorkerHostBridgeTarget};
 
-    fn root_document(generation: u64) -> RendererDocumentToken {
-        RendererDocumentToken {
-            page_id: crate::PageId::new_for_testing(71),
-            generation,
-        }
+    fn root_document(lifecycle_document_id: u64) -> RendererDocumentToken {
+        RendererDocumentToken::new_for_testing(
+            crate::PageId::new_for_testing(71),
+            lifecycle_document_id,
+        )
     }
 
     fn dedicated_worker_id(raw: u64) -> DedicatedWorkerId {

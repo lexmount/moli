@@ -526,10 +526,7 @@ mod tests {
             ready: ready_metadata(ready_at, order),
             owner: RendererPageDomManipulationOwner::BroadcastChannel(
                 RendererPageBroadcastChannelDeliveryOwner::new(
-                    RendererDocumentToken {
-                        page_id: crate::PageId::new_for_testing(1),
-                        generation: 1,
-                    },
+                    RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(1), 1),
                     WindowExecutionContextIdentity::new(
                         WindowExecutionContextOwner::Frame(LocalWindowId(7)),
                         OwnerDispatchScope::Top,
@@ -545,10 +542,7 @@ mod tests {
         RendererPageReadyDescriptor::UserInteraction {
             ready: ready_metadata(ready_at, order),
             owner: RendererPageUserInteractionOwner::new(
-                RendererDocumentToken {
-                    page_id: crate::PageId::new_for_testing(1),
-                    generation: 1,
-                },
+                RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(1), 1),
                 WindowDocumentTaskTarget::new(
                     WindowDocumentOwner::Frame(FrameDocumentTaskOwner::new(
                         FrameSchedulerLaneId(order),
@@ -565,10 +559,7 @@ mod tests {
         RendererPageReadyDescriptor::FileReading {
             ready: ready_metadata(ready_at, order),
             owner: RendererPageFileReadingOwner::new(
-                RendererDocumentToken {
-                    page_id: crate::PageId::new_for_testing(1),
-                    generation: 1,
-                },
+                RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(1), 1),
                 WindowDocumentTaskTarget::new(
                     WindowDocumentOwner::Frame(FrameDocumentTaskOwner::new(
                         FrameSchedulerLaneId(order),
@@ -585,10 +576,7 @@ mod tests {
         RendererPageReadyDescriptor::MiscPlatformApi {
             ready: ready_metadata(ready_at, order),
             owner: RendererPageMiscPlatformApiOwner::new(
-                RendererDocumentToken {
-                    page_id: crate::PageId::new_for_testing(1),
-                    generation: 1,
-                },
+                RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(1), 1),
                 WindowDocumentTaskTarget::new(
                     WindowDocumentOwner::Frame(FrameDocumentTaskOwner::new(
                         FrameSchedulerLaneId(order),
@@ -618,10 +606,7 @@ mod tests {
             ready: ready_metadata(ready_at, order),
             head: RendererPageNavigationAndTraversalHead::HistoryTraversal {
                 owner: RendererPageHistoryTraversalOwner::new(
-                    RendererDocumentToken {
-                        page_id: crate::PageId::new_for_testing(1),
-                        generation: 1,
-                    },
+                    RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(1), 1),
                     execution_context,
                     crate::native_bridge::WindowTaskTarget::new(
                         OwnerDispatchScope::Top,
@@ -639,10 +624,7 @@ mod tests {
             ready: ready_metadata(ready_at, order),
             head: RendererPageRenderingUpdateHead::new(
                 RendererPageRenderingUpdateOwner::new(
-                    RendererDocumentToken {
-                        page_id: crate::PageId::new_for_testing(1),
-                        generation: 1,
-                    },
+                    RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(1), 1),
                     WindowDocumentTaskTarget::new(
                         WindowDocumentOwner::Frame(FrameDocumentTaskOwner::new(
                             FrameSchedulerLaneId(order),
@@ -665,10 +647,7 @@ mod tests {
         RendererPageReadyDescriptor::MediaElementEvent {
             ready: ready_metadata(ready_at, order),
             owner: RendererPageMediaElementEventOwner::new(
-                RendererDocumentToken {
-                    page_id: crate::PageId::new_for_testing(1),
-                    generation: 1,
-                },
+                RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(1), 1),
                 WindowDocumentTaskTarget::new(
                     WindowDocumentOwner::Frame(FrameDocumentTaskOwner::new(
                         FrameSchedulerLaneId(order),
@@ -688,10 +667,7 @@ mod tests {
         RendererPageReadyDescriptor::DedicatedWorkerClientEvent {
             ready: ready_metadata(ready_at, order),
             owner: RendererPageDedicatedWorkerClientEventOwner::new(
-                RendererDocumentToken {
-                    page_id: crate::PageId::new_for_testing(1),
-                    generation: 1,
-                },
+                RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(1), 1),
                 WindowExecutionContextIdentity::new(
                     WindowExecutionContextOwner::Frame(LocalWindowId(7)),
                     OwnerDispatchScope::Top,
@@ -726,10 +702,7 @@ mod tests {
         RendererPageReadyDescriptor::SharedWorkerClientEvent {
             ready: ready_metadata(ready_at, order),
             owner: RendererPageSharedWorkerClientEventOwner::new(
-                RendererDocumentToken {
-                    page_id: crate::PageId::new_for_testing(1),
-                    generation: 1,
-                },
+                RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(1), 1),
                 WindowExecutionContextIdentity::new(
                     WindowExecutionContextOwner::Frame(LocalWindowId(7)),
                     OwnerDispatchScope::Top,
@@ -747,10 +720,10 @@ mod tests {
     ) -> RendererPageReadyDescriptor {
         RendererPageReadyDescriptor::ServiceWorkerInternal {
             ready: ready_metadata(ready_at, order),
-            root_document: RendererDocumentToken {
-                page_id: crate::PageId::new_for_testing(1),
-                generation: 1,
-            },
+            root_document: RendererDocumentToken::new_for_testing(
+                crate::PageId::new_for_testing(1),
+                1,
+            ),
         }
     }
 
@@ -761,10 +734,7 @@ mod tests {
         RendererPageReadyDescriptor::ServiceWorkerClientMessage {
             ready: ready_metadata(ready_at, order),
             owner: crate::page_task_queue::RendererPageServiceWorkerClientMessageOwner::new(
-                RendererDocumentToken {
-                    page_id: crate::PageId::new_for_testing(1),
-                    generation: 1,
-                },
+                RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(1), 1),
                 crate::types::ServiceWorkerWindowClientTarget {
                     client_id:
                         crate::service_worker_runtime::ServiceWorkerClientId::from_u64_for_test(
@@ -780,10 +750,7 @@ mod tests {
         RendererPageReadyDescriptor::WindowMessage {
             ready: ready_metadata(ready_at, order),
             owner: RendererPageWindowMessageOwner::new(
-                RendererDocumentToken {
-                    page_id: crate::PageId::new_for_testing(1),
-                    generation: 1,
-                },
+                RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(1), 1),
                 crate::native_bridge::WindowTaskTarget::new(
                     crate::native_bridge::OwnerDispatchScope::Top,
                     WindowExecutionContextOwner::Frame(LocalWindowId(7)),
@@ -797,10 +764,7 @@ mod tests {
         RendererPageReadyDescriptor::WebCryptoTask {
             ready: ready_metadata(ready_at, order),
             owner: RendererPageWebCryptoTaskOwner::new(
-                RendererDocumentToken {
-                    page_id: crate::PageId::new_for_testing(1),
-                    generation: 1,
-                },
+                RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(1), 1),
                 WindowExecutionContextIdentity::new(
                     WindowExecutionContextOwner::Frame(LocalWindowId(7)),
                     OwnerDispatchScope::Top,
@@ -816,10 +780,7 @@ mod tests {
         RendererPageReadyDescriptor::IndexedDbTask {
             ready: ready_metadata(ready_at, order),
             owner: RendererPageIndexedDbTaskOwner::new(
-                RendererDocumentToken {
-                    page_id: crate::PageId::new_for_testing(1),
-                    generation: 1,
-                },
+                RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(1), 1),
                 WindowExecutionContextIdentity::new(
                     WindowExecutionContextOwner::Frame(LocalWindowId(7)),
                     OwnerDispatchScope::Top,
@@ -834,10 +795,7 @@ mod tests {
         RendererPageReadyDescriptor::OpfsTask {
             ready: ready_metadata(ready_at, order),
             owner: RendererPageOpfsTaskOwner::new(
-                RendererDocumentToken {
-                    page_id: crate::PageId::new_for_testing(1),
-                    generation: 1,
-                },
+                RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(1), 1),
                 WindowExecutionContextIdentity::new(
                     WindowExecutionContextOwner::Frame(LocalWindowId(7)),
                     OwnerDispatchScope::Top,
@@ -856,10 +814,7 @@ mod tests {
         RendererPageReadyDescriptor::ChildFrameTask {
             ready: ready_metadata(ready_at, order),
             owner: RendererPageChildFrameTaskOwner::new(
-                RendererDocumentToken {
-                    page_id: crate::PageId::new_for_testing(1),
-                    generation: 1,
-                },
+                RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(1), 1),
                 RendererPageChildFrameTaskTarget::RealmMaterialization(
                     RendererPageChildRealmMaterializationTarget::new(
                         DomHandle::new(order as usize + 100),
@@ -878,10 +833,7 @@ mod tests {
         RendererPageReadyDescriptor::MessagePortDelivery {
             ready: ready_metadata(ready_at, order),
             owner: RendererPageMessagePortDeliveryOwner::new(
-                RendererDocumentToken {
-                    page_id: crate::PageId::new_for_testing(1),
-                    generation: 1,
-                },
+                RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(1), 1),
                 WindowExecutionContextIdentity::new(
                     WindowExecutionContextOwner::Frame(LocalWindowId(7)),
                     OwnerDispatchScope::Top,
@@ -898,10 +850,7 @@ mod tests {
             ready: ready_metadata(ready_at, order),
             owner: RendererPageNetworkingOwner::ResourceCompletion(
                 RendererPageResourceCompletionOwner::child_document(
-                    RendererDocumentToken {
-                        page_id: crate::PageId::new_for_testing(1),
-                        generation: 1,
-                    },
+                    RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(1), 1),
                     DomHandle::new(99),
                     FrameDocumentTaskOwner::new(
                         FrameSchedulerLaneId(99),
@@ -917,10 +866,7 @@ mod tests {
         RendererPageReadyDescriptor::WebSocket {
             ready: ready_metadata(ready_at, order),
             owner: RendererPageWebSocketOwner::new_for_test(
-                RendererDocumentToken {
-                    page_id: crate::PageId::new_for_testing(1),
-                    generation: 1,
-                },
+                RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(1), 1),
                 order,
             ),
             readiness: RendererPageWebSocketReadiness::Ready,
@@ -942,10 +888,10 @@ mod tests {
         RendererPageReadyDescriptor::ModuleReaction {
             ready: ready_metadata(ready_at, order),
             owner: crate::page_task_queue::RendererPageModuleReactionOwner::new(
-                crate::runtime::RendererDocumentToken {
-                    page_id: crate::PageId::new_for_testing(1),
-                    generation: 1,
-                },
+                crate::runtime::RendererDocumentToken::new_for_testing(
+                    crate::PageId::new_for_testing(1),
+                    1,
+                ),
                 crate::page_task_queue::RendererPageModuleReactionTarget::DocumentModuleScript {
                     document_owner: FrameDocumentTaskOwner::new(
                         FrameSchedulerLaneId(1),
@@ -961,10 +907,10 @@ mod tests {
         RendererPageReadyDescriptor::InternalLoading {
             ready: ready_metadata(ready_at, order),
             owner: crate::page_task_queue::RendererPageInternalLoadingOwner::new(
-                crate::runtime::RendererDocumentToken {
-                    page_id: crate::PageId::new_for_testing(1),
-                    generation: 1,
-                },
+                crate::runtime::RendererDocumentToken::new_for_testing(
+                    crate::PageId::new_for_testing(1),
+                    1,
+                ),
                 FrameDocumentTaskOwner::new(
                     FrameSchedulerLaneId(order),
                     LocalWindowId(order + 1),
@@ -981,10 +927,10 @@ mod tests {
         RendererPageReadyDescriptor::ChildModulepreloadEventAction {
             ready: ready_metadata(ready_at, order),
             owner: crate::page_task_queue::RendererPageChildModulepreloadEventActionOwner::new(
-                crate::runtime::RendererDocumentToken {
-                    page_id: crate::PageId::new_for_testing(1),
-                    generation: 1,
-                },
+                crate::runtime::RendererDocumentToken::new_for_testing(
+                    crate::PageId::new_for_testing(1),
+                    1,
+                ),
                 FrameDocumentTaskOwner::new(
                     FrameSchedulerLaneId(order),
                     LocalWindowId(order + 1),
@@ -1002,10 +948,7 @@ mod tests {
         RendererPageReadyDescriptor::ChildModuleDependencyFetchStart {
             ready: ready_metadata(ready_at, order),
             owner: RendererPageChildModuleDependencyFetchStartOwner::new(
-                RendererDocumentToken {
-                    page_id: crate::PageId::new_for_testing(1),
-                    generation: 1,
-                },
+                RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(1), 1),
                 ChildDocumentModuleFetchTarget::new(
                     DomHandle::new(order as usize + 100),
                     FrameDocumentTaskOwner::new(
@@ -1026,10 +969,7 @@ mod tests {
         RendererPageReadyDescriptor::ChildModuleScriptTerminal {
             ready: ready_metadata(ready_at, order),
             owner: RendererPageChildModuleScriptTerminalOwner::new(
-                RendererDocumentToken {
-                    page_id: crate::PageId::new_for_testing(1),
-                    generation: 1,
-                },
+                RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(1), 1),
                 FrameDocumentTaskOwner::new(
                     FrameSchedulerLaneId(order),
                     LocalWindowId(order + 1),
@@ -1047,10 +987,7 @@ mod tests {
         RendererPageReadyDescriptor::MainDocumentRuntime {
             ready: ready_metadata(ready_at, order),
             owner: crate::page_task_queue::RendererPageMainDocumentRuntimeOwner::new_for_test(
-                RendererDocumentToken {
-                    page_id: crate::PageId::new_for_testing(1),
-                    generation: 1,
-                },
+                RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(1), 1),
                 FrameDocumentTaskOwner::new(
                     FrameSchedulerLaneId(order),
                     LocalWindowId(order + 1),

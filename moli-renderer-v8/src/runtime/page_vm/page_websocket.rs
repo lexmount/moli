@@ -67,10 +67,10 @@ mod tests {
     fn completion_for(target_effect: PageWebSocketTargetEffect) -> PageTaskCompletion {
         PageWebSocketTurnAction {
             owner: crate::page_task_queue::RendererPageWebSocketOwner::new_for_test(
-                crate::runtime::RendererDocumentToken {
-                    page_id: crate::PageId::new_for_testing(1),
-                    generation: 1,
-                },
+                crate::runtime::RendererDocumentToken::new_for_testing(
+                    crate::PageId::new_for_testing(1),
+                    1,
+                ),
                 7,
             ),
             target_effect,
@@ -92,10 +92,10 @@ mod tests {
             PageWebSocketTargetEffect::CurrentDocumentTargetDisappeared,
             PageWebSocketTargetEffect::ParkedForReadableBackpressure,
             PageWebSocketTargetEffect::DiscardedStaleDocument {
-                current_document: crate::runtime::RendererDocumentToken {
-                    page_id: crate::PageId::new_for_testing(1),
-                    generation: 2,
-                },
+                current_document: crate::runtime::RendererDocumentToken::new_for_testing(
+                    crate::PageId::new_for_testing(1),
+                    2,
+                ),
             },
         ] {
             assert!(matches!(

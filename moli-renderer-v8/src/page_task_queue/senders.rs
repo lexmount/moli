@@ -556,10 +556,10 @@ impl RendererPageTaskTestResidence {
         runtime_source
             .bind_page_task_producer_routes(routes)
             .expect("fresh test Page residence must accept its producer routes");
-        let root_document = crate::runtime::RendererDocumentToken {
-            page_id: crate::PageId::new_for_testing(runtime_source.identity_key() as u64),
-            generation: 1,
-        };
+        let root_document = crate::runtime::RendererDocumentToken::new_for_testing(
+            crate::PageId::new_for_testing(runtime_source.identity_key() as u64),
+            1,
+        );
         Self {
             standalone_runtime,
             resource_task_runner,

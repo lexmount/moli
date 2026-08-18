@@ -316,10 +316,7 @@ async fn stale_root_with_reused_async_subresource_id_cannot_consume_current_requ
         let request_url = Url::parse("https://typed-subresource.test/reused-id").unwrap();
         let mut page_vm = test_page_vm();
         let current_root = page_vm.document_lifecycle.identity().document;
-        let stale_root = crate::runtime::RendererDocumentToken {
-            page_id: current_root.page_id,
-            generation: current_root.generation.wrapping_add(1),
-        };
+        let stale_root = current_root.successor_for_testing();
         let internal_id = register_intercepted_fetch(&mut page_vm, &request_url);
         let target = AsyncSubresourceFetchEventTarget::Completion { internal_id };
         let stale_owner =
@@ -542,10 +539,7 @@ async fn stale_observed_network_record_is_captured_without_consuming_current_req
         let document_url = Url::parse("https://typed-subresource.test/retired-document").unwrap();
         let mut page_vm = test_page_vm();
         let current_root = page_vm.document_lifecycle.identity().document;
-        let stale_root = crate::runtime::RendererDocumentToken {
-            page_id: current_root.page_id,
-            generation: current_root.generation.wrapping_add(1),
-        };
+        let stale_root = current_root.successor_for_testing();
         let internal_id = register_intercepted_fetch(&mut page_vm, &request_url);
         let request_target = AsyncSubresourceFetchEventTarget::Completion { internal_id };
 

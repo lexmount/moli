@@ -294,10 +294,7 @@ async fn websocket_stale_root_task_cannot_complete_in_replacement_page_vm() {
         let mut page_vm = test_page_vm();
         page_vm.vm_mut().enqueue_test_pending_runtime_source_load();
         let current_document = page_vm.document_lifecycle.identity().document;
-        let stale_document = crate::runtime::RendererDocumentToken {
-            page_id: current_document.page_id,
-            generation: current_document.generation + 1,
-        };
+        let stale_document = current_document.successor_for_testing();
         let senders = page_vm
             .runtime_hooks
             .standalone_page_task_residence()

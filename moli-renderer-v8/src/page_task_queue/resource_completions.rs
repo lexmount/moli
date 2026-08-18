@@ -868,10 +868,7 @@ mod tests {
             owner_attached_page_queue(RendererPageToken::new_for_testing(page_id), wake_tx);
         let sender = RendererResourceCompletionSender::for_page_resource_test(
             page_queue.sender(),
-            RendererDocumentToken {
-                page_id,
-                generation: 1,
-            },
+            RendererDocumentToken::new_for_testing(page_id, 1),
         );
 
         sender
@@ -1306,10 +1303,7 @@ mod tests {
         let token =
             crate::runtime::RendererPageToken::new_for_testing(crate::PageId::new_for_testing(19));
         let mut page_queue = owner_attached_page_queue(token, wake_tx);
-        let root_document = RendererDocumentToken {
-            page_id: token.page_id(),
-            generation: 7,
-        };
+        let root_document = RendererDocumentToken::new_for_testing(token.page_id(), 7);
         let sender = RendererResourceCompletionSender::for_page_resource_test(
             page_queue.sender(),
             root_document,
@@ -1349,10 +1343,7 @@ mod tests {
         let token =
             crate::runtime::RendererPageToken::new_for_testing(crate::PageId::new_for_testing(20));
         let mut page_queue = owner_attached_page_queue(token, wake_tx);
-        let root_document = RendererDocumentToken {
-            page_id: token.page_id(),
-            generation: 8,
-        };
+        let root_document = RendererDocumentToken::new_for_testing(token.page_id(), 8);
         let sender = RendererResourceCompletionSender::for_page_resource_test(
             page_queue.sender(),
             root_document,
@@ -1394,10 +1385,7 @@ mod tests {
         let page_queue = owner_attached_page_queue(token, wake_tx);
         let sender = RendererResourceCompletionSender::for_page_resource_test(
             page_queue.sender(),
-            RendererDocumentToken {
-                page_id: token.page_id(),
-                generation: 2,
-            },
+            RendererDocumentToken::new_for_testing(token.page_id(), 2),
         );
         drop(page_queue);
 
@@ -1420,10 +1408,7 @@ mod tests {
         let token =
             crate::runtime::RendererPageToken::new_for_testing(crate::PageId::new_for_testing(25));
         let mut page_queue = owner_attached_page_queue(token, wake_tx);
-        let root_document = RendererDocumentToken {
-            page_id: token.page_id(),
-            generation: 11,
-        };
+        let root_document = RendererDocumentToken::new_for_testing(token.page_id(), 11);
         let sender = RendererResourceCompletionSender::for_page_resource_test(
             page_queue.sender(),
             root_document,
@@ -1465,10 +1450,7 @@ mod tests {
         let page_queue = owner_attached_page_queue(token, wake_tx);
         let sender = RendererResourceCompletionSender::for_page_resource_test(
             page_queue.sender(),
-            RendererDocumentToken {
-                page_id: token.page_id(),
-                generation: 12,
-            },
+            RendererDocumentToken::new_for_testing(token.page_id(), 12),
         );
         drop(page_queue);
 
@@ -1491,10 +1473,7 @@ mod tests {
         let token =
             crate::runtime::RendererPageToken::new_for_testing(crate::PageId::new_for_testing(29));
         let mut page_queue = owner_attached_page_queue(token, wake_tx);
-        let root_document = RendererDocumentToken {
-            page_id: token.page_id(),
-            generation: 15,
-        };
+        let root_document = RendererDocumentToken::new_for_testing(token.page_id(), 15);
         let sender = RendererResourceCompletionSender::for_page_resource_test(
             page_queue.sender(),
             root_document,
@@ -1537,10 +1516,7 @@ mod tests {
         let page_queue = owner_attached_page_queue(token, wake_tx);
         let sender = RendererResourceCompletionSender::for_page_resource_test(
             page_queue.sender(),
-            RendererDocumentToken {
-                page_id: token.page_id(),
-                generation: 16,
-            },
+            RendererDocumentToken::new_for_testing(token.page_id(), 16),
         );
         drop(page_queue);
 
@@ -1563,10 +1539,7 @@ mod tests {
         let token =
             crate::runtime::RendererPageToken::new_for_testing(crate::PageId::new_for_testing(27));
         let mut page_queue = owner_attached_page_queue(token, wake_tx);
-        let root_document = RendererDocumentToken {
-            page_id: token.page_id(),
-            generation: 13,
-        };
+        let root_document = RendererDocumentToken::new_for_testing(token.page_id(), 13);
         let sender = RendererResourceCompletionSender::for_page_resource_test(
             page_queue.sender(),
             root_document,
@@ -1605,10 +1578,7 @@ mod tests {
         let page_queue = owner_attached_page_queue(token, wake_tx);
         let sender = RendererResourceCompletionSender::for_page_resource_test(
             page_queue.sender(),
-            RendererDocumentToken {
-                page_id: token.page_id(),
-                generation: 14,
-            },
+            RendererDocumentToken::new_for_testing(token.page_id(), 14),
         );
         drop(page_queue);
 
@@ -1631,10 +1601,7 @@ mod tests {
         let token =
             crate::runtime::RendererPageToken::new_for_testing(crate::PageId::new_for_testing(21));
         let mut page_queue = owner_attached_page_queue(token, wake_tx);
-        let root_document = RendererDocumentToken {
-            page_id: token.page_id(),
-            generation: 9,
-        };
+        let root_document = RendererDocumentToken::new_for_testing(token.page_id(), 9);
         let sender = RendererResourceCompletionSender::for_page_resource_test(
             page_queue.sender(),
             root_document,
@@ -1677,10 +1644,7 @@ mod tests {
         let page_queue = owner_attached_page_queue(token, wake_tx);
         let sender = RendererResourceCompletionSender::for_page_resource_test(
             page_queue.sender(),
-            RendererDocumentToken {
-                page_id: token.page_id(),
-                generation: 1,
-            },
+            RendererDocumentToken::new_for_testing(token.page_id(), 1),
         );
         drop(page_queue);
 
@@ -1702,14 +1666,8 @@ mod tests {
         let token =
             crate::runtime::RendererPageToken::new_for_testing(crate::PageId::new_for_testing(23));
         let mut page_queue = owner_attached_page_queue(token, wake_tx);
-        let old_root_document = RendererDocumentToken {
-            page_id: token.page_id(),
-            generation: 1,
-        };
-        let replacement_root_document = RendererDocumentToken {
-            page_id: token.page_id(),
-            generation: 2,
-        };
+        let old_root_document = RendererDocumentToken::new_for_testing(token.page_id(), 1);
+        let replacement_root_document = RendererDocumentToken::new_for_testing(token.page_id(), 2);
         let stable_route = page_queue.sender();
         let old_document_sender = RendererResourceCompletionSender::for_page_resource_test(
             stable_route.clone(),
@@ -1764,10 +1722,7 @@ mod tests {
         let token =
             crate::runtime::RendererPageToken::new_for_testing(crate::PageId::new_for_testing(29));
         let mut page_queue = owner_attached_page_queue(token, wake_tx);
-        let root_document = RendererDocumentToken {
-            page_id: token.page_id(),
-            generation: 5,
-        };
+        let root_document = RendererDocumentToken::new_for_testing(token.page_id(), 5);
         let sender = RendererResourceCompletionSender::for_page_resource_test(
             page_queue.sender(),
             root_document,
@@ -1812,10 +1767,7 @@ mod tests {
         let token =
             crate::runtime::RendererPageToken::new_for_testing(crate::PageId::new_for_testing(31));
         let mut page_queue = owner_attached_page_queue(token, wake_tx);
-        let root_document = RendererDocumentToken {
-            page_id: token.page_id(),
-            generation: 6,
-        };
+        let root_document = RendererDocumentToken::new_for_testing(token.page_id(), 6);
         let sender = RendererResourceCompletionSender::for_page_resource_test(
             page_queue.sender(),
             root_document,
@@ -1858,10 +1810,7 @@ mod tests {
             crate::runtime::RendererPageToken::new_for_testing(crate::PageId::new_for_testing(32));
         let page_queue = owner_attached_page_queue(token, wake_tx);
         let page_route = page_queue.sender();
-        let root_document = RendererDocumentToken {
-            page_id: token.page_id(),
-            generation: 7,
-        };
+        let root_document = RendererDocumentToken::new_for_testing(token.page_id(), 7);
         let sender =
             RendererResourceCompletionSender::for_page_resource_test(page_route, root_document);
         drop(page_queue);
@@ -1887,10 +1836,7 @@ mod tests {
         let token =
             crate::runtime::RendererPageToken::new_for_testing(crate::PageId::new_for_testing(33));
         let mut page_queue = owner_attached_page_queue(token, wake_tx);
-        let root_document = RendererDocumentToken {
-            page_id: token.page_id(),
-            generation: 11,
-        };
+        let root_document = RendererDocumentToken::new_for_testing(token.page_id(), 11);
         let sender = RendererResourceCompletionSender::for_page_resource_test(
             page_queue.sender(),
             root_document,
@@ -1933,10 +1879,7 @@ mod tests {
             crate::runtime::RendererPageToken::new_for_testing(crate::PageId::new_for_testing(34));
         let page_queue = owner_attached_page_queue(token, wake_tx);
         let page_route = page_queue.sender();
-        let root_document = RendererDocumentToken {
-            page_id: token.page_id(),
-            generation: 13,
-        };
+        let root_document = RendererDocumentToken::new_for_testing(token.page_id(), 13);
         let sender =
             RendererResourceCompletionSender::for_page_resource_test(page_route, root_document);
         drop(page_queue);
@@ -1959,10 +1902,7 @@ mod tests {
         let token =
             crate::runtime::RendererPageToken::new_for_testing(crate::PageId::new_for_testing(35));
         let mut page_queue = owner_attached_page_queue(token, wake_tx);
-        let root_document = RendererDocumentToken {
-            page_id: token.page_id(),
-            generation: 17,
-        };
+        let root_document = RendererDocumentToken::new_for_testing(token.page_id(), 17);
         let sender = RendererResourceCompletionSender::for_page_resource_test(
             page_queue.sender(),
             root_document,
@@ -2005,10 +1945,7 @@ mod tests {
             crate::runtime::RendererPageToken::new_for_testing(crate::PageId::new_for_testing(36));
         let page_queue = owner_attached_page_queue(token, wake_tx);
         let page_route = page_queue.sender();
-        let root_document = RendererDocumentToken {
-            page_id: token.page_id(),
-            generation: 19,
-        };
+        let root_document = RendererDocumentToken::new_for_testing(token.page_id(), 19);
         let sender =
             RendererResourceCompletionSender::for_page_resource_test(page_route, root_document);
         drop(page_queue);
@@ -2031,10 +1968,7 @@ mod tests {
         let token =
             crate::runtime::RendererPageToken::new_for_testing(crate::PageId::new_for_testing(37));
         let mut page_queue = owner_attached_page_queue(token, wake_tx);
-        let root_document = RendererDocumentToken {
-            page_id: token.page_id(),
-            generation: 11,
-        };
+        let root_document = RendererDocumentToken::new_for_testing(token.page_id(), 11);
         let sender = RendererResourceCompletionSender::for_page_resource_test(
             page_queue.sender(),
             root_document,
@@ -2121,10 +2055,7 @@ mod tests {
             crate::runtime::RendererPageToken::new_for_testing(crate::PageId::new_for_testing(41));
         let page_queue = owner_attached_page_queue(token, wake_tx);
         let page_route = page_queue.sender();
-        let root_document = RendererDocumentToken {
-            page_id: token.page_id(),
-            generation: 13,
-        };
+        let root_document = RendererDocumentToken::new_for_testing(token.page_id(), 13);
         let sender =
             RendererResourceCompletionSender::for_page_resource_test(page_route, root_document);
         drop(page_queue);

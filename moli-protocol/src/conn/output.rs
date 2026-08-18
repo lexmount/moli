@@ -4483,10 +4483,7 @@ mod tests {
     #[test]
     fn renderer_page_load_matches_wait_key_by_document_and_epoch() {
         let page_id = PageId::new_for_testing(902);
-        let document = RendererDocumentToken {
-            page_id,
-            generation: 3,
-        };
+        let document = RendererDocumentToken::new_for_testing(page_id, 3);
         let event = NavigationLifecycleEvent {
             target_id: DevToolsTargetId::from("FRAME"),
             frame_id: DevToolsFrameId::from("FRAME"),

@@ -202,10 +202,8 @@ mod tests {
         RendererPageNetworkingSource,
         RendererPageMainParserContinuationProducer,
     ) {
-        let root_document = RendererDocumentToken {
-            page_id: crate::PageId::new_for_testing(11),
-            generation: 7,
-        };
+        let root_document =
+            RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(11), 7);
         let (wake_tx, _wake_rx) = tokio::sync::mpsc::unbounded_channel();
         let source = RendererPageNetworkingSource::new_owner_attached(
             PageRuntimeWakeSignal::default(),

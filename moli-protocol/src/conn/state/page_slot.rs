@@ -943,8 +943,7 @@ impl TargetPageSlot {
         }
         tracing::trace!(
             target: "moli_renderer_document_lifecycle",
-            renderer_page_id = active_document.page_id.as_u64(),
-            renderer_document_generation = active_document.generation,
+            renderer_document = ?active_document,
             renderer_lifecycle_epoch = active_epoch.0,
             frame_id = binding.frame_id,
             loader_id = binding.loader_id,
@@ -1648,10 +1647,7 @@ mod renderer_document_lifecycle_tests {
     #[test]
     fn lifecycle_binding_requires_and_tracks_the_current_page_attachment() {
         let page_id = moli_core::PageId::new_for_testing(8);
-        let document = RendererDocumentToken {
-            page_id,
-            generation: 1,
-        };
+        let document = RendererDocumentToken::new_for_testing(page_id, 1);
         let epoch = RendererLifecycleEpoch(1);
         let started = event(
             document,
@@ -1713,10 +1709,7 @@ mod renderer_document_lifecycle_tests {
     #[test]
     fn binding_accepts_current_identity_and_rejects_stale_document() {
         let page_id = moli_core::PageId::new_for_testing(9);
-        let document = RendererDocumentToken {
-            page_id,
-            generation: 1,
-        };
+        let document = RendererDocumentToken::new_for_testing(page_id, 1);
         let epoch = RendererLifecycleEpoch(1);
         let started = event(
             document,
@@ -1786,10 +1779,7 @@ mod renderer_document_lifecycle_tests {
         );
 
         let stale = event(
-            RendererDocumentToken {
-                generation: 2,
-                ..document
-            },
+            document.successor_for_testing(),
             epoch,
             3,
             RendererDocumentLifecycleEventKind::Milestone(RendererDocumentLifecycleMilestone::Load),
@@ -1809,10 +1799,7 @@ mod renderer_document_lifecycle_tests {
     #[test]
     fn load_visibility_barrier_exposes_dcl_and_defers_only_load_delivery() {
         let page_id = moli_core::PageId::new_for_testing(10);
-        let document = RendererDocumentToken {
-            page_id,
-            generation: 1,
-        };
+        let document = RendererDocumentToken::new_for_testing(page_id, 1);
         let epoch = RendererLifecycleEpoch(1);
         let started = event(
             document,
@@ -1953,10 +1940,7 @@ mod renderer_document_lifecycle_tests {
     #[test]
     fn cancelling_load_visibility_barrier_discards_tail_without_revealing_it() {
         let page_id = moli_core::PageId::new_for_testing(16);
-        let document = RendererDocumentToken {
-            page_id,
-            generation: 1,
-        };
+        let document = RendererDocumentToken::new_for_testing(page_id, 1);
         let epoch = RendererLifecycleEpoch(1);
         let started = event(
             document,
@@ -2021,10 +2005,7 @@ mod renderer_document_lifecycle_tests {
     #[test]
     fn load_visibility_barrier_keeps_later_epoch_behind_deferred_load_tail() {
         let page_id = moli_core::PageId::new_for_testing(11);
-        let document = RendererDocumentToken {
-            page_id,
-            generation: 1,
-        };
+        let document = RendererDocumentToken::new_for_testing(page_id, 1);
         let first_epoch = RendererLifecycleEpoch(1);
         let second_epoch = RendererLifecycleEpoch(2);
         let started = event(
@@ -2156,10 +2137,7 @@ mod renderer_document_lifecycle_tests {
     #[test]
     fn same_document_restart_advances_epoch_without_rebinding_loader() {
         let page_id = moli_core::PageId::new_for_testing(10);
-        let document = RendererDocumentToken {
-            page_id,
-            generation: 1,
-        };
+        let document = RendererDocumentToken::new_for_testing(page_id, 1);
         let first_epoch = RendererLifecycleEpoch(1);
         let started = event(
             document,
@@ -2239,10 +2217,7 @@ mod renderer_document_lifecycle_tests {
     #[test]
     fn creation_handoff_preserves_completed_epochs_before_the_active_epoch() {
         let page_id = moli_core::PageId::new_for_testing(11);
-        let document = RendererDocumentToken {
-            page_id,
-            generation: 1,
-        };
+        let document = RendererDocumentToken::new_for_testing(page_id, 1);
         let first_epoch = RendererLifecycleEpoch(1);
         let second_epoch = RendererLifecycleEpoch(2);
         let first_started = event(
@@ -2332,10 +2307,7 @@ mod renderer_document_lifecycle_tests {
     #[test]
     fn successor_document_binding_discards_deferred_tail_but_preserves_reached_waiter() {
         let page_id = moli_core::PageId::new_for_testing(14);
-        let document = RendererDocumentToken {
-            page_id,
-            generation: 1,
-        };
+        let document = RendererDocumentToken::new_for_testing(page_id, 1);
         let epoch = RendererLifecycleEpoch(1);
         let started = event(
             document,
@@ -2413,10 +2385,7 @@ mod renderer_document_lifecycle_tests {
                 .is_some_and(|snapshot| snapshot.load.is_none())
         );
 
-        let successor = RendererDocumentToken {
-            page_id,
-            generation: 2,
-        };
+        let successor = RendererDocumentToken::new_for_testing(page_id, 2);
         let successor_epoch = RendererLifecycleEpoch(2);
         let successor_started = event(
             successor,
@@ -2482,10 +2451,7 @@ mod renderer_document_lifecycle_tests {
     #[test]
     fn post_load_observers_are_armed_once_and_bound_to_the_loaded_document() {
         let page_id = moli_core::PageId::new_for_testing(12);
-        let document = RendererDocumentToken {
-            page_id,
-            generation: 1,
-        };
+        let document = RendererDocumentToken::new_for_testing(page_id, 1);
         let epoch = RendererLifecycleEpoch(1);
         let started = event(
             document,

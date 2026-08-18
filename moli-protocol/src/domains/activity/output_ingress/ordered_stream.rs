@@ -477,10 +477,10 @@ mod tests {
                         frame: RendererFrameToken {
                             page_id: PageId::new_for_testing(1),
                         },
-                        document: RendererDocumentToken {
-                            page_id: PageId::new_for_testing(1),
-                            generation: 1,
-                        },
+                        document: RendererDocumentToken::new_for_testing(
+                            PageId::new_for_testing(1),
+                            1,
+                        ),
                         epoch: RendererLifecycleEpoch(1),
                         sequence,
                         timestamp_micros: sequence,

@@ -14,14 +14,67 @@ impl RendererFrameToken {
     }
 }
 
+/// Identifies one cross-document root lifecycle within a Page.
+///
+/// `document.open()` keeps this token and advances [`RendererLifecycleEpoch`];
+/// a cross-document commit allocates a new opaque lifecycle Document id.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct RendererDocumentToken {
     pub page_id: PageId,
-    pub generation: u64,
+    lifecycle_document_id: RendererLifecycleDocumentId,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct RendererLifecycleDocumentId(u64);
+
+impl RendererLifecycleDocumentId {
+    const INITIAL: Self = Self(1);
+
+    const fn successor(self) -> Self {
+        match self.0.checked_add(1) {
+            Some(value) => Self(value),
+            None => panic!("renderer lifecycle Document id overflow"),
+        }
+    }
+}
+
+impl RendererDocumentToken {
+    const fn initial(page_id: PageId) -> Self {
+        Self {
+            page_id,
+            lifecycle_document_id: RendererLifecycleDocumentId::INITIAL,
+        }
+    }
+
+    const fn with_id(page_id: PageId, lifecycle_document_id: RendererLifecycleDocumentId) -> Self {
+        Self {
+            page_id,
+            lifecycle_document_id,
+        }
+    }
+
+    #[doc(hidden)]
+    pub const fn new_for_testing(page_id: PageId, lifecycle_document_id: u64) -> Self {
+        Self::with_id(page_id, RendererLifecycleDocumentId(lifecycle_document_id))
+    }
+
+    #[doc(hidden)]
+    pub const fn successor_for_testing(self) -> Self {
+        Self::with_id(self.page_id, self.lifecycle_document_id.successor())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct RendererLifecycleEpoch(pub u64);
+
+impl RendererLifecycleEpoch {
+    const fn successor(self) -> Self {
+        match self.0.checked_add(1) {
+            Some(value) => Self(value),
+            None => panic!("renderer lifecycle epoch overflow"),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RendererLifecycleStartReason {
@@ -241,7 +294,7 @@ pub(crate) enum RendererDocumentLifecycleTransition {
 pub(crate) struct RendererDocumentLifecycleJournal {
     frame: RendererFrameToken,
     current_snapshot: RendererDocumentLifecycleSnapshot,
-    next_document_generation: u64,
+    next_document_id: RendererLifecycleDocumentId,
     next_sequence: u64,
     initial_handoff_complete: bool,
     initial_events: VecDeque<RendererDocumentLifecycleEvent>,
@@ -487,10 +540,7 @@ impl RendererDocumentLifecycleJournalHandle {
 impl RendererDocumentLifecycleJournal {
     fn new_initial_at(page_id: PageId, timestamp_micros: u64) -> Self {
         let frame = RendererFrameToken::root(page_id);
-        let document = RendererDocumentToken {
-            page_id,
-            generation: 1,
-        };
+        let document = RendererDocumentToken::initial(page_id);
         let epoch = RendererLifecycleEpoch(1);
         let started = RendererLifecycleEventStamp {
             sequence: 1,
@@ -518,7 +568,7 @@ impl RendererDocumentLifecycleJournal {
                 load: None,
                 terminated: None,
             },
-            next_document_generation: 2,
+            next_document_id: RendererLifecycleDocumentId::INITIAL.successor(),
             next_sequence: 2,
             initial_handoff_complete: false,
             initial_events: VecDeque::from([event]),
@@ -772,7 +822,7 @@ impl RendererDocumentLifecycleJournal {
                     break;
                 }
             }
-            let epoch = RendererLifecycleEpoch(self.current_snapshot.epoch.0 + 1);
+            let epoch = self.current_snapshot.epoch.successor();
             match self.start_lifecycle(
                 self.current_snapshot.document,
                 epoch,
@@ -911,11 +961,9 @@ impl RendererDocumentLifecycleJournal {
         if self.current_snapshot.terminated.is_none() {
             return Err(RendererDocumentLifecycleTransition::RejectedOutOfOrder);
         }
-        let document = RendererDocumentToken {
-            page_id: self.frame.page_id,
-            generation: self.next_document_generation,
-        };
-        self.next_document_generation += 1;
+        let document_id = self.next_document_id;
+        self.next_document_id = document_id.successor();
+        let document = RendererDocumentToken::with_id(self.frame.page_id, document_id);
         self.start_lifecycle(
             document,
             RendererLifecycleEpoch(1),
@@ -936,7 +984,7 @@ impl RendererDocumentLifecycleJournal {
             | RendererDocumentLifecycleTransition::Duplicate => {}
             transition => return Err(transition),
         }
-        let epoch = RendererLifecycleEpoch(self.current_snapshot.epoch.0 + 1);
+        let epoch = self.current_snapshot.epoch.successor();
         let to = self.start_lifecycle(
             self.current_snapshot.document,
             epoch,
@@ -1022,7 +1070,10 @@ impl RendererDocumentLifecycleJournal {
 
     fn next_sequence(&mut self) -> u64 {
         let sequence = self.next_sequence;
-        self.next_sequence += 1;
+        self.next_sequence = self
+            .next_sequence
+            .checked_add(1)
+            .expect("renderer lifecycle event sequence overflow");
         sequence
     }
 
@@ -1055,7 +1106,7 @@ fn trace_lifecycle_transition(event: &RendererDocumentLifecycleEvent) {
     trace!(
         target: "moli_renderer_document_lifecycle",
         page_id = event.document.page_id.as_u64(),
-        document_generation = event.document.generation,
+        lifecycle_document_id = event.document.lifecycle_document_id.0,
         lifecycle_epoch = event.epoch.0,
         sequence = event.sequence,
         timestamp_micros = event.timestamp_micros,
@@ -1070,6 +1121,26 @@ mod tests {
 
     fn journal() -> RendererDocumentLifecycleJournal {
         RendererDocumentLifecycleJournal::new_initial_at(PageId::new_for_testing(7), 10)
+    }
+
+    #[test]
+    #[should_panic(expected = "renderer lifecycle Document id overflow")]
+    fn lifecycle_document_id_allocator_rejects_overflow() {
+        let _ = RendererLifecycleDocumentId(u64::MAX).successor();
+    }
+
+    #[test]
+    #[should_panic(expected = "renderer lifecycle epoch overflow")]
+    fn lifecycle_epoch_allocator_rejects_overflow() {
+        let _ = RendererLifecycleEpoch(u64::MAX).successor();
+    }
+
+    #[test]
+    #[should_panic(expected = "renderer lifecycle event sequence overflow")]
+    fn lifecycle_event_sequence_allocator_rejects_overflow() {
+        let mut journal = journal();
+        journal.next_sequence = u64::MAX;
+        let _ = journal.next_sequence();
     }
 
     fn finish(
@@ -1506,10 +1577,7 @@ mod tests {
         );
 
         let stale = RendererDocumentLifecycleEvent {
-            document: RendererDocumentToken {
-                generation: snapshot.document.generation + 1,
-                ..snapshot.document
-            },
+            document: snapshot.document.successor_for_testing(),
             kind: RendererDocumentLifecycleEventKind::Milestone(
                 RendererDocumentLifecycleMilestone::DomContentLoaded,
             ),

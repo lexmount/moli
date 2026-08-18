@@ -86,10 +86,7 @@ async fn service_worker_internal_body_authorizes_the_exact_root_document() {
         // This test intentionally stops at the body/settlement boundary. The
         // typed NoCompletion mapping above proves that the selected dispatcher
         // has no task-end work to apply.
-        let stale_root = crate::runtime::RendererDocumentToken {
-            page_id: current_root.page_id,
-            generation: current_root.generation + 1,
-        };
+        let stale_root = current_root.successor_for_testing();
         page_vm
             .service_worker_task_sender_for_root_for_test(stale_root)
             .send_service_worker_unregister(ServiceWorkerUnregisterCompletion {
@@ -171,10 +168,7 @@ async fn service_worker_client_message_authorizes_root_before_window_client_targ
             stale_client.action.target_effect,
             PageServiceWorkerClientMessageTargetEffect::DiscardedStaleTarget
         );
-        let stale_root = crate::runtime::RendererDocumentToken {
-            page_id: current_root.page_id,
-            generation: current_root.generation + 1,
-        };
+        let stale_root = current_root.successor_for_testing();
         page_vm
             .service_worker_task_sender_for_root_for_test(stale_root)
             .send_service_worker_client_message(service_worker_message(stale_target))

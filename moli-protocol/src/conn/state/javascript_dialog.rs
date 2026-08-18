@@ -391,10 +391,7 @@ mod tests {
         let page_id = PageId::new_for_testing(1);
         let source_document = RendererDocumentLifecycleIdentity {
             frame: RendererFrameToken { page_id },
-            document: RendererDocumentToken {
-                page_id,
-                generation: 1,
-            },
+            document: RendererDocumentToken::new_for_testing(page_id, 1),
             epoch: RendererLifecycleEpoch(1),
         };
         let completion = RendererJavaScriptDialogCompletion::pending();

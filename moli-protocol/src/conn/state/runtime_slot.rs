@@ -1484,10 +1484,7 @@ mod tests {
                 page_attachment_id: TargetPageAttachmentId::from_raw_for_test(1),
                 binding: CommittedRendererDocumentBinding {
                     renderer_frame: RendererFrameToken { page_id },
-                    renderer_document: RendererDocumentToken {
-                        page_id,
-                        generation: 1,
-                    },
+                    renderer_document: RendererDocumentToken::new_for_testing(page_id, 1),
                     renderer_epoch: RendererLifecycleEpoch(1),
                     navigation: None,
                     frame_id: "FRAME-old".to_owned(),

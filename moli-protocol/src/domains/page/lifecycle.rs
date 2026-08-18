@@ -882,10 +882,7 @@ mod tests {
             &mut events,
             Some("SID-page"),
             true,
-            moli_core::page::RendererDocumentToken {
-                page_id,
-                generation: 1,
-            },
+            moli_core::page::RendererDocumentToken::new_for_testing(page_id, 1),
             moli_core::page::RendererLifecycleEpoch(1),
             "FRAME-page",
             "LOADER-page",

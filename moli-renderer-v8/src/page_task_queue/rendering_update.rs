@@ -79,10 +79,7 @@ mod tests {
     };
 
     fn root_document() -> RendererDocumentToken {
-        RendererDocumentToken {
-            page_id: PageId::new_for_testing(71),
-            generation: 3,
-        }
+        RendererDocumentToken::new_for_testing(PageId::new_for_testing(71), 3)
     }
 
     fn target(document_id: u64) -> WindowDocumentTaskTarget {

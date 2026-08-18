@@ -2404,11 +2404,8 @@ mod tests {
         types::{ChildDocumentLoadCompletion, DocumentWriteExternalScriptLoadCompletion},
     };
 
-    fn document_token(generation: u64) -> RendererDocumentToken {
-        RendererDocumentToken {
-            page_id: PageId::new_for_testing(9001),
-            generation,
-        }
+    fn document_token(lifecycle_document_id: u64) -> RendererDocumentToken {
+        RendererDocumentToken::new_for_testing(PageId::new_for_testing(9001), lifecycle_document_id)
     }
 
     fn resource_completion(load_id: u64) -> RendererPageResourceCompletion {

@@ -201,10 +201,8 @@ impl RendererPageStylesheetTaskTestResidence {
         static NEXT_PAGE_ID: AtomicU64 = AtomicU64::new(1);
 
         let page_id = NEXT_PAGE_ID.fetch_add(1, Ordering::Relaxed);
-        let root_document = RendererDocumentToken {
-            page_id: crate::PageId::new_for_testing(page_id),
-            generation: 1,
-        };
+        let root_document =
+            RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(page_id), 1);
         let page_token = crate::runtime::RendererPageToken::new_for_testing(root_document.page_id);
         let (owner_wake_tx, owner_wake_rx) = tokio::sync::mpsc::unbounded_channel();
         let owner_wake = RendererOwnerWakeSender::new(owner_wake_tx, page_token);

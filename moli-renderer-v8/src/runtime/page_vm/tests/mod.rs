@@ -999,10 +999,7 @@ async fn child_modulepreload_start_rejects_reused_local_owner_from_retired_root_
             .current_child_document_module_fetch_target(child_handle)
             .expect("current PageVm should expose an exact child target");
         let current_root = page_vm.document_lifecycle.identity().document;
-        let retired_root = crate::runtime::RendererDocumentToken {
-            page_id: current_root.page_id,
-            generation: current_root.generation.checked_sub(1).unwrap_or(u64::MAX),
-        };
+        let retired_root = current_root.successor_for_testing();
         page_vm.page_task_executor_sources_for_test().modulepreload_start()
             .enqueue_local_for_test(
                 retired_root,

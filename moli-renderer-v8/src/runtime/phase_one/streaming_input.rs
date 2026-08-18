@@ -153,10 +153,8 @@ mod tests {
         RendererPageMainParserContinuationProducer,
         tokio::sync::mpsc::UnboundedReceiver<RendererOwnerWake>,
     ) {
-        let root_document = RendererDocumentToken {
-            page_id: crate::PageId::new_for_testing(page_id),
-            generation: 1,
-        };
+        let root_document =
+            RendererDocumentToken::new_for_testing(crate::PageId::new_for_testing(page_id), 1);
         let (wake_tx, wake_rx) = tokio::sync::mpsc::unbounded_channel();
         let networking = RendererPageNetworkingSource::new_owner_attached(
             PageRuntimeWakeSignal::default(),

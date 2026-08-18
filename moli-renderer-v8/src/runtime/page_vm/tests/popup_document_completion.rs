@@ -631,10 +631,7 @@ async fn retired_root_namespace_rejects_an_identical_popup_local_target() {
         wait_for_popup_terminal(&mut queue, &mut wake_rx, "namespace popup response").await;
         let target = queued_popup_target(&mut queue);
         let current_root = page_vm.document_lifecycle.identity().document;
-        let retired_root = crate::runtime::RendererDocumentToken {
-            page_id: current_root.page_id,
-            generation: current_root.generation.wrapping_add(1),
-        };
+        let retired_root = current_root.successor_for_testing();
         queue.enqueue_local_for_test(RendererPageResourceCompletion::popup_document_load(
             retired_root,
             loaded_popup_completion(

@@ -178,11 +178,8 @@ fn assert_fifo_replacement_and_route_retirement(mut lane: impl TypedPageSourceCo
     );
 }
 
-fn document_token(generation: u64) -> RendererDocumentToken {
-    RendererDocumentToken {
-        page_id: PageId::new_for_testing(9101),
-        generation,
-    }
+fn document_token(lifecycle_document_id: u64) -> RendererDocumentToken {
+    RendererDocumentToken::new_for_testing(PageId::new_for_testing(9101), lifecycle_document_id)
 }
 
 struct ResourceCompletionLane {

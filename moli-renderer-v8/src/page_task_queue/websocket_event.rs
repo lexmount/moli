@@ -415,11 +415,8 @@ mod tests {
     use super::*;
     use crate::{PageId, page_task_queue::RendererOwnerWakeSource, runtime::RendererPageToken};
 
-    fn root_document(generation: u64) -> RendererDocumentToken {
-        RendererDocumentToken {
-            page_id: PageId::new_for_testing(1),
-            generation,
-        }
+    fn root_document(lifecycle_document_id: u64) -> RendererDocumentToken {
+        RendererDocumentToken::new_for_testing(PageId::new_for_testing(1), lifecycle_document_id)
     }
 
     fn close_event(socket_id: u64) -> WebSocketEvent {

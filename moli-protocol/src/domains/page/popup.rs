@@ -218,10 +218,7 @@ mod tests {
         let page_id = PageId::new_for_testing(1);
         RendererDocumentLifecycleIdentity {
             frame: RendererFrameToken { page_id },
-            document: RendererDocumentToken {
-                page_id,
-                generation: 3,
-            },
+            document: RendererDocumentToken::new_for_testing(page_id, 3),
             epoch: RendererLifecycleEpoch(5),
         }
     }

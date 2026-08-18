@@ -221,10 +221,7 @@ mod tests {
             crate::runtime::RendererJavaScriptDialogId::new(1),
             crate::runtime::RendererDocumentLifecycleIdentity {
                 frame: crate::runtime::RendererFrameToken { page_id },
-                document: crate::runtime::RendererDocumentToken {
-                    page_id,
-                    generation: 1,
-                },
+                document: crate::runtime::RendererDocumentToken::new_for_testing(page_id, 1),
                 epoch: crate::runtime::RendererLifecycleEpoch(1),
             },
             crate::runtime::RendererJavaScriptDialogSource::RootFrame,

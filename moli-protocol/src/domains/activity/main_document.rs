@@ -998,10 +998,7 @@ mod tests {
 
         let page_id = moli_core::PageId::new_for_testing(71);
         let frame = RendererFrameToken { page_id };
-        let document = RendererDocumentToken {
-            page_id,
-            generation: 1,
-        };
+        let document = RendererDocumentToken::new_for_testing(page_id, 1);
         let epoch = RendererLifecycleEpoch(1);
         let started = RendererDocumentLifecycleEvent {
             frame,
@@ -1345,10 +1342,7 @@ mod tests {
         let mut output = CommandOutputBuffer::default();
         let page_id = moli_core::PageId::new_for_testing(17);
         let renderer_frame = RendererFrameToken { page_id };
-        let renderer_document = RendererDocumentToken {
-            page_id,
-            generation: 1,
-        };
+        let renderer_document = RendererDocumentToken::new_for_testing(page_id, 1);
         let renderer_epoch = RendererLifecycleEpoch(1);
         let renderer_document_binding = CommittedRendererDocumentBinding {
             renderer_frame,

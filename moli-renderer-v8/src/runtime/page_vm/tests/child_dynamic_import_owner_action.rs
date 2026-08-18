@@ -252,10 +252,7 @@ async fn root_document_namespace_rejects_reused_local_owner_identity() {
         let target =
             install_dynamic_import_action_target(&mut page_vm, "dynamic-action-root-namespace")?;
         let current_root = page_vm.document_lifecycle.identity().document;
-        let non_current_root = crate::runtime::RendererDocumentToken {
-            page_id: current_root.page_id,
-            generation: current_root.generation + 1,
-        };
+        let non_current_root = current_root.successor_for_testing();
         page_vm
             .page_task_executor_sources_for_test()
             .dynamic_import_owner_action()

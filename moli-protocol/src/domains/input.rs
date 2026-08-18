@@ -1997,16 +1997,13 @@ mod producer_tests {
     use crate::domains::activity::ProtocolOutputPayloads;
 
     fn renderer_document_identity_for_test(
-        document_generation: u64,
+        lifecycle_document_id: u64,
         epoch: u64,
     ) -> RendererDocumentLifecycleIdentity {
         let page_id = moli_core::PageId::new_for_testing(31);
         RendererDocumentLifecycleIdentity {
             frame: RendererFrameToken { page_id },
-            document: RendererDocumentToken {
-                page_id,
-                generation: document_generation,
-            },
+            document: RendererDocumentToken::new_for_testing(page_id, lifecycle_document_id),
             epoch: RendererLifecycleEpoch(epoch),
         }
     }

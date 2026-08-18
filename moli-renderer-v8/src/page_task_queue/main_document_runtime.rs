@@ -923,11 +923,8 @@ mod tests {
         )
     }
 
-    fn document_token(generation: u64) -> RendererDocumentToken {
-        RendererDocumentToken {
-            page_id: PageId::new_for_testing(7),
-            generation,
-        }
+    fn document_token(lifecycle_document_id: u64) -> RendererDocumentToken {
+        RendererDocumentToken::new_for_testing(PageId::new_for_testing(7), lifecycle_document_id)
     }
 
     fn prepared_script() -> PreparedScript {

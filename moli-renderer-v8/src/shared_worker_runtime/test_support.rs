@@ -25,10 +25,7 @@ pub(super) struct SharedWorkerPageClientHarness {
 impl SharedWorkerPageClientHarness {
     pub(super) fn new() -> Self {
         let page_id = crate::PageId::new_for_testing(9201);
-        let root_document = crate::runtime::RendererDocumentToken {
-            page_id,
-            generation: 1,
-        };
+        let root_document = crate::runtime::RendererDocumentToken::new_for_testing(page_id, 1);
         let (wake_tx, wake_rx) = tokio::sync::mpsc::unbounded_channel();
         let (sources, routes) = crate::page_task_queue::RendererPageOwnedTaskSources::new(
             crate::page_task_queue::PageRuntimeWakeSignal::default(),

@@ -428,10 +428,7 @@ fn renderer_output_record(page_id: PageId, sequence: u64) -> RendererOutputRecor
     RendererOutputRecord::new_for_test(RendererOutputItem::Observation(
         RendererProtocolObservation::DocumentLifecycle(RendererDocumentLifecycleEvent {
             frame: RendererFrameToken { page_id },
-            document: RendererDocumentToken {
-                page_id,
-                generation: 1,
-            },
+            document: RendererDocumentToken::new_for_testing(page_id, 1),
             epoch: RendererLifecycleEpoch(1),
             sequence,
             timestamp_micros: sequence,
@@ -462,9 +459,9 @@ fn unconstrained_renderer_publication(page_id: PageId) -> RendererOutputTranspor
 
 fn post_load_renderer_publication(
     page_id: PageId,
-    document_generation: u64,
+    lifecycle_document_id: u64,
 ) -> RendererOutputTransportMessage {
-    let source_document = root_document_lifecycle_identity(page_id, document_generation);
+    let source_document = root_document_lifecycle_identity(page_id, lifecycle_document_id);
     renderer_publication(
         page_id,
         1,
@@ -481,15 +478,12 @@ fn publication_cursor(publication: &RendererOutputTransportMessage) -> RendererO
 
 fn root_document_lifecycle_identity(
     page_id: PageId,
-    generation: u64,
+    identity_value: u64,
 ) -> RendererDocumentLifecycleIdentity {
     RendererDocumentLifecycleIdentity {
         frame: RendererFrameToken { page_id },
-        document: RendererDocumentToken {
-            page_id,
-            generation,
-        },
-        epoch: RendererLifecycleEpoch(generation),
+        document: RendererDocumentToken::new_for_testing(page_id, identity_value),
+        epoch: RendererLifecycleEpoch(identity_value),
     }
 }
 

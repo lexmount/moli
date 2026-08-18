@@ -723,10 +723,7 @@ mod tests {
     };
 
     fn root_document() -> RendererDocumentToken {
-        RendererDocumentToken {
-            page_id: PageId::new_for_testing(7),
-            generation: 11,
-        }
+        RendererDocumentToken::new_for_testing(PageId::new_for_testing(7), 11)
     }
 
     fn parser_root_task(

@@ -1460,10 +1460,7 @@ fn devtools_document_lifecycle_wait_key_observes_interruption_and_target_loss() 
 
     let page_id = moli_core::PageId::new_for_testing(901);
     let frame = moli_core::page::RendererFrameToken { page_id };
-    let document = moli_core::page::RendererDocumentToken {
-        page_id,
-        generation: 1,
-    };
+    let document = moli_core::page::RendererDocumentToken::new_for_testing(page_id, 1);
     let epoch = moli_core::page::RendererLifecycleEpoch(1);
     let started = moli_core::page::RendererDocumentLifecycleEvent {
         frame,
