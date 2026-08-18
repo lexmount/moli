@@ -131,7 +131,7 @@ impl SubresourceResponseBody {
                 .chunks
                 .capacity()
                 .saturating_mul(std::mem::size_of::<DiskData>())
-                .saturating_add(storage.trailing_bytes.capacity())
+                .saturating_add(storage.trailing_bytes.len())
                 .saturating_add(std::mem::size_of::<SubresourceResponseBodyInner>()),
             SubresourceResponseBodyInner::ParkableImage(image) => image
                 .diagnostics()
