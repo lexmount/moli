@@ -73,6 +73,52 @@ Promise.resolve().then(() => {
     .expect("missing ModuleReaction completion test should run");
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn document_open_rejects_a_module_reaction_from_the_previous_exact_document() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let document_url =
+            Url::parse("https://module-reaction.test/document-open").expect("document URL");
+        let (mut page_vm, _resource_source, _wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        let root_document = page_vm.document_lifecycle.identity().document;
+        let old_document_owner = page_vm
+            .vm()
+            .current_main_document_task_owner()
+            .expect("old main Document owner");
+
+        enqueue_missing_document_module_reaction(&mut page_vm, 151);
+        page_vm.vm_mut().eval(
+            "document.open(); document.write('<!doctype html><body>replacement</body>'); document.close(); 'replaced'",
+        )?;
+
+        assert_eq!(page_vm.document_lifecycle.identity().document, root_document);
+        assert_ne!(
+            page_vm
+                .vm()
+                .current_main_document_task_owner()
+                .expect("replacement main Document owner"),
+            old_document_owner
+        );
+        let task = page_vm
+            .take_module_reaction_body_task_for_test()
+            .expect("the previous Document reaction must remain queued for stale retirement");
+        let action = page_vm.apply_selected_page_module_reaction_turn(task)?.action;
+        assert_eq!(
+            action.target_effect(),
+            PageModuleReactionTargetEffect::IgnoredStaleOwner
+        );
+        assert!(matches!(
+            action.into_page_task_completion(),
+            PageTaskCompletion::NoCompletion
+        ));
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("document.open module-reaction identity test should run");
+}
+
 #[test]
 fn old_root_module_reaction_is_discarded_by_the_selected_dispatcher() {
     run_page_vm_large_stack_async_test(

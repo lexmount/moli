@@ -15,17 +15,16 @@ use super::RendererOwnerWakeSender;
 /// Exact PageVm-local target captured by a module Promise reaction callback.
 ///
 /// The stable source adds the root `RendererDocumentToken`. Main-document
-/// module reactions additionally carry the runtime generation used for
-/// `document.open()`. Child reactions carry the exact child Document and realm;
+/// module reactions carry the exact main Document owner. Child reactions carry
+/// the exact child Document and realm;
 /// dynamic imports retain the execution-context owner captured at import()
 /// acceptance.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RendererPageModuleReactionTarget {
     DocumentModuleScript {
-        runtime_generation: u64,
+        document_owner: FrameDocumentTaskOwner,
     },
     ChildParserModule {
-        runtime_generation: u64,
         document_owner: FrameDocumentTaskOwner,
         realm_id: FrameRealmId,
     },
@@ -37,23 +36,21 @@ pub(crate) enum RendererPageModuleReactionTarget {
 /// One concrete host continuation produced by a V8 module Promise callback.
 pub(crate) enum RendererPageModuleReactionEvent {
     DocumentModuleScriptEvaluationFulfilled {
-        runtime_generation: u64,
+        document_owner: FrameDocumentTaskOwner,
         reaction_id: u64,
     },
     DocumentModuleScriptEvaluationRejected {
-        runtime_generation: u64,
+        document_owner: FrameDocumentTaskOwner,
         reaction_id: u64,
         reason: String,
         error_constructor: Option<ScriptErrorConstructorKind>,
     },
     ChildParserModuleEvaluationFulfilled {
-        runtime_generation: u64,
         document_owner: FrameDocumentTaskOwner,
         realm_id: FrameRealmId,
         reaction_id: u64,
     },
     ChildParserModuleEvaluationRejected {
-        runtime_generation: u64,
         document_owner: FrameDocumentTaskOwner,
         realm_id: FrameRealmId,
         reaction_id: u64,
@@ -74,27 +71,22 @@ pub(crate) enum RendererPageModuleReactionEvent {
 impl RendererPageModuleReactionEvent {
     pub(crate) const fn target(&self) -> RendererPageModuleReactionTarget {
         match self {
-            Self::DocumentModuleScriptEvaluationFulfilled {
-                runtime_generation, ..
+            Self::DocumentModuleScriptEvaluationFulfilled { document_owner, .. }
+            | Self::DocumentModuleScriptEvaluationRejected { document_owner, .. } => {
+                RendererPageModuleReactionTarget::DocumentModuleScript {
+                    document_owner: *document_owner,
+                }
             }
-            | Self::DocumentModuleScriptEvaluationRejected {
-                runtime_generation, ..
-            } => RendererPageModuleReactionTarget::DocumentModuleScript {
-                runtime_generation: *runtime_generation,
-            },
             Self::ChildParserModuleEvaluationFulfilled {
-                runtime_generation,
                 document_owner,
                 realm_id,
                 ..
             }
             | Self::ChildParserModuleEvaluationRejected {
-                runtime_generation,
                 document_owner,
                 realm_id,
                 ..
             } => RendererPageModuleReactionTarget::ChildParserModule {
-                runtime_generation: *runtime_generation,
                 document_owner: *document_owner,
                 realm_id: *realm_id,
             },

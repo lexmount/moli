@@ -947,7 +947,11 @@ mod tests {
                     generation: 1,
                 },
                 crate::page_task_queue::RendererPageModuleReactionTarget::DocumentModuleScript {
-                    runtime_generation: 1,
+                    document_owner: FrameDocumentTaskOwner::new(
+                        FrameSchedulerLaneId(1),
+                        LocalWindowId(2),
+                        DocumentId(3),
+                    ),
                 },
             ),
         }

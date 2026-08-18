@@ -602,7 +602,7 @@ impl ModuleReactionLane {
         sender
             .send(
                 RendererPageModuleReactionEvent::DocumentModuleScriptEvaluationFulfilled {
-                    runtime_generation: sequence,
+                    document_owner: task_owner(sequence),
                     reaction_id: sequence,
                 },
             )
@@ -2487,7 +2487,7 @@ fn unified_ready_descriptors_expose_one_fifo_head_per_typed_source() {
         .module_reaction_sender(document_token(1))
         .send(
             RendererPageModuleReactionEvent::DocumentModuleScriptEvaluationFulfilled {
-                runtime_generation: 1,
+                document_owner: task_owner(90),
                 reaction_id: 15,
             },
         )

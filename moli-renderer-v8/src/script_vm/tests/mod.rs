@@ -7756,10 +7756,8 @@ async fn child_module_reaction_target_rejects_a_replaced_realm_with_the_same_doc
         (realm.child_handle, realm.owner_realm_id)
     };
     let document_owner = current_single_child_document_owner_for_test(&vm, "child reaction owner");
-    let runtime_generation = vm.document_runtime.runtime_reset_generation();
     let retired_target =
         crate::page_task_queue::RendererPageModuleReactionTarget::ChildParserModule {
-            runtime_generation,
             document_owner,
             realm_id: retired_realm_id,
         };
@@ -7785,7 +7783,6 @@ async fn child_module_reaction_target_rejects_a_replaced_realm_with_the_same_doc
     );
     assert!(vm.module_reaction_target_is_current(
         crate::page_task_queue::RendererPageModuleReactionTarget::ChildParserModule {
-            runtime_generation,
             document_owner,
             realm_id: current_realm_id,
         }

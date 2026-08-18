@@ -575,7 +575,6 @@ fn runtime_owned_module_script_graph_job_for_prepared_script(
     }
 }
 
-const MODULE_REACTION_RUNTIME_GENERATION_SLOT: &str = "runtimeGeneration";
 const DYNAMIC_MODULE_REACTION_ID_SLOT: &str = "reactionId";
 const MODULE_SCRIPT_REACTION_ID_SLOT: &str = "moduleScriptReactionId";
 const MODULE_REACTION_SCHEDULER_LANE_ID_SLOT: &str = "schedulerLaneId";
@@ -593,14 +592,15 @@ struct NativeDynamicModuleReactionDataDeclaration<'scope> {
 #[webapi(interface = "Object", data_properties, enumerable)]
 struct NativeModuleScriptReactionDataDeclaration<'scope> {
     module_script_reaction_id: v8::Local<'scope, v8::BigInt>,
-    runtime_generation: v8::Local<'scope, v8::BigInt>,
+    scheduler_lane_id: v8::Local<'scope, v8::BigInt>,
+    local_window_id: v8::Local<'scope, v8::BigInt>,
+    document_id: v8::Local<'scope, v8::BigInt>,
 }
 
 #[derive(WebApiObject)]
 #[webapi(interface = "Object", data_properties, enumerable)]
 struct NativeChildModuleScriptReactionDataDeclaration<'scope> {
     module_script_reaction_id: v8::Local<'scope, v8::BigInt>,
-    runtime_generation: v8::Local<'scope, v8::BigInt>,
     scheduler_lane_id: v8::Local<'scope, v8::BigInt>,
     local_window_id: v8::Local<'scope, v8::BigInt>,
     document_id: v8::Local<'scope, v8::BigInt>,
@@ -3853,7 +3853,12 @@ impl ScriptVm {
         reaction_id: u64,
         promise: v8::Global<v8::Promise>,
     ) -> std::result::Result<(), ModuleLoadError> {
-        let runtime_generation = self.document_runtime.runtime_reset_generation();
+        let document_owner = self.current_main_document_task_owner().ok_or_else(|| {
+            ModuleLoadError::new(
+                ModuleLoadStage::Evaluate,
+                "main module evaluation reaction has no current Document owner",
+            )
+        })?;
         self.renderer_document_isolate
             .with_entered_renderer_document_isolate(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));
@@ -3861,10 +3866,17 @@ impl ScriptVm {
                 let context = v8::Local::new(scope, &self.page_default_context);
                 let scope = &mut v8::ContextScope::new(scope, context);
                 let reaction_id_value = v8::BigInt::new_from_u64(scope, reaction_id);
-                let runtime_generation_value = v8::BigInt::new_from_u64(scope, runtime_generation);
                 let data = NativeModuleScriptReactionDataDeclaration {
                     module_script_reaction_id: reaction_id_value,
-                    runtime_generation: runtime_generation_value,
+                    scheduler_lane_id: v8::BigInt::new_from_u64(
+                        scope,
+                        document_owner.scheduler_lane_id.0,
+                    ),
+                    local_window_id: v8::BigInt::new_from_u64(
+                        scope,
+                        document_owner.local_window_id.0,
+                    ),
+                    document_id: v8::BigInt::new_from_u64(scope, document_owner.document_id.0),
                 }
                 .bind(scope)
                 .map_err(|error| {
@@ -3914,7 +3926,6 @@ impl ScriptVm {
         reaction_id: u64,
         promise: v8::Global<v8::Promise>,
     ) -> std::result::Result<(), ModuleLoadError> {
-        let runtime_generation = self.document_runtime.runtime_reset_generation();
         self.renderer_document_isolate
             .with_entered_renderer_document_isolate(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));
@@ -3922,10 +3933,8 @@ impl ScriptVm {
                 let context = unsafe { v8::Local::new(scope, &*context_ptr) };
                 let scope = &mut v8::ContextScope::new(scope, context);
                 let reaction_id_value = v8::BigInt::new_from_u64(scope, reaction_id);
-                let runtime_generation_value = v8::BigInt::new_from_u64(scope, runtime_generation);
                 let data = NativeChildModuleScriptReactionDataDeclaration {
                     module_script_reaction_id: reaction_id_value,
-                    runtime_generation: runtime_generation_value,
                     scheduler_lane_id: v8::BigInt::new_from_u64(
                         scope,
                         document_owner.scheduler_lane_id.0,
@@ -4105,16 +4114,12 @@ impl ScriptVm {
     ) -> bool {
         match target {
             crate::page_task_queue::RendererPageModuleReactionTarget::DocumentModuleScript {
-                runtime_generation,
-            } => self.document_runtime.runtime_reset_generation() == runtime_generation,
+                document_owner,
+            } => self.current_main_document_task_owner() == Some(document_owner),
             crate::page_task_queue::RendererPageModuleReactionTarget::ChildParserModule {
-                runtime_generation,
                 document_owner,
                 realm_id,
-            } => {
-                self.document_runtime.runtime_reset_generation() == runtime_generation
-                    && self.child_parser_module_route_task_is_current(document_owner, realm_id)
-            }
+            } => self.child_parser_module_route_task_is_current(document_owner, realm_id),
             crate::page_task_queue::RendererPageModuleReactionTarget::DynamicModuleImport {
                 import_owner,
             } => self.dynamic_module_import_owner_is_current(import_owner),
@@ -4231,10 +4236,12 @@ impl ScriptVm {
     /// spent or stale source ticket.
     #[cfg(test)]
     pub(crate) fn queue_missing_document_module_reaction_for_test(&mut self, reaction_id: u64) {
-        let runtime_generation = self.document_runtime.runtime_reset_generation();
+        let document_owner = self
+            .current_main_document_task_owner()
+            .expect("module reaction fixture requires a current main Document owner");
         self._context_host
             .borrow_mut()
-            .queue_document_module_script_evaluation_fulfilled(runtime_generation, reaction_id);
+            .queue_document_module_script_evaluation_fulfilled(document_owner, reaction_id);
     }
 
     /// Apply only the body of one production module-reaction task in a
@@ -4424,7 +4431,7 @@ fn native_module_script_reaction_fulfilled_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Some((runtime_generation, reaction_id)) =
+    let Some((document_owner, reaction_id)) =
         native_module_script_reaction_data(scope, args.data())
     else {
         return;
@@ -4433,7 +4440,7 @@ fn native_module_script_reaction_fulfilled_callback<'s>(
         return;
     };
     unsafe { &mut *host_ptr }
-        .queue_document_module_script_evaluation_fulfilled(runtime_generation, reaction_id);
+        .queue_document_module_script_evaluation_fulfilled(document_owner, reaction_id);
 }
 
 fn native_module_script_reaction_rejected_callback<'s>(
@@ -4441,7 +4448,7 @@ fn native_module_script_reaction_rejected_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Some((runtime_generation, reaction_id)) =
+    let Some((document_owner, reaction_id)) =
         native_module_script_reaction_data(scope, args.data())
     else {
         return;
@@ -4456,7 +4463,7 @@ fn native_module_script_reaction_rejected_callback<'s>(
         .map(|value| value.to_rust_string_lossy(scope))
         .unwrap_or_else(|| "unknown promise rejection".to_owned());
     unsafe { &mut *host_ptr }.queue_document_module_script_evaluation_rejected(
-        runtime_generation,
+        document_owner,
         reaction_id,
         reason,
         error_constructor,
@@ -4468,7 +4475,7 @@ fn child_parser_module_reaction_fulfilled_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Some((runtime_generation, document_owner, realm_id, reaction_id)) =
+    let Some((document_owner, realm_id, reaction_id)) =
         native_child_module_script_reaction_data(scope, args.data())
     else {
         return;
@@ -4477,7 +4484,6 @@ fn child_parser_module_reaction_fulfilled_callback<'s>(
         return;
     };
     unsafe { &mut *host_ptr }.queue_child_parser_module_script_evaluation_fulfilled(
-        runtime_generation,
         document_owner,
         realm_id,
         reaction_id,
@@ -4489,7 +4495,7 @@ fn child_parser_module_reaction_rejected_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Some((runtime_generation, document_owner, realm_id, reaction_id)) =
+    let Some((document_owner, realm_id, reaction_id)) =
         native_child_module_script_reaction_data(scope, args.data())
     else {
         return;
@@ -4504,7 +4510,6 @@ fn child_parser_module_reaction_rejected_callback<'s>(
         .map(|value| value.to_rust_string_lossy(scope))
         .unwrap_or_else(|| "unknown promise rejection".to_owned());
     unsafe { &mut *host_ptr }.queue_child_parser_module_script_evaluation_rejected(
-        runtime_generation,
         document_owner,
         realm_id,
         reaction_id,
@@ -4516,37 +4521,37 @@ fn child_parser_module_reaction_rejected_callback<'s>(
 fn native_module_script_reaction_data<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     data: v8::Local<'s, v8::Value>,
-) -> Option<(u64, u64)> {
+) -> Option<(FrameDocumentTaskOwner, u64)> {
     let data = v8::Local::<v8::Object>::try_from(data).ok()?;
     let reaction_id = get_u64_reaction_data_slot(scope, data, MODULE_SCRIPT_REACTION_ID_SLOT)?;
-    let runtime_generation =
-        get_u64_reaction_data_slot(scope, data, MODULE_REACTION_RUNTIME_GENERATION_SLOT)?;
-    Some((runtime_generation, reaction_id))
+    let document_owner = frame_document_owner_from_module_reaction_data(scope, data)?;
+    Some((document_owner, reaction_id))
 }
 
 fn native_child_module_script_reaction_data<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     data: v8::Local<'s, v8::Value>,
-) -> Option<(u64, FrameDocumentTaskOwner, FrameRealmId, u64)> {
+) -> Option<(FrameDocumentTaskOwner, FrameRealmId, u64)> {
     let data = v8::Local::<v8::Object>::try_from(data).ok()?;
     let reaction_id = get_u64_reaction_data_slot(scope, data, MODULE_SCRIPT_REACTION_ID_SLOT)?;
-    let runtime_generation =
-        get_u64_reaction_data_slot(scope, data, MODULE_REACTION_RUNTIME_GENERATION_SLOT)?;
+    let document_owner = frame_document_owner_from_module_reaction_data(scope, data)?;
+    let realm_id = get_i64_reaction_data_slot(scope, data, MODULE_REACTION_REALM_ID_SLOT)?;
+    Some((document_owner, FrameRealmId(realm_id), reaction_id))
+}
+
+fn frame_document_owner_from_module_reaction_data<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    data: v8::Local<'s, v8::Object>,
+) -> Option<FrameDocumentTaskOwner> {
     let scheduler_lane_id =
         get_u64_reaction_data_slot(scope, data, MODULE_REACTION_SCHEDULER_LANE_ID_SLOT)?;
     let local_window_id =
         get_u64_reaction_data_slot(scope, data, MODULE_REACTION_LOCAL_WINDOW_ID_SLOT)?;
     let document_id = get_u64_reaction_data_slot(scope, data, MODULE_REACTION_DOCUMENT_ID_SLOT)?;
-    let realm_id = get_i64_reaction_data_slot(scope, data, MODULE_REACTION_REALM_ID_SLOT)?;
-    Some((
-        runtime_generation,
-        FrameDocumentTaskOwner::new(
-            FrameSchedulerLaneId(scheduler_lane_id),
-            LocalWindowId(local_window_id),
-            DocumentId(document_id),
-        ),
-        FrameRealmId(realm_id),
-        reaction_id,
+    Some(FrameDocumentTaskOwner::new(
+        FrameSchedulerLaneId(scheduler_lane_id),
+        LocalWindowId(local_window_id),
+        DocumentId(document_id),
     ))
 }
 
@@ -5011,8 +5016,9 @@ mod tests {
     use super::{
         DYNAMIC_MODULE_REACTION_ID_SLOT, MainNativeModuleSelectedTaskApplication,
         NativeChildModuleScriptReactionDataDeclaration, NativeDynamicModuleReactionDataDeclaration,
-        ScriptVmCheckpointingMainNativeModuleTaskBody, get_u64_reaction_data_slot,
-        native_child_module_script_reaction_data, preserve_current_v8_module_exception,
+        NativeModuleScriptReactionDataDeclaration, ScriptVmCheckpointingMainNativeModuleTaskBody,
+        get_u64_reaction_data_slot, native_child_module_script_reaction_data,
+        native_module_script_reaction_data, preserve_current_v8_module_exception,
     };
     use crate::dom::native::{DomHost, NativeDom};
     use crate::ensure_v8_for_test as ensure_v8;
@@ -5308,14 +5314,30 @@ mod tests {
             Some(reaction_id)
         );
 
-        let runtime_generation = (1_u64 << 53) + 124;
         let scheduler_lane_id = (1_u64 << 53) + 125;
         let local_window_id = (1_u64 << 53) + 126;
         let document_id = (1_u64 << 53) + 127;
         let realm_id = -17_i64;
+        let document_owner = FrameDocumentTaskOwner::new(
+            FrameSchedulerLaneId(scheduler_lane_id),
+            LocalWindowId(local_window_id),
+            DocumentId(document_id),
+        );
+        let main_data = NativeModuleScriptReactionDataDeclaration {
+            module_script_reaction_id: v8::BigInt::new_from_u64(scope, reaction_id),
+            scheduler_lane_id: v8::BigInt::new_from_u64(scope, scheduler_lane_id),
+            local_window_id: v8::BigInt::new_from_u64(scope, local_window_id),
+            document_id: v8::BigInt::new_from_u64(scope, document_id),
+        }
+        .bind(scope)
+        .expect("main reaction data declaration should bind");
+        assert_eq!(
+            native_module_script_reaction_data(scope, main_data.into()),
+            Some((document_owner, reaction_id)),
+            "callback data must preserve the exact main Document without Number coercion"
+        );
         let child_data = NativeChildModuleScriptReactionDataDeclaration {
             module_script_reaction_id: v8::BigInt::new_from_u64(scope, reaction_id),
-            runtime_generation: v8::BigInt::new_from_u64(scope, runtime_generation),
             scheduler_lane_id: v8::BigInt::new_from_u64(scope, scheduler_lane_id),
             local_window_id: v8::BigInt::new_from_u64(scope, local_window_id),
             document_id: v8::BigInt::new_from_u64(scope, document_id),
@@ -5325,16 +5347,7 @@ mod tests {
         .expect("child reaction data declaration should bind");
         assert_eq!(
             native_child_module_script_reaction_data(scope, child_data.into()),
-            Some((
-                runtime_generation,
-                FrameDocumentTaskOwner::new(
-                    FrameSchedulerLaneId(scheduler_lane_id),
-                    LocalWindowId(local_window_id),
-                    DocumentId(document_id),
-                ),
-                FrameRealmId(realm_id),
-                reaction_id,
-            )),
+            Some((document_owner, FrameRealmId(realm_id), reaction_id)),
             "callback data must preserve the exact child Document and realm without Number coercion"
         );
     }
@@ -5417,11 +5430,13 @@ mod tests {
     #[test]
     fn module_reaction_source_consumes_exactly_one_current_target_per_turn() {
         let mut vm = new_test_vm("https://module-reaction-one-turn.test/page.html");
-        let runtime_generation = vm.document_runtime.runtime_reset_generation();
+        let document_owner = vm
+            .current_main_document_task_owner()
+            .expect("module reaction fixture requires a main Document owner");
         for reaction_id in [71, 72] {
             vm._context_host
                 .borrow_mut()
-                .queue_document_module_script_evaluation_fulfilled(runtime_generation, reaction_id);
+                .queue_document_module_script_evaluation_fulfilled(document_owner, reaction_id);
         }
 
         assert_eq!(

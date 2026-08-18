@@ -1091,12 +1091,12 @@ impl JsContextHost {
 
     pub(crate) fn queue_document_module_script_evaluation_fulfilled(
         &mut self,
-        runtime_generation: u64,
+        document_owner: FrameDocumentTaskOwner,
         reaction_id: u64,
     ) {
         self.queue_page_module_reaction(
             RendererPageModuleReactionEvent::DocumentModuleScriptEvaluationFulfilled {
-                runtime_generation,
+                document_owner,
                 reaction_id,
             },
         );
@@ -1104,14 +1104,14 @@ impl JsContextHost {
 
     pub(crate) fn queue_document_module_script_evaluation_rejected(
         &mut self,
-        runtime_generation: u64,
+        document_owner: FrameDocumentTaskOwner,
         reaction_id: u64,
         reason: String,
         error_constructor: Option<ScriptErrorConstructorKind>,
     ) {
         self.queue_page_module_reaction(
             RendererPageModuleReactionEvent::DocumentModuleScriptEvaluationRejected {
-                runtime_generation,
+                document_owner,
                 reaction_id,
                 reason,
                 error_constructor,
@@ -1121,14 +1121,12 @@ impl JsContextHost {
 
     pub(crate) fn queue_child_parser_module_script_evaluation_fulfilled(
         &mut self,
-        runtime_generation: u64,
         document_owner: FrameDocumentTaskOwner,
         realm_id: crate::frame_owner_model::FrameRealmId,
         reaction_id: u64,
     ) {
         self.queue_page_module_reaction(
             RendererPageModuleReactionEvent::ChildParserModuleEvaluationFulfilled {
-                runtime_generation,
                 document_owner,
                 realm_id,
                 reaction_id,
@@ -1138,7 +1136,6 @@ impl JsContextHost {
 
     pub(crate) fn queue_child_parser_module_script_evaluation_rejected(
         &mut self,
-        runtime_generation: u64,
         document_owner: FrameDocumentTaskOwner,
         realm_id: crate::frame_owner_model::FrameRealmId,
         reaction_id: u64,
@@ -1147,7 +1144,6 @@ impl JsContextHost {
     ) {
         self.queue_page_module_reaction(
             RendererPageModuleReactionEvent::ChildParserModuleEvaluationRejected {
-                runtime_generation,
                 document_owner,
                 realm_id,
                 reaction_id,
