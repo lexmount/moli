@@ -160,6 +160,11 @@ mod window_security_tokens;
 mod workers;
 pub(crate) use window_security_tokens::set_window_security_token;
 
+#[cfg(test)]
+pub(crate) use crate::window_document_identity::LightweightPopupDocumentId;
+pub(crate) use crate::window_document_identity::{
+    LightweightPopupDocumentOwner, LightweightPopupLocalWindowId, WindowDocumentOwner,
+};
 use crate::{
     frame_owner_model::FrameDocumentLoadDeliveryTask, runtime::ServiceWorkerControlState,
     service_worker_runtime::ServiceWorkerClientId,
@@ -194,11 +199,8 @@ pub(crate) use moli_page_types::{
     NavigationActivationSeed, NavigationHistoryEntrySeed, NavigationHistorySerializedEntry,
 };
 pub(crate) use navigation::{PendingLocationNavigation, PendingTopLevelNavigation};
-#[cfg(test)]
-pub(crate) use popups::LightweightPopupDocumentId;
 pub(crate) use popups::{
     LightweightPopupClassicScriptFetchTarget, LightweightPopupDocumentFetchTarget,
-    LightweightPopupDocumentOwner, LightweightPopupLocalWindowId,
     LightweightPopupNavigationTaskToken, PopupClassicScriptLoadApplication,
     PopupDocumentLoadApplication, PopupDocumentLoadBodyActivity, active_lightweight_popup_id,
     defer_active_lightweight_popup_restore, enter_active_lightweight_popup_scope,
@@ -305,28 +307,6 @@ pub(crate) enum OwnerDispatchScope {
 pub(crate) struct OwnerDispatchRestore<'s> {
     previous_child: v8::Local<'s, v8::Value>,
     previous_popup: v8::Local<'s, v8::Value>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) enum WindowDocumentOwner {
-    Frame(FrameDocumentTaskOwner),
-    LightweightPopup(LightweightPopupDocumentOwner),
-}
-
-impl WindowDocumentOwner {
-    pub(crate) fn frame_document_owner(self) -> Option<FrameDocumentTaskOwner> {
-        match self {
-            Self::Frame(owner) => Some(owner),
-            Self::LightweightPopup(_) => None,
-        }
-    }
-
-    pub(crate) fn projected_document_epoch(self) -> u64 {
-        match self {
-            Self::Frame(owner) => owner.document_id.0,
-            Self::LightweightPopup(owner) => owner.document_id().as_u64(),
-        }
-    }
 }
 
 /// Exact Document plus the Window dispatch address used by a queued task.
@@ -901,7 +881,7 @@ pub(crate) struct JsContextHost {
         HashMap<u64, service_workers::PendingServiceWorkerUnregister>,
     pending_service_worker_ready: HashMap<u64, service_workers::PendingServiceWorkerReady>,
     service_worker_registration_watchers: Vec<service_workers::ServiceWorkerRegistrationWatcher>,
-    service_worker_lifecycle_watched_scopes: HashSet<(Url, String, u64)>,
+    service_worker_lifecycle_watched_scopes: HashSet<(Url, String, WindowDocumentOwner)>,
     service_worker_popup_clients: HashMap<u64, ServiceWorkerClientId>,
     pending_service_worker_clients_open_window_popups:
         HashMap<u64, service_workers::PendingServiceWorkerClientsOpenWindowPopup>,

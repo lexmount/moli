@@ -214,14 +214,13 @@ mod tests {
         let sender = harness.sender();
         let target = ServiceWorkerWindowClientTarget {
             client_id: ServiceWorkerClientId::from_u64_for_test(17),
-            document_epoch: Some(23),
-            transport_generation: 29,
+            document_owner: crate::native_bridge::WindowDocumentOwner::for_test(23),
         };
 
         sender
             .send_service_worker_unregister(ServiceWorkerUnregisterCompletion {
                 request_id: 31,
-                runtime_generation: 37,
+                document_owner: crate::native_bridge::WindowDocumentOwner::for_test(37),
                 result: true,
             })
             .expect("internal callback should enter its typed source");

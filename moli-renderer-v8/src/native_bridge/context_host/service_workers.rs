@@ -24,7 +24,6 @@ pub(super) fn service_worker_first_party_storage_key(document_url: &Url) -> Stri
 pub(crate) struct ServiceWorkerWindowOwner {
     dispatch_scope: OwnerDispatchScope,
     document_owner: WindowDocumentOwner,
-    transport_generation: u64,
 }
 
 impl ServiceWorkerWindowOwner {
@@ -38,14 +37,6 @@ impl ServiceWorkerWindowOwner {
 
     pub(crate) fn window_document_owner(self) -> WindowDocumentOwner {
         self.document_owner
-    }
-
-    pub(crate) fn document_epoch(self) -> Option<u64> {
-        Some(self.document_owner.projected_document_epoch())
-    }
-
-    pub(crate) fn transport_generation(self) -> u64 {
-        self.transport_generation
     }
 }
 
@@ -139,7 +130,6 @@ impl JsContextHost {
         Some(ServiceWorkerWindowOwner {
             dispatch_scope,
             document_owner,
-            transport_generation: self.runtime_reset_generation(),
         })
     }
 
@@ -151,8 +141,7 @@ impl JsContextHost {
         let owner = self.service_worker_window_owner_for_dispatch_scope(dispatch_scope)?;
         Some(crate::types::ServiceWorkerWindowClientTarget {
             client_id: self.service_worker_client_id_for_subresource_owner(dispatch_scope),
-            document_epoch: owner.document_epoch(),
-            transport_generation: owner.transport_generation(),
+            document_owner: owner.window_document_owner(),
         })
     }
 
@@ -203,10 +192,7 @@ impl JsContextHost {
                 (
                     OwnerDispatchScope::LightweightPopup(popup_id),
                     WindowDocumentOwner::LightweightPopup(document_owner),
-                ) => {
-                    owner.transport_generation() == self.runtime_reset_generation()
-                        && document_owner.popup_id() == popup_id
-                }
+                ) => document_owner.popup_id() == popup_id,
                 _ => false,
             }
     }
@@ -298,11 +284,9 @@ impl JsContextHost {
             pending.request_context.owner().document_owner() != Some(retired_owner)
         });
 
-        let transport_generation = self.runtime_reset_generation();
         let current_window_owner = ServiceWorkerWindowOwner {
             dispatch_scope: OwnerDispatchScope::Top,
             document_owner: WindowDocumentOwner::Frame(transition.current_owner()),
-            transport_generation,
         };
         let mut rebound_scopes = Vec::new();
         self.service_worker_registration_watchers
@@ -315,20 +299,20 @@ impl JsContextHost {
             rebound_scopes.push((watcher.scope_url.clone(), watcher.storage_key.clone()));
         }
         self.service_worker_lifecycle_watched_scopes
-            .retain(|(_, _, generation)| *generation == transport_generation);
+            .retain(|(_, _, owner)| *owner != WindowDocumentOwner::Frame(retired_owner));
         let mut rebound_watcher_count = 0usize;
         for (scope_url, storage_key) in rebound_scopes {
             rebound_watcher_count += 1;
             if self.service_worker_lifecycle_watched_scopes.insert((
                 scope_url.clone(),
                 storage_key.clone(),
-                transport_generation,
+                current_window_owner.window_document_owner(),
             )) {
                 self.browser_context_runtime
                     .watch_service_worker_registration_lifecycle(
                         scope_url,
                         storage_key,
-                        transport_generation,
+                        current_window_owner.window_document_owner(),
                         self.service_worker_task_sender(),
                     );
             }
@@ -336,7 +320,6 @@ impl JsContextHost {
         tracing::debug!(
             ?retired_owner,
             current_owner = ?transition.current_owner(),
-            transport_generation,
             retired_register_resolvers =
                 register_count - self.pending_service_worker_registers.len(),
             retired_unregister_resolvers =
@@ -353,7 +336,7 @@ impl JsContextHost {
     ) {
         let document_url = self.document_url().clone();
         let storage_key = self.service_worker_document_storage_key();
-        let runtime_generation = self.runtime_reset_generation();
+        let document_owner = WindowDocumentOwner::Frame(transition.current_owner());
         let updated = self
             .browser_context_runtime
             .update_service_worker_client_document(
@@ -361,15 +344,14 @@ impl JsContextHost {
                 document_url.clone(),
                 storage_key,
                 ServiceWorkerClientFrameType::TopLevel,
-                Some(transition.current_owner().document_id.0),
-                runtime_generation,
+                Some(document_owner),
             );
         if updated {
             tracing::debug!(
                 retired_owner = ?transition.retired_owner(),
                 current_owner = ?transition.current_owner(),
                 client_id = ?self.service_worker_client_id,
-                runtime_generation,
+                ?document_owner,
                 document_url = %document_url,
                 "updated top-level service worker client in main document owner transaction"
             );
@@ -378,7 +360,7 @@ impl JsContextHost {
                 retired_owner = ?transition.retired_owner(),
                 current_owner = ?transition.current_owner(),
                 client_id = ?self.service_worker_client_id,
-                runtime_generation,
+                ?document_owner,
                 document_url = %document_url,
                 "main document owner transaction could not update its service worker client"
             );
@@ -398,7 +380,7 @@ impl JsContextHost {
         owner: ServiceWorkerWindowOwner,
     ) -> (
         u64,
-        u64,
+        WindowDocumentOwner,
         crate::page_task_queue::RendererPageServiceWorkerTaskSender,
     ) {
         let request_id = self.next_service_worker_register_request_id;
@@ -418,12 +400,11 @@ impl JsContextHost {
             request_id,
             dispatch_scope = ?owner.dispatch_scope(),
             window_document_owner = ?owner.window_document_owner(),
-            transport_generation = owner.transport_generation(),
             "registered owner-bound service worker register resolver"
         );
         (
             request_id,
-            owner.transport_generation(),
+            owner.window_document_owner(),
             self.service_worker_task_sender(),
         )
     }
@@ -457,7 +438,7 @@ impl JsContextHost {
         owner: ServiceWorkerWindowOwner,
     ) -> (
         u64,
-        u64,
+        WindowDocumentOwner,
         crate::page_task_queue::RendererPageServiceWorkerTaskSender,
     ) {
         let request_id = self.next_service_worker_register_request_id;
@@ -479,12 +460,11 @@ impl JsContextHost {
             request_id,
             dispatch_scope = ?owner.dispatch_scope(),
             window_document_owner = ?owner.window_document_owner(),
-            transport_generation = owner.transport_generation(),
             "registered owner-bound service worker unregister resolver"
         );
         (
             request_id,
-            owner.transport_generation(),
+            owner.window_document_owner(),
             self.service_worker_task_sender(),
         )
     }
@@ -522,7 +502,6 @@ impl JsContextHost {
             request_id,
             dispatch_scope = ?owner.dispatch_scope(),
             window_document_owner = ?owner.window_document_owner(),
-            transport_generation = owner.transport_generation(),
             "registered owner-bound service worker ready resolver"
         );
         request_id
@@ -593,7 +572,7 @@ impl JsContextHost {
         request_context: &ServiceWorkerWindowRequestContext,
         request_client: crate::network::ResourceRequestClient,
         register_request_id: u64,
-        register_runtime_generation: u64,
+        register_document_owner: WindowDocumentOwner,
         register_completion_tx: crate::page_task_queue::RendererPageServiceWorkerTaskSender,
     ) {
         let creator_secure_context =
@@ -631,7 +610,7 @@ impl JsContextHost {
                 Some(self.storage_bucket_store()),
                 update_via_cache,
                 register_request_id,
-                register_runtime_generation,
+                register_document_owner,
                 register_completion_tx,
             );
         self.watch_pending_service_worker_ready();
@@ -647,7 +626,7 @@ impl JsContextHost {
                     request_context.document_url().clone(),
                     request_context.serialized_storage_key(),
                     request_id,
-                    request_context.owner().transport_generation(),
+                    request_context.owner().window_document_owner(),
                     completion_tx,
                 )
             {
@@ -814,20 +793,19 @@ impl JsContextHost {
         if self.service_worker_lifecycle_watched_scopes.insert((
             scope_url.clone(),
             storage_key.clone(),
-            owner.transport_generation(),
+            owner.window_document_owner(),
         )) {
             self.browser_context_runtime
                 .watch_service_worker_registration_lifecycle(
                     scope_url,
                     storage_key,
-                    owner.transport_generation(),
+                    owner.window_document_owner(),
                     self.service_worker_task_sender(),
                 );
         }
         tracing::debug!(
             ?dispatch_scope,
             window_document_owner = ?owner.window_document_owner(),
-            transport_generation = owner.transport_generation(),
             "registered owner-bound service worker lifecycle watcher"
         );
     }
@@ -837,13 +815,13 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'s, '_>,
         scope_url: &Url,
         storage_key: &str,
-        runtime_generation: u64,
+        document_owner: WindowDocumentOwner,
     ) -> Vec<(OwnerDispatchScope, v8::Local<'s, v8::Object>)> {
         self.compact_service_worker_registration_watchers();
         self.service_worker_registration_watchers
             .iter()
             .filter(|watcher| {
-                watcher.owner.transport_generation() == runtime_generation
+                watcher.owner.window_document_owner() == document_owner
                     && watcher.scope_url == *scope_url
                     && watcher.storage_key == storage_key
             })
@@ -857,22 +835,25 @@ impl JsContextHost {
     }
 
     fn compact_service_worker_registration_watchers(&mut self) {
-        let runtime_generation = self.runtime_reset_generation();
         let mut watchers = std::mem::take(&mut self.service_worker_registration_watchers);
         watchers.retain(|watcher| {
             !watcher.registration.is_empty()
                 && self.service_worker_window_owner_is_current(watcher.owner)
         });
+        let current_owners = watchers
+            .iter()
+            .map(|watcher| watcher.owner.window_document_owner())
+            .collect::<std::collections::HashSet<_>>();
         self.service_worker_registration_watchers = watchers;
         self.service_worker_lifecycle_watched_scopes
-            .retain(|(_, _, generation)| *generation == runtime_generation);
+            .retain(|(_, _, owner)| current_owners.contains(owner));
     }
 
     pub(crate) fn unregister_service_worker_control(
         &mut self,
         request_context: &ServiceWorkerWindowRequestContext,
         request_id: u64,
-        runtime_generation: u64,
+        document_owner: WindowDocumentOwner,
         completion_tx: crate::page_task_queue::RendererPageServiceWorkerTaskSender,
     ) -> ServiceWorkerUnregisterStart {
         let state = self.service_worker_control_state_for_window_owner(
@@ -883,7 +864,7 @@ impl JsContextHost {
                 request_context,
                 state.scope_url(),
                 request_id,
-                runtime_generation,
+                document_owner,
                 completion_tx,
             );
         }
@@ -895,7 +876,7 @@ impl JsContextHost {
         request_context: &ServiceWorkerWindowRequestContext,
         scope_url: &Url,
         request_id: u64,
-        runtime_generation: u64,
+        document_owner: WindowDocumentOwner,
         completion_tx: crate::page_task_queue::RendererPageServiceWorkerTaskSender,
     ) -> ServiceWorkerUnregisterStart {
         self.browser_context_runtime
@@ -903,7 +884,7 @@ impl JsContextHost {
                 scope_url,
                 request_context.serialized_storage_key(),
                 request_id,
-                runtime_generation,
+                document_owner,
                 completion_tx,
             )
     }
@@ -981,8 +962,7 @@ impl JsContextHost {
         let Some(dispatch_scope) = self.service_worker_window_client_owner(target.client_id) else {
             tracing::debug!(
                 client_id = ?target.client_id,
-                target_document_epoch = ?target.document_epoch,
-                target_generation = target.transport_generation,
+                target_document_owner = ?target.document_owner,
                 "dropped service worker completion for retired window client"
             );
             return None;
@@ -992,23 +972,17 @@ impl JsContextHost {
             tracing::debug!(
                 client_id = ?target.client_id,
                 ?dispatch_scope,
-                target_document_epoch = ?target.document_epoch,
-                target_generation = target.transport_generation,
+                target_document_owner = ?target.document_owner,
                 "dropped service worker completion for retired window document owner"
             );
             return None;
         };
-        if owner.transport_generation() != target.transport_generation
-            || owner.document_epoch() != target.document_epoch
-        {
+        if owner.window_document_owner() != target.document_owner {
             tracing::debug!(
                 client_id = ?target.client_id,
                 ?dispatch_scope,
                 window_document_owner = ?owner.window_document_owner(),
-                target_document_epoch = ?target.document_epoch,
-                current_document_epoch = ?owner.document_epoch(),
-                target_generation = target.transport_generation,
-                current_generation = owner.transport_generation(),
+                target_document_owner = ?target.document_owner,
                 "dropped stale service worker window client completion target"
             );
             return None;
@@ -1031,7 +1005,6 @@ impl JsContextHost {
                     storage_key,
                     ServiceWorkerClientFrameType::TopLevel,
                     None,
-                    self.runtime_reset_generation(),
                 ),
         )
     }
@@ -1097,8 +1070,7 @@ impl JsContextHost {
                     document_url,
                     storage_key,
                     ServiceWorkerClientFrameType::TopLevel,
-                    Some(document_owner.document_id().as_u64()),
-                    self.runtime_reset_generation(),
+                    Some(WindowDocumentOwner::LightweightPopup(document_owner)),
                 );
             return Some(client_id);
         }
@@ -1106,8 +1078,7 @@ impl JsContextHost {
             document_url,
             storage_key,
             ServiceWorkerClientFrameType::TopLevel,
-            Some(document_owner.document_id().as_u64()),
-            self.runtime_reset_generation(),
+            Some(WindowDocumentOwner::LightweightPopup(document_owner)),
             self.service_worker_task_sender(),
         );
         self.service_worker_popup_clients
@@ -1133,8 +1104,7 @@ impl JsContextHost {
                 document_url,
                 storage_key,
                 ServiceWorkerClientFrameType::TopLevel,
-                Some(document_owner.document_id().as_u64()),
-                self.runtime_reset_generation(),
+                Some(WindowDocumentOwner::LightweightPopup(document_owner)),
             )
     }
 
@@ -1144,11 +1114,10 @@ impl JsContextHost {
     ) -> Option<ServiceWorkerClientId> {
         let document_url = self.child_browsing_context_current_url(handle)?;
         let storage_key = service_worker_first_party_storage_key(&document_url);
-        let runtime_generation = self.runtime_reset_generation();
-        let document_epoch = self
+        let document_owner = self
             .frame_owner_store
             .current_child_document_task_owner(handle)
-            .map(|owner| owner.document_id.0)?;
+            .map(WindowDocumentOwner::Frame)?;
         let existing_client_id = self
             .child_browsing_contexts
             .get(&handle)
@@ -1161,8 +1130,7 @@ impl JsContextHost {
                     document_url.clone(),
                     storage_key.clone(),
                     ServiceWorkerClientFrameType::Nested,
-                    Some(document_epoch),
-                    runtime_generation,
+                    Some(document_owner),
                     self.service_worker_task_sender(),
                 )
         {
@@ -1174,8 +1142,7 @@ impl JsContextHost {
             document_url,
             storage_key,
             ServiceWorkerClientFrameType::Nested,
-            Some(document_epoch),
-            runtime_generation,
+            Some(document_owner),
             self.service_worker_task_sender(),
         );
         if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
@@ -1206,7 +1173,6 @@ impl JsContextHost {
                 storage_key,
                 ServiceWorkerClientFrameType::Nested,
                 None,
-                self.runtime_reset_generation(),
             );
         if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
             entry.set_pending_service_worker_client_id(client_id);

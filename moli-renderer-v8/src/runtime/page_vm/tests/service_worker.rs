@@ -42,7 +42,7 @@ async fn service_worker_internal_body_authorizes_the_exact_root_document() {
             .service_worker_task_sender_for_root_for_test(current_root)
             .send_service_worker_unregister(ServiceWorkerUnregisterCompletion {
                 request_id: 47,
-                runtime_generation: 53,
+                document_owner: crate::native_bridge::WindowDocumentOwner::for_test(53),
                 result: false,
             })
             .expect("current-root callback should enter the stable source");
@@ -94,7 +94,7 @@ async fn service_worker_internal_body_authorizes_the_exact_root_document() {
             .service_worker_task_sender_for_root_for_test(stale_root)
             .send_service_worker_unregister(ServiceWorkerUnregisterCompletion {
                 request_id: 59,
-                runtime_generation: 61,
+                document_owner: crate::native_bridge::WindowDocumentOwner::for_test(61),
                 result: true,
             })
             .expect("stale callback should still enter one discard turn");
@@ -145,8 +145,7 @@ async fn service_worker_client_message_authorizes_root_before_window_client_targ
         let current_root = page_vm.document_lifecycle.identity().document;
         let stale_target = ServiceWorkerWindowClientTarget {
             client_id: ServiceWorkerClientId::from_u64_for_test(u64::MAX - 7),
-            document_epoch: Some(u64::MAX - 5),
-            transport_generation: u64::MAX - 3,
+            document_owner: crate::native_bridge::WindowDocumentOwner::for_test(u64::MAX - 5),
         };
 
         page_vm

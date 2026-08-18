@@ -6,7 +6,7 @@ impl ServiceWorkerRuntimeService {
         &self,
         document_url: Url,
         request_id: u64,
-        runtime_generation: u64,
+        document_owner_identity: u64,
         completion_tx: RendererPageServiceWorkerTaskSender,
     ) -> bool {
         let storage_key =
@@ -15,7 +15,7 @@ impl ServiceWorkerRuntimeService {
             document_url,
             storage_key,
             request_id,
-            runtime_generation,
+            crate::window_document_identity::WindowDocumentOwner::for_test(document_owner_identity),
             completion_tx,
         )
     }
@@ -25,7 +25,7 @@ impl ServiceWorkerRuntimeService {
         document_url: Url,
         storage_key: String,
         request_id: u64,
-        runtime_generation: u64,
+        document_owner: crate::window_document_identity::WindowDocumentOwner,
         completion_tx: RendererPageServiceWorkerTaskSender,
     ) -> bool {
         let current_document_url = service_worker_current_url_for_creation_url(&document_url);
@@ -56,7 +56,7 @@ impl ServiceWorkerRuntimeService {
             drop(state);
             let _ = completion_tx.send_service_worker_ready(ServiceWorkerReadyCompletion {
                 request_id,
-                runtime_generation,
+                document_owner,
                 registration: snapshot,
             });
             return true;
@@ -82,7 +82,7 @@ impl ServiceWorkerRuntimeService {
         }
         let ready_job = ServiceWorkerReadyJob {
             request_id,
-            runtime_generation,
+            document_owner,
             completion_tx,
             registration_id,
         };
@@ -94,7 +94,7 @@ impl ServiceWorkerRuntimeService {
         &self,
         scope_url: Url,
         storage_key: String,
-        runtime_generation: u64,
+        document_owner: crate::window_document_identity::WindowDocumentOwner,
         completion_tx: RendererPageServiceWorkerTaskSender,
     ) {
         self.inner
@@ -104,7 +104,7 @@ impl ServiceWorkerRuntimeService {
             .push(ServiceWorkerLifecycleWatcher {
                 scope_url,
                 storage_key,
-                runtime_generation,
+                document_owner,
                 completion_tx,
             });
     }

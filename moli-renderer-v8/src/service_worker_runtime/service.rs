@@ -789,8 +789,9 @@ mod tests {
                         secure_context: true,
                         execution_ready: true,
                         discarded_or_frozen: false,
-                        document_epoch: Some(0),
-                        runtime_generation: 0,
+                        document_owner: Some(crate::native_bridge::WindowDocumentOwner::for_test(
+                            0,
+                        )),
                         endpoint: ServiceWorkerClientEndpoint::Page(test_completion_sender()),
                         focused: false,
                     },
@@ -1073,8 +1074,7 @@ mod tests {
             document_url,
             storage_key,
             frame_type,
-            Some(0),
-            0,
+            Some(crate::native_bridge::WindowDocumentOwner::for_test(0)),
             test_completion_sender(),
         )
     }
@@ -1090,8 +1090,7 @@ mod tests {
             document_url,
             storage_key,
             frame_type,
-            Some(0),
-            0,
+            Some(crate::native_bridge::WindowDocumentOwner::for_test(0)),
         )
     }
 
@@ -1142,8 +1141,7 @@ mod tests {
                 secure_context: true,
                 execution_ready: true,
                 discarded_or_frozen: false,
-                document_epoch: Some(0),
-                runtime_generation: 0,
+                document_owner: Some(crate::native_bridge::WindowDocumentOwner::for_test(0)),
                 endpoint: ServiceWorkerClientEndpoint::Page(test_completion_sender()),
                 focused: false,
             },
@@ -1189,13 +1187,13 @@ mod tests {
                 ServiceWorkerLifecycleWatcher {
                     scope_url: scope_url.clone(),
                     storage_key: registration_storage_key.clone(),
-                    runtime_generation: 7,
+                    document_owner: crate::native_bridge::WindowDocumentOwner::for_test(7),
                     completion_tx: test_completion_sender(),
                 },
                 ServiceWorkerLifecycleWatcher {
                     scope_url: scope_url.clone(),
                     storage_key: "different-partition".to_owned(),
-                    runtime_generation: 8,
+                    document_owner: crate::native_bridge::WindowDocumentOwner::for_test(8),
                     completion_tx: test_completion_sender(),
                 },
             ]);
@@ -1207,7 +1205,10 @@ mod tests {
         };
 
         assert_eq!(deliveries.len(), 1);
-        assert_eq!(deliveries[0].watcher.runtime_generation, 7);
+        assert_eq!(
+            deliveries[0].watcher.document_owner,
+            crate::native_bridge::WindowDocumentOwner::for_test(7)
+        );
         assert_ne!(deliveries[0].watcher.storage_key, "different-partition");
     }
 
@@ -1351,7 +1352,7 @@ mod tests {
             storage_bucket_store: None,
             callbacks: vec![ServiceWorkerRegisterJob {
                 request_id: 1,
-                runtime_generation: 1,
+                document_owner: crate::native_bridge::WindowDocumentOwner::for_test(1),
                 completion_tx: test_completion_sender(),
             }],
         }
@@ -1387,7 +1388,7 @@ mod tests {
             storage_bucket_store: None,
             callbacks: vec![ServiceWorkerRegisterJob {
                 request_id,
-                runtime_generation: 1,
+                document_owner: crate::native_bridge::WindowDocumentOwner::for_test(1),
                 completion_tx,
             }],
         };
@@ -1564,7 +1565,7 @@ mod tests {
         let mut pending_register_job =
             ServiceWorkerPendingRegisterJob::new(vec![ServiceWorkerRegisterJob {
                 request_id,
-                runtime_generation: 1,
+                document_owner: crate::native_bridge::WindowDocumentOwner::for_test(1),
                 completion_tx,
             }]);
         pending_register_job.start_current_moli_job();
@@ -1635,7 +1636,7 @@ mod tests {
                 storage_bucket_store: None,
                 callbacks: vec![ServiceWorkerRegisterJob {
                     request_id,
-                    runtime_generation: 1,
+                    document_owner: crate::native_bridge::WindowDocumentOwner::for_test(1),
                     completion_tx,
                 }],
             },
@@ -2540,8 +2541,7 @@ mod tests {
             committed_creation_url.clone(),
             ServiceWorkerRegistrationKey::first_party_storage_key_for_url(&committed_creation_url,),
             ServiceWorkerClientFrameType::TopLevel,
-            Some(3),
-            3,
+            Some(crate::native_bridge::WindowDocumentOwner::for_test(3)),
         ));
 
         let visible = service.query_clients(&ServiceWorkerClientQuery {
@@ -2616,8 +2616,7 @@ mod tests {
             reserved_creation_url.clone(),
             ServiceWorkerRegistrationKey::first_party_storage_key_for_url(&reserved_creation_url),
             ServiceWorkerClientFrameType::TopLevel,
-            Some(4),
-            4,
+            Some(crate::native_bridge::WindowDocumentOwner::for_test(4)),
         ));
 
         let visible = service.query_clients(&ServiceWorkerClientQuery {
@@ -2663,7 +2662,6 @@ mod tests {
             storage_key.clone(),
             ServiceWorkerClientFrameType::TopLevel,
             None,
-            0,
         );
         assert!(service.matching_controller_for_client(client_id).is_none());
 
@@ -2673,8 +2671,7 @@ mod tests {
                 document_url,
                 storage_key,
                 ServiceWorkerClientFrameType::TopLevel,
-                Some(1),
-                1,
+                Some(crate::native_bridge::WindowDocumentOwner::for_test(1)),
                 test_completion_sender(),
             )
         );
@@ -2685,7 +2682,7 @@ mod tests {
     }
 
     #[test]
-    fn window_client_completion_target_rotates_when_document_epoch_changes() {
+    fn window_client_completion_target_rotates_with_exact_document_owner() {
         let service = new_service_worker_runtime_service();
         let document_url = url("https://client-epoch.test/page.html");
         let storage_key =
@@ -2694,8 +2691,7 @@ mod tests {
             document_url.clone(),
             storage_key.clone(),
             ServiceWorkerClientFrameType::TopLevel,
-            Some(10),
-            7,
+            Some(crate::native_bridge::WindowDocumentOwner::for_test(10)),
             test_completion_sender(),
         );
         let initial_target = service
@@ -2712,8 +2708,7 @@ mod tests {
             document_url,
             storage_key,
             ServiceWorkerClientFrameType::TopLevel,
-            Some(11),
-            7,
+            Some(crate::native_bridge::WindowDocumentOwner::for_test(11)),
         ));
         let replacement_target = service
             .inner
@@ -2725,10 +2720,14 @@ mod tests {
             .expect("replacement window client target");
 
         assert_eq!(initial_target.client_id, replacement_target.client_id);
-        assert_eq!(initial_target.transport_generation, 7);
-        assert_eq!(replacement_target.transport_generation, 7);
-        assert_eq!(initial_target.document_epoch, Some(10));
-        assert_eq!(replacement_target.document_epoch, Some(11));
+        assert_eq!(
+            initial_target.document_owner,
+            crate::native_bridge::WindowDocumentOwner::for_test(10)
+        );
+        assert_eq!(
+            replacement_target.document_owner,
+            crate::native_bridge::WindowDocumentOwner::for_test(11)
+        );
         assert_ne!(initial_target, replacement_target);
     }
 
@@ -2745,16 +2744,14 @@ mod tests {
             app_page.clone(),
             ServiceWorkerRegistrationKey::first_party_storage_key_for_url(&app_page),
             ServiceWorkerClientFrameType::TopLevel,
-            Some(7),
-            7,
+            Some(crate::native_bridge::WindowDocumentOwner::for_test(7)),
             app_queue.sender(),
         );
         service.register_client_with_storage_key(
             outside_page.clone(),
             ServiceWorkerRegistrationKey::first_party_storage_key_for_url(&outside_page),
             ServiceWorkerClientFrameType::TopLevel,
-            Some(11),
-            11,
+            Some(crate::native_bridge::WindowDocumentOwner::for_test(11)),
             outside_queue.sender(),
         );
         insert_registered_version(
@@ -2775,8 +2772,10 @@ mod tests {
             other => panic!("expected controllerchange completion, got {other:?}"),
         };
         assert_eq!(completion.target.client_id, app_client_id);
-        assert_eq!(completion.target.document_epoch, Some(7));
-        assert_eq!(completion.target.transport_generation, 7);
+        assert_eq!(
+            completion.target.document_owner,
+            crate::native_bridge::WindowDocumentOwner::for_test(7)
+        );
         assert!(!app_queue.has_ready_task());
         assert!(!outside_queue.has_ready_task());
 
@@ -3409,8 +3408,7 @@ mod tests {
                 &same_origin_creation_url,
             ),
             ServiceWorkerClientFrameType::TopLevel,
-            Some(2),
-            2,
+            Some(crate::native_bridge::WindowDocumentOwner::for_test(2)),
         ));
         let same_origin_result = service.query_clients(&ServiceWorkerClientQuery {
             request_id: 31,
@@ -3442,8 +3440,7 @@ mod tests {
                 &cross_origin_creation_url,
             ),
             ServiceWorkerClientFrameType::TopLevel,
-            Some(3),
-            3,
+            Some(crate::native_bridge::WindowDocumentOwner::for_test(3)),
         ));
         let hidden_old_exposed_id = service.query_clients(&ServiceWorkerClientQuery {
             request_id: 32,
@@ -3753,24 +3750,21 @@ mod tests {
             not_ready_url.clone(),
             ServiceWorkerRegistrationKey::first_party_storage_key_for_url(&not_ready_url),
             ServiceWorkerClientFrameType::TopLevel,
-            Some(21),
-            21,
+            Some(crate::native_bridge::WindowDocumentOwner::for_test(21)),
             not_ready_queue.sender(),
         );
         let discarded_client_id = service.register_client_with_storage_key(
             discarded_url.clone(),
             ServiceWorkerRegistrationKey::first_party_storage_key_for_url(&discarded_url),
             ServiceWorkerClientFrameType::TopLevel,
-            Some(22),
-            22,
+            Some(crate::native_bridge::WindowDocumentOwner::for_test(22)),
             discarded_queue.sender(),
         );
         let ready_client_id = service.register_client_with_storage_key(
             ready_url.clone(),
             ServiceWorkerRegistrationKey::first_party_storage_key_for_url(&ready_url),
             ServiceWorkerClientFrameType::TopLevel,
-            Some(23),
-            23,
+            Some(crate::native_bridge::WindowDocumentOwner::for_test(23)),
             ready_queue.sender(),
         );
         {
@@ -3818,8 +3812,10 @@ mod tests {
         };
         assert_eq!(completion.request_id, 51);
         assert_eq!(completion.host.client_id, ready_client_id);
-        assert_eq!(completion.host.document_epoch, Some(23));
-        assert_eq!(completion.host.transport_generation, 23);
+        assert_eq!(
+            completion.host.document_owner,
+            crate::native_bridge::WindowDocumentOwner::for_test(23)
+        );
         assert_eq!(completion.source_version_id, version_id);
         assert_eq!(completion.source_run, run);
         assert_eq!(completion.url, url("https://example.test/app/opened.html"));
@@ -3899,8 +3895,7 @@ mod tests {
                     secure_context: true,
                     execution_ready: true,
                     discarded_or_frozen: false,
-                    document_epoch: Some(0),
-                    runtime_generation: 0,
+                    document_owner: Some(crate::native_bridge::WindowDocumentOwner::for_test(0)),
                     endpoint: ServiceWorkerClientEndpoint::Page(test_completion_sender()),
                     focused: false,
                 },
@@ -4254,7 +4249,7 @@ mod tests {
             for registration_id in [deleted_registration_id, kept_registration_id] {
                 state.pending_ready_jobs.push(ServiceWorkerReadyJob {
                     request_id: registration_id.as_u64(),
-                    runtime_generation: 1,
+                    document_owner: crate::native_bridge::WindowDocumentOwner::for_test(1),
                     completion_tx: test_completion_sender(),
                     registration_id,
                 });
@@ -5045,11 +5040,17 @@ self.addEventListener("message", event => {
         assert!(register_completion.result.is_ok());
         let first_completion = pop_unregister_completion(&mut first_unregister_queue);
         assert_eq!(first_completion.request_id, 21);
-        assert_eq!(first_completion.runtime_generation, 1);
+        assert_eq!(
+            first_completion.document_owner,
+            crate::native_bridge::WindowDocumentOwner::for_test(1)
+        );
         assert!(first_completion.result);
         let second_completion = pop_unregister_completion(&mut second_unregister_queue);
         assert_eq!(second_completion.request_id, 22);
-        assert_eq!(second_completion.runtime_generation, 2);
+        assert_eq!(
+            second_completion.document_owner,
+            crate::native_bridge::WindowDocumentOwner::for_test(2)
+        );
         assert!(second_completion.result);
 
         let diagnostics = service.diagnostics_snapshot();
@@ -5101,7 +5102,7 @@ self.addEventListener("message", event => {
             let mut state = service.inner.state.lock();
             state.pending_ready_jobs.push(ServiceWorkerReadyJob {
                 request_id: 33,
-                runtime_generation: 1,
+                document_owner: crate::native_bridge::WindowDocumentOwner::for_test(1),
                 completion_tx: test_completion_sender(),
                 registration_id,
             });
@@ -7441,8 +7442,7 @@ self.addEventListener("message", event => {
             document_url,
             second_storage_key,
             ServiceWorkerClientFrameType::TopLevel,
-            Some(1),
-            1,
+            Some(crate::native_bridge::WindowDocumentOwner::for_test(1)),
             test_completion_sender(),
         );
         let control = service
@@ -10962,8 +10962,7 @@ self.addEventListener("message", event => {
                     secure_context: true,
                     execution_ready: true,
                     discarded_or_frozen: false,
-                    document_epoch: Some(0),
-                    runtime_generation: 0,
+                    document_owner: Some(crate::native_bridge::WindowDocumentOwner::for_test(0)),
                     endpoint: ServiceWorkerClientEndpoint::Page(test_completion_sender()),
                     focused: false,
                 },
@@ -11146,8 +11145,7 @@ self.addEventListener("message", event => {
                     secure_context: true,
                     execution_ready: true,
                     discarded_or_frozen: false,
-                    document_epoch: Some(0),
-                    runtime_generation: 0,
+                    document_owner: Some(crate::native_bridge::WindowDocumentOwner::for_test(0)),
                     endpoint: ServiceWorkerClientEndpoint::Page(test_completion_sender()),
                     focused: false,
                 },
@@ -11763,8 +11761,7 @@ self.addEventListener("message", event => {
                     secure_context: true,
                     execution_ready: true,
                     discarded_or_frozen: false,
-                    document_epoch: Some(0),
-                    runtime_generation: 0,
+                    document_owner: Some(crate::native_bridge::WindowDocumentOwner::for_test(0)),
                     endpoint: ServiceWorkerClientEndpoint::Page(client_queue.sender()),
                     focused: false,
                 },
@@ -11925,8 +11922,7 @@ self.addEventListener("message", event => {
                     secure_context: true,
                     execution_ready: true,
                     discarded_or_frozen: false,
-                    document_epoch: Some(0),
-                    runtime_generation: 0,
+                    document_owner: Some(crate::native_bridge::WindowDocumentOwner::for_test(0)),
                     endpoint: ServiceWorkerClientEndpoint::Page(test_completion_sender()),
                     focused: false,
                 },
@@ -13642,8 +13638,7 @@ self.addEventListener("message", event => {
                     secure_context: true,
                     execution_ready: true,
                     discarded_or_frozen: false,
-                    document_epoch: Some(7),
-                    runtime_generation: 7,
+                    document_owner: Some(crate::native_bridge::WindowDocumentOwner::for_test(7)),
                     endpoint: ServiceWorkerClientEndpoint::Page(completion_queue.sender()),
                     focused: false,
                 },
@@ -13678,8 +13673,10 @@ self.addEventListener("message", event => {
             panic!("expected notification action navigate request");
         };
         assert_eq!(completion.host.client_id, client_id);
-        assert_eq!(completion.host.document_epoch, Some(7));
-        assert_eq!(completion.host.transport_generation, 7);
+        assert_eq!(
+            completion.host.document_owner,
+            crate::native_bridge::WindowDocumentOwner::for_test(7)
+        );
         assert_eq!(completion.url, action_url);
         let state = service.inner.state.lock();
         let version = state.versions.get(&version_id).unwrap();

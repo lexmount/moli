@@ -49,6 +49,9 @@ use crate::{
         context_host_ptr_from_global_bridge, get_private_value, set_private_value,
         throw_type_error, v8_string, v8str,
     },
+    window_document_identity::{
+        LightweightPopupDocumentId, LightweightPopupDocumentOwner, LightweightPopupLocalWindowId,
+    },
 };
 use anyhow::Result;
 use moli_crypto::sha256_hex;
@@ -211,55 +214,6 @@ pub(super) struct PendingLightweightPopupClassicScriptLoad {
     request_url: Url,
     continuation: LightweightPopupClassicScriptContinuation,
     cancel_handle: moli_fetch::FetchCancelHandle,
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) struct LightweightPopupDocumentId(u64);
-
-impl LightweightPopupDocumentId {
-    pub(crate) fn new(value: u64) -> Self {
-        Self(value)
-    }
-
-    pub(crate) fn as_u64(self) -> u64 {
-        self.0
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) struct LightweightPopupLocalWindowId(u64);
-
-impl LightweightPopupLocalWindowId {
-    pub(crate) fn new(value: u64) -> Self {
-        Self(value)
-    }
-
-    pub(crate) fn as_u64(self) -> u64 {
-        self.0
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) struct LightweightPopupDocumentOwner {
-    popup_id: u64,
-    document_id: LightweightPopupDocumentId,
-}
-
-impl LightweightPopupDocumentOwner {
-    pub(crate) fn new(popup_id: u64, document_id: LightweightPopupDocumentId) -> Self {
-        Self {
-            popup_id,
-            document_id,
-        }
-    }
-
-    pub(crate) fn popup_id(self) -> u64 {
-        self.popup_id
-    }
-
-    pub(crate) fn document_id(self) -> LightweightPopupDocumentId {
-        self.document_id
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

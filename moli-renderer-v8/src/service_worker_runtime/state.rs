@@ -820,7 +820,7 @@ impl ServiceWorkerFetchJob {
 #[derive(Clone, Debug)]
 pub(super) struct ServiceWorkerReadyJob {
     pub(super) request_id: u64,
-    pub(super) runtime_generation: u64,
+    pub(super) document_owner: crate::window_document_identity::WindowDocumentOwner,
     pub(super) completion_tx: RendererPageServiceWorkerTaskSender,
     pub(super) registration_id: ServiceWorkerRegistrationId,
 }
@@ -831,7 +831,7 @@ impl ServiceWorkerReadyJob {
             .completion_tx
             .send_service_worker_ready(ServiceWorkerReadyCompletion {
                 request_id: self.request_id,
-                runtime_generation: self.runtime_generation,
+                document_owner: self.document_owner,
                 registration,
             });
     }
@@ -841,7 +841,7 @@ impl ServiceWorkerReadyJob {
 pub(super) struct ServiceWorkerLifecycleWatcher {
     pub(super) scope_url: Url,
     pub(super) storage_key: String,
-    pub(super) runtime_generation: u64,
+    pub(super) document_owner: crate::window_document_identity::WindowDocumentOwner,
     pub(super) completion_tx: RendererPageServiceWorkerTaskSender,
 }
 
@@ -855,7 +855,7 @@ impl ServiceWorkerLifecycleNotificationDelivery {
     pub(super) fn send(self) {
         let _ = self.watcher.completion_tx.send_service_worker_lifecycle(
             ServiceWorkerLifecycleNotification {
-                runtime_generation: self.watcher.runtime_generation,
+                document_owner: self.watcher.document_owner,
                 storage_key: self.watcher.storage_key,
                 registration: self.registration,
                 events: self.events,
@@ -962,21 +962,20 @@ pub(super) struct ServiceWorkerClient {
     pub(super) secure_context: bool,
     pub(super) execution_ready: bool,
     pub(super) discarded_or_frozen: bool,
-    pub(super) document_epoch: Option<u64>,
-    pub(super) runtime_generation: u64,
+    pub(super) document_owner: Option<crate::window_document_identity::WindowDocumentOwner>,
     pub(super) endpoint: ServiceWorkerClientEndpoint,
     pub(super) focused: bool,
 }
 
 impl ServiceWorkerClient {
     pub(super) fn window_completion_target(&self) -> Option<ServiceWorkerWindowClientTarget> {
-        (self.client_type == ServiceWorkerClientType::Window).then_some(
-            ServiceWorkerWindowClientTarget {
-                client_id: self.id,
-                document_epoch: self.document_epoch,
-                transport_generation: self.runtime_generation,
-            },
-        )
+        if self.client_type != ServiceWorkerClientType::Window {
+            return None;
+        }
+        Some(ServiceWorkerWindowClientTarget {
+            client_id: self.id,
+            document_owner: self.document_owner?,
+        })
     }
 }
 

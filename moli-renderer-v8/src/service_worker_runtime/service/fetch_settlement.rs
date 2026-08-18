@@ -1108,8 +1108,7 @@ mod tests {
                 secure_context: true,
                 execution_ready: true,
                 discarded_or_frozen: false,
-                document_epoch: Some(0),
-                runtime_generation: 0,
+                document_owner: Some(crate::native_bridge::WindowDocumentOwner::for_test(0)),
                 endpoint: ServiceWorkerClientEndpoint::Page(
                     crate::page_task_queue::RendererPageServiceWorkerTestHarness::new().sender(),
                 ),

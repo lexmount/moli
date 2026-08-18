@@ -3973,7 +3973,7 @@ async fn service_worker_window_requests_bind_and_retire_exact_document_owners() 
     vm.current_service_worker_task_sender_for_test()
         .send_service_worker_ready(crate::types::ServiceWorkerReadyCompletion {
             request_id: child_ready_request_id,
-            runtime_generation: child_ready_owner.transport_generation(),
+            document_owner: child_ready_owner.window_document_owner(),
             registration:
                 crate::service_worker_runtime::ServiceWorkerRegistrationSnapshot::active_for_binding_test(
                 ready_scope.clone(),
@@ -4036,7 +4036,7 @@ async fn service_worker_window_requests_bind_and_retire_exact_document_owners() 
     vm.current_service_worker_task_sender_for_test()
         .send_service_worker_register(crate::types::ServiceWorkerRegisterCompletion {
             request_id,
-            runtime_generation: register_owner.transport_generation(),
+            document_owner: register_owner.window_document_owner(),
             result: Err(
                 crate::service_worker_runtime::ServiceWorkerRegistrationError::type_error(
                     "forced owner completion",
@@ -4101,7 +4101,7 @@ async fn service_worker_window_requests_bind_and_retire_exact_document_owners() 
     vm.current_service_worker_task_sender_for_test()
         .send_service_worker_register(crate::types::ServiceWorkerRegisterCompletion {
             request_id: binding_request_id,
-            runtime_generation: binding_owner.transport_generation(),
+            document_owner: binding_owner.window_document_owner(),
             result: Ok(registration_snapshot.clone()),
         })
         .expect("owner-bound child registration should enter the typed Page source");
@@ -4141,7 +4141,7 @@ async fn service_worker_window_requests_bind_and_retire_exact_document_owners() 
     .expect("child lifecycle listener should install");
     vm.current_service_worker_task_sender_for_test()
         .send_service_worker_lifecycle(crate::types::ServiceWorkerLifecycleNotification {
-            runtime_generation: binding_owner.transport_generation(),
+            document_owner: binding_owner.window_document_owner(),
             storage_key: "wrong-partition".to_owned(),
             registration: registration_snapshot.clone(),
             events: vec![crate::types::ServiceWorkerLifecycleClientEvent::UpdateFound],
@@ -4163,7 +4163,7 @@ async fn service_worker_window_requests_bind_and_retire_exact_document_owners() 
     );
     vm.current_service_worker_task_sender_for_test()
         .send_service_worker_lifecycle(crate::types::ServiceWorkerLifecycleNotification {
-            runtime_generation: binding_owner.transport_generation(),
+            document_owner: binding_owner.window_document_owner(),
             storage_key: lifecycle_storage_key,
             registration: registration_snapshot,
             events: vec![crate::types::ServiceWorkerLifecycleClientEvent::UpdateFound],
@@ -4330,7 +4330,7 @@ async fn main_document_replacement_rebinds_service_worker_lifecycle_watcher() {
     vm.current_service_worker_task_sender_for_test()
         .send_service_worker_register(crate::types::ServiceWorkerRegisterCompletion {
             request_id,
-            runtime_generation: register_owner.transport_generation(),
+            document_owner: register_owner.window_document_owner(),
             result: Ok(registration_snapshot.clone()),
         })
         .expect("main service worker registration should enter the typed Page source");
@@ -4369,7 +4369,7 @@ async fn main_document_replacement_rebinds_service_worker_lifecycle_watcher() {
 
     vm.current_service_worker_task_sender_for_test()
         .send_service_worker_lifecycle(crate::types::ServiceWorkerLifecycleNotification {
-            runtime_generation: register_owner.transport_generation(),
+            document_owner: register_owner.window_document_owner(),
             storage_key: storage_key.clone(),
             registration: registration_snapshot.clone(),
             events: vec![crate::types::ServiceWorkerLifecycleClientEvent::UpdateFound],
@@ -4390,7 +4390,7 @@ async fn main_document_replacement_rebinds_service_worker_lifecycle_watcher() {
 
     vm.current_service_worker_task_sender_for_test()
         .send_service_worker_lifecycle(crate::types::ServiceWorkerLifecycleNotification {
-            runtime_generation: rebound_owner.transport_generation(),
+            document_owner: rebound_owner.window_document_owner(),
             storage_key,
             registration: registration_snapshot,
             events: vec![crate::types::ServiceWorkerLifecycleClientEvent::UpdateFound],
@@ -4460,8 +4460,7 @@ async fn service_worker_controller_change_targets_exact_child_document() {
     };
     let child_target = crate::types::ServiceWorkerWindowClientTarget {
         client_id: child_client_id,
-        document_epoch: Some(child_owner.document_id.0),
-        transport_generation: vm.document_runtime.runtime_reset_generation(),
+        document_owner: crate::native_bridge::WindowDocumentOwner::Frame(child_owner),
     };
     vm.eval(
         r#"
@@ -4574,8 +4573,7 @@ async fn service_worker_controller_change_targets_exact_child_document() {
 
     let replacement_target = crate::types::ServiceWorkerWindowClientTarget {
         client_id: replacement_client_id,
-        document_epoch: Some(replacement_owner.document_id.0),
-        transport_generation: vm.document_runtime.runtime_reset_generation(),
+        document_owner: crate::native_bridge::WindowDocumentOwner::Frame(replacement_owner),
     };
     vm.current_service_worker_task_sender_for_test()
         .send_service_worker_controller_change(

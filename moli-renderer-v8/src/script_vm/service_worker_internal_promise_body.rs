@@ -29,13 +29,13 @@ impl ScriptVm {
             ._context_host
             .borrow()
             .service_worker_window_owner_is_current(owner);
-        if owner.transport_generation() != completion.runtime_generation || !owner_is_current {
+        if owner.window_document_owner() != completion.document_owner || !owner_is_current {
             tracing::debug!(
                 dispatch_scope = ?owner.dispatch_scope(),
                 document_owner = ?owner.document_owner(),
                 owner_is_current,
-                pending_generation = owner.transport_generation(),
-                completion_generation = completion.runtime_generation,
+                pending_document_owner = ?owner.window_document_owner(),
+                completion_document_owner = ?completion.document_owner,
                 request_id = completion.request_id,
                 "dropped stale service worker register completion"
             );
@@ -74,13 +74,13 @@ impl ScriptVm {
             ._context_host
             .borrow()
             .service_worker_window_owner_is_current(owner);
-        if owner.transport_generation() != completion.runtime_generation || !owner_is_current {
+        if owner.window_document_owner() != completion.document_owner || !owner_is_current {
             tracing::debug!(
                 dispatch_scope = ?owner.dispatch_scope(),
                 document_owner = ?owner.document_owner(),
                 owner_is_current,
-                pending_generation = owner.transport_generation(),
-                completion_generation = completion.runtime_generation,
+                pending_document_owner = ?owner.window_document_owner(),
+                completion_document_owner = ?completion.document_owner,
                 request_id = completion.request_id,
                 "dropped stale service worker ready completion"
             );
@@ -120,13 +120,13 @@ impl ScriptVm {
             ._context_host
             .borrow()
             .service_worker_window_owner_is_current(owner);
-        if owner.transport_generation() != completion.runtime_generation || !owner_is_current {
+        if owner.window_document_owner() != completion.document_owner || !owner_is_current {
             tracing::debug!(
                 dispatch_scope = ?owner.dispatch_scope(),
                 document_owner = ?owner.document_owner(),
                 owner_is_current,
-                pending_generation = owner.transport_generation(),
-                completion_generation = completion.runtime_generation,
+                pending_document_owner = ?owner.window_document_owner(),
+                completion_document_owner = ?completion.document_owner,
                 request_id = completion.request_id,
                 "dropped stale service worker unregister completion"
             );

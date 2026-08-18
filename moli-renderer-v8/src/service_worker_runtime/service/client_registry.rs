@@ -5,7 +5,7 @@ impl ServiceWorkerRuntimeService {
     pub(crate) fn register_client(
         &self,
         document_url: Url,
-        runtime_generation: u64,
+        document_owner_identity: u64,
         completion_tx: RendererPageServiceWorkerTaskSender,
     ) -> ServiceWorkerClientId {
         let storage_key =
@@ -14,8 +14,11 @@ impl ServiceWorkerRuntimeService {
             document_url,
             storage_key,
             ServiceWorkerClientFrameType::TopLevel,
-            Some(runtime_generation),
-            runtime_generation,
+            Some(
+                crate::window_document_identity::WindowDocumentOwner::for_test(
+                    document_owner_identity,
+                ),
+            ),
             completion_tx,
         )
     }
@@ -25,16 +28,14 @@ impl ServiceWorkerRuntimeService {
         document_url: Url,
         storage_key: String,
         frame_type: ServiceWorkerClientFrameType,
-        document_epoch: Option<u64>,
-        runtime_generation: u64,
+        document_owner: Option<crate::window_document_identity::WindowDocumentOwner>,
         completion_tx: RendererPageServiceWorkerTaskSender,
     ) -> ServiceWorkerClientId {
         let client_id = self.register_window_client_with_storage_key(
             document_url,
             storage_key,
             frame_type,
-            document_epoch,
-            runtime_generation,
+            document_owner,
             ServiceWorkerClientEndpoint::Page(completion_tx),
         );
         self.mark_client_execution_ready(client_id);
@@ -46,15 +47,13 @@ impl ServiceWorkerRuntimeService {
         document_url: Url,
         storage_key: String,
         frame_type: ServiceWorkerClientFrameType,
-        document_epoch: Option<u64>,
-        runtime_generation: u64,
+        document_owner: Option<crate::window_document_identity::WindowDocumentOwner>,
     ) -> ServiceWorkerClientId {
         self.register_reserved_client_with_storage_key_and_bypass(
             document_url,
             storage_key,
             frame_type,
-            document_epoch,
-            runtime_generation,
+            document_owner,
             false,
         )
     }
@@ -64,15 +63,13 @@ impl ServiceWorkerRuntimeService {
         document_url: Url,
         storage_key: String,
         frame_type: ServiceWorkerClientFrameType,
-        document_epoch: Option<u64>,
-        runtime_generation: u64,
+        document_owner: Option<crate::window_document_identity::WindowDocumentOwner>,
     ) -> ServiceWorkerClientId {
         self.register_reserved_client_with_storage_key_and_bypass(
             document_url,
             storage_key,
             frame_type,
-            document_epoch,
-            runtime_generation,
+            document_owner,
             true,
         )
     }
@@ -82,16 +79,14 @@ impl ServiceWorkerRuntimeService {
         document_url: Url,
         storage_key: String,
         frame_type: ServiceWorkerClientFrameType,
-        document_epoch: Option<u64>,
-        runtime_generation: u64,
+        document_owner: Option<crate::window_document_identity::WindowDocumentOwner>,
         bypass_service_worker: bool,
     ) -> ServiceWorkerClientId {
         self.register_window_client_with_storage_key(
             document_url,
             storage_key,
             frame_type,
-            document_epoch,
-            runtime_generation,
+            document_owner,
             ServiceWorkerClientEndpoint::ReservedPage {
                 bypass_service_worker,
             },
@@ -135,8 +130,7 @@ impl ServiceWorkerRuntimeService {
                     secure_context,
                     execution_ready: true,
                     discarded_or_frozen: false,
-                    document_epoch: None,
-                    runtime_generation: 0,
+                    document_owner: None,
                     endpoint: ServiceWorkerClientEndpoint::Worker(worker_tx),
                     focused: false,
                 },
@@ -191,8 +185,7 @@ impl ServiceWorkerRuntimeService {
                     secure_context,
                     execution_ready: false,
                     discarded_or_frozen: false,
-                    document_epoch: None,
-                    runtime_generation: 0,
+                    document_owner: None,
                     endpoint: ServiceWorkerClientEndpoint::PendingWorker,
                     focused: false,
                 },
@@ -276,8 +269,7 @@ impl ServiceWorkerRuntimeService {
                 secure_context,
                 execution_ready: false,
                 discarded_or_frozen: false,
-                document_epoch: None,
-                runtime_generation: 0,
+                document_owner: None,
                 endpoint: ServiceWorkerClientEndpoint::PendingWorker,
                 focused: false,
             },
@@ -318,8 +310,7 @@ impl ServiceWorkerRuntimeService {
         document_url: Url,
         storage_key: String,
         frame_type: ServiceWorkerClientFrameType,
-        document_epoch: Option<u64>,
-        runtime_generation: u64,
+        document_owner: Option<crate::window_document_identity::WindowDocumentOwner>,
         endpoint: ServiceWorkerClientEndpoint,
     ) -> ServiceWorkerClientId {
         let client_id =
@@ -353,8 +344,7 @@ impl ServiceWorkerRuntimeService {
                     secure_context: true,
                     execution_ready: false,
                     discarded_or_frozen: false,
-                    document_epoch,
-                    runtime_generation,
+                    document_owner,
                     endpoint,
                     focused: false,
                 },
@@ -425,16 +415,14 @@ impl ServiceWorkerRuntimeService {
         document_url: Url,
         storage_key: String,
         frame_type: ServiceWorkerClientFrameType,
-        document_epoch: Option<u64>,
-        runtime_generation: u64,
+        document_owner: Option<crate::window_document_identity::WindowDocumentOwner>,
     ) -> bool {
         self.update_client_document_with_storage_key_internal(
             client_id,
             document_url,
             storage_key,
             frame_type,
-            document_epoch,
-            runtime_generation,
+            document_owner,
             None,
         )
     }
@@ -445,8 +433,7 @@ impl ServiceWorkerRuntimeService {
         document_url: Url,
         storage_key: String,
         frame_type: ServiceWorkerClientFrameType,
-        document_epoch: Option<u64>,
-        runtime_generation: u64,
+        document_owner: Option<crate::window_document_identity::WindowDocumentOwner>,
         completion_tx: RendererPageServiceWorkerTaskSender,
     ) -> bool {
         self.update_client_document_with_storage_key_internal(
@@ -454,8 +441,7 @@ impl ServiceWorkerRuntimeService {
             document_url,
             storage_key,
             frame_type,
-            document_epoch,
-            runtime_generation,
+            document_owner,
             Some(completion_tx),
         )
     }
@@ -466,8 +452,7 @@ impl ServiceWorkerRuntimeService {
         document_url: Url,
         storage_key: String,
         frame_type: ServiceWorkerClientFrameType,
-        document_epoch: Option<u64>,
-        runtime_generation: u64,
+        document_owner: Option<crate::window_document_identity::WindowDocumentOwner>,
         completion_tx: Option<RendererPageServiceWorkerTaskSender>,
     ) -> bool {
         let current_document_url = service_worker_current_url_for_creation_url(&document_url);
@@ -509,8 +494,7 @@ impl ServiceWorkerRuntimeService {
                 client.frame_type = frame_type;
                 client.storage_key = storage_key.clone();
                 client.execution_ready = true;
-                client.document_epoch = document_epoch;
-                client.runtime_generation = runtime_generation;
+                client.document_owner = document_owner;
                 if let Some(completion_tx) = completion_tx {
                     client.endpoint = ServiceWorkerClientEndpoint::Page(completion_tx);
                 }

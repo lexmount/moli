@@ -90,7 +90,6 @@ impl RendererBrowserContextRuntime {
                 storage_key,
                 ServiceWorkerClientFrameType::TopLevel,
                 None,
-                0,
             )
         } else {
             self.register_reserved_service_worker_client(
@@ -98,7 +97,6 @@ impl RendererBrowserContextRuntime {
                 storage_key,
                 ServiceWorkerClientFrameType::TopLevel,
                 None,
-                0,
             )
         };
         let reserved_client = RendererReservedServiceWorkerClient::new(self.clone(), client_id);
@@ -375,8 +373,7 @@ impl RendererBrowserContextRuntime {
         document_url: Url,
         storage_key: String,
         frame_type: ServiceWorkerClientFrameType,
-        document_epoch: Option<u64>,
-        runtime_generation: u64,
+        document_owner: Option<crate::window_document_identity::WindowDocumentOwner>,
         completion_tx: crate::page_task_queue::RendererPageServiceWorkerTaskSender,
     ) -> ServiceWorkerClientId {
         self.inner
@@ -385,8 +382,7 @@ impl RendererBrowserContextRuntime {
                 document_url,
                 storage_key,
                 frame_type,
-                document_epoch,
-                runtime_generation,
+                document_owner,
                 completion_tx,
             )
     }
@@ -396,8 +392,7 @@ impl RendererBrowserContextRuntime {
         document_url: Url,
         storage_key: String,
         frame_type: ServiceWorkerClientFrameType,
-        document_epoch: Option<u64>,
-        runtime_generation: u64,
+        document_owner: Option<crate::window_document_identity::WindowDocumentOwner>,
     ) -> ServiceWorkerClientId {
         self.inner
             .service_worker_runtime
@@ -405,8 +400,7 @@ impl RendererBrowserContextRuntime {
                 document_url,
                 storage_key,
                 frame_type,
-                document_epoch,
-                runtime_generation,
+                document_owner,
             )
     }
 
@@ -415,8 +409,7 @@ impl RendererBrowserContextRuntime {
         document_url: Url,
         storage_key: String,
         frame_type: ServiceWorkerClientFrameType,
-        document_epoch: Option<u64>,
-        runtime_generation: u64,
+        document_owner: Option<crate::window_document_identity::WindowDocumentOwner>,
     ) -> ServiceWorkerClientId {
         self.inner
             .service_worker_runtime
@@ -424,8 +417,7 @@ impl RendererBrowserContextRuntime {
                 document_url,
                 storage_key,
                 frame_type,
-                document_epoch,
-                runtime_generation,
+                document_owner,
             )
     }
 
@@ -477,8 +469,7 @@ impl RendererBrowserContextRuntime {
         document_url: Url,
         storage_key: String,
         frame_type: ServiceWorkerClientFrameType,
-        document_epoch: Option<u64>,
-        runtime_generation: u64,
+        document_owner: Option<crate::window_document_identity::WindowDocumentOwner>,
     ) -> bool {
         self.inner
             .service_worker_runtime
@@ -487,8 +478,7 @@ impl RendererBrowserContextRuntime {
                 document_url,
                 storage_key,
                 frame_type,
-                document_epoch,
-                runtime_generation,
+                document_owner,
             )
     }
 
@@ -498,8 +488,7 @@ impl RendererBrowserContextRuntime {
         document_url: Url,
         storage_key: String,
         frame_type: ServiceWorkerClientFrameType,
-        document_epoch: Option<u64>,
-        runtime_generation: u64,
+        document_owner: Option<crate::window_document_identity::WindowDocumentOwner>,
         completion_tx: crate::page_task_queue::RendererPageServiceWorkerTaskSender,
     ) -> bool {
         self.inner
@@ -509,8 +498,7 @@ impl RendererBrowserContextRuntime {
                 document_url,
                 storage_key,
                 frame_type,
-                document_epoch,
-                runtime_generation,
+                document_owner,
                 completion_tx,
             )
     }
@@ -520,7 +508,7 @@ impl RendererBrowserContextRuntime {
         scope_url: &Url,
         storage_key: String,
         request_id: u64,
-        runtime_generation: u64,
+        document_owner: crate::window_document_identity::WindowDocumentOwner,
         completion_tx: crate::page_task_queue::RendererPageServiceWorkerTaskSender,
     ) -> ServiceWorkerUnregisterStart {
         self.inner
@@ -529,7 +517,7 @@ impl RendererBrowserContextRuntime {
                 scope_url,
                 storage_key,
                 request_id,
-                runtime_generation,
+                document_owner,
                 completion_tx,
             )
     }
@@ -588,7 +576,7 @@ impl RendererBrowserContextRuntime {
         document_url: Url,
         storage_key: String,
         request_id: u64,
-        runtime_generation: u64,
+        document_owner: crate::window_document_identity::WindowDocumentOwner,
         completion_tx: crate::page_task_queue::RendererPageServiceWorkerTaskSender,
     ) -> bool {
         self.inner
@@ -597,7 +585,7 @@ impl RendererBrowserContextRuntime {
                 document_url,
                 storage_key,
                 request_id,
-                runtime_generation,
+                document_owner,
                 completion_tx,
             )
     }
@@ -606,12 +594,12 @@ impl RendererBrowserContextRuntime {
         &self,
         scope_url: Url,
         storage_key: String,
-        runtime_generation: u64,
+        document_owner: crate::window_document_identity::WindowDocumentOwner,
         completion_tx: crate::page_task_queue::RendererPageServiceWorkerTaskSender,
     ) {
         self.inner
             .service_worker_runtime
-            .watch_registration_lifecycle(scope_url, storage_key, runtime_generation, completion_tx)
+            .watch_registration_lifecycle(scope_url, storage_key, document_owner, completion_tx)
     }
 
     pub(crate) fn service_worker_controller_for_client(

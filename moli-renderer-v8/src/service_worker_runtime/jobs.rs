@@ -44,7 +44,7 @@ pub(crate) struct ServiceWorkerLaunchParams {
 #[derive(Clone, Debug)]
 pub(super) struct ServiceWorkerRegisterJob {
     pub(super) request_id: u64,
-    pub(super) runtime_generation: u64,
+    pub(super) document_owner: crate::window_document_identity::WindowDocumentOwner,
     pub(super) completion_tx: RendererPageServiceWorkerTaskSender,
 }
 
@@ -60,7 +60,7 @@ impl ServiceWorkerRegisterJob {
             .completion_tx
             .send_service_worker_register(ServiceWorkerRegisterCompletion {
                 request_id: self.request_id,
-                runtime_generation: self.runtime_generation,
+                document_owner: self.document_owner,
                 result,
             });
     }
@@ -255,7 +255,7 @@ mod tests {
         let queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
         let mut job = ServiceWorkerPendingRegisterJob::new(vec![ServiceWorkerRegisterJob {
             request_id: 1,
-            runtime_generation: 1,
+            document_owner: crate::window_document_identity::WindowDocumentOwner::for_test(1),
             completion_tx: queue.sender(),
         }]);
 
@@ -289,7 +289,7 @@ mod tests {
 #[derive(Clone, Debug)]
 pub(super) struct ServiceWorkerUnregisterJob {
     pub(super) request_id: u64,
-    pub(super) runtime_generation: u64,
+    pub(super) document_owner: crate::window_document_identity::WindowDocumentOwner,
     pub(super) completion_tx: RendererPageServiceWorkerTaskSender,
 }
 
@@ -299,7 +299,7 @@ impl ServiceWorkerUnregisterJob {
             self.completion_tx
                 .send_service_worker_unregister(ServiceWorkerUnregisterCompletion {
                     request_id: self.request_id,
-                    runtime_generation: self.runtime_generation,
+                    document_owner: self.document_owner,
                     result,
                 });
     }

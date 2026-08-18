@@ -770,8 +770,7 @@ mod tests {
                         crate::service_worker_runtime::ServiceWorkerClientId::from_u64_for_test(
                             order,
                         ),
-                    document_epoch: Some(order + 1),
-                    transport_generation: order + 2,
+                    document_owner: crate::native_bridge::WindowDocumentOwner::for_test(order + 1),
                 },
             ),
         }

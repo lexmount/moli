@@ -16,7 +16,7 @@ use crate::{
 
 struct PreparedServiceWorkerLifecycleTarget {
     registration: ServiceWorkerRegistrationSnapshot,
-    runtime_generation: u64,
+    document_owner: crate::native_bridge::WindowDocumentOwner,
     storage_key: String,
 }
 
@@ -33,7 +33,7 @@ navigator.serviceWorker.ready.then(registration => {
 "ready-observer-installed"
 "#,
     )?;
-    let (request_id, runtime_generation) = page_vm
+    let (request_id, document_owner) = page_vm
         .vm()
         .service_worker_ready_request_for_test(crate::native_bridge::OwnerDispatchScope::Top)
         .expect("top-level ServiceWorker ready request");
@@ -47,7 +47,7 @@ navigator.serviceWorker.ready.then(registration => {
         .service_worker_task_sender_for_root_for_test(root_document)
         .send_service_worker_ready(ServiceWorkerReadyCompletion {
             request_id,
-            runtime_generation,
+            document_owner,
             registration: registration.clone(),
         })
         .expect("ready completion should enter the stable internal source");
@@ -68,7 +68,7 @@ navigator.serviceWorker.ready.then(registration => {
         "selected ready completion should resolve the registration binding"
     );
 
-    let (watcher_generation, storage_key) = page_vm
+    let (watcher_owner, storage_key) = page_vm
         .vm()
         .service_worker_lifecycle_watcher_for_test(
             crate::native_bridge::OwnerDispatchScope::Top,
@@ -76,12 +76,12 @@ navigator.serviceWorker.ready.then(registration => {
         )
         .expect("ready registration should install one exact lifecycle watcher");
     anyhow::ensure!(
-        watcher_generation == runtime_generation,
-        "ready request and lifecycle watcher must retain the same transport generation"
+        watcher_owner == document_owner,
+        "ready request and lifecycle watcher must retain the same exact document owner"
     );
     Ok(PreparedServiceWorkerLifecycleTarget {
         registration,
-        runtime_generation,
+        document_owner,
         storage_key,
     })
 }
@@ -91,7 +91,7 @@ fn send_updatefound(page_vm: &PageVm, target: &PreparedServiceWorkerLifecycleTar
     page_vm
         .service_worker_task_sender_for_root_for_test(root_document)
         .send_service_worker_lifecycle(ServiceWorkerLifecycleNotification {
-            runtime_generation: target.runtime_generation,
+            document_owner: target.document_owner,
             storage_key: target.storage_key.clone(),
             registration: target.registration.clone(),
             events: vec![ServiceWorkerLifecycleClientEvent::UpdateFound],
@@ -118,7 +118,7 @@ navigator.serviceWorker.ready.then(registration => {
 "observer-ready"
 "#,
         )?;
-        let (request_id, runtime_generation) = page_vm
+        let (request_id, document_owner) = page_vm
             .vm()
             .service_worker_ready_request_for_test(crate::native_bridge::OwnerDispatchScope::Top)
             .expect("top-level ServiceWorker ready request");
@@ -133,7 +133,7 @@ navigator.serviceWorker.ready.then(registration => {
             .service_worker_task_sender_for_root_for_test(current_root)
             .send_service_worker_ready(ServiceWorkerReadyCompletion {
                 request_id,
-                runtime_generation,
+                document_owner,
                 registration,
             })
             .expect("ready completion should enter the stable internal source");
@@ -462,7 +462,9 @@ fn service_worker_internal_task_rejects_a_real_root_document_replacement() {
                         .service_worker_task_sender_for_root_for_test(retired_root)
                         .send_service_worker_unregister(ServiceWorkerUnregisterCompletion {
                             request_id: u64::MAX - 11,
-                            runtime_generation: u64::MAX - 7,
+                            document_owner: crate::native_bridge::WindowDocumentOwner::for_test(
+                                u64::MAX - 7,
+                            ),
                             result: false,
                         })
                         .expect("retired-root internal task should remain resident");

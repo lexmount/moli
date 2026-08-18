@@ -33,13 +33,11 @@ use super::service_worker_drain::{
 
 fn service_worker_window_client_target_for_test(
     client_id: crate::runtime::ServiceWorkerClientId,
-    document_epoch: Option<u64>,
-    transport_generation: u64,
+    document_owner: crate::native_bridge::WindowDocumentOwner,
 ) -> crate::types::ServiceWorkerWindowClientTarget {
     crate::types::ServiceWorkerWindowClientTarget {
         client_id,
-        document_epoch,
-        transport_generation,
+        document_owner,
     }
 }
 
@@ -20189,8 +20187,7 @@ async fn service_worker_window_client_owner_requests_reject_on_stale_page_genera
         crate::types::ServiceWorkerClientNavigateRequestCompletion {
             target: service_worker_window_client_target_for_test(
                 crate::runtime::ServiceWorkerClientId::from_u64_for_test(1),
-                Some(0),
-                stale_generation,
+                crate::native_bridge::WindowDocumentOwner::for_test(stale_generation),
             ),
             request_id: 101,
             source_version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
@@ -20208,8 +20205,7 @@ async fn service_worker_window_client_owner_requests_reject_on_stale_page_genera
         crate::types::ServiceWorkerClientFocusRequestCompletion {
             target: service_worker_window_client_target_for_test(
                 crate::runtime::ServiceWorkerClientId::from_u64_for_test(1),
-                Some(0),
-                stale_generation,
+                crate::native_bridge::WindowDocumentOwner::for_test(stale_generation),
             ),
             request_id: 102,
             source_version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
@@ -20226,8 +20222,7 @@ async fn service_worker_window_client_owner_requests_reject_on_stale_page_genera
         crate::types::ServiceWorkerClientsOpenWindowRequestCompletion {
             host: service_worker_window_client_target_for_test(
                 crate::runtime::ServiceWorkerClientId::from_u64_for_test(1),
-                Some(0),
-                stale_generation,
+                crate::native_bridge::WindowDocumentOwner::for_test(stale_generation),
             ),
             request_id: 103,
             source_version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
@@ -20300,17 +20295,17 @@ async fn service_worker_client_focus_request_marks_current_page_focused() {
     )
     .await;
 
-    let runtime_generation = vm.document_runtime.runtime_reset_generation();
+    let current_target = vm
+        .service_worker_internal_window_client_target_for_test(
+            crate::native_bridge::OwnerDispatchScope::Top,
+        )
+        .expect("current top-level ServiceWorker client target");
     run_service_worker_client_focus_request_task_for_test(
         &mut vm,
         &loader,
         "current Page focus request",
         crate::types::ServiceWorkerClientFocusRequestCompletion {
-            target: service_worker_window_client_target_for_test(
-                crate::runtime::ServiceWorkerClientId::from_u64_for_test(1),
-                Some(0),
-                runtime_generation,
-            ),
+            target: current_target,
             request_id: 77,
             source_version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
             source_run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
@@ -20400,17 +20395,17 @@ async fn service_worker_clients_open_window_request_records_popup_activation() {
     )
     .await;
 
-    let runtime_generation = vm.document_runtime.runtime_reset_generation();
+    let current_target = vm
+        .service_worker_internal_window_client_target_for_test(
+            crate::native_bridge::OwnerDispatchScope::Top,
+        )
+        .expect("current top-level ServiceWorker client target");
     run_service_worker_clients_open_window_request_task_for_test(
         &mut vm,
         &loader,
         "current Page openWindow request",
         crate::types::ServiceWorkerClientsOpenWindowRequestCompletion {
-            host: service_worker_window_client_target_for_test(
-                crate::runtime::ServiceWorkerClientId::from_u64_for_test(1),
-                Some(0),
-                runtime_generation,
-            ),
+            host: current_target,
             request_id: 88,
             source_version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
             source_run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
@@ -20460,13 +20455,11 @@ async fn service_worker_clients_open_window_request_records_popup_activation() {
     assert!(opened.controlled);
     let opened_client_id = opened.id;
     let opened_exposed_client_id = opened.exposed_id.clone();
-    let popup_document_epoch = vm
+    let popup_document_owner = vm
         ._context_host
         .borrow()
         .current_lightweight_popup_document_owner(popup_id)
-        .expect("openWindow popup document owner")
-        .document_id()
-        .as_u64();
+        .expect("openWindow popup document owner");
 
     run_service_worker_client_focus_request_task_for_test(
         &mut vm,
@@ -20475,8 +20468,7 @@ async fn service_worker_clients_open_window_request_records_popup_activation() {
         crate::types::ServiceWorkerClientFocusRequestCompletion {
             target: service_worker_window_client_target_for_test(
                 opened_client_id,
-                Some(popup_document_epoch),
-                runtime_generation,
+                crate::native_bridge::WindowDocumentOwner::LightweightPopup(popup_document_owner),
             ),
             request_id: 90,
             source_version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
@@ -20726,7 +20718,6 @@ async fn service_worker_popup_client_survives_javascript_reopen() {
         .current_lightweight_popup_local_window_id(popup_id)
         .expect("replacement service worker popup LocalWindow owner");
     assert_ne!(replacement_local_window_id, initial_local_window_id);
-    let runtime_generation = vm.document_runtime.runtime_reset_generation();
     run_service_worker_client_focus_request_task_for_test(
         &mut vm,
         &loader,
@@ -20734,8 +20725,7 @@ async fn service_worker_popup_client_survives_javascript_reopen() {
         crate::types::ServiceWorkerClientFocusRequestCompletion {
             target: service_worker_window_client_target_for_test(
                 popup_client_id,
-                Some(initial_document_owner.document_id().as_u64()),
-                runtime_generation,
+                crate::native_bridge::WindowDocumentOwner::LightweightPopup(initial_document_owner),
             ),
             request_id: 98,
             source_version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
@@ -20766,8 +20756,9 @@ async fn service_worker_popup_client_survives_javascript_reopen() {
         crate::types::ServiceWorkerClientFocusRequestCompletion {
             target: service_worker_window_client_target_for_test(
                 popup_client_id,
-                Some(replacement_document_owner.document_id().as_u64()),
-                runtime_generation,
+                crate::native_bridge::WindowDocumentOwner::LightweightPopup(
+                    replacement_document_owner,
+                ),
             ),
             request_id: 100,
             source_version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
@@ -20843,17 +20834,17 @@ async fn service_worker_clients_open_window_about_blank_request_creates_no_popup
     )
     .await;
 
-    let runtime_generation = vm.document_runtime.runtime_reset_generation();
+    let current_target = vm
+        .service_worker_internal_window_client_target_for_test(
+            crate::native_bridge::OwnerDispatchScope::Top,
+        )
+        .expect("current top-level ServiceWorker client target");
     run_service_worker_clients_open_window_request_task_for_test(
         &mut vm,
         &loader,
         "about:blank openWindow request",
         crate::types::ServiceWorkerClientsOpenWindowRequestCompletion {
-            host: service_worker_window_client_target_for_test(
-                crate::runtime::ServiceWorkerClientId::from_u64_for_test(1),
-                Some(0),
-                runtime_generation,
-            ),
+            host: current_target,
             request_id: 92,
             source_version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
             source_run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
@@ -20928,17 +20919,17 @@ async fn service_worker_clients_open_window_cross_origin_result_stays_null() {
     )
     .await;
 
-    let runtime_generation = vm.document_runtime.runtime_reset_generation();
+    let current_target = vm
+        .service_worker_internal_window_client_target_for_test(
+            crate::native_bridge::OwnerDispatchScope::Top,
+        )
+        .expect("current top-level ServiceWorker client target");
     run_service_worker_clients_open_window_request_task_for_test(
         &mut vm,
         &loader,
         "cross-origin openWindow request",
         crate::types::ServiceWorkerClientsOpenWindowRequestCompletion {
-            host: service_worker_window_client_target_for_test(
-                crate::runtime::ServiceWorkerClientId::from_u64_for_test(1),
-                Some(0),
-                runtime_generation,
-            ),
+            host: current_target,
             request_id: 94,
             source_version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
             source_run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),

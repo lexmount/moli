@@ -645,8 +645,8 @@ mod tests {
         frame_owner_model::LocalWindowId,
         native_bridge::context_host::{
             WindowExecutionContextRealmRecords, WindowExecutionContextScopedRealmRegistration,
-            popups::LightweightPopupLocalWindowId,
         },
+        window_document_identity::LightweightPopupLocalWindowId,
     };
 
     #[test]

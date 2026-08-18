@@ -171,11 +171,14 @@ impl JsContextHost {
             },
             None,
         );
-        let main_document_epoch = frame_owner_store
+        let main_owner_snapshot = frame_owner_store
             .current_main_owner_snapshot()
-            .expect("main frame owner must exist before client projection")
-            .document_id
-            .0;
+            .expect("main frame owner must exist before client projection");
+        let main_document_owner = FrameDocumentTaskOwner::new(
+            main_owner_snapshot.scheduler_lane_id,
+            main_owner_snapshot.local_window_id,
+            main_owner_snapshot.document_id,
+        );
         let service_worker_storage_key = top_level_storage_key
             .as_ref()
             .map(moli_storage_key::MoliStorageKey::serialized_storage_key)
@@ -189,8 +192,7 @@ impl JsContextHost {
                     document_url.clone(),
                     service_worker_storage_key.clone(),
                     crate::service_worker_runtime::ServiceWorkerClientFrameType::TopLevel,
-                    Some(main_document_epoch),
-                    runtime.runtime_reset_generation(),
+                    Some(super::WindowDocumentOwner::Frame(main_document_owner)),
                     service_worker_task_tx.clone(),
                 )
             })
@@ -199,8 +201,7 @@ impl JsContextHost {
                     document_url,
                     service_worker_storage_key,
                     crate::service_worker_runtime::ServiceWorkerClientFrameType::TopLevel,
-                    Some(main_document_epoch),
-                    runtime.runtime_reset_generation(),
+                    Some(super::WindowDocumentOwner::Frame(main_document_owner)),
                     service_worker_task_tx.clone(),
                 )
             });

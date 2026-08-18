@@ -12,20 +12,20 @@ impl ScriptVm {
     pub(crate) fn service_worker_ready_request_for_test(
         &self,
         dispatch_scope: crate::native_bridge::OwnerDispatchScope,
-    ) -> Option<(u64, u64)> {
+    ) -> Option<(u64, crate::native_bridge::WindowDocumentOwner)> {
         self._context_host
             .borrow()
             .pending_service_worker_ready_owners_for_test()
             .into_iter()
             .find(|(_, owner)| owner.dispatch_scope() == dispatch_scope)
-            .map(|(request_id, owner)| (request_id, owner.transport_generation()))
+            .map(|(request_id, owner)| (request_id, owner.window_document_owner()))
     }
 
     pub(crate) fn service_worker_lifecycle_watcher_for_test(
         &self,
         dispatch_scope: crate::native_bridge::OwnerDispatchScope,
         scope_url: &url::Url,
-    ) -> Option<(u64, String)> {
+    ) -> Option<(crate::native_bridge::WindowDocumentOwner, String)> {
         self._context_host
             .borrow()
             .service_worker_registration_watchers_for_test()
@@ -33,7 +33,7 @@ impl ScriptVm {
             .find(|(owner, watcher_scope, _)| {
                 owner.dispatch_scope() == dispatch_scope && watcher_scope == scope_url
             })
-            .map(|(owner, _, storage_key)| (owner.transport_generation(), storage_key))
+            .map(|(owner, _, storage_key)| (owner.window_document_owner(), storage_key))
     }
 
     pub(crate) fn service_worker_internal_window_client_target_for_test(

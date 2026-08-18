@@ -1312,8 +1312,7 @@ mod tests {
             moli_storage_key::MoliStorageKey::first_party_from_url(&document_url, None)
                 .serialized_storage_key(),
             crate::service_worker_runtime::ServiceWorkerClientFrameType::TopLevel,
-            None,
-            1,
+            Some(crate::native_bridge::WindowDocumentOwner::for_test(1)),
             completion_queue.sender(),
         );
         let (wake_tx, mut wake_rx) = tokio::sync::mpsc::unbounded_channel();

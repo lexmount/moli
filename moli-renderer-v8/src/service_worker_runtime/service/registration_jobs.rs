@@ -64,7 +64,7 @@ impl ServiceWorkerRuntimeService {
         storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
         update_via_cache: ServiceWorkerUpdateViaCache,
         register_request_id: u64,
-        register_runtime_generation: u64,
+        register_document_owner_identity: u64,
         register_completion_tx: RendererPageServiceWorkerTaskSender,
     ) {
         let storage_key =
@@ -83,7 +83,9 @@ impl ServiceWorkerRuntimeService {
             storage_bucket_store,
             update_via_cache,
             register_request_id,
-            register_runtime_generation,
+            crate::window_document_identity::WindowDocumentOwner::for_test(
+                register_document_owner_identity,
+            ),
             register_completion_tx,
         );
     }
@@ -103,7 +105,7 @@ impl ServiceWorkerRuntimeService {
         storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
         update_via_cache: ServiceWorkerUpdateViaCache,
         register_request_id: u64,
-        register_runtime_generation: u64,
+        register_document_owner: crate::window_document_identity::WindowDocumentOwner,
         register_completion_tx: RendererPageServiceWorkerTaskSender,
     ) {
         let queued_job = ServiceWorkerQueuedRegisterJob {
@@ -125,7 +127,7 @@ impl ServiceWorkerRuntimeService {
             storage_bucket_store,
             callbacks: vec![ServiceWorkerRegisterJob {
                 request_id: register_request_id,
-                runtime_generation: register_runtime_generation,
+                document_owner: register_document_owner,
                 completion_tx: register_completion_tx,
             }],
         };
@@ -326,14 +328,14 @@ impl ServiceWorkerRuntimeService {
         &self,
         scope_url: &Url,
         request_id: u64,
-        runtime_generation: u64,
+        document_owner_identity: u64,
         completion_tx: RendererPageServiceWorkerTaskSender,
     ) -> ServiceWorkerUnregisterStart {
         self.start_unregistration_with_storage_key(
             scope_url,
             ServiceWorkerRegistrationKey::storage_key_for_scope_url(scope_url),
             request_id,
-            runtime_generation,
+            crate::window_document_identity::WindowDocumentOwner::for_test(document_owner_identity),
             completion_tx,
         )
     }
@@ -343,7 +345,7 @@ impl ServiceWorkerRuntimeService {
         scope_url: &Url,
         storage_key: String,
         request_id: u64,
-        runtime_generation: u64,
+        document_owner: crate::window_document_identity::WindowDocumentOwner,
         completion_tx: RendererPageServiceWorkerTaskSender,
     ) -> ServiceWorkerUnregisterStart {
         self.start_unregistration_job(
@@ -351,7 +353,7 @@ impl ServiceWorkerRuntimeService {
             storage_key,
             Some(ServiceWorkerUnregisterJob {
                 request_id,
-                runtime_generation,
+                document_owner,
                 completion_tx,
             }),
         )

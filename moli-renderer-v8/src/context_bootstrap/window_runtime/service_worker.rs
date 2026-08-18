@@ -400,7 +400,7 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_register_callback<'
         rv.set(promise.into());
         return;
     };
-    let (request_id, runtime_generation, completion_tx) =
+    let (request_id, document_owner, completion_tx) =
         host.register_pending_service_worker_register(scope, resolver, request_context.owner());
     host.start_service_worker_runtime(
         script_url,
@@ -410,7 +410,7 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_register_callback<'
         &request_context,
         request_client,
         request_id,
-        runtime_generation,
+        document_owner,
         completion_tx,
     );
     rv.set(promise.into());
@@ -521,7 +521,7 @@ pub(crate) fn dispatch_service_worker_lifecycle_notification(
         scope,
         notification.registration.scope_url(),
         &notification.storage_key,
-        notification.runtime_generation,
+        notification.document_owner,
     );
     for (owner, registration) in registrations {
         let previous_owner_context = owner.enter(scope);
@@ -1174,7 +1174,7 @@ fn navigator_service_worker_unregister_callback<'s>(
         rv.set(promise.into());
         return;
     };
-    let (request_id, runtime_generation, completion_tx) = host
+    let (request_id, document_owner, completion_tx) = host
         .register_pending_service_worker_unregister(
             scope,
             resolver,
@@ -1187,13 +1187,13 @@ fn navigator_service_worker_unregister_callback<'s>(
             &request_context,
             scope_url,
             request_id,
-            runtime_generation,
+            document_owner,
             completion_tx,
         ),
         None => host.unregister_service_worker_control(
             &request_context,
             request_id,
-            runtime_generation,
+            document_owner,
             completion_tx,
         ),
     };

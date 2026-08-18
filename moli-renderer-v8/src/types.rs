@@ -715,7 +715,7 @@ impl AsyncSubresourceFetchEvent {
 #[derive(Debug)]
 pub(super) struct ServiceWorkerRegisterCompletion {
     pub(super) request_id: u64,
-    pub(super) runtime_generation: u64,
+    pub(super) document_owner: crate::window_document_identity::WindowDocumentOwner,
     pub(super) result: std::result::Result<
         crate::service_worker_runtime::ServiceWorkerRegistrationSnapshot,
         crate::service_worker_runtime::ServiceWorkerRegistrationError,
@@ -725,22 +725,21 @@ pub(super) struct ServiceWorkerRegisterCompletion {
 #[derive(Debug)]
 pub(super) struct ServiceWorkerReadyCompletion {
     pub(super) request_id: u64,
-    pub(super) runtime_generation: u64,
+    pub(super) document_owner: crate::window_document_identity::WindowDocumentOwner,
     pub(super) registration: crate::service_worker_runtime::ServiceWorkerRegistrationSnapshot,
 }
 
 #[derive(Debug)]
 pub(super) struct ServiceWorkerUnregisterCompletion {
     pub(super) request_id: u64,
-    pub(super) runtime_generation: u64,
+    pub(super) document_owner: crate::window_document_identity::WindowDocumentOwner,
     pub(super) result: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct ServiceWorkerWindowClientTarget {
     pub(super) client_id: crate::service_worker_runtime::ServiceWorkerClientId,
-    pub(super) document_epoch: Option<u64>,
-    pub(super) transport_generation: u64,
+    pub(super) document_owner: crate::window_document_identity::WindowDocumentOwner,
 }
 
 #[derive(Debug)]
@@ -835,7 +834,7 @@ pub(super) enum ServiceWorkerLifecycleClientEvent {
 
 #[derive(Debug)]
 pub(super) struct ServiceWorkerLifecycleNotification {
-    pub(super) runtime_generation: u64,
+    pub(super) document_owner: crate::window_document_identity::WindowDocumentOwner,
     pub(super) storage_key: String,
     pub(super) registration: crate::service_worker_runtime::ServiceWorkerRegistrationSnapshot,
     pub(super) events: Vec<ServiceWorkerLifecycleClientEvent>,

@@ -432,8 +432,8 @@ navigator.serviceWorker.onmessage = () => {
         )?;
         assert_eq!(current_target.client_id, target.client_id);
         assert_ne!(
-            current_target.document_epoch, target.document_epoch,
-            "document.open must retire the authorized ServiceWorker client target epoch"
+            current_target.document_owner, target.document_owner,
+            "document.open must retire the authorized ServiceWorker client document owner"
         );
         assert_eq!(
             page_vm
@@ -611,8 +611,8 @@ document.getElementById("service-worker-message-replacement-child").srcdoc =
         );
         assert_eq!(retired_target.client_id, current_target.client_id);
         assert_ne!(
-            retired_target.document_epoch, current_target.document_epoch,
-            "document epoch must distinguish reused child client ids"
+            retired_target.document_owner, current_target.document_owner,
+            "exact document owner must distinguish reused child client ids"
         );
         page_vm.vm_mut().eval(
             r#"
