@@ -23,12 +23,7 @@ pub struct WeakParkableImage {
 struct ParkableImageInner {
     id: u64,
     manager: ParkableImageManager,
-    state: Mutex<ParkableImageState>,
-}
-
-enum ParkableImageState {
-    Mutable(Vec<u8>),
-    Frozen(FrozenImageState),
+    state: Mutex<FrozenImageState>,
 }
 
 struct FrozenImageState {
@@ -76,16 +71,9 @@ enum ParkPreparation {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ParkableImageMutationError {
-    Frozen,
-    AlreadyFrozen,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParkOutcome {
     Parked,
     AlreadyParked,
-    NotFrozen,
     BelowMinimum,
     Delayed { remaining: Duration },
     InUse,
@@ -94,7 +82,6 @@ pub enum ParkOutcome {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParkableImageStorageState {
-    Mutable,
     Resident,
     Parking,
     ResidentWithDiskBackup,
@@ -113,52 +100,17 @@ pub struct ParkableImageDiagnostics {
 
 impl Drop for ParkableImageInner {
     fn drop(&mut self) {
-        // Release a retained disk extent before waking capacity-blocked
-        // residents. The async scheduler can otherwise race this destructor
-        // and retry while the extent is still reserved.
-        let storage = std::mem::replace(
-            self.state.get_mut(),
-            ParkableImageState::Mutable(Vec::new()),
-        );
-        let released_disk_capacity = matches!(
-            &storage,
-            ParkableImageState::Frozen(FrozenImageState {
-                storage: FrozenImageStorage::Parked { .. }
-                    | FrozenImageStorage::Resident {
-                        disk_backup: Some(_),
-                        ..
-                    },
-                ..
-            })
-        );
-        drop(storage);
-        self.manager.unregister(self.id, released_disk_capacity);
+        self.manager.unregister(self.id);
     }
 }
 
 impl ParkableImage {
-    pub(crate) fn new_mutable(
-        manager: ParkableImageManager,
-        id: u64,
-        initial_capacity: usize,
-    ) -> Self {
+    pub(crate) fn new(manager: ParkableImageManager, id: u64, bytes: Vec<u8>) -> Self {
         Self {
             inner: Arc::new(ParkableImageInner {
                 id,
                 manager,
-                state: Mutex::new(ParkableImageState::Mutable(Vec::with_capacity(
-                    initial_capacity,
-                ))),
-            }),
-        }
-    }
-
-    pub(crate) fn new_frozen(manager: ParkableImageManager, id: u64, bytes: Vec<u8>) -> Self {
-        Self {
-            inner: Arc::new(ParkableImageInner {
-                id,
-                manager,
-                state: Mutex::new(ParkableImageState::Frozen(FrozenImageState {
+                state: Mutex::new(FrozenImageState {
                     len: bytes.len(),
                     storage: FrozenImageStorage::Resident {
                         bytes: Arc::new(bytes),
@@ -167,55 +119,13 @@ impl ParkableImage {
                     frozen_at: Instant::now(),
                     used: false,
                     reader_count: 0,
-                })),
+                }),
             }),
         }
     }
 
-    pub fn append(&self, bytes: &[u8]) -> Result<(), ParkableImageMutationError> {
-        let mut state = self.inner.state.lock();
-        let ParkableImageState::Mutable(buffer) = &mut *state else {
-            return Err(ParkableImageMutationError::Frozen);
-        };
-        buffer.extend_from_slice(bytes);
-        Ok(())
-    }
-
-    pub fn freeze(&self) -> Result<(), ParkableImageMutationError> {
-        {
-            let mut state = self.inner.state.lock();
-            let ParkableImageState::Mutable(_) = &*state else {
-                return Err(ParkableImageMutationError::AlreadyFrozen);
-            };
-            let ParkableImageState::Mutable(bytes) =
-                std::mem::replace(&mut *state, ParkableImageState::Mutable(Vec::new()))
-            else {
-                unreachable!("checked mutable parkable image state")
-            };
-            *state = ParkableImageState::Frozen(FrozenImageState {
-                len: bytes.len(),
-                storage: FrozenImageStorage::Resident {
-                    bytes: Arc::new(bytes),
-                    disk_backup: None,
-                },
-                frozen_at: Instant::now(),
-                used: false,
-                reader_count: 0,
-            });
-        }
-        self.inner.manager.notify_schedule_changed();
-        Ok(())
-    }
-
-    pub fn is_frozen(&self) -> bool {
-        matches!(*self.inner.state.lock(), ParkableImageState::Frozen(_))
-    }
-
     pub fn len(&self) -> usize {
-        match &*self.inner.state.lock() {
-            ParkableImageState::Mutable(bytes) => bytes.len(),
-            ParkableImageState::Frozen(frozen) => frozen.len,
-        }
+        self.inner.state.lock().len
     }
 
     pub fn is_empty(&self) -> bool {
@@ -231,16 +141,7 @@ impl ParkableImage {
     /// is synchronously read back into memory first.
     pub fn snapshot(&self) -> io::Result<ParkableImageSnapshot> {
         let snapshot = {
-            let mut state = self.inner.state.lock();
-            let ParkableImageState::Frozen(frozen) = &mut *state else {
-                let ParkableImageState::Mutable(bytes) = &*state else {
-                    unreachable!("parkable image has only mutable and frozen states")
-                };
-                return Ok(ParkableImageSnapshot {
-                    data: Arc::new(bytes.clone()),
-                    lease: None,
-                });
-            };
+            let mut frozen = self.inner.state.lock();
 
             frozen.used = true;
             if let FrozenImageStorage::Parked { disk } = &frozen.storage {
@@ -293,10 +194,7 @@ impl ParkableImage {
     }
 
     fn retain_snapshot_reader(&self) {
-        let mut state = self.inner.state.lock();
-        let ParkableImageState::Frozen(frozen) = &mut *state else {
-            unreachable!("only frozen parkable images issue reader leases")
-        };
+        let mut frozen = self.inner.state.lock();
         frozen.reader_count = frozen
             .reader_count
             .checked_add(1)
@@ -305,10 +203,7 @@ impl ParkableImage {
 
     fn release_snapshot_reader(&self) {
         let became_parkable = {
-            let mut state = self.inner.state.lock();
-            let ParkableImageState::Frozen(frozen) = &mut *state else {
-                unreachable!("only frozen parkable images issue reader leases")
-            };
+            let mut frozen = self.inner.state.lock();
             frozen.reader_count = frozen
                 .reader_count
                 .checked_sub(1)
@@ -321,10 +216,7 @@ impl ParkableImage {
     }
 
     pub(crate) fn parking_deadline(&self, now: Instant) -> Option<Instant> {
-        let state = self.inner.state.lock();
-        let ParkableImageState::Frozen(frozen) = &*state else {
-            return None;
-        };
+        let frozen = self.inner.state.lock();
         let policy = self.inner.manager.policy();
         if frozen.len < policy.min_size_to_park {
             return None;
@@ -370,10 +262,7 @@ impl ParkableImage {
     }
 
     fn prepare_parking(&self) -> ParkPreparation {
-        let mut state = self.inner.state.lock();
-        let ParkableImageState::Frozen(frozen) = &mut *state else {
-            return ParkPreparation::Done(ParkOutcome::NotFrozen);
-        };
+        let mut frozen = self.inner.state.lock();
         let policy = self.inner.manager.policy();
         if frozen.len < policy.min_size_to_park {
             return ParkPreparation::Done(ParkOutcome::BelowMinimum);
@@ -434,12 +323,7 @@ impl ParkableImage {
         write_result: io::Result<DiskData>,
         write_bytes: Arc<Vec<u8>>,
     ) -> io::Result<ParkOutcome> {
-        let mut state = self.inner.state.lock();
-        let ParkableImageState::Frozen(frozen) = &mut *state else {
-            return Err(io::Error::other(
-                "parking write completed for a mutable image",
-            ));
-        };
+        let mut frozen = self.inner.state.lock();
         if !matches!(frozen.storage, FrozenImageStorage::Parking { .. }) {
             return Err(io::Error::other(
                 "parking write completed after its state was replaced",
@@ -472,55 +356,44 @@ impl ParkableImage {
     }
 
     pub fn diagnostics(&self) -> ParkableImageDiagnostics {
-        match &*self.inner.state.lock() {
-            ParkableImageState::Mutable(bytes) => ParkableImageDiagnostics {
-                len: bytes.len(),
-                storage: ParkableImageStorageState::Mutable,
-                used: false,
-                snapshot_count: 0,
-                retained_memory_bytes: bytes.capacity(),
-                retained_disk_bytes: 0,
-            },
-            ParkableImageState::Frozen(frozen) => {
-                let (storage, snapshot_count, retained_memory_bytes, retained_disk_bytes) =
-                    match &frozen.storage {
-                        FrozenImageStorage::Resident {
-                            bytes,
-                            disk_backup: None,
-                        } => (
-                            ParkableImageStorageState::Resident,
-                            frozen.reader_count,
-                            bytes.capacity(),
-                            0,
-                        ),
-                        FrozenImageStorage::Resident {
-                            bytes,
-                            disk_backup: Some(disk),
-                        } => (
-                            ParkableImageStorageState::ResidentWithDiskBackup,
-                            frozen.reader_count,
-                            bytes.capacity(),
-                            disk.len(),
-                        ),
-                        FrozenImageStorage::Parking { bytes, .. } => (
-                            ParkableImageStorageState::Parking,
-                            frozen.reader_count,
-                            bytes.capacity(),
-                            0,
-                        ),
-                        FrozenImageStorage::Parked { disk } => {
-                            (ParkableImageStorageState::Parked, 0, 0, disk.len())
-                        }
-                    };
-                ParkableImageDiagnostics {
-                    len: frozen.len,
-                    storage,
-                    used: frozen.used,
-                    snapshot_count,
-                    retained_memory_bytes,
-                    retained_disk_bytes,
+        let frozen = self.inner.state.lock();
+        let (storage, snapshot_count, retained_memory_bytes, retained_disk_bytes) =
+            match &frozen.storage {
+                FrozenImageStorage::Resident {
+                    bytes,
+                    disk_backup: None,
+                } => (
+                    ParkableImageStorageState::Resident,
+                    frozen.reader_count,
+                    bytes.capacity(),
+                    0,
+                ),
+                FrozenImageStorage::Resident {
+                    bytes,
+                    disk_backup: Some(disk),
+                } => (
+                    ParkableImageStorageState::ResidentWithDiskBackup,
+                    frozen.reader_count,
+                    bytes.capacity(),
+                    disk.len(),
+                ),
+                FrozenImageStorage::Parking { bytes, .. } => (
+                    ParkableImageStorageState::Parking,
+                    frozen.reader_count,
+                    bytes.capacity(),
+                    0,
+                ),
+                FrozenImageStorage::Parked { disk } => {
+                    (ParkableImageStorageState::Parked, 0, 0, disk.len())
                 }
-            }
+            };
+        ParkableImageDiagnostics {
+            len: frozen.len,
+            storage,
+            used: frozen.used,
+            snapshot_count,
+            retained_memory_bytes,
+            retained_disk_bytes,
         }
     }
 

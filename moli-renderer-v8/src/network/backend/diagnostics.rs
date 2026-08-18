@@ -27,7 +27,6 @@ impl From<moli_disk_pool::DiskPoolDiagnostics> for BrowserResourceDiskPoolDiagno
 #[serde(rename_all = "camelCase")]
 pub struct BrowserParkableImageDiagnostics {
     pub image_count: usize,
-    pub mutable_count: usize,
     pub resident_count: usize,
     pub parking_count: usize,
     pub resident_with_disk_backup_count: usize,
@@ -42,7 +41,6 @@ impl From<moli_parkable_image::ParkableImageManagerDiagnostics>
     fn from(diagnostics: moli_parkable_image::ParkableImageManagerDiagnostics) -> Self {
         Self {
             image_count: diagnostics.image_count,
-            mutable_count: diagnostics.mutable_count,
             resident_count: diagnostics.resident_count,
             parking_count: diagnostics.parking_count,
             resident_with_disk_backup_count: diagnostics.resident_with_disk_backup_count,
