@@ -1,6 +1,6 @@
 use moli_layout::{
-    LayoutError, LayoutFlushReason, LayoutHit, LayoutPoint, LayoutQuery, LayoutQueryAnswer,
-    LayoutQueryBatch, LayoutScrollbarHit, LayoutTransform2D, LayoutViewport,
+    FrozenLayoutTree, LayoutError, LayoutFlushReason, LayoutHit, LayoutPoint, LayoutQuery,
+    LayoutQueryAnswer, LayoutQueryBatch, LayoutScrollbarHit, LayoutTransform2D, LayoutViewport,
 };
 
 use super::provider::{
@@ -17,6 +17,12 @@ pub(crate) struct InputHit {
     /// owner frame. Keeping the affine map lets boundary and capture events
     /// convert a new root position into a previously targeted child frame.
     pub(crate) root_to_frame: LayoutTransform2D,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct InputSurfaceHit {
+    pub(crate) input: Option<InputHit>,
+    pub(crate) scrollbar: Option<LayoutScrollbarHit<DomHandle>>,
 }
 
 #[derive(Clone, Copy)]
@@ -70,18 +76,49 @@ pub(crate) fn observable_input_hit_test(
     document: DomHandle,
     point: LayoutPoint,
 ) -> Result<Option<InputHit>, LayoutError> {
-    input_hit_test(runtime, document, point, false)
+    observable_input_surface_hit_test(runtime, document, point, false, false).map(|hit| hit.input)
 }
 
+#[cfg(test)]
 pub(crate) fn observable_scrollbar_hit_test(
     runtime: &JsContextHost,
     document: DomHandle,
     point: LayoutPoint,
 ) -> Result<Option<LayoutScrollbarHit<DomHandle>>, LayoutError> {
+    observable_input_surface_hit_test(runtime, document, point, false, true)
+        .map(|hit| hit.scrollbar)
+}
+
+pub(crate) fn observable_input_surface_hit_test(
+    runtime: &JsContextHost,
+    document: DomHandle,
+    point: LayoutPoint,
+    ignore_pointer_events_none: bool,
+    include_scrollbars: bool,
+) -> Result<InputSurfaceHit, LayoutError> {
     if !runtime.layout_policy().uses_real_layout() {
-        return Ok(None);
+        return input_hit_test_via_documents(runtime, document, point, ignore_pointer_events_none)
+            .map(|input| InputSurfaceHit {
+                input,
+                scrollbar: None,
+            });
     }
-    scrollbar_hit_test_in_frame(runtime, FrameHitTest::root(runtime, document, point), 0)
+
+    let viewport = runtime.layout_viewport_for_document(document);
+    runtime.ensure_layout_at_viewport(document, LayoutFlushReason::HitTest, viewport)?;
+    runtime
+        .with_latest_layout_tree_for_document(document, |tree| {
+            input_surface_hit_test_in_tree(
+                runtime,
+                tree,
+                point,
+                LayoutTransform2D::IDENTITY,
+                ignore_pointer_events_none,
+                include_scrollbars,
+                0,
+            )
+        })
+        .ok_or(LayoutError::NoLayoutRoot)
 }
 
 pub(crate) fn observable_deep_hit_test(
@@ -90,10 +127,18 @@ pub(crate) fn observable_deep_hit_test(
     point: LayoutPoint,
     ignore_pointer_events_none: bool,
 ) -> Result<Option<DomHandle>, LayoutError> {
-    Ok(input_hit_test(runtime, document, point, ignore_pointer_events_none)?.map(|hit| hit.handle))
+    Ok(observable_input_surface_hit_test(
+        runtime,
+        document,
+        point,
+        ignore_pointer_events_none,
+        false,
+    )?
+    .input
+    .map(|hit| hit.handle))
 }
 
-fn input_hit_test(
+fn input_hit_test_via_documents(
     runtime: &JsContextHost,
     document: DomHandle,
     point: LayoutPoint,
@@ -133,35 +178,112 @@ fn input_hit_test_in_frame(
     )
 }
 
-fn scrollbar_hit_test_in_frame(
+fn input_surface_hit_test_in_tree(
     runtime: &JsContextHost,
-    frame: FrameHitTest,
+    tree: &FrozenLayoutTree<DomHandle>,
+    point: LayoutPoint,
+    root_to_frame: LayoutTransform2D,
+    ignore_pointer_events_none: bool,
+    include_scrollbars: bool,
     depth: usize,
-) -> Result<Option<LayoutScrollbarHit<DomHandle>>, LayoutError> {
-    // Publish a current tree through the same exact-viewport hit-test
-    // boundary used for DOM input. Scrollbar geometry intentionally remains a
-    // frozen-tree control query because it is user-agent chrome, not a DOM
-    // target.
-    let live_hit = live_hit_in_frame(runtime, frame, false)?;
-    if let Some(mut hit) = runtime
-        .with_latest_layout_tree_for_document(frame.document, |tree| {
-            tree.scrollbar_hit_test(frame.point)
-        })
-        .flatten()
-    {
-        hit.viewport_to_local = hit.viewport_to_local.concatenate(frame.root_to_frame);
-        return Ok(Some(hit));
+) -> InputSurfaceHit {
+    if include_scrollbars && let Some(mut scrollbar) = tree.scrollbar_hit_test(point) {
+        scrollbar.viewport_to_local = scrollbar.viewport_to_local.concatenate(root_to_frame);
+        return InputSurfaceHit {
+            input: None,
+            scrollbar: Some(scrollbar),
+        };
     }
+
+    let Some((layout_hit, target)) =
+        live_hit_in_tree(runtime, tree, point, ignore_pointer_events_none)
+    else {
+        return InputSurfaceHit::default();
+    };
+    let target_hit = InputHit {
+        handle: target,
+        root_to_frame,
+    };
     if depth >= CHILD_FRAME_DEPTH_LIMIT {
-        return Ok(None);
+        return InputSurfaceHit {
+            input: Some(target_hit),
+            scrollbar: None,
+        };
     }
-    let Some((layout_hit, target)) = live_hit else {
-        return Ok(None);
+    let Some(child_tree) = tree.embedded_frame_tree(target) else {
+        return InputSurfaceHit {
+            input: Some(target_hit),
+            scrollbar: None,
+        };
     };
-    let Some(child) = frame.child(runtime, target, layout_hit) else {
-        return Ok(None);
+    if runtime
+        .child_browsing_context_document_handle(target)
+        .is_none()
+    {
+        return InputSurfaceHit {
+            input: Some(target_hit),
+            scrollbar: None,
+        };
+    }
+    let Some(content_box) = layout_hit.local_content_box else {
+        return InputSurfaceHit {
+            input: Some(target_hit),
+            scrollbar: None,
+        };
     };
-    scrollbar_hit_test_in_frame(runtime, child, depth + 1)
+    if !content_box.contains(layout_hit.local_point) {
+        return InputSurfaceHit {
+            input: Some(target_hit),
+            scrollbar: None,
+        };
+    }
+    let frame_to_child = LayoutTransform2D::translation(-content_box.x, -content_box.y)
+        .concatenate(layout_hit.viewport_to_local);
+    let child_hit = input_surface_hit_test_in_tree(
+        runtime,
+        child_tree,
+        frame_to_child.map_point(point),
+        frame_to_child.concatenate(root_to_frame),
+        ignore_pointer_events_none,
+        include_scrollbars,
+        depth + 1,
+    );
+    if child_hit.input.is_some() || child_hit.scrollbar.is_some() {
+        child_hit
+    } else {
+        InputSurfaceHit {
+            input: Some(target_hit),
+            scrollbar: None,
+        }
+    }
+}
+
+fn live_hit_in_tree(
+    runtime: &JsContextHost,
+    tree: &FrozenLayoutTree<DomHandle>,
+    point: LayoutPoint,
+    ignore_pointer_events_none: bool,
+) -> Option<(LayoutHit<DomHandle>, DomHandle)> {
+    let first_hit = tree.hit_test(point, ignore_pointer_events_none);
+    let live_first_hit = first_hit.and_then(|hit| {
+        let target = element_for_hit_source(runtime, hit.source)?;
+        runtime
+            .dom_host()
+            .is_connected(target)
+            .then_some((hit, target))
+    });
+    if live_first_hit.is_some() || first_hit.is_none() {
+        return live_first_hit;
+    }
+    tree.hit_test_all(point, ignore_pointer_events_none)
+        .into_iter()
+        .find_map(|hit| {
+            let target = element_for_hit_source(runtime, hit.source)?;
+            runtime
+                .dom_host()
+                .is_connected(target)
+                .then_some((hit, target))
+        })
 }
 
 fn live_hit_in_frame(

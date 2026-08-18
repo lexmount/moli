@@ -1,7 +1,7 @@
 use crate::{
-    DocumentLayoutServices, LayoutError, LayoutFlushReason, LayoutPassResult, LayoutScrollbarAxis,
-    LayoutSource, LayoutStyleResolver, LayoutViewport, PaintCaptureRequest, PaintSnapshot,
-    PaintViewport, build_layout_world,
+    DocumentLayoutServices, FrozenLayoutTree, LayoutError, LayoutFlushReason, LayoutPassResult,
+    LayoutScrollbarAxis, LayoutSource, LayoutStyleResolver, LayoutViewport, PaintCaptureRequest,
+    PaintSnapshot, PaintViewport, build_layout_world,
     form::prepare_form_controls,
     inline::prepare_inline_contexts,
     list::prepare_list_markers,
@@ -11,6 +11,26 @@ use crate::{
 use std::collections::HashMap;
 use std::time::Instant;
 
+/// Owned products for one embedded browsing context in the same synchronous
+/// layout demand as its parent.
+pub struct EmbeddedFrameSnapshot<N>
+where
+    N: Copy + std::fmt::Debug + Eq + std::hash::Hash,
+{
+    pub tree: FrozenLayoutTree<N>,
+    pub paint: Option<PaintSnapshot>,
+}
+
+impl<N> EmbeddedFrameSnapshot<N>
+where
+    N: Copy + std::fmt::Debug + Eq + std::hash::Hash,
+{
+    #[must_use]
+    pub const fn new(tree: FrozenLayoutTree<N>, paint: Option<PaintSnapshot>) -> Self {
+        Self { tree, paint }
+    }
+}
+
 /// Renderer-owned bridge for one live embedded browsing context.
 ///
 /// The parent numeric layout has already completed when this callback runs, so
@@ -18,23 +38,30 @@ use std::time::Instant;
 /// computed-style estimate. Implementations must return an owned, source-free
 /// snapshot and must not run JavaScript, lifecycle work, or an event-loop turn.
 /// Recursive child layout is allowed because every nested world remains local
-/// to the same synchronous demand.
-pub trait EmbeddedFrameRenderer<N> {
+/// to the same synchronous demand. The child tree is consumed into the single
+/// parent-owned frozen snapshot; it is not a separately retained cache entry.
+pub trait EmbeddedFrameRenderer<N>
+where
+    N: Copy + std::fmt::Debug + Eq + std::hash::Hash,
+{
     fn render_embedded_frame(
         &mut self,
         frame: N,
         viewport: LayoutViewport,
-    ) -> Result<Option<PaintSnapshot>, LayoutError>;
+    ) -> Result<Option<EmbeddedFrameSnapshot<N>>, LayoutError>;
 }
 
 struct NoEmbeddedFrames;
 
-impl<N> EmbeddedFrameRenderer<N> for NoEmbeddedFrames {
+impl<N> EmbeddedFrameRenderer<N> for NoEmbeddedFrames
+where
+    N: Copy + std::fmt::Debug + Eq + std::hash::Hash,
+{
     fn render_embedded_frame(
         &mut self,
         _frame: N,
         _viewport: LayoutViewport,
-    ) -> Result<Option<PaintSnapshot>, LayoutError> {
+    ) -> Result<Option<EmbeddedFrameSnapshot<N>>, LayoutError> {
         Ok(None)
     }
 }
@@ -77,6 +104,13 @@ impl LayoutPassRequest {
     /// Whether this demand also needs immutable software-paint input.
     pub const fn requests_paint(self) -> bool {
         self.paint_capture.is_some()
+    }
+
+    /// Whether this demand needs a complete embedded-frame input projection.
+    /// Paint always composes child frames, while coordinate input needs their
+    /// source-bearing geometry without retaining independent child snapshots.
+    pub const fn requests_embedded_frames(self) -> bool {
+        self.requests_paint() || matches!(self.reason, LayoutFlushReason::HitTest)
     }
 
     /// Whether paint snapshots for this demand should include CSS backgrounds.
@@ -152,9 +186,9 @@ where
 /// Builds one complete layout result and resolves embedded frame pixels after
 /// the parent numeric layout has established their exact content viewports.
 ///
-/// This is a one-shot composition seam, not a retained subframe tree. Child
-/// snapshots are consumed into the parent snapshot before all layout worlds
-/// are dropped.
+/// This is a one-shot composition seam, not a per-Document cache. Child trees
+/// are recursively owned by the one parent snapshot, child paint is consumed
+/// into parent paint, and every working layout world is then dropped.
 pub fn build_layout_pass_with_embedded_frames<S, R, F>(
     source: &S,
     styles: &mut R,
@@ -174,7 +208,7 @@ where
     prepare_inline_contexts(&mut world, services);
     compute_world_layout_with_scrollbars(&mut world, request.viewport);
     let mut embedded_frames = HashMap::new();
-    if request.requests_paint() {
+    if request.requests_embedded_frames() {
         for index in 0..world.boxes.len() {
             let layout_box = &world.boxes[index];
             if !layout_box.element_semantics().is_some_and(|semantics| {
@@ -207,17 +241,19 @@ where
                 request.viewport.device_pixel_ratio,
             );
             if let Some(snapshot) = frames.render_embedded_frame(source, viewport)? {
-                embedded_frames.insert(crate::LayoutBoxId::from_index(index), snapshot);
+                embedded_frames.insert(crate::LayoutBoxId::from_index(index), (source, snapshot));
             }
         }
     }
     finish_layout_pass(
         &world,
+        source.root(),
         request.viewport,
         request.reason,
         started,
         request.paint_capture,
-        &mut embedded_frames,
+        embedded_frames,
+        request.requests_embedded_frames(),
     )
 }
 

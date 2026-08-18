@@ -27,6 +27,18 @@ pub struct FrozenLayoutBox<N> {
     pub hit_source: Option<N>,
 }
 
+/// One child browsing context owned by the same latest frozen snapshot as its
+/// parent. It is deliberately recursive rather than an independently keyed
+/// cache entry, so capturing input geometry does not publish a child over the
+/// top-level tree.
+pub struct FrozenEmbeddedFrame<N>
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    pub source: N,
+    pub tree: Box<FrozenLayoutTree<N>>,
+}
+
 impl<N> Deref for FrozenLayoutBox<N> {
     type Target = LayoutBoxGeometry;
 
@@ -65,6 +77,7 @@ pub struct FrozenLayoutTree<N>
 where
     N: Copy + Debug + Eq + Hash,
 {
+    source_root: N,
     pub viewport: LayoutViewport,
     pub viewport_scroll: LayoutPoint,
     pub content_size: LayoutSize,
@@ -76,12 +89,31 @@ where
     pub scroll_proxy_links: Vec<(N, LayoutOutputBoxId)>,
     viewport_coordinate_space: FrozenCoordinateSpace,
     pub clip_chain: Vec<LayoutClipNode>,
+    embedded_frames: Vec<FrozenEmbeddedFrame<N>>,
+    embedded_frames_complete: bool,
 }
 
 impl<N> FrozenLayoutTree<N>
 where
     N: Copy + Debug + Eq + Hash,
 {
+    /// Source root whose complete layout projection this member tree owns.
+    pub const fn source_root(&self) -> N {
+        self.source_root
+    }
+
+    /// Finds an exact Document/source-root member without a per-Document
+    /// index. Browsing-context depth is bounded, so this walks only the small
+    /// recursive frame projection rather than the member trees' boxes.
+    pub fn tree_for_root(&self, source_root: N) -> Option<&FrozenLayoutTree<N>> {
+        if self.source_root == source_root {
+            return Some(self);
+        }
+        self.embedded_frames
+            .iter()
+            .find_map(|frame| frame.tree.tree_for_root(source_root))
+    }
+
     pub fn retention_metrics(&self) -> LayoutTreeRetentionMetrics {
         fn allocation<T>(capacity: usize) -> usize {
             capacity.saturating_mul(std::mem::size_of::<T>())
@@ -92,18 +124,35 @@ where
                 layout_box.fragments.capacity(),
             ))
         });
-        let estimated_geometry_bytes = std::mem::size_of::<Self>()
+        let own_estimated_geometry_bytes = std::mem::size_of::<Self>()
             .saturating_add(allocation::<FrozenLayoutBox<N>>(self.boxes.capacity()))
             .saturating_add(allocation::<LayoutFragment>(self.fragments.capacity()))
             .saturating_add(allocation::<(N, LayoutOutputBoxId)>(
                 self.scroll_proxy_links.capacity(),
             ))
             .saturating_add(allocation::<LayoutClipNode>(self.clip_chain.capacity()))
+            .saturating_add(allocation::<FrozenEmbeddedFrame<N>>(
+                self.embedded_frames.capacity(),
+            ))
             .saturating_add(box_allocations);
+        let embedded = self.embedded_frames.iter().fold(
+            LayoutTreeRetentionMetrics::default(),
+            |total, frame| {
+                let child = frame.tree.retention_metrics();
+                LayoutTreeRetentionMetrics {
+                    box_count: total.box_count.saturating_add(child.box_count),
+                    fragment_count: total.fragment_count.saturating_add(child.fragment_count),
+                    estimated_geometry_bytes: total
+                        .estimated_geometry_bytes
+                        .saturating_add(child.estimated_geometry_bytes),
+                }
+            },
+        );
         LayoutTreeRetentionMetrics {
-            box_count: self.boxes.len(),
-            fragment_count: self.fragments.len(),
-            estimated_geometry_bytes,
+            box_count: self.boxes.len().saturating_add(embedded.box_count),
+            fragment_count: self.fragments.len().saturating_add(embedded.fragment_count),
+            estimated_geometry_bytes: own_estimated_geometry_bytes
+                .saturating_add(embedded.estimated_geometry_bytes),
         }
     }
 
@@ -138,6 +187,25 @@ where
             .get(id.index())
             .map(|layout_box| &layout_box.scroll_extent)
     }
+
+    /// Returns the embedded child tree frozen into this same retained snapshot.
+    pub fn embedded_frame_tree(&self, source: N) -> Option<&FrozenLayoutTree<N>> {
+        self.embedded_frames
+            .iter()
+            .find(|frame| frame.source == source)
+            .map(|frame| frame.tree.as_ref())
+    }
+
+    /// Whether every live child frame encountered by this pass was projected.
+    /// Hit-test demands require this bit before reusing a tree produced by a
+    /// geometry-only pass.
+    pub const fn embedded_frames_complete(&self) -> bool {
+        self.embedded_frames_complete
+    }
+
+    pub fn embedded_frames(&self) -> impl ExactSizeIterator<Item = &FrozenEmbeddedFrame<N>> {
+        self.embedded_frames.iter()
+    }
 }
 
 impl<N> FrozenLayoutTree<N>
@@ -145,6 +213,7 @@ where
     N: Copy + Debug + Eq + Hash,
 {
     pub(crate) fn new(
+        source_root: N,
         viewport: LayoutViewport,
         viewport_scroll: LayoutPoint,
         content_size: LayoutSize,
@@ -154,8 +223,11 @@ where
         scroll_proxy_links: Vec<(N, LayoutOutputBoxId)>,
         viewport_coordinate_space: FrozenCoordinateSpace,
         clip_chain: Vec<LayoutClipNode>,
+        embedded_frames: Vec<FrozenEmbeddedFrame<N>>,
+        embedded_frames_complete: bool,
     ) -> Self {
         Self {
+            source_root,
             viewport,
             viewport_scroll,
             content_size,
@@ -165,6 +237,8 @@ where
             scroll_proxy_links,
             viewport_coordinate_space,
             clip_chain,
+            embedded_frames,
+            embedded_frames_complete,
         }
     }
 }

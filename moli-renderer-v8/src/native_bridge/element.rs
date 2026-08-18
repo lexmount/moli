@@ -385,11 +385,13 @@ pub(crate) fn install_html_select_element_prototype_bindings(
 }
 
 pub use geometry::ClientRect;
+#[cfg(test)]
+pub(crate) use geometry::observable_scrollbar_hit_test;
 pub(crate) use geometry::{
     apply_scroll_observable_effects, observable_bounding_client_rect, observable_caret_position,
     observable_deep_hit_test, observable_event_offset, observable_geometry_batch,
-    observable_hit_test_all, observable_input_hit_test, observable_scroll_adjusted_client_rect,
-    observable_scrollbar_hit_test, observable_sources_with_fragments,
+    observable_hit_test_all, observable_input_hit_test, observable_input_surface_hit_test,
+    observable_scroll_adjusted_client_rect, observable_sources_with_fragments,
     perform_scrollbar_scroll_default_action, perform_wheel_scroll_default_action,
     queue_scroll_observable_effects, scroll_node_into_view_at_start,
 };

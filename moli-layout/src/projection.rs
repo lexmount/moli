@@ -17,11 +17,13 @@ use crate::{
 
 pub(crate) fn finish_layout_pass<N>(
     world: &LayoutWorld<N>,
+    source_root: N,
     viewport: LayoutViewport,
     reason: LayoutFlushReason,
     started: Instant,
     paint_capture: Option<PaintCaptureRequest>,
-    embedded_frames: &mut HashMap<LayoutBoxId, crate::PaintSnapshot>,
+    mut embedded_frames: HashMap<LayoutBoxId, (N, crate::EmbeddedFrameSnapshot<N>)>,
+    embedded_frames_complete: bool,
 ) -> Result<LayoutPassResult<N>, LayoutError>
 where
     N: Copy + Debug + Eq + Hash,
@@ -34,12 +36,16 @@ where
     projection.assign_clip_and_paint_order();
 
     let content_size = projection.document_content_size();
+    let mut embedded_paint = embedded_frames
+        .iter_mut()
+        .filter_map(|(id, (_, snapshot))| snapshot.paint.take().map(|paint| (*id, paint)))
+        .collect::<HashMap<_, _>>();
     let mut paint_snapshot = paint_capture
         .map(|request| {
             request
                 .resolve(viewport, projection.viewport_scroll, content_size)
                 .map(|capture| {
-                    crate::paint::project_paint_snapshot(&projection, capture, embedded_frames)
+                    crate::paint::project_paint_snapshot(&projection, capture, &mut embedded_paint)
                 })
         })
         .transpose()?;
@@ -73,7 +79,19 @@ where
             .filter(|diagnostic| diagnostic.severity == PaintDiagnosticSeverity::Warning)
             .count(),
     };
-    let tree = projection.into_frozen_tree(content_size);
+    let embedded_frames = embedded_frames
+        .into_values()
+        .map(|(source, snapshot)| crate::FrozenEmbeddedFrame {
+            source,
+            tree: Box::new(snapshot.tree),
+        })
+        .collect();
+    let tree = projection.into_frozen_tree(
+        source_root,
+        content_size,
+        embedded_frames,
+        embedded_frames_complete,
+    );
     Ok(LayoutPassResult::new(
         tree,
         diagnostics,
@@ -907,7 +925,13 @@ where
         )
     }
 
-    fn into_frozen_tree(self, content_size: LayoutSize) -> FrozenLayoutTree<N> {
+    fn into_frozen_tree(
+        self,
+        source_root: N,
+        content_size: LayoutSize,
+        embedded_frames: Vec<crate::FrozenEmbeddedFrame<N>>,
+        embedded_frames_complete: bool,
+    ) -> FrozenLayoutTree<N> {
         let root_box = LayoutOutputBoxId::from_index(self.world.root.index());
         let mut coordinate_spaces = self
             .coordinate_spaces
@@ -941,6 +965,7 @@ where
             )
             .collect();
         FrozenLayoutTree::new(
+            source_root,
             self.viewport,
             self.viewport_scroll,
             content_size,
@@ -950,6 +975,8 @@ where
             self.scroll_proxy_links,
             viewport_coordinate_space,
             self.clip_chain,
+            embedded_frames,
+            embedded_frames_complete,
         )
     }
 }

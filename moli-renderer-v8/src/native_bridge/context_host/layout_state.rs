@@ -17,8 +17,9 @@ use crate::{
 /// layout tree and document-owned font/text sidecars survive a pass.
 /// Embedded documents receive separate Parley services so a main-document
 /// `@font-face` registration cannot leak across the browsing-context boundary.
-/// The single snapshot slot may describe any exact Document in the current
-/// document tree; its identity is stored alongside the tree.
+/// The single snapshot slot records the exact root Document it was built for;
+/// embedded Document member trees remain recursively owned by that same
+/// snapshot instead of becoming separately keyed cache entries.
 pub(super) struct DocumentLayoutState {
     services: DocumentLayoutServices,
     embedded_document_services: HashMap<DomHandle, DocumentLayoutServices>,
@@ -27,8 +28,8 @@ pub(super) struct DocumentLayoutState {
     latest_layout: LatestLayoutTreeCache,
     /// Last used content viewport published by each live iframe owner's
     /// parent layout. Blink keeps the equivalent size on LocalFrameView; it is
-    /// separate from the single latest-tree slot because parent and child
-    /// layout queries replace that slot while the frame view remains live.
+    /// separate from the single latest-tree slot because a later fresh layout
+    /// may replace that slot while the frame view remains live.
     frame_viewports: HashMap<DomHandle, LayoutViewport>,
 }
 
@@ -92,6 +93,13 @@ impl DocumentLayoutState {
         document: DomHandle,
     ) -> Option<&FrozenLayoutTree<DomHandle>> {
         self.latest_layout.get(document)
+    }
+
+    pub(super) fn latest_layout_for_root(
+        &self,
+        root: DomHandle,
+    ) -> Option<&FrozenLayoutTree<DomHandle>> {
+        self.latest_layout.get_for_root(root)
     }
 
     pub(super) fn publish_latest_layout(

@@ -83,6 +83,13 @@ where
         self.tree
     }
 
+    /// Consumes one pass into the sole retainable tree plus optional one-shot
+    /// paint input. Embedded-frame composition uses this to nest the child tree
+    /// into its parent while separately consuming paint into the parent frame.
+    pub fn into_tree_and_paint_snapshot(self) -> (FrozenLayoutTree<N>, Option<PaintSnapshot>) {
+        (self.tree, self.paint_snapshot)
+    }
+
     pub fn retention_metrics(&self) -> LayoutTreeRetentionMetrics {
         self.tree.retention_metrics()
     }

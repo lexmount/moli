@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use moli_layout::{
     DocumentLayoutServices, EmbeddedFrameRenderer, LayoutPassRequest, LayoutPassResult,
-    LayoutSource, LayoutViewport, PaintSnapshot, build_layout_pass_with_embedded_frames,
+    LayoutSource, LayoutViewport, build_layout_pass_with_embedded_frames,
 };
 use style::values::generics::image::GenericImage;
 
@@ -148,6 +148,7 @@ fn build_native_layout_pass_recursive(
         let mut frames = NativeEmbeddedFrameRenderer {
             runtime,
             reason: request.reason,
+            capture_paint: request.requests_paint(),
             include_backgrounds: request.includes_backgrounds(),
             document_stack,
             embedded_document_services,
@@ -161,6 +162,7 @@ fn build_native_layout_pass_recursive(
 struct NativeEmbeddedFrameRenderer<'a> {
     runtime: &'a JsContextHost,
     reason: moli_layout::LayoutFlushReason,
+    capture_paint: bool,
     include_backgrounds: bool,
     document_stack: &'a mut Vec<DomHandle>,
     embedded_document_services: &'a mut HashMap<DomHandle, DocumentLayoutServices>,
@@ -171,7 +173,8 @@ impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
         &mut self,
         frame: DomHandle,
         viewport: LayoutViewport,
-    ) -> Result<Option<PaintSnapshot>, moli_layout::LayoutError> {
+    ) -> Result<Option<moli_layout::EmbeddedFrameSnapshot<DomHandle>>, moli_layout::LayoutError>
+    {
         const MAX_EMBEDDED_DOCUMENT_DEPTH: usize = 32;
 
         let Some(document) = self.runtime.child_browsing_context_document_handle(frame) else {
@@ -194,19 +197,25 @@ impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
             .embedded_document_services
             .remove(&document)
             .unwrap_or_default();
-        let mut capture = moli_layout::PaintCaptureRequest::viewport();
-        capture.include_backgrounds = self.include_backgrounds;
+        let request = if self.capture_paint {
+            let mut capture = moli_layout::PaintCaptureRequest::viewport();
+            capture.include_backgrounds = self.include_backgrounds;
+            LayoutPassRequest::with_capture(viewport, self.reason, capture)
+        } else {
+            LayoutPassRequest::new(viewport, self.reason)
+        };
         let result = build_native_layout_pass_recursive(
             self.runtime,
             root,
             &mut services,
             self.embedded_document_services,
-            LayoutPassRequest::with_capture(viewport, self.reason, capture),
+            request,
             self.document_stack,
         );
         self.embedded_document_services.insert(document, services);
         let output = result?;
-        output.into_paint_snapshot().map(Some)
+        let (tree, paint) = output.into_tree_and_paint_snapshot();
+        Ok(Some(moli_layout::EmbeddedFrameSnapshot::new(tree, paint)))
     }
 }
 

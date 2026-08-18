@@ -45,23 +45,24 @@ pub use capture::{
 };
 pub use error::LayoutError;
 pub use layout_tree::{
-    FrozenCoordinateSpace, FrozenLayoutBox, FrozenLayoutTree, GeometryProvider, LayoutAnswers,
-    LayoutBoxGeometry, LayoutBoxModel, LayoutCaretPosition, LayoutClipChainId, LayoutClipNode,
-    LayoutCoordinateSpaceId, LayoutDocumentMetrics, LayoutElementMetrics, LayoutFlushReason,
-    LayoutFragment, LayoutFragmentBoxModel, LayoutFragmentId, LayoutFragmentKind, LayoutHit,
-    LayoutIntersectionGeometry, LayoutNodeOutput, LayoutOutputBoxId, LayoutPassMetrics,
-    LayoutPassResult, LayoutPoint, LayoutQuad, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch,
-    LayoutRect, LayoutScrollContainerMetrics, LayoutScrollExtent, LayoutScrollIntoViewGeometry,
-    LayoutSize, LayoutTransform2D, LayoutTreeRetentionMetrics, LayoutViewport,
-    MAX_RETAINED_LAYOUT_BOXES, MAX_RETAINED_LAYOUT_FRAGMENTS, MAX_RETAINED_LAYOUT_TREE_BYTES,
+    FrozenCoordinateSpace, FrozenEmbeddedFrame, FrozenLayoutBox, FrozenLayoutTree,
+    GeometryProvider, LayoutAnswers, LayoutBoxGeometry, LayoutBoxModel, LayoutCaretPosition,
+    LayoutClipChainId, LayoutClipNode, LayoutCoordinateSpaceId, LayoutDocumentMetrics,
+    LayoutElementMetrics, LayoutFlushReason, LayoutFragment, LayoutFragmentBoxModel,
+    LayoutFragmentId, LayoutFragmentKind, LayoutHit, LayoutIntersectionGeometry, LayoutNodeOutput,
+    LayoutOutputBoxId, LayoutPassMetrics, LayoutPassResult, LayoutPoint, LayoutQuad, LayoutQuery,
+    LayoutQueryAnswer, LayoutQueryBatch, LayoutRect, LayoutScrollContainerMetrics,
+    LayoutScrollExtent, LayoutScrollIntoViewGeometry, LayoutSize, LayoutTransform2D,
+    LayoutTreeRetentionMetrics, LayoutViewport, MAX_RETAINED_LAYOUT_BOXES,
+    MAX_RETAINED_LAYOUT_FRAGMENTS, MAX_RETAINED_LAYOUT_TREE_BYTES,
 };
 pub use normalize::{NormalizedBoxNode, NormalizedBoxTree, NormalizedFormattingContext};
 pub use normalize_source::{
     NormalizedLayoutSourceNode, NormalizedLayoutSourceTree, normalize_layout_source,
 };
 pub use pass::{
-    EmbeddedFrameRenderer, LayoutPassRequest, ScreenshotLayoutRequest, build_layout_pass,
-    build_layout_pass_with_embedded_frames, build_screenshot_snapshot,
+    EmbeddedFrameRenderer, EmbeddedFrameSnapshot, LayoutPassRequest, ScreenshotLayoutRequest,
+    build_layout_pass, build_layout_pass_with_embedded_frames, build_screenshot_snapshot,
 };
 pub use scrollbar::{
     LayoutScrollbarAxis, LayoutScrollbarColors, LayoutScrollbarGeometry, LayoutScrollbarGutter,

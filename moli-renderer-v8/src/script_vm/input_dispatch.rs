@@ -22,10 +22,11 @@ use crate::native_bridge::element::{
     construct_pointer_event_with_related_target_and_modifiers, construct_simple_event,
     construct_touch_event, construct_touch_event_with_points, construct_wheel_event,
     contenteditable_editing_host, dispatch_public_event, observable_input_hit_test,
-    observable_scrollbar_hit_test, perform_drop_default_action, perform_mouse_focus_default_action,
-    perform_scrollbar_scroll_default_action, perform_wheel_scroll_default_action,
-    replace_contenteditable_selection, replace_text_control_selection,
-    select_contenteditable_contents, text_control_set_selection_range_internal,
+    observable_input_surface_hit_test, perform_drop_default_action,
+    perform_mouse_focus_default_action, perform_scrollbar_scroll_default_action,
+    perform_wheel_scroll_default_action, replace_contenteditable_selection,
+    replace_text_control_selection, select_contenteditable_contents,
+    text_control_set_selection_range_internal,
     text_control_set_selection_range_with_direction_internal, text_control_value, update_focus,
 };
 use crate::runtime::{
@@ -475,17 +476,23 @@ impl ScriptVm {
         let buttons = buttons.unwrap_or(self.pressed_mouse_buttons);
 
         if let Some(outcome) =
-            self.dispatch_native_scrollbar_mouse_event(x, y, event_name, button, buttons)?
+            self.dispatch_active_scrollbar_mouse_event(x, y, event_name, button, buttons)?
         {
             return Ok(outcome);
         }
 
         let root_point = moli_layout::LayoutPoint::new(x as f32, y as f32);
-        let hit = observable_input_hit_test(
+        let surface_hit = observable_input_surface_hit_test(
             &self._context_host.borrow(),
             self.document_runtime.document_handle(),
             root_point,
+            false,
+            matches!(event_name, "mousedown" | "mouseup" | "mousemove"),
         )?;
+        if let Some(scrollbar) = surface_hit.scrollbar {
+            return self.dispatch_native_scrollbar_hit(scrollbar, event_name, button);
+        }
+        let hit = surface_hit.input;
         let hit_handle = hit.map(|hit| hit.handle);
         let pointer_event_name = pointer_event_name_for_mouse_event(event_name);
         let mut pending_pointer_capture_events = Vec::new();
@@ -973,7 +980,7 @@ impl ScriptVm {
         result
     }
 
-    fn dispatch_native_scrollbar_mouse_event(
+    fn dispatch_active_scrollbar_mouse_event(
         &mut self,
         x: f64,
         y: f64,
@@ -981,54 +988,51 @@ impl ScriptVm {
         button: i32,
         buttons: i32,
     ) -> Result<Option<RendererInputDispatchOutcome>> {
-        if let Some(drag) = self.active_scrollbar_drag {
-            match event_name {
-                "mousemove" if buttons & 1 != 0 => {
-                    let local = drag
-                        .viewport_to_local
-                        .map_point(moli_layout::LayoutPoint::new(x as f32, y as f32));
-                    let coordinate = match drag.scrollbar.axis {
-                        moli_layout::LayoutScrollbarAxis::Horizontal => local.x,
-                        moli_layout::LayoutScrollbarAxis::Vertical => local.y,
-                    };
-                    let target = (drag.scrollbar.current_offset
-                        + (coordinate - drag.pointer_origin) * drag.scrollbar.drag_ratio())
-                    .clamp(drag.scrollbar.minimum_offset, drag.scrollbar.maximum_offset);
-                    self.with_default_context_scope(|scope, runtime_ptr| {
-                        perform_scrollbar_scroll_default_action(
-                            scope,
-                            runtime_ptr,
-                            drag.source,
-                            drag.scrollbar.axis,
-                            f64::from(target),
-                        );
-                        Ok(())
-                    })?;
-                    return Ok(Some(input_dispatch_outcome(true)));
-                }
-                "mouseup" if button == 0 => {
-                    self.active_scrollbar_drag = None;
-                    return Ok(Some(input_dispatch_outcome(true)));
-                }
-                "mousemove" => {
-                    self.active_scrollbar_drag = None;
-                }
-                _ => return Ok(Some(input_dispatch_outcome(true))),
-            }
-        }
-
-        if !matches!(event_name, "mousedown" | "mouseup" | "mousemove") {
-            return Ok(None);
-        }
-        let document = self.document_runtime.document_handle();
-        let Some(hit) = observable_scrollbar_hit_test(
-            &self._context_host.borrow(),
-            document,
-            moli_layout::LayoutPoint::new(x as f32, y as f32),
-        )?
-        else {
+        let Some(drag) = self.active_scrollbar_drag else {
             return Ok(None);
         };
+        match event_name {
+            "mousemove" if buttons & 1 != 0 => {
+                let local = drag
+                    .viewport_to_local
+                    .map_point(moli_layout::LayoutPoint::new(x as f32, y as f32));
+                let coordinate = match drag.scrollbar.axis {
+                    moli_layout::LayoutScrollbarAxis::Horizontal => local.x,
+                    moli_layout::LayoutScrollbarAxis::Vertical => local.y,
+                };
+                let target = (drag.scrollbar.current_offset
+                    + (coordinate - drag.pointer_origin) * drag.scrollbar.drag_ratio())
+                .clamp(drag.scrollbar.minimum_offset, drag.scrollbar.maximum_offset);
+                self.with_default_context_scope(|scope, runtime_ptr| {
+                    perform_scrollbar_scroll_default_action(
+                        scope,
+                        runtime_ptr,
+                        drag.source,
+                        drag.scrollbar.axis,
+                        f64::from(target),
+                    );
+                    Ok(())
+                })?;
+                Ok(Some(input_dispatch_outcome(true)))
+            }
+            "mouseup" if button == 0 => {
+                self.active_scrollbar_drag = None;
+                Ok(Some(input_dispatch_outcome(true)))
+            }
+            "mousemove" => {
+                self.active_scrollbar_drag = None;
+                Ok(None)
+            }
+            _ => Ok(Some(input_dispatch_outcome(true))),
+        }
+    }
+
+    fn dispatch_native_scrollbar_hit(
+        &mut self,
+        hit: moli_layout::LayoutScrollbarHit<DomHandle>,
+        event_name: &str,
+        button: i32,
+    ) -> Result<RendererInputDispatchOutcome> {
         if event_name == "mousedown" && button == 0 {
             match hit.part {
                 moli_layout::LayoutScrollbarPart::Thumb => {
@@ -1068,7 +1072,7 @@ impl ScriptVm {
                 }
             }
         }
-        Ok(Some(input_dispatch_outcome(true)))
+        Ok(input_dispatch_outcome(true))
     }
 
     pub(crate) fn dispatch_touch_event_at_point(

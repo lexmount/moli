@@ -196,13 +196,12 @@ impl JsContextHost {
         if self.force_fresh_layout_reads_for_test {
             return false;
         }
-        self.document_layout_state
-            .borrow()
-            .latest_layout(document)
+        self.with_latest_layout_tree_for_document(document, |_| ())
             .is_some()
     }
 
-    /// Inspects the latest frozen layout tree for one exact Document.
+    /// Inspects the member tree for one exact Document in the single latest
+    /// recursively frozen snapshot.
     ///
     /// The callback cannot retain the tree or force a refresh. Consumers
     /// such as lazy-image admission may combine this sampled geometry with
@@ -213,8 +212,15 @@ impl JsContextHost {
         document: DomHandle,
         inspect: impl FnOnce(&FrozenLayoutTree<DomHandle>) -> T,
     ) -> Option<T> {
+        let root = self
+            .dom_host()
+            .dom()
+            .document_element_handle_for_document(document);
         let state = self.document_layout_state.borrow();
-        state.latest_layout(document).map(inspect)
+        state
+            .latest_layout(document)
+            .or_else(|| root.and_then(|root| state.latest_layout_for_root(root)))
+            .map(inspect)
     }
 
     pub(crate) fn answer_layout_at_viewport(
@@ -225,6 +231,41 @@ impl JsContextHost {
         queries: &LayoutQueryBatch<DomHandle>,
     ) -> Result<LayoutAnswers<DomHandle>, LayoutError> {
         self.answer_layout(document, reason, viewport, queries, true)
+    }
+
+    /// Ensures one exact-viewport tree exists without manufacturing a geometry
+    /// query. Hit-test demands additionally require the complete embedded-frame
+    /// projection owned by that same frozen tree.
+    pub(crate) fn ensure_layout_at_viewport(
+        &self,
+        document: DomHandle,
+        reason: LayoutFlushReason,
+        viewport: LayoutViewport,
+    ) -> Result<(), LayoutError> {
+        #[cfg(test)]
+        let reuse_latest = !self.force_fresh_layout_reads_for_test;
+        #[cfg(not(test))]
+        let reuse_latest = true;
+        let cached = reuse_latest
+            && self
+                .with_latest_layout_tree_for_document(document, |tree| {
+                    layout_tree_satisfies_request(tree, reason, viewport, true)
+                })
+                .unwrap_or(false);
+        if cached {
+            self.layout_snapshot_cache_hits
+                .set(self.layout_snapshot_cache_hits.get().saturating_add(1));
+            return Ok(());
+        }
+
+        self.layout_snapshot_cache_misses
+            .set(self.layout_snapshot_cache_misses.get().saturating_add(1));
+        self.with_fresh_layout_pass_for_document(
+            document,
+            LayoutPassRequest::new(viewport, reason),
+            |_| Ok(()),
+        )?
+        .ok_or(LayoutError::NoLayoutRoot)
     }
 
     fn answer_layout(
@@ -240,15 +281,15 @@ impl JsContextHost {
         #[cfg(not(test))]
         let reuse_latest = true;
         let cached = if reuse_latest {
-            let state = self.document_layout_state.borrow();
-            state
-                .latest_layout(document)
-                .filter(|tree| !exact_viewport || tree.viewport == viewport)
-                .and_then(|tree| {
-                    self.last_layout_pass_metrics
-                        .get()
-                        .map(|metrics| self.answer_layout_queries(tree, metrics, viewport, queries))
-                })
+            self.with_latest_layout_tree_for_document(document, |tree| {
+                if !layout_tree_satisfies_request(tree, reason, viewport, exact_viewport) {
+                    return None;
+                }
+                self.last_layout_pass_metrics
+                    .get()
+                    .map(|metrics| self.answer_layout_queries(tree, metrics, viewport, queries))
+            })
+            .flatten()
         } else {
             None
         };
@@ -422,6 +463,16 @@ impl JsContextHost {
                 .latest_layout_observability(),
         }
     }
+}
+
+fn layout_tree_satisfies_request(
+    tree: &FrozenLayoutTree<DomHandle>,
+    reason: LayoutFlushReason,
+    viewport: LayoutViewport,
+    exact_viewport: bool,
+) -> bool {
+    (!exact_viewport || tree.viewport == viewport)
+        && (!matches!(reason, LayoutFlushReason::HitTest) || tree.embedded_frames_complete())
 }
 
 impl GeometryProvider for JsContextHost {

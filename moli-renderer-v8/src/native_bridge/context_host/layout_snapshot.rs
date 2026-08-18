@@ -9,9 +9,10 @@ struct LatestFrozenLayout {
 
 /// Single-slot storage for the latest successful frozen layout tree.
 ///
-/// This owns exactly one frozen layout tree. It has no working layout world,
-/// source index, hit-test index, Taffy cache, style borrow, pass diagnostics,
-/// paint snapshot, timer, freshness stamp, or invalidation policy.
+/// This owns exactly one recursively frozen snapshot. It has no separately
+/// keyed child tree, working layout world, source index, hit-test index, Taffy
+/// cache, style borrow, pass diagnostics, paint snapshot, timer, freshness
+/// stamp, or invalidation policy.
 #[derive(Default)]
 pub(super) struct LatestLayoutTreeCache {
     latest: Option<LatestFrozenLayout>,
@@ -23,6 +24,10 @@ impl LatestLayoutTreeCache {
             .as_ref()
             .filter(|snapshot| snapshot.document == document)
             .map(|snapshot| snapshot.tree.as_ref())
+    }
+
+    pub(super) fn get_for_root(&self, root: DomHandle) -> Option<&FrozenLayoutTree<DomHandle>> {
+        self.latest.as_ref()?.tree.tree_for_root(root)
     }
 
     pub(super) fn publish(&mut self, document: DomHandle, tree: FrozenLayoutTree<DomHandle>) {

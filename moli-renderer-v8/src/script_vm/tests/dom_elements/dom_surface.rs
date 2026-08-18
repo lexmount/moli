@@ -588,6 +588,167 @@ fn transformed_constrained_iframe_routes_hover_click_and_wheel_in_child_coordina
 }
 
 #[test]
+fn iframe_input_reuses_one_top_level_snapshot_without_parent_child_ping_pong() {
+    let mut vm = new_storage_test_vm("https://iframe-input-snapshot.test/");
+    vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+        inner_width: 800,
+        inner_height: 600,
+        outer_width: 800,
+        outer_height: 600,
+        device_pixel_ratio: 1.0,
+        screen_width: 800,
+        screen_height: 600,
+        screen_avail_width: 800,
+        screen_avail_height: 600,
+    }))
+    .expect("iframe input snapshot viewport should update");
+    vm.eval(
+        r#"
+        if (!document.documentElement) {
+          document.appendChild(document.createElement('html'));
+        }
+        if (!document.body) {
+          document.documentElement.appendChild(document.createElement('body'));
+        }
+        document.documentElement.style.cssText = 'margin:0;padding:0';
+        document.body.style.cssText = 'margin:0;padding:0';
+        const frame = document.createElement('iframe');
+        frame.id = 'snapshot-frame';
+        frame.style.cssText = 'position:absolute;left:100px;top:80px;width:240px;height:180px;border:0;padding:0';
+        document.body.appendChild(frame);
+        const child = frame.contentDocument;
+        child.documentElement.style.cssText = 'margin:0;padding:0';
+        child.body.style.cssText = 'margin:0;padding:0';
+        child.body.innerHTML = '<button id="snapshot-target" style="position:fixed;left:20px;top:20px;width:80px;height:60px">target</button>';
+        'installed'
+        "#,
+    )
+    .expect("iframe input snapshot fixture should initialize");
+
+    assert_eq!(
+        vm.eval("document.body.offsetWidth > 0")
+            .expect("parent geometry should evaluate"),
+        "true"
+    );
+    let passes_before = vm.layout_pass_observability_for_test().1;
+    vm.dispatch_mouse_event_at_point(140.0, 130.0, "mousemove", -1, Some(0), 0.0, 0.0)
+        .expect("cold child hover should dispatch");
+    let passes_after_cold = vm.layout_pass_observability_for_test().1;
+    assert_eq!(
+        passes_after_cold,
+        passes_before + 1,
+        "input must upgrade a geometry-only tree through one shared recursive layout demand"
+    );
+
+    // The first hover transition invalidates its sampled tree because :hover
+    // may affect geometry. Rebuilding for the same target publishes one complete
+    // top-level snapshot; a third move can then reuse it without a child publish
+    // evicting the parent.
+    vm.dispatch_mouse_event_at_point(140.0, 130.0, "mousemove", -1, Some(0), 0.0, 0.0)
+        .expect("stable child hover should rebuild once");
+    let passes_after_rebuild = vm.layout_pass_observability_for_test().1;
+    assert_eq!(passes_after_rebuild, passes_after_cold + 1);
+    vm.dispatch_mouse_event_at_point(140.0, 130.0, "mousemove", -1, Some(0), 0.0, 0.0)
+        .expect("stable child hover should reuse the top-level snapshot");
+    assert_eq!(
+        vm.layout_pass_observability_for_test().1,
+        passes_after_rebuild,
+        "an embedded hit must leave the top-level composite snapshot reusable"
+    );
+
+    let cached = vm
+        .layout_snapshot_cache_observability_for_test()
+        .3
+        .expect("stable child input should retain one snapshot");
+    assert_eq!(cached.0, vm.document_runtime.document_handle());
+}
+
+#[test]
+fn iframe_wheel_batch_reuses_one_composite_snapshot_for_every_scroll_step() {
+    let mut vm = new_storage_test_vm("https://iframe-wheel-snapshot.test/");
+    vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+        inner_width: 800,
+        inner_height: 600,
+        outer_width: 800,
+        outer_height: 600,
+        device_pixel_ratio: 1.0,
+        screen_width: 800,
+        screen_height: 600,
+        screen_avail_width: 800,
+        screen_avail_height: 600,
+    }))
+    .expect("iframe wheel snapshot viewport should update");
+    vm.eval(
+        r#"
+        if (!document.documentElement) {
+          document.appendChild(document.createElement('html'));
+        }
+        if (!document.body) {
+          document.documentElement.appendChild(document.createElement('body'));
+        }
+        document.documentElement.style.cssText = 'margin:0;padding:0';
+        document.body.style.cssText = 'margin:0;padding:0';
+        const frame = document.createElement('iframe');
+        frame.id = 'wheel-frame';
+        frame.style.cssText = 'position:absolute;left:100px;top:80px;width:240px;height:180px;border:0;padding:0';
+        document.body.appendChild(frame);
+        const child = frame.contentDocument;
+        child.documentElement.style.cssText = 'margin:0;padding:0';
+        child.body.style.cssText = 'margin:0;padding:0';
+        child.body.innerHTML = `
+          <div id="wheel-scroller" style="position:absolute;left:10px;top:10px;width:160px;height:100px;overflow:auto">
+            <div id="wheel-content" style="width:140px;height:500px"></div>
+          </div>`;
+        child.defaultView.__wheelGeometryReads = 0;
+        child.getElementById('wheel-scroller').addEventListener('wheel', event => {
+          void event.currentTarget.offsetWidth;
+          child.defaultView.__wheelGeometryReads++;
+        });
+        'installed'
+        "#,
+    )
+    .expect("iframe wheel snapshot fixture should initialize");
+
+    let passes_before = vm.layout_pass_observability_for_test().1;
+    vm.begin_batched_mouse_event_dispatch();
+    for delta_y in [10.0, 20.0, 30.0] {
+        vm.dispatch_mouse_event_at_point_with_pointer_and_modifiers_without_checkpoint(
+            130.0,
+            110.0,
+            "wheel",
+            -1,
+            Some(0),
+            0,
+            0.0,
+            delta_y,
+            crate::runtime::RendererPointerEventProperties::default(),
+            0,
+        )
+        .expect("batched child wheel step should dispatch");
+    }
+    assert_eq!(
+        vm.layout_pass_observability_for_test().1,
+        passes_before + 1,
+        "every wheel step must share the hit-test pass's recursively frozen snapshot"
+    );
+    vm.finish_batched_mouse_event_dispatch(Ok(()), true)
+        .expect("batched child wheel effects should commit");
+    assert_eq!(
+        vm.layout_pass_observability_for_test().1,
+        passes_before + 1,
+        "committing derived effects must not perform another layout"
+    );
+
+    assert_eq!(
+        vm.eval(
+            "(() => { const frame = document.getElementById('wheel-frame'); return [frame.contentDocument.getElementById('wheel-scroller').scrollTop, frame.contentWindow.__wheelGeometryReads].join('|'); })()"
+        )
+        .expect("child scroll position should evaluate"),
+        "60|3"
+    );
+}
+
+#[test]
 fn focusing_visible_child_target_does_not_scroll_partially_hidden_transformed_iframe() {
     let mut vm = new_storage_test_vm("https://iframe-focus-scroll.test/");
     vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
