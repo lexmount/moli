@@ -7,8 +7,8 @@ use crate::LayoutError;
 use super::{
     hit_test::{LayoutCaretPosition, LayoutHit},
     model::{
-        LayoutBoxModel, LayoutFragmentId, LayoutOutputBoxId, LayoutPoint, LayoutQuad,
-        LayoutScrollExtent, LayoutSize, LayoutViewport,
+        LayoutBoxModel, LayoutFragmentId, LayoutGridGeometry, LayoutOutputBoxId, LayoutPoint,
+        LayoutQuad, LayoutScrollExtent, LayoutSize, LayoutViewport,
     },
     pass_result::{LayoutFlushReason, LayoutPassMetrics},
     tree::FrozenLayoutTree,
@@ -135,6 +135,10 @@ pub enum LayoutQuery<N> {
     UsedBoxSize {
         source: N,
     },
+    /// Used Grid row and column tracks for a principal Grid container.
+    UsedGridTracks {
+        source: N,
+    },
     ScrollIntoViewGeometry {
         source: N,
     },
@@ -186,6 +190,7 @@ pub enum LayoutQueryAnswer<N> {
     TextRangeRects(Vec<LayoutQuad>),
     ElementMetrics(Option<LayoutElementMetrics<N>>),
     UsedBoxSize(Option<LayoutSize>),
+    UsedGridTracks(Option<LayoutGridGeometry>),
     ScrollIntoViewGeometry(Option<LayoutScrollIntoViewGeometry<N>>),
     IntersectionGeometry(Option<LayoutIntersectionGeometry>),
     HitTest(Option<LayoutHit<N>>),
@@ -264,6 +269,9 @@ where
                 }
                 LayoutQuery::UsedBoxSize { source } => {
                     LayoutQueryAnswer::UsedBoxSize(self.used_box_size_for_source(*source))
+                }
+                LayoutQuery::UsedGridTracks { source } => {
+                    LayoutQueryAnswer::UsedGridTracks(self.used_grid_tracks_for_source(*source))
                 }
                 LayoutQuery::ScrollIntoViewGeometry { source } => {
                     LayoutQueryAnswer::ScrollIntoViewGeometry(

@@ -25,6 +25,7 @@ pub struct FrozenLayoutBox<N> {
     pub geometry_source: Option<N>,
     pub principal_source: Option<N>,
     pub hit_source: Option<N>,
+    pub grid_geometry: Option<super::model::LayoutGridGeometry>,
 }
 
 impl<N> Deref for FrozenLayoutBox<N> {
@@ -92,9 +93,40 @@ where
         }
 
         let box_allocations = self.boxes.iter().fold(0usize, |bytes, layout_box| {
-            bytes.saturating_add(allocation::<LayoutFragmentId>(
-                layout_box.fragments.capacity(),
-            ))
+            let fragment_bytes = allocation::<LayoutFragmentId>(layout_box.fragments.capacity());
+            let grid_bytes = layout_box.grid_geometry.as_ref().map_or(0, |grid| {
+                let numeric_bytes = [
+                    grid.rows.sizes.capacity(),
+                    grid.rows.gutters.capacity(),
+                    grid.columns.sizes.capacity(),
+                    grid.columns.gutters.capacity(),
+                ]
+                .into_iter()
+                .fold(0usize, |bytes, capacity| {
+                    bytes.saturating_add(allocation::<f32>(capacity))
+                });
+                let line_name_bytes =
+                    [&grid.rows, &grid.columns]
+                        .into_iter()
+                        .fold(0usize, |bytes, tracks| {
+                            let outer =
+                                allocation::<Vec<String>>(tracks.explicit_line_names.capacity());
+                            tracks.explicit_line_names.iter().fold(
+                                bytes.saturating_add(outer),
+                                |bytes, names| {
+                                    let strings = allocation::<String>(names.capacity());
+                                    let text = names.iter().fold(0usize, |bytes, name| {
+                                        bytes.saturating_add(name.capacity())
+                                    });
+                                    bytes.saturating_add(strings).saturating_add(text)
+                                },
+                            )
+                        });
+                numeric_bytes.saturating_add(line_name_bytes)
+            });
+            bytes
+                .saturating_add(fragment_bytes)
+                .saturating_add(grid_bytes)
         });
         let estimated_geometry_bytes = std::mem::size_of::<Self>()
             .saturating_add(allocation::<FrozenLayoutBox<N>>(self.boxes.capacity()))

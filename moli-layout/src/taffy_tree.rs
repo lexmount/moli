@@ -4,16 +4,16 @@ use parley::{AlignmentOptions, PositionedLayoutItem, YieldData};
 use style::Atom;
 use taffy::{
     AlignContent, AutoSizeBehavior, AvailableSpace, BlockContext, BlockFormattingContext,
-    CacheTree, Clear, Dimension, Display, FloatDirection, IntrinsicSizeResult, Layout,
-    LayoutBlockContainer, LayoutFlexboxContainer, LayoutGridContainer, LayoutInput, LayoutOutput,
-    LayoutPartialTree, Line, LogicalBoxStrut, LogicalOffset, LogicalSize, LogicalStaticPosition,
-    MaybeMath, MaybeResolve, NodeId, OutOfFlowCandidate, OutOfFlowContainingBlock, Point,
-    ResolveOrZero, RoundTree, RunMode, Size, SizingMode, SizingPurpose, Style, TraversePartialTree,
-    TraverseTree, WritingDirection, compute_block_layout, compute_cached_layout,
-    compute_cached_size, compute_content_alignment_offset, compute_flexbox_layout,
-    compute_grid_layout, compute_hidden_layout, compute_leaf_layout_with_tree,
-    compute_out_of_flow_layout, compute_replaced_layout, compute_root_layout,
-    resolve_content_alignment_fallback, round_layout,
+    CacheTree, Clear, DetailedGridInfo, Dimension, Display, FloatDirection, IntrinsicSizeResult,
+    Layout, LayoutBlockContainer, LayoutFlexboxContainer, LayoutGridContainer, LayoutInput,
+    LayoutOutput, LayoutPartialTree, Line, LogicalBoxStrut, LogicalOffset, LogicalSize,
+    LogicalStaticPosition, MaybeMath, MaybeResolve, NodeId, OutOfFlowCandidate,
+    OutOfFlowContainingBlock, Point, ResolveOrZero, RoundTree, RunMode, Size, SizingMode,
+    SizingPurpose, Style, TraversePartialTree, TraverseTree, WritingDirection,
+    compute_block_layout, compute_cached_layout, compute_cached_size,
+    compute_content_alignment_offset, compute_flexbox_layout, compute_grid_layout,
+    compute_hidden_layout, compute_leaf_layout_with_tree, compute_out_of_flow_layout,
+    compute_replaced_layout, compute_root_layout, resolve_content_alignment_fallback, round_layout,
 };
 
 use crate::{
@@ -74,6 +74,7 @@ where
         layout_box.out_of_flow_candidates.clear();
         layout_box.positioned_containing_block = None;
         layout_box.out_of_flow_static_position = None;
+        layout_box.grid_geometry = None;
     }
 
     world.viewport_layout.children.clear();
@@ -1310,6 +1311,22 @@ where
 
     fn get_grid_child_style(&self, child_node_id: NodeId) -> Self::GridItemStyle<'_> {
         self.get_core_container_style(child_node_id)
+    }
+
+    fn set_detailed_grid_info(&mut self, node_id: NodeId, detailed_grid_info: DetailedGridInfo) {
+        let layout_box = &self.boxes[LayoutBoxId::from_taffy(node_id).index()];
+        if layout_box
+            .capability_diagnostics
+            .contains(&LayoutCapabilityDiagnostic::GridTemplateModeDeferred)
+        {
+            return;
+        }
+        let Some(grid_geometry) =
+            crate::grid::project_grid_geometry(&layout_box.style.taffy, detailed_grid_info)
+        else {
+            return;
+        };
+        self.boxes[LayoutBoxId::from_taffy(node_id).index()].grid_geometry = Some(grid_geometry);
     }
 }
 

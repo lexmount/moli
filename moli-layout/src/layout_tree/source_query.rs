@@ -7,8 +7,8 @@ use crate::LayoutPosition;
 use super::{
     model::{
         LayoutBoxModel, LayoutCoordinateSpaceId, LayoutFragmentBoxModel, LayoutFragmentKind,
-        LayoutOutputBoxId, LayoutPhysicalAxis, LayoutPoint, LayoutQuad, LayoutRect, LayoutSize,
-        LayoutTransform2D,
+        LayoutGridGeometry, LayoutOutputBoxId, LayoutPhysicalAxis, LayoutPoint, LayoutQuad,
+        LayoutRect, LayoutSize, LayoutTransform2D,
     },
     query::{LayoutElementMetrics, LayoutNodeOutput},
     tree::FrozenLayoutTree,
@@ -222,6 +222,24 @@ where
         let geometry = self.box_geometry(output.principal_box?)?;
         let size = geometry.used_box_size?;
         Some(CssomAbsoluteZoom::new(geometry.effective_zoom).size(size))
+    }
+
+    /// Returns used Grid tracks from the same frozen epoch as other CSSOM
+    /// geometry, normalized out of the container's effective CSS zoom.
+    pub fn used_grid_tracks_for_source(&self, source: N) -> Option<LayoutGridGeometry> {
+        let output = self.source_output(source)?;
+        let layout_box = self.boxes.get(output.principal_box?.index())?;
+        let mut grid = layout_box.grid_geometry.clone()?;
+        let zoom = CssomAbsoluteZoom::new(layout_box.geometry.effective_zoom);
+        for tracks in [&mut grid.rows, &mut grid.columns] {
+            for size in &mut tracks.sizes {
+                *size = zoom.scalar(*size);
+            }
+            for gutter in &mut tracks.gutters {
+                *gutter = zoom.scalar(*gutter);
+            }
+        }
+        Some(grid)
     }
 
     /// Resolves a viewport point into the coordinate system Blink uses for
@@ -507,6 +525,10 @@ impl CssomAbsoluteZoom {
 
     fn point(self, point: LayoutPoint) -> LayoutPoint {
         LayoutPoint::new(point.x / self.0, point.y / self.0)
+    }
+
+    fn scalar(self, value: f32) -> f32 {
+        value / self.0
     }
 
     fn size(self, size: LayoutSize) -> LayoutSize {

@@ -15,6 +15,7 @@ mod containment;
 mod error;
 mod form;
 mod gradient;
+mod grid;
 mod inline;
 mod intrinsic;
 mod layout_tree;
@@ -47,12 +48,12 @@ pub use layout_tree::{
     LayoutBoxGeometry, LayoutBoxModel, LayoutCaretPosition, LayoutClipChainId, LayoutClipNode,
     LayoutCoordinateSpaceId, LayoutDocumentMetrics, LayoutDocumentScrollMetrics,
     LayoutElementMetrics, LayoutFlushReason, LayoutFragment, LayoutFragmentBoxModel,
-    LayoutFragmentId, LayoutFragmentKind, LayoutHit, LayoutIntersectionGeometry, LayoutNodeOutput,
-    LayoutOutputBoxId, LayoutPassMetrics, LayoutPassResult, LayoutPhysicalAxis, LayoutPoint,
-    LayoutQuad, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutRect,
-    LayoutScrollContainerKind, LayoutScrollContainerMetrics, LayoutScrollExtent,
-    LayoutScrollIntoViewGeometry, LayoutSize, LayoutTextSourceSpan, LayoutTransform2D,
-    LayoutTreeRetentionMetrics, LayoutViewport, MAX_RETAINED_LAYOUT_BOXES,
+    LayoutFragmentId, LayoutFragmentKind, LayoutGridGeometry, LayoutGridTrackGeometry, LayoutHit,
+    LayoutIntersectionGeometry, LayoutNodeOutput, LayoutOutputBoxId, LayoutPassMetrics,
+    LayoutPassResult, LayoutPhysicalAxis, LayoutPoint, LayoutQuad, LayoutQuery, LayoutQueryAnswer,
+    LayoutQueryBatch, LayoutRect, LayoutScrollContainerKind, LayoutScrollContainerMetrics,
+    LayoutScrollExtent, LayoutScrollIntoViewGeometry, LayoutSize, LayoutTextSourceSpan,
+    LayoutTransform2D, LayoutTreeRetentionMetrics, LayoutViewport, MAX_RETAINED_LAYOUT_BOXES,
     MAX_RETAINED_LAYOUT_FRAGMENTS, MAX_RETAINED_LAYOUT_TREE_BYTES,
 };
 pub use normalize::{NormalizedBoxNode, NormalizedBoxTree, NormalizedFormattingContext};

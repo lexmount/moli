@@ -2,10 +2,10 @@ use std::{collections::HashSet, time::Duration};
 
 use moli_layout::{
     LayoutAnswers, LayoutBoxModel, LayoutCaretPosition, LayoutDocumentMetrics,
-    LayoutDocumentScrollMetrics, LayoutElementMetrics, LayoutError, LayoutFlushReason, LayoutHit,
-    LayoutIntersectionGeometry, LayoutPassMetrics, LayoutPoint, LayoutQuad, LayoutQuery,
-    LayoutQueryAnswer, LayoutQueryBatch, LayoutScrollContainerKind, LayoutScrollContainerMetrics,
-    LayoutScrollIntoViewGeometry, LayoutSize,
+    LayoutDocumentScrollMetrics, LayoutElementMetrics, LayoutError, LayoutFlushReason,
+    LayoutGridGeometry, LayoutHit, LayoutIntersectionGeometry, LayoutPassMetrics, LayoutPoint,
+    LayoutQuad, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutScrollContainerKind,
+    LayoutScrollContainerMetrics, LayoutScrollIntoViewGeometry, LayoutSize,
 };
 
 use super::layout::{
@@ -236,6 +236,29 @@ pub(crate) fn observable_used_box_size(
     match answers.answers.into_iter().next() {
         Some(LayoutQueryAnswer::UsedBoxSize(size)) => Ok(size),
         _ => Err(provider_contract_error("used box size")),
+    }
+}
+
+pub(crate) fn observable_used_grid_tracks(
+    runtime: &JsContextHost,
+    source: DomHandle,
+    reason: LayoutFlushReason,
+) -> Result<Option<LayoutGridGeometry>, LayoutError> {
+    if !runtime.dom_host().is_connected(source) {
+        return Ok(None);
+    }
+    let Some(document) = runtime.layout_document_for_source(source) else {
+        return Ok(None);
+    };
+    let answers = observable_geometry_batch(
+        runtime,
+        document,
+        reason,
+        &LayoutQueryBatch::new(vec![LayoutQuery::UsedGridTracks { source }]),
+    )?;
+    match answers.answers.into_iter().next() {
+        Some(LayoutQueryAnswer::UsedGridTracks(tracks)) => Ok(tracks),
+        _ => Err(provider_contract_error("used Grid tracks")),
     }
 }
 
@@ -609,6 +632,7 @@ fn answer_mock_queries(
                 LayoutQueryAnswer::ElementMetrics(mock_element_metrics(runtime, *source))
             }
             LayoutQuery::UsedBoxSize { .. } => LayoutQueryAnswer::UsedBoxSize(None),
+            LayoutQuery::UsedGridTracks { .. } => LayoutQueryAnswer::UsedGridTracks(None),
             LayoutQuery::ScrollIntoViewGeometry { source } => {
                 LayoutQueryAnswer::ScrollIntoViewGeometry(mock_scroll_into_view_geometry(
                     runtime, document, *source,
