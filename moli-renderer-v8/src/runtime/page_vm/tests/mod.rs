@@ -126,6 +126,7 @@ mod element_toggle_event;
 mod fetch_xhr;
 mod file_entry_file_callback;
 mod file_system_directory_reader;
+mod flex_baseline_export;
 mod flex_percentage_gap;
 mod float_bfc_stretch;
 mod grid_intrinsic_minimum;
