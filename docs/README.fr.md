@@ -212,7 +212,7 @@ Le document et les styles n'ont qu'une seule source de vérité : le DOM natif, 
 
 ## Données de test
 
-Les trois jeux de mesures ci-dessous illustrent l'étendue actuelle des capacités de Moli. Les tests couvrent des sites réels, de vrais clients d'automatisation, des vérifications ciblées du comportement Chromium/WPT, ainsi qu'une large suite de régression nextest.
+Les mesures ci-dessous illustrent les capacités actuelles de Moli. Elles couvrent des sites réels, des clients d'automatisation, des vérifications du comportement Chromium/WPT et une large suite de régression nextest.
 
 ### Test d'exploration mixte du Web public
 
@@ -234,33 +234,27 @@ Le test porte sur 192 URL publiques issues de grands sites chinois et internatio
 | PSS maximal | 102.46 MiB | 348.82 MiB |
 | Nombre maximal de processus / threads | 1 / 24 | 11 / 123 |
 
-### Lexbench-Headless-Browser (compatibilité des piles de drivers)
+### Tests WPT
 
-[Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) mesure la surface d'exécution dont dépendent réellement les écosystèmes d'automatisation : 1 928 tâches couvrant le CDP brut et 13 bibliothèques de drivers aux versions épinglées (Playwright, Puppeteer, Selenium via le WebDriver natif de Moli, chromedp, rod, chromiumoxide, ferrum, pydoll et d'autres), plus la justesse sémantique de la plateforme web, avec une vérification d'identité en deux étapes afin qu'aucun résultat de candidat ne puisse venir silencieusement de Chrome.
+Dans la sélection WPT actuelle qui valide le périmètre de Moli comme navigateur pour agents, une exécution complète a réussi **1 612 000 tests**.
+
+### Performances de Moli dans Lexbench-Headless-Browser
+
+Le corpus complet de [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) contient 1 928 tâches couvrant le CDP brut, 13 outils d'automatisation aux versions épinglées, dont Playwright, Puppeteer et Selenium, ainsi que la sémantique de la plateforme Web. Pour inclure Kitesurf, disponible uniquement sous forme de point d'accès distant, le graphique ci-dessous utilise 1 308 tâches comparables. Tous les navigateurs suivent les mêmes règles de sélection.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-four-engine-overview-dark.png">
-  <img alt="Taux de réussite de quatre navigateurs headless sur 1 928 tâches : Chrome 99,9 %, Moli 80,7 %, Lightpanda 43,8 %, Obscura 39,5 %" src="../assets/lexbench-four-engine-overview-light.png" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-five-engine-caliber-b-dark.png">
+  <img alt="Taux de réussite de cinq navigateurs headless sur 1 308 tâches comparables : Chrome 99,8 %, Moli 81,9 %, Kitesurf 62,1 %, Lightpanda 53,3 %, Obscura 44,9 %" src="../assets/lexbench-five-engine-caliber-b-light.png" width="100%">
 </picture>
 
-Run `four_engine_full_20260812` · seed `official20260709` · k=3 ·
-`--score-mode independent --chrome-baseline best_effort`:
-
-| Moteur | Binaire | Tâches réussies | Sémantique L2 |
-| --- | --- | ---: | ---: |
-| Chrome for Testing | 151.0.7922.47 `3b0be9872ea9` | 1,926 / 1,928 (99.90%) | 192 / 192 |
-| **Moli** | **0.1.1 `74e08f8d3eb6`** | **1,556 / 1,928 (80.71%)** | **183 / 192** |
-| Lightpanda | 1.0.0-dev.321+b04c99a9 `70f5ab69b0ce` | 845 / 1,928 (43.83%) | 132 / 192 |
-| Obscura | 0.1.11 `42c7eac0f635` | 762 / 1,928 (39.52%) | 84 / 192 |
+**Moli 0.1.1 a réussi 1 071 tâches, soit un taux de 81,88 %**, devant Kitesurf à 62,08 %, Lightpanda à 53,29 % et Obscura à 44,88 % ; Chrome, utilisé comme référence, a atteint 99,85 %. Kitesurf a été exécuté avec k=1, les tâches non couvertes comptent comme non réussies et les conditions de reproduction d'un service distant diffèrent de celles des binaires locaux. Les résultats complets figurent dans le [rapport à cinq moteurs](https://github.com/lexmount/Lexbench-Headless-Browser/blob/kitesurf-eval/docs/reports/five-engine-report-20260813.md) du benchmark.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-efficiency-map-dark.png">
-  <img alt="Taux de réussite en fonction de la mémoire de pointe médiane par tâche : Chrome à 99,9 % et 697 MiB, Moli à 80,7 % et 92 MiB, Lightpanda à 43,8 % et 34 MiB, Obscura à 39,5 % et 39 MiB" src="../assets/lexbench-efficiency-map-light.png" width="100%">
+  <img alt="Taux de réussite en fonction de la mémoire de pointe médiane par tâche pour les quatre moteurs locaux : Chrome à 99,9 % et 697 MiB, Moli à 80,7 % et 92 MiB, Lightpanda à 43,8 % et 34 MiB, Obscura à 39,5 % et 39 MiB" src="../assets/lexbench-efficiency-map-light.png" width="100%">
 </picture>
 
-La mesure de ressources calibrée par A/B utilise un sous-ensemble représentatif de 557 tâches (`l1.raw_cdp` plus `l2.web_platform`, `jobs=1 k=5`) et mesure le CPU cgroup-v2 ainsi que la PSS de l'arbre de processus sur l'intersection des tâches réussies par les quatre moteurs ; l'effet d'observation reste sous 0,9 % par moteur. Sur ce sous-ensemble, **Moli atteint une médiane de 100,6 ms de CPU et 92 MiB de mémoire de pointe par tâche contre 687 ms et 697 MiB pour Chrome** : environ 1/7 du CPU et 1/7,5 de la mémoire. Dans l'exécution de compatibilité distincte portant sur 1 928 tâches, Moli réussit 80,7 % de la surface de tâches. Les rapports complets se trouvent dans le dépôt du bench, sous [`docs/reports/`](https://github.com/lexmount/Lexbench-Headless-Browser/tree/main/docs/reports).
-
-Sur la sélection WPT actuelle, utilisée pour valider le périmètre fonctionnel du navigateur pour agents de Moli, une exécution complète a totalisé **1 612 000 tests réussis**.
+Kitesurf est un service distant, dont le CPU, la mémoire et le nombre de processus ne sont pas mesurables. La comparaison des ressources ne couvre donc que les quatre moteurs locaux. Une exécution distincte de 557 tâches ne comptabilise que le travail terminé par les quatre. La médiane de Moli par tâche était de **100,6 ms de CPU** et **92 MiB de mémoire de pointe** ; Chrome a enregistré respectivement **687 ms** et **697 MiB**. Moli a utilisé environ 15 % du temps CPU et 13 % de la mémoire de pointe de Chrome. La méthodologie et les données complètes figurent dans la [fiche de ressources](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md) du benchmark.
 
 ## Périmètre du projet
 

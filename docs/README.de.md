@@ -212,7 +212,7 @@ Dokument und Stil haben genau eine verbindliche Datenquelle: die Integration aus
 
 ## Benchmarks
 
-Die folgenden drei Messreihen zeigen Molis derzeitigen Funktionsumfang. Die Tests decken reale Websites, reale Automatisierungsclients, gezielte Prüfungen des Chromium-/WPT-Verhaltens und eine große nextest-Regressionssuite ab.
+Die folgenden Messwerte zeigen Molis derzeitigen Funktionsumfang. Sie decken reale Websites, Automatisierungsclients, Prüfungen des Chromium-/WPT-Verhaltens und eine große nextest-Regressionssuite ab.
 
 ### Gemischter Crawling-Test im öffentlichen Web
 
@@ -234,33 +234,27 @@ Getestet wurden 192 öffentliche URLs großer chinesischer und internationaler W
 | PSS-Spitzenwert | 102.46 MiB | 348.82 MiB |
 | Maximale Prozesse / Threads | 1 / 24 | 11 / 123 |
 
-### Lexbench-Headless-Browser (Treiber-Stack-Kompatibilität)
+### WPT-Tests
 
-[Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) misst die Laufzeitoberfläche, auf die sich Automatisierungs-Ökosysteme tatsächlich stützen: 1.928 Aufgaben mit rohem CDP und 13 fest versionierten Treiberbibliotheken (Playwright, Puppeteer, Selenium über Molis nativen WebDriver, chromedp, rod, chromiumoxide, ferrum, pydoll und weitere) plus semantische Korrektheit der Web-Plattform, mit zweistufiger Identitätsprüfung, damit kein Kandidatenergebnis stillschweigend von Chrome stammen kann.
+In der aktuellen WPT-Auswahl zur Überprüfung von Molis Funktionsumfang als Agenten-Browser wurden bei einem vollständigen Lauf **1,612 Millionen Tests bestanden**.
+
+### Molis Ergebnisse in Lexbench-Headless-Browser
+
+Der vollständige Aufgabenbestand von [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) umfasst 1.928 Aufgaben zu rohem CDP, 13 fest versionierten Automatisierungswerkzeugen wie Playwright, Puppeteer und Selenium sowie zur Semantik der Web-Plattform. Da Kitesurf nur als entfernter Endpunkt verfügbar ist, verwendet die folgende Grafik 1.308 vergleichbare Aufgaben. Für alle Browser gelten dieselben Regeln zur Aufgabenauswahl.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-four-engine-overview-dark.png">
-  <img alt="Erfolgsquote von vier Headless-Browsern über 1.928 Aufgaben: Chrome 99,9 %, Moli 80,7 %, Lightpanda 43,8 %, Obscura 39,5 %" src="../assets/lexbench-four-engine-overview-light.png" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-five-engine-caliber-b-dark.png">
+  <img alt="Erfolgsquote von fünf Headless-Browsern über 1.308 vergleichbare Aufgaben: Chrome 99,8 %, Moli 81,9 %, Kitesurf 62,1 %, Lightpanda 53,3 %, Obscura 44,9 %" src="../assets/lexbench-five-engine-caliber-b-light.png" width="100%">
 </picture>
 
-Run `four_engine_full_20260812` · seed `official20260709` · k=3 ·
-`--score-mode independent --chrome-baseline best_effort`:
-
-| Engine | Binärdatei | Aufgaben bestanden | L2-Semantik |
-| --- | --- | ---: | ---: |
-| Chrome for Testing | 151.0.7922.47 `3b0be9872ea9` | 1,926 / 1,928 (99.90%) | 192 / 192 |
-| **Moli** | **0.1.1 `74e08f8d3eb6`** | **1,556 / 1,928 (80.71%)** | **183 / 192** |
-| Lightpanda | 1.0.0-dev.321+b04c99a9 `70f5ab69b0ce` | 845 / 1,928 (43.83%) | 132 / 192 |
-| Obscura | 0.1.11 `42c7eac0f635` | 762 / 1,928 (39.52%) | 84 / 192 |
+**Moli 0.1.1 bestand 1.071 Aufgaben und erreichte 81,88 %**. Kitesurf erreichte 62,08 %, Lightpanda 53,29 % und Obscura 44,88 %; Chrome kam als Referenz-Engine auf 99,85 %. Kitesurf lief mit k=1, nicht abgedeckte Aufgaben zählen als nicht bestanden, und die Reproduktionsbedingungen eines entfernten Dienstes unterscheiden sich von denen lokaler Binärdateien. Die vollständigen Ergebnisse stehen im [Fünf-Engine-Bericht](https://github.com/lexmount/Lexbench-Headless-Browser/blob/kitesurf-eval/docs/reports/five-engine-report-20260813.md) des Benchmarks.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-efficiency-map-dark.png">
-  <img alt="Aufgaben-Erfolgsquote gegen den Median des Spitzenspeichers pro Aufgabe: Chrome bei 99,9 % und 697 MiB, Moli bei 80,7 % und 92 MiB, Lightpanda bei 43,8 % und 34 MiB, Obscura bei 39,5 % und 39 MiB" src="../assets/lexbench-efficiency-map-light.png" width="100%">
+  <img alt="Aufgaben-Erfolgsquote gegen den Median des Spitzenspeichers pro Aufgabe für die vier lokalen Engines: Chrome bei 99,9 % und 697 MiB, Moli bei 80,7 % und 92 MiB, Lightpanda bei 43,8 % und 34 MiB, Obscura bei 39,5 % und 39 MiB" src="../assets/lexbench-efficiency-map-light.png" width="100%">
 </picture>
 
-Die A/B-kalibrierte Ressourcenmessung verwendet eine repräsentative Teilmenge von 557 Aufgaben (`l1.raw_cdp` plus `l2.web_platform`, `jobs=1 k=5`) und ermittelt cgroup-v2-CPU und Prozessbaum-PSS über die Schnittmenge der von allen vier Engines bestandenen Aufgaben; der Beobachtereffekt liegt je Engine unter 0,9 %. Für diese Teilmenge ergibt sich für **Moli ein Median von 100,6 ms CPU und 92 MiB Spitzenspeicher pro Aufgabe gegenüber 687 ms und 697 MiB bei Chrome** – rund 1/7 der CPU und 1/7,5 des Speichers. Im separaten Kompatibilitätslauf mit 1.928 Aufgaben besteht Moli 80,7 % der Aufgabenfläche. Die vollständigen Berichte liegen im Bench-Repository unter [`docs/reports/`](https://github.com/lexmount/Lexbench-Headless-Browser/tree/main/docs/reports).
-
-Ein vollständiger Lauf der aktuellen WPT-Auswahl zur Überprüfung von Molis Funktionsumfang als Agenten-Browser verzeichnete **1,612 Millionen bestandene Tests**.
+Kitesurf ist ein entfernter Dienst, dessen CPU, Arbeitsspeicher und Prozessanzahl nicht messbar sind. Der Ressourcenvergleich umfasst daher nur die vier lokalen Engines. Ein separater Lauf mit 557 Aufgaben berücksichtigt nur Arbeiten, die alle vier abgeschlossen haben. Molis Median pro Aufgabe lag bei **100,6 ms CPU-Zeit** und **92 MiB Spitzenspeicher**; Chrome erreichte **687 ms** beziehungsweise **697 MiB**. Damit lag Moli bei rund 15 % der CPU-Zeit und 13 % des Spitzenspeichers von Chrome. Methodik und vollständige Daten stehen in der [Ressourcenübersicht](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md) des Benchmarks.
 
 ## Projektumfang
 

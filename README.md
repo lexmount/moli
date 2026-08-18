@@ -259,9 +259,9 @@ retained display list, GPU compositor, or persistent window.
 
 ## Test data
 
-The following three measured data sets show Moli's current capability envelope.
-The tests cover real websites, real automation clients, focused Chromium/WPT
-behavior checks, and a large nextest regression suite.
+The following measurements show Moli's current capability envelope. They cover
+real websites, automation clients, Chromium/WPT behavior checks, and a large
+nextest regression suite.
 
 ### Mixed public-web crawl test
 
@@ -286,46 +286,45 @@ shell-only application does not count.
 | Peak PSS | 102.46 MiB | 348.82 MiB |
 | Peak processes / threads | 1 / 24 | 11 / 123 |
 
-### Lexbench-Headless-Browser (driver-stack compatibility)
+### WPT tests
 
-[Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser)
-measures the runtime surface automation ecosystems actually depend on: 1,928
-tasks spanning raw CDP and 13 pinned driver libraries (Playwright, Puppeteer,
-Selenium over Moli's native WebDriver, chromedp, rod, chromiumoxide, ferrum,
-pydoll and more), plus web-platform semantic correctness, with two-gate
-identity verification so no candidate result can silently come from Chrome.
+In the current WPT selection used to validate Moli's agent-browser scope, one
+full run passed **1.612 million tests**.
+
+### Moli's performance in Lexbench-Headless-Browser
+
+The full [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser)
+corpus contains 1,928 tasks covering raw CDP, 13 pinned automation tools
+including Playwright, Puppeteer and Selenium, and web-platform semantics. To
+include Kitesurf, which is only available as a remote endpoint, the chart below
+uses 1,308 comparable tasks. All browsers use the same task selection rules.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/lexbench-four-engine-overview-dark.png">
-  <img alt="Task success rate of four headless browsers over 1,928 tasks: Chrome 99.9%, Moli 80.7%, Lightpanda 43.8%, Obscura 39.5%" src="assets/lexbench-four-engine-overview-light.png" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/lexbench-five-engine-caliber-b-dark.png">
+  <img alt="Task success rate of five headless browsers over 1,308 comparable tasks: Chrome 99.8%, Moli 81.9%, Kitesurf 62.1%, Lightpanda 53.3%, Obscura 44.9%" src="assets/lexbench-five-engine-caliber-b-light.png" width="100%">
 </picture>
 
-Run `four_engine_full_20260812` · seed `official20260709` · k=3 ·
-`--score-mode independent --chrome-baseline best_effort`:
-
-| Engine | Binary | Tasks passed | L2 semantic |
-| --- | --- | ---: | ---: |
-| Chrome for Testing | 151.0.7922.47 `3b0be9872ea9` | 1,926 / 1,928 (99.90%) | 192 / 192 |
-| **Moli** | **0.1.1 `74e08f8d3eb6`** | **1,556 / 1,928 (80.71%)** | **183 / 192** |
-| Lightpanda | 1.0.0-dev.321+b04c99a9 `70f5ab69b0ce` | 845 / 1,928 (43.83%) | 132 / 192 |
-| Obscura | 0.1.11 `42c7eac0f635` | 762 / 1,928 (39.52%) | 84 / 192 |
+**Moli 0.1.1 passed 1,071 tasks, a success rate of 81.88%**, ahead of Kitesurf
+at 62.08%, Lightpanda at 53.29%, and Obscura at 44.88%; Chrome, the reference
+engine, reached 99.85%. Kitesurf ran at k=1, uncovered tasks count as not
+passed, and the reproduction conditions of a remote service differ from those
+of local binaries. See the benchmark's
+[five-engine report](https://github.com/lexmount/Lexbench-Headless-Browser/blob/kitesurf-eval/docs/reports/five-engine-report-20260813.md)
+for the full results.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/lexbench-efficiency-map-dark.png">
-  <img alt="Task success rate plotted against median peak memory per task: Chrome at 99.9% and 697 MiB, Moli at 80.7% and 92 MiB, Lightpanda at 43.8% and 34 MiB, Obscura at 39.5% and 39 MiB" src="assets/lexbench-efficiency-map-light.png" width="100%">
+  <img alt="Task success rate plotted against median peak memory per task for the four local engines: Chrome at 99.9% and 697 MiB, Moli at 80.7% and 92 MiB, Lightpanda at 43.8% and 34 MiB, Obscura at 39.5% and 39 MiB" src="assets/lexbench-efficiency-map-light.png" width="100%">
 </picture>
 
-The A/B-calibrated resource companion uses a representative 557-task subset
-(`l1.raw_cdp` plus `l2.web_platform`, `jobs=1 k=5`) and reports cgroup-v2 CPU
-and process-tree PSS over the all-pass intersection, with observer effect
-within 0.9% per engine. On that subset, Moli records a **median 100.6 ms CPU
-and 92 MiB peak PSS per task versus Chrome's 687 ms and 697 MiB** — about 1/7
-the CPU and 1/7.5 the memory. The separate 1,928-task compatibility run puts
-Moli at 80.7% of the task surface. Full reports live in the bench repository
-under [`docs/reports/`](https://github.com/lexmount/Lexbench-Headless-Browser/tree/main/docs/reports).
-
-In the current WPT selection used to validate Moli's agent-browser scope, one
-complete run recorded **1.612 million passing tests**.
+Kitesurf is a remote service, so its CPU, memory, and process counts cannot be
+measured. The resource comparison therefore covers only the four local
+engines. A separate 557-task run includes only work completed by all four.
+Moli's median CPU time per task was **100.6 ms** and its median peak memory was
+**92 MiB**; Chrome recorded **687 ms** and **697 MiB**, respectively. Moli used
+about 15% of Chrome's CPU time and 13% of its peak memory. See the benchmark's
+[resource card](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md)
+for the methodology and full data.
 
 ## Project scope
 
