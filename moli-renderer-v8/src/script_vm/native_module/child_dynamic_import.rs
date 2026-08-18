@@ -915,6 +915,7 @@ impl ScriptVm {
 
     fn evaluate_native_dynamic_module_graph_with_modulator(
         &mut self,
+        document_owner: FrameDocumentOwner,
         realm_id: FrameRealmId,
         document_modulator: &mut NativeDocumentModulator,
         root_entry: crate::module_runtime::ModuleEntryId,
@@ -927,6 +928,8 @@ impl ScriptVm {
         })?;
         self.evaluate_native_module_graph_with_modulator_in_context(
             context_ptr,
+            document_owner,
+            realm_id,
             document_modulator,
             root_entry,
             NativeModuleEvaluationOwner::DynamicImport,
@@ -963,6 +966,7 @@ impl ScriptVm {
                             &graph,
                         )?;
                         vm.start_child_native_module_graph_evaluation(
+                            document_owner,
                             realm_id,
                             document_modulator,
                             graph.root_entry,
@@ -970,6 +974,7 @@ impl ScriptVm {
                     }
                     ModuleMapEntryState::Instantiated | ModuleMapEntryState::Evaluating => vm
                         .start_child_native_module_graph_evaluation(
+                            document_owner,
                             realm_id,
                             document_modulator,
                             graph.root_entry,
@@ -1001,11 +1006,13 @@ impl ScriptVm {
 
     fn start_child_native_module_graph_evaluation(
         &mut self,
+        document_owner: FrameDocumentOwner,
         realm_id: FrameRealmId,
         document_modulator: &mut NativeDocumentModulator,
         root_entry: crate::module_runtime::ModuleEntryId,
     ) -> std::result::Result<DynamicModuleImportEvaluationStart, ModuleLoadError> {
         let evaluation = self.evaluate_native_dynamic_module_graph_with_modulator(
+            document_owner,
             realm_id,
             document_modulator,
             root_entry,
@@ -1020,6 +1027,8 @@ impl ScriptVm {
     pub(super) fn evaluate_native_module_graph_with_modulator_in_context(
         &mut self,
         context_ptr: *const v8::Global<v8::Context>,
+        document_owner: FrameDocumentOwner,
+        realm_id: FrameRealmId,
         document_modulator: &mut NativeDocumentModulator,
         root_entry: crate::module_runtime::ModuleEntryId,
         owner: NativeModuleEvaluationOwner,
@@ -1033,7 +1042,6 @@ impl ScriptVm {
                     format!("native root module entry {root_entry:?} is not compiled"),
                 )
             })?;
-        let runtime_generation_before_evaluation = self.document_runtime.runtime_reset_generation();
         document_modulator.mark_evaluating(root_entry);
         let promise = self
             .renderer_document_isolate
@@ -1112,10 +1120,12 @@ impl ScriptVm {
             .map_err(|error| {
                 ModuleLoadError::new(ModuleLoadStage::Evaluate, error.to_string())
             })??;
-        if promise.is_none()
-            && self.document_runtime.runtime_reset_generation()
-                == runtime_generation_before_evaluation
-        {
+        let document_owner_is_current = self
+            ._context_host
+            .borrow()
+            .current_child_module_route_task_owner(document_owner, realm_id)
+            .is_some();
+        if promise.is_none() && document_owner_is_current {
             document_modulator.mark_evaluated(root_entry);
         }
         Ok(NativeModuleEvaluationResult {

@@ -61,6 +61,7 @@ impl ScriptVm {
                 realm_id,
                 |vm, document_modulator| {
                     vm.start_child_parser_module_graph_evaluation_with_modulator(
+                        owner.document_owner(),
                         realm_id,
                         document_modulator,
                         work.graph(),
@@ -131,6 +132,7 @@ impl ScriptVm {
 
     fn start_child_parser_module_graph_evaluation_with_modulator(
         &mut self,
+        document_owner: crate::frame_owner_model::FrameDocumentOwner,
         realm_id: FrameRealmId,
         document_modulator: &mut NativeDocumentModulator,
         graph: &crate::module_runtime::ModuleGraphHandle,
@@ -154,6 +156,8 @@ impl ScriptVm {
         }
         let evaluation = self.evaluate_native_module_graph_with_modulator_in_context(
             context_ptr,
+            document_owner,
+            realm_id,
             document_modulator,
             graph.root_entry,
             NativeModuleEvaluationOwner::Script,

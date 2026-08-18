@@ -3674,7 +3674,13 @@ impl ScriptVm {
                     format!("native root module entry {root_entry:?} is not compiled"),
                 )
             })?;
-        let runtime_generation_before_evaluation = self.document_runtime.runtime_reset_generation();
+        let document_owner_before_evaluation =
+            self.current_main_document_task_owner().ok_or_else(|| {
+                ModuleLoadError::new(
+                    ModuleLoadStage::Evaluate,
+                    "native module evaluation has no current main Document owner",
+                )
+            })?;
         self.document_runtime
             .mark_native_module_evaluating(root_entry);
         let promise = self
@@ -3759,8 +3765,7 @@ impl ScriptVm {
                 ModuleLoadError::new(ModuleLoadStage::Evaluate, error.to_string())
             })??;
         if promise.is_none()
-            && self.document_runtime.runtime_reset_generation()
-                == runtime_generation_before_evaluation
+            && self.current_main_document_task_owner() == Some(document_owner_before_evaluation)
         {
             self.document_runtime
                 .mark_native_module_evaluated(root_entry);
