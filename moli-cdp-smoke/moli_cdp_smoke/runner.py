@@ -56,6 +56,7 @@ from .groups.url_policy import run_url_policy_group
 from .groups.workers import run_workers_group
 from .groups.xhr_sync_semantics import run_xhr_sync_semantics_group
 from .helpers import attach_cdp_event_collector
+from .progress import await_with_progress
 from .serve import MoliServe, start_moli_serve, stop_moli_serve, wait_for_cdp_server
 from .state import SmokeState
 
@@ -412,16 +413,29 @@ async def run_smoke(
     if results is None:
         results = []
     temp_dir = Path(tempfile.mkdtemp(prefix="moli-pw-smoke-"))
-    async with async_playwright() as playwright:
-        browser = await playwright.chromium.connect_over_cdp(endpoint, timeout=10_000)
+    playwright = await await_with_progress("playwright/start", async_playwright().start())
+    try:
+        browser = await await_with_progress(
+            "playwright/connect-over-cdp",
+            playwright.chromium.connect_over_cdp(endpoint, timeout=10_000),
+        )
         try:
             record(results, "connect_over_cdp", {"browserContexts": len(browser.contexts)})
 
-            context = await browser.new_context(accept_downloads=True)
+            context = await await_with_progress(
+                "playwright/browser-new-context",
+                browser.new_context(accept_downloads=True),
+            )
             record(results, "browser_new_context")
 
-            page = await context.new_page()
-            cdp = await context.new_cdp_session(page)
+            page = await await_with_progress(
+                "playwright/context-new-page",
+                context.new_page(),
+            )
+            cdp = await await_with_progress(
+                "playwright/context-new-cdp-session",
+                context.new_cdp_session(page),
+            )
             websocket_events = attach_cdp_event_collector(
                 cdp,
                 [
@@ -443,7 +457,10 @@ async def run_smoke(
                     "Network.loadingFailed",
                 ],
             )
-            await cdp.send("Network.enable")
+            await await_with_progress(
+                "playwright/network-enable",
+                cdp.send("Network.enable"),
+            )
 
             state = SmokeState(
                 endpoint=endpoint,
@@ -460,15 +477,23 @@ async def run_smoke(
             )
 
             for group in selection.page_groups:
-                await group.runner(state)  # type: ignore[misc]
+                await await_with_progress(
+                    f"group/{group.phase}/{group.name}",
+                    group.runner(state),  # type: ignore[misc]
+                )
 
-            await context.close()
+            await await_with_progress("playwright/context-close", context.close())
             for group in selection.browser_groups:
-                await group.runner(browser, fixture_server.url, results)  # type: ignore[misc]
+                await await_with_progress(
+                    f"group/{group.phase}/{group.name}",
+                    group.runner(browser, fixture_server.url, results),  # type: ignore[misc]
+                )
             return results
         finally:
-            await browser.close()
+            await await_with_progress("playwright/browser-close", browser.close())
             shutil.rmtree(temp_dir, ignore_errors=True)
+    finally:
+        await await_with_progress("playwright/stop", playwright.stop())
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -515,10 +540,16 @@ async def async_main(argv: list[str] | None = None) -> int:
             endpoint = f"http://127.0.0.1:{port}"
         await wait_for_cdp_server(endpoint, serve)
         for group in selection.raw_groups:
-            await group.runner(endpoint, fixture.url, results)  # type: ignore[misc]
+            await await_with_progress(
+                f"group/{group.phase}/{group.name}",
+                group.runner(endpoint, fixture.url, results),  # type: ignore[misc]
+            )
         await run_smoke(endpoint, fixture, selection, results)
         for group in selection.external_groups:
-            await group.runner(endpoint, fixture.url, results)  # type: ignore[misc]
+            await await_with_progress(
+                f"group/{group.phase}/{group.name}",
+                group.runner(endpoint, fixture.url, results),  # type: ignore[misc]
+            )
         ok = not any(result.get("ok") is False for result in results)
         print(
             json.dumps(

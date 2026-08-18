@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 
 from ..assertions import SmokeError, assert_equal, record_contract, wait_until
 from ..helpers import attach_cdp_event_collector
+from ..progress import await_with_progress
 from ..raw_cdp import RawCdpClient, RawCdpError, connect_raw_cdp
 from ..state import SmokeState
 
@@ -33,7 +34,10 @@ async def run_target_semantics_group(
 ) -> None:
     for item in _raw_semantic_contracts():
         try:
-            observed = await item.scenario(endpoint, fixture)
+            observed = await await_with_progress(
+                f"scenario/raw/target-semantics/{item.name}",
+                item.scenario(endpoint, fixture),
+            )
         except Exception as error:
             results.append(
                 {
@@ -150,7 +154,10 @@ def _raw_semantic_contracts() -> tuple[RawSemanticContract, ...]:
 async def run_browser_semantics_group(state: SmokeState) -> None:
     for name, contract, source, commands, scenario in _semantic_scenarios():
         try:
-            observed = await scenario(state)
+            observed = await await_with_progress(
+                f"scenario/page/browser-semantics/{name}",
+                scenario(state),
+            )
         except Exception as error:
             state.results.append(
                 {
@@ -368,13 +375,25 @@ def _semantic_scenarios() -> tuple[
 
 @asynccontextmanager
 async def _isolated_page(state: SmokeState) -> AsyncIterator[tuple[Any, Any, Any]]:
-    context = await state.browser.new_context()
+    context = await await_with_progress(
+        "playwright/browser-semantics/isolated-context-new",
+        state.browser.new_context(),
+    )
     try:
-        page = await context.new_page()
-        cdp = await context.new_cdp_session(page)
+        page = await await_with_progress(
+            "playwright/browser-semantics/isolated-page-new",
+            context.new_page(),
+        )
+        cdp = await await_with_progress(
+            "playwright/browser-semantics/isolated-cdp-session-new",
+            context.new_cdp_session(page),
+        )
         yield context, page, cdp
     finally:
-        await context.close()
+        await await_with_progress(
+            "playwright/browser-semantics/isolated-context-close",
+            context.close(),
+        )
 
 
 async def _multi_session_child_frame_realm_routing(
@@ -1696,9 +1715,13 @@ async def _autofill_trigger_card_semantics(state: SmokeState) -> dict[str, Any]:
 
 async def _dom_mutation_events_and_edit_commands(state: SmokeState) -> dict[str, Any]:
     async with _isolated_page(state) as (_context, page, cdp):
-        await cdp.send("DOM.enable")
-        await page.set_content(
-            """<!doctype html><body>
+        progress_prefix = "command/page/browser-semantics/dom-mutation-edit"
+
+        async def step(label: str, awaitable: Awaitable[Any]) -> Any:
+            return await await_with_progress(f"{progress_prefix}/{label}", awaitable)
+
+        await step("DOM.enable", cdp.send("DOM.enable"))
+        html = """<!doctype html><body>
               <div id="unrequested"><span>old</span></div>
               <p id="attrs" data-old="one">attribute target</p>
               <p id="value">old text</p>
@@ -1707,12 +1730,23 @@ async def _dom_mutation_events_and_edit_commands(state: SmokeState) -> dict[str,
               <div id="destination"></div>
               <div id="outer">outer target</div>
             </body>"""
+        await step(
+            "Page.setContent",
+            page.set_content(html),
         )
-        root_id = (await cdp.send("DOM.getDocument", {"depth": 0}))["root"]["nodeId"]
+        root_id = (
+            await step(
+                "DOM.getDocument-shallow",
+                cdp.send("DOM.getDocument", {"depth": 0}),
+            )
+        )["root"]["nodeId"]
         unrequested_id = (
-            await cdp.send(
-                "DOM.querySelector",
-                {"nodeId": root_id, "selector": "#unrequested"},
+            await step(
+                "DOM.querySelector-unrequested",
+                cdp.send(
+                    "DOM.querySelector",
+                    {"nodeId": root_id, "selector": "#unrequested"},
+                ),
             )
         )["nodeId"]
 
@@ -1734,12 +1768,13 @@ async def _dom_mutation_events_and_edit_commands(state: SmokeState) -> dict[str,
             )
 
         async def send_and_require_events(
+            label: str,
             method: str,
             params: dict[str, Any],
             expected_methods: list[str],
         ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
             start = len(wire_order)
-            result = await cdp.send(method, params)
+            result = await step(label, cdp.send(method, params))
             wire_order.append({"kind": "response", "method": method})
             command_order = wire_order[start:]
             observed_methods = [
@@ -1753,6 +1788,7 @@ async def _dom_mutation_events_and_edit_commands(state: SmokeState) -> dict[str,
             return result, command_order
 
         _, shallow_runtime_order = await send_and_require_events(
+            "Runtime.evaluate-shallow-mutation",
             "Runtime.evaluate",
             {
                 "expression": "document.querySelector('#unrequested').append(document.createElement('i'))"
@@ -1760,7 +1796,12 @@ async def _dom_mutation_events_and_edit_commands(state: SmokeState) -> dict[str,
             ["DOM.childNodeCountUpdated"],
         )
 
-        document = (await cdp.send("DOM.getDocument", {"depth": -1}))["root"]
+        document = (
+            await step(
+                "DOM.getDocument-deep",
+                cdp.send("DOM.getDocument", {"depth": -1}),
+            )
+        )["root"]
 
         def node_for_selector(selector: str) -> int:
             node = _find_dom_node_by_attribute(document, "id", selector.removeprefix("#"))
@@ -1771,6 +1812,7 @@ async def _dom_mutation_events_and_edit_commands(state: SmokeState) -> dict[str,
 
         attrs_id = node_for_selector("#attrs")
         _, attributes_order = await send_and_require_events(
+            "DOM.setAttributesAsText",
             "DOM.setAttributesAsText",
             {
                 "nodeId": attrs_id,
@@ -1787,18 +1829,23 @@ async def _dom_mutation_events_and_edit_commands(state: SmokeState) -> dict[str,
         text_node_id = value_children[0].get("nodeId")
         _require(isinstance(text_node_id, int) and text_node_id > 0, f"invalid text node: {value_children[0]}")
         _, value_order = await send_and_require_events(
+            "DOM.setNodeValue-change",
             "DOM.setNodeValue",
             {"nodeId": text_node_id, "value": "updated text"},
             ["DOM.characterDataModified"],
         )
-        same_value_result = await cdp.send(
-            "DOM.setNodeValue",
-            {"nodeId": text_node_id, "value": "updated text"},
+        same_value_result = await step(
+            "DOM.setNodeValue-same",
+            cdp.send(
+                "DOM.setNodeValue",
+                {"nodeId": text_node_id, "value": "updated text"},
+            ),
         )
         assert_equal(same_value_result, {}, "DOM.setNodeValue same-value result")
 
         rename_id = node_for_selector("#rename")
         rename_result, rename_order = await send_and_require_events(
+            "DOM.setNodeName-element",
             "DOM.setNodeName",
             {"nodeId": rename_id, "name": "article"},
             ["DOM.childNodeRemoved", "DOM.childNodeInserted"],
@@ -1818,6 +1865,7 @@ async def _dom_mutation_events_and_edit_commands(state: SmokeState) -> dict[str,
         destination_id = node_for_selector("#destination")
         move_result, move_order = await send_and_require_events(
             "DOM.moveTo",
+            "DOM.moveTo",
             {"nodeId": move_id, "targetNodeId": destination_id},
             ["DOM.childNodeRemoved", "DOM.childNodeInserted"],
         )
@@ -1835,6 +1883,7 @@ async def _dom_mutation_events_and_edit_commands(state: SmokeState) -> dict[str,
         outer_id = node_for_selector("#outer")
         _, outer_order = await send_and_require_events(
             "DOM.setOuterHTML",
+            "DOM.setOuterHTML",
             {
                 "nodeId": outer_id,
                 "outerHTML": '<aside id="outer-replacement">replacement</aside>',
@@ -1842,21 +1891,33 @@ async def _dom_mutation_events_and_edit_commands(state: SmokeState) -> dict[str,
             ["DOM.childNodeRemoved", "DOM.childNodeInserted"],
         )
         assert_equal(
-            await page.evaluate("document.querySelector('#outer-replacement')?.localName"),
+            await step(
+                "Runtime.evaluate-outer-replacement",
+                page.evaluate("document.querySelector('#outer-replacement')?.localName"),
+            ),
             "aside",
             "DOM.setOuterHTML replacement",
         )
 
         pi_object = (
-            await cdp.send(
-                "Runtime.evaluate",
-                {
-                    "expression": "(() => { const pi = document.createProcessingInstruction('old-target', 'data'); document.insertBefore(pi, document.firstChild); return pi; })()"
-                },
+            await step(
+                "Runtime.evaluate-create-processing-instruction",
+                cdp.send(
+                    "Runtime.evaluate",
+                    {
+                        "expression": "(() => { const pi = document.createProcessingInstruction('old-target', 'data'); document.insertBefore(pi, document.firstChild); return pi; })()"
+                    },
+                ),
             )
         )["result"]["objectId"]
-        pi_node_id = (await cdp.send("DOM.requestNode", {"objectId": pi_object}))["nodeId"]
+        pi_node_id = (
+            await step(
+                "DOM.requestNode-processing-instruction",
+                cdp.send("DOM.requestNode", {"objectId": pi_object}),
+            )
+        )["nodeId"]
         pi_rename_result, pi_rename_order = await send_and_require_events(
+            "DOM.setNodeName-processing-instruction",
             "DOM.setNodeName",
             {"nodeId": pi_node_id, "name": "xml"},
             ["DOM.childNodeRemoved", "DOM.childNodeInserted"],
@@ -1872,7 +1933,10 @@ async def _dom_mutation_events_and_edit_commands(state: SmokeState) -> dict[str,
             "DOM.setNodeName processing-instruction node id",
         )
         assert_equal(
-            await page.evaluate("document.firstChild.target"),
+            await step(
+                "Runtime.evaluate-processing-instruction-target",
+                page.evaluate("document.firstChild.target"),
+            ),
             "xml",
             "DOM.setNodeName processing-instruction xml target",
         )
