@@ -73,7 +73,7 @@ struct RendererJavaScriptDialogBrokerState {
 #[derive(Debug)]
 struct RendererJavaScriptDialogBrokerInner {
     state: Mutex<RendererJavaScriptDialogBrokerState>,
-    open_generation_tx: watch::Sender<u64>,
+    open_signal_tx: watch::Sender<()>,
 }
 
 #[derive(Clone, Debug)]
@@ -83,11 +83,11 @@ pub(crate) struct RendererJavaScriptDialogBroker {
 
 impl Default for RendererJavaScriptDialogBroker {
     fn default() -> Self {
-        let (open_generation_tx, _) = watch::channel(0);
+        let (open_signal_tx, _) = watch::channel(());
         Self {
             inner: Arc::new(RendererJavaScriptDialogBrokerInner {
                 state: Mutex::new(RendererJavaScriptDialogBrokerState::default()),
-                open_generation_tx,
+                open_signal_tx,
             }),
         }
     }
@@ -96,7 +96,7 @@ impl Default for RendererJavaScriptDialogBroker {
 #[derive(Debug)]
 pub(crate) struct RendererJavaScriptDialogWatch {
     broker: RendererJavaScriptDialogBroker,
-    open_generation_rx: watch::Receiver<u64>,
+    open_signal_rx: watch::Receiver<()>,
 }
 
 impl RendererJavaScriptDialogBroker {
@@ -106,9 +106,7 @@ impl RendererJavaScriptDialogBroker {
             state.open_count += 1;
             state.pending.push_back(dialog);
         }
-        self.inner
-            .open_generation_tx
-            .send_modify(|generation| *generation = generation.wrapping_add(1));
+        self.inner.open_signal_tx.send_modify(|_| {});
     }
 
     pub(crate) fn take_pending(&self) -> Vec<RendererPendingJavaScriptDialog> {
@@ -143,7 +141,7 @@ impl RendererJavaScriptDialogBroker {
     pub(crate) fn watch(&self) -> RendererJavaScriptDialogWatch {
         RendererJavaScriptDialogWatch {
             broker: self.clone(),
-            open_generation_rx: self.inner.open_generation_tx.subscribe(),
+            open_signal_rx: self.inner.open_signal_tx.subscribe(),
         }
     }
 
@@ -158,7 +156,7 @@ impl RendererJavaScriptDialogWatch {
             if self.broker.has_open_dialog() {
                 return;
             }
-            if self.open_generation_rx.changed().await.is_err() {
+            if self.open_signal_rx.changed().await.is_err() {
                 return;
             }
         }
