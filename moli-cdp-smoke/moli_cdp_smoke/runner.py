@@ -84,7 +84,6 @@ RAW_GROUPS: tuple[SmokeGroup, ...] = (
         "Chromium-calibrated active-JS IO interrupt, nested Main receiver, per-session FIFO, and non-V8 IO boundaries.",
         "raw",
         run_inspector_routing_group,
-        default=False,
     ),
     SmokeGroup(
         "action-window",

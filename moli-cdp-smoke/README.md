@@ -129,7 +129,7 @@ Covered well:
   response/event crossover, foreign flattened and legacy session rejection,
   and staged peer-disconnect isolation.
 - Raw CDP websocket command flow for `Runtime.evaluate(awaitPromise=true)` resolving page `fetch()`, timer-triggered `fetch()`, and WebSocket echo work without any follow-up client command; emitted `Runtime.executionContextCreated.uniqueId` round-tripping through DevTools-shaped `Runtime.evaluate` and `Runtime.callFunctionOn`; Chromium-calibrated pre-commit navigation suspension where DOM/Runtime/Debugger main-thread commands wait while `Performance.getMetrics`, `Runtime.terminateExecution`, and browser commands remain dispatchable; `Debugger.pause` responding before `Debugger.paused`, interrupting an in-flight `Runtime.evaluate`, and resuming that evaluation; commands queued behind a winning `Debugger.resume` completing through normal owner dispatch rather than synthetic cancellation; deterministic nested-function `Debugger.stepOut` response/resumed/caller-pause ordering; browser-global Tracing ownership across independent browser/page WebSocket frontends, including exactly one response for a synchronously completed start and the stop-before-start-ack `end response -> start error -> data -> complete` sequence; shared worker target discovery through `Target.getTargets`, worker-session `Runtime.executionContextCreated` / console log replay, and `Profiler.enable` / `Profiler.start` / `Profiler.stop` through `Target.setAutoAttach`; plus Chromium-calibrated DedicatedWorker target creation/update/attach ordering, exact worker-isolate Runtime/Console routing, `Inspector.workerScriptLoaded`, terminate, and owner-navigation cleanup.
-- The optional raw `inspector-routing` group is the executable DevToolsSession boundary matrix. It covers per-session Main/IO FIFO and exactly-once completion, IO preemption of non-yielding JavaScript, all 13 methods in Chromium 147's `ShouldSendOnIO`, normal debugger-pause pumping of one mixed V8/Page/DOM Main receiver, instrumentation-pause IO-only behavior, navigation replacement, auxiliary-session detach, BrowserContext teardown with interrupts in flight, and `Page.crash`. Every scenario runs in an isolated target and records its Chromium-derived contract.
+- The default raw `inspector-routing` group is the executable DevToolsSession boundary matrix. It covers per-session Main/IO FIFO and exactly-once completion, IO preemption of non-yielding JavaScript, all 13 methods in Chromium 147's `ShouldSendOnIO`, normal debugger-pause pumping of one mixed V8/Page/DOM Main receiver, instrumentation-pause IO-only behavior, navigation replacement, auxiliary-session detach, BrowserContext teardown with interrupts in flight, and `Page.crash`. Every scenario runs in an isolated target and records its Chromium-derived contract.
 - The focused raw `agent-episode` group copies the recorded RL
   `Runtime.evaluate(awaitPromise=true)` observe/fill/click path. It requires the
   action response before destructive cross-document realm events, observes only
@@ -320,8 +320,8 @@ uv run moli-cdp-smoke --group inspector-routing
 MOLI_SMOKE_GROUPS=protocol,websocket uv run moli-cdp-smoke
 ```
 
-The Inspector routing group is intentionally outside the default selection.
-Run one or more named contracts while iterating with
+The Inspector routing group is part of the default selection. Run one or more
+named contracts while iterating with
 `MOLI_INSPECTOR_ROUTING_SCENARIOS`:
 
 ```bash
@@ -415,7 +415,7 @@ Useful environment variables:
 - `MOLI_BIN`: path to the `moli` binary under test.
 - `MOLI_CDP_PORT`: CDP server port. Defaults to a free local port.
 - `MOLI_SMOKE_GROUPS`: comma-separated smoke group list. CLI `--group` takes precedence.
-- `MOLI_INSPECTOR_ROUTING_SCENARIOS`: comma-separated scenario names within the optional `inspector-routing` group.
+- `MOLI_INSPECTOR_ROUTING_SCENARIOS`: comma-separated scenario names within the `inspector-routing` group.
 - `MOLI_SMOKE_TRACE=1`: print extra runner-side trace logs.
 - `MOLI_SMOKE_TRACE_BG=1`: print background `moli serve` logs.
 - `NODE`: Node executable used by optional Node client groups. Defaults to `node`.
