@@ -168,8 +168,15 @@ Covered well:
 - Parser-discovered external script, link stylesheet, and parser-created `@import` stylesheet observation plus `Network.getResponseBody`; configured `20,000,000 / 2,000,000` inspector-cache budgets retain a small body while a `2,000,001`-byte body keeps its request identity and repeatedly returns the inspector-cache eviction error.
 - Classic WebSocket echo, WebSocket `Network.webSocket*` events, and blocked WebSocket handshake behavior.
 - Chromium-calibrated transformed-iframe input routing through raw CDP: exact
-  used child viewport, hover/click/wheel targets and child-local coordinates,
-  overflow-container scrolling, and cross-frame mouseout coordinates.
+  used child viewports, hover/click/wheel targets and child-local coordinates,
+  overflow-container scrolling, focus chains, and cross-frame mouseout
+  coordinates across both single and nested transformed frames. On 2026-08-18,
+  `uv run moli-cdp-smoke --endpoint http://127.0.0.1:9228 --group iframe-input`
+  passed three consecutive runs against
+  `~/chromium/src/out/Default/chrome` (`Chromium 147.0.7709.0`) under headed
+  Xvfb; the same group then passed three consecutive Moli runs. The nested UA
+  scrollbar control assertion is Moli-only because Chromium/Xvfb does not route
+  raw CDP synthetic mouse input through its platform scrollbar widget.
 - Dedicated default `Page.setDocumentContent` replacement coverage through
   Playwright and raw CDP: exact-once, ordered document-open/DOM/load projection
   to two attached sessions while one session has a pending Runtime command;
@@ -262,8 +269,9 @@ Runner layout:
 - `groups/workers.py`: dedicated worker `postMessage`, SharedWorker port reuse, worker fetch routing/auth, and worker XHR routing.
 - `groups/dom_input.py`: `set_content`, file upload, file chooser, scripted picker, click navigation, locator/input workflows, Playwright upstream derived locator composition, `page.type()`, layout-backed mouse/touch/tap/raw-drag input, `fill()`, `check()` / `uncheck()` / `setChecked()`, and `selectOption()` workflows, DOM/handle workflows, plus the explicit high-level drag-interception boundary.
 - `groups/iframe_input.py`: a Chromium-calibrated raw-CDP regression for
-  transformed iframe hover, click, wheel, child-local event coordinates, and
-  exact used frame viewport propagation.
+  transformed single and nested iframe hover, click, wheel, child-local event
+  coordinates, exact used frame viewport propagation, and Moli's nested-frame
+  UA scrollbar routing boundary.
 - `groups/emulation_storage.py`: viewport and Playwright screenshot-clip boundary, storage/cookie isolation, IndexedDB baseline, and browser-context profile overrides.
 - `groups/browser_semantics.py`: raw-target and page/runtime cross-engine
   contracts calibrated against Chromium before they are applied to Moli.

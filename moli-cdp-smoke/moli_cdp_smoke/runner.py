@@ -159,7 +159,7 @@ RAW_GROUPS: tuple[SmokeGroup, ...] = (
 PAGE_GROUPS: tuple[SmokeGroup, ...] = (
     SmokeGroup(
         "iframe-input",
-        "Cross-engine transformed iframe hover, click, wheel, and target-Document coordinate routing.",
+        "Cross-engine transformed single and nested iframe hover, click, wheel, and target-Document coordinate routing.",
         "page",
         run_iframe_input_group,
     ),
