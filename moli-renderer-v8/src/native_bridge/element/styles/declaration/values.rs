@@ -16,6 +16,7 @@ use crate::{
         document_runtime::DomHandle,
         native_bridge::element::geometry::{
             ClientRect, observable_bounding_client_rect, observable_bounding_client_rects,
+            observable_used_box_size,
         },
         style_engine::{
             ComputedDisplayKind, ComputedRenderedStyleFacts, StyleSourceId, StyleViewport,
@@ -44,10 +45,18 @@ use super::{
     text_decoration_shorthand_longhands, transition_shorthand_longhands,
 };
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum ComputedStyleValuePhase {
+    #[default]
+    Computed,
+    Resolved,
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub(in crate::native_bridge::element::styles) struct StyleComputationContext {
     pub(in crate::native_bridge::element::styles) viewport: StyleViewport,
     pub(in crate::native_bridge::element::styles) read_document: Option<DomHandle>,
+    value_phase: ComputedStyleValuePhase,
 }
 
 impl StyleComputationContext {
@@ -55,6 +64,7 @@ impl StyleComputationContext {
         Self {
             viewport,
             read_document: None,
+            value_phase: ComputedStyleValuePhase::Computed,
         }
     }
 
@@ -72,6 +82,15 @@ impl StyleComputationContext {
     ) -> Self {
         self.read_document = read_document;
         self
+    }
+
+    pub(in crate::native_bridge::element::styles) const fn with_resolved_values(mut self) -> Self {
+        self.value_phase = ComputedStyleValuePhase::Resolved;
+        self
+    }
+
+    const fn reads_resolved_values(self) -> bool {
+        matches!(self.value_phase, ComputedStyleValuePhase::Resolved)
     }
 
     fn resolved_read_document(self, runtime: &JsContextHost, handle: DomHandle) -> DomHandle {
@@ -5753,6 +5772,13 @@ fn resolve_moli_computed_style_value(
     if property == "font-family" {
         return normalize_cssom_font_family_value(value).unwrap_or_else(|| value.to_owned());
     }
+    if matches!(property, "width" | "height") {
+        match resolved_layout_box_dimension(runtime, handle, property, context) {
+            Some(ResolvedLayoutBoxDimension::Used(size)) => return size,
+            Some(ResolvedLayoutBoxDimension::Computed) => return value.to_owned(),
+            None => {}
+        }
+    }
     if property == "width"
         && let Some(width) = resolve_computed_width_with_inline_fallback(
             runtime, handle, value, inputs, context, resolution,
@@ -5801,6 +5827,42 @@ fn resolve_moli_computed_style_value(
         return resolve_computed_auto_min_size(runtime, handle, resolution);
     }
     value.to_owned()
+}
+
+enum ResolvedLayoutBoxDimension {
+    Used(String),
+    Computed,
+}
+
+fn resolved_layout_box_dimension(
+    runtime: &JsContextHost,
+    handle: DomHandle,
+    property: &str,
+    context: StyleComputationContext,
+) -> Option<ResolvedLayoutBoxDimension> {
+    if !context.reads_resolved_values() || !runtime.layout_policy().uses_real_layout() {
+        return None;
+    }
+    let size = observable_used_box_size(
+        runtime,
+        handle,
+        moli_layout::LayoutFlushReason::SynchronousGeometry,
+    )
+    .ok()?;
+    let Some(size) = size else {
+        // The published tree has no principal CSS-box used value (for
+        // example, for a non-replaced inline or a box-suppressed element).
+        // Do not reconstruct one from declarations and ancestor sizes.
+        return Some(ResolvedLayoutBoxDimension::Computed);
+    };
+    let value = match property {
+        "width" => size.width,
+        "height" => size.height,
+        _ => return None,
+    };
+    Some(ResolvedLayoutBoxDimension::Used(
+        format_non_negative_used_css_px(f64::from(value)),
+    ))
 }
 
 fn computed_axis_position_shorthand_value(

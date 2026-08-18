@@ -216,6 +216,29 @@ pub(crate) fn observable_element_metrics(
     }
 }
 
+pub(crate) fn observable_used_box_size(
+    runtime: &JsContextHost,
+    source: DomHandle,
+    reason: LayoutFlushReason,
+) -> Result<Option<LayoutSize>, LayoutError> {
+    if !runtime.dom_host().is_connected(source) {
+        return Ok(None);
+    }
+    let Some(document) = runtime.layout_document_for_source(source) else {
+        return Ok(None);
+    };
+    let answers = observable_geometry_batch(
+        runtime,
+        document,
+        reason,
+        &LayoutQueryBatch::new(vec![LayoutQuery::UsedBoxSize { source }]),
+    )?;
+    match answers.answers.into_iter().next() {
+        Some(LayoutQueryAnswer::UsedBoxSize(size)) => Ok(size),
+        _ => Err(provider_contract_error("used box size")),
+    }
+}
+
 pub(crate) fn observable_document_scroll_metrics(
     runtime: &JsContextHost,
     document: DomHandle,
@@ -585,6 +608,7 @@ fn answer_mock_queries(
             LayoutQuery::ElementMetrics { source } => {
                 LayoutQueryAnswer::ElementMetrics(mock_element_metrics(runtime, *source))
             }
+            LayoutQuery::UsedBoxSize { .. } => LayoutQueryAnswer::UsedBoxSize(None),
             LayoutQuery::ScrollIntoViewGeometry { source } => {
                 LayoutQueryAnswer::ScrollIntoViewGeometry(mock_scroll_into_view_geometry(
                     runtime, document, *source,
