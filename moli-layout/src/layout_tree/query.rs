@@ -41,6 +41,9 @@ pub struct LayoutDocumentMetrics {
 pub struct LayoutElementMetrics<N> {
     pub offset_parent: Option<N>,
     pub offset_position: LayoutPoint,
+    /// Border-box origin in viewport CSS pixels after layout placement and
+    /// scrolling, but before authored CSS transforms.
+    pub border_origin_in_viewport_ignoring_css_transforms: LayoutPoint,
     pub offset_size: LayoutSize,
     pub content_size: LayoutSize,
     pub client_size: LayoutSize,

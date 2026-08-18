@@ -96,30 +96,45 @@ where
                 }
             })
             .unwrap_or(LayoutPoint::ZERO);
-        let layout_origin = output
-            .fragments
-            .iter()
-            .find_map(|id| {
-                let fragment = self.fragment(*id)?;
-                let LayoutFragmentKind::InlineBox {
-                    box_id: fragment_box,
-                    ..
-                } = fragment.kind
-                else {
-                    return None;
-                };
-                if fragment_box != box_id {
-                    return None;
-                }
-                let border = fragment.box_model?.border;
-                let owner = self.coordinate_space(fragment.coordinate_space)?.owner?;
-                let owner_origin = self.box_geometry(owner)?.layout_origin_in_document;
-                Some(LayoutPoint::new(
-                    owner_origin.x + border.x,
-                    owner_origin.y + border.y,
-                ))
-            })
-            .unwrap_or(geometry.layout_origin_in_document);
+        let fragment_origins = output.fragments.iter().find_map(|id| {
+            let fragment = self.fragment(*id)?;
+            let LayoutFragmentKind::InlineBox {
+                box_id: fragment_box,
+                ..
+            } = fragment.kind
+            else {
+                return None;
+            };
+            if fragment_box != box_id {
+                return None;
+            }
+            let border = fragment.box_model?.border;
+            let fragment_space = self.coordinate_space(fragment.coordinate_space)?;
+            let owner = fragment_space.owner?;
+            let owner_origin = self.box_geometry(owner)?.layout_origin_in_document;
+            let local_border_origin = LayoutPoint::new(border.x, border.y);
+            Some((
+                LayoutPoint::new(
+                    owner_origin.x + local_border_origin.x,
+                    owner_origin.y + local_border_origin.y,
+                ),
+                fragment_space
+                    .local_to_viewport_ignoring_css_transforms
+                    .map_point(local_border_origin),
+            ))
+        });
+        let (layout_origin, border_origin_in_viewport_ignoring_css_transforms) = fragment_origins
+            .unwrap_or_else(|| {
+                (
+                    geometry.layout_origin_in_document,
+                    coordinate_space
+                        .local_to_viewport_ignoring_css_transforms
+                        .map_point(LayoutPoint::new(
+                            geometry.border_box.x,
+                            geometry.border_box.y,
+                        )),
+                )
+            });
         let client_size = if is_root {
             LayoutSize::new(
                 self.viewport.css_width as f32,
@@ -142,6 +157,7 @@ where
                 layout_origin.x - offset_parent_origin.x,
                 layout_origin.y - offset_parent_origin.y,
             ),
+            border_origin_in_viewport_ignoring_css_transforms,
             offset_size: LayoutSize::new(geometry.border_box.width, geometry.border_box.height),
             content_size: LayoutSize::new(geometry.content_box.width, geometry.content_box.height),
             client_size,

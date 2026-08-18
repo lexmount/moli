@@ -255,6 +255,12 @@ pub(crate) struct LayoutCoordinateSpace {
     pub(crate) local_to_document: LayoutTransform2D,
     /// Maps local coordinates directly to viewport CSS pixels.
     pub(crate) local_to_viewport: LayoutTransform2D,
+    /// Maps local coordinates to the visual document coordinate system while
+    /// omitting authored CSS transforms. Layout placement, scrolling, CSS
+    /// zoom, and fixed-position anchoring are retained.
+    pub(crate) local_to_document_ignoring_css_transforms: LayoutTransform2D,
+    /// The corresponding transform-free mapping to viewport CSS pixels.
+    pub(crate) local_to_viewport_ignoring_css_transforms: LayoutTransform2D,
 }
 
 /// Query-facing coordinate data retained for one frozen box-tree node.
@@ -262,6 +268,7 @@ pub(crate) struct LayoutCoordinateSpace {
 pub struct FrozenCoordinateSpace {
     pub owner: Option<LayoutOutputBoxId>,
     pub local_to_viewport: LayoutTransform2D,
+    pub(crate) local_to_viewport_ignoring_css_transforms: LayoutTransform2D,
 }
 
 impl From<LayoutCoordinateSpace> for FrozenCoordinateSpace {
@@ -269,6 +276,8 @@ impl From<LayoutCoordinateSpace> for FrozenCoordinateSpace {
         Self {
             owner: space.owner,
             local_to_viewport: space.local_to_viewport,
+            local_to_viewport_ignoring_css_transforms: space
+                .local_to_viewport_ignoring_css_transforms,
         }
     }
 }

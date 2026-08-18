@@ -125,6 +125,7 @@ mod file_system_directory_reader;
 mod hash_change_delivery;
 mod history_traversal;
 mod image_load_event;
+mod image_root_coordinates;
 mod indexed_db;
 mod inline_svg_paint;
 mod internal_loading_completion;

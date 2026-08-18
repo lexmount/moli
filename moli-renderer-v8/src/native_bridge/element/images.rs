@@ -1,6 +1,7 @@
 mod attributes;
 mod decode;
 mod dimensions;
+mod geometry;
 mod lazy;
 mod src;
 mod state;
@@ -15,6 +16,7 @@ pub(in crate::native_bridge) use dimensions::{
     image_natural_height_getter_function, image_natural_width_getter_function,
     image_width_getter_function, image_width_setter_function,
 };
+pub(in crate::native_bridge) use geometry::{image_x_getter_function, image_y_getter_function};
 pub(in crate::native_bridge) use src::image_current_src_getter_function;
 pub(crate) use src::{
     apply_authorized_image_load_event_in_context, apply_image_attribute_mutation_plan,
