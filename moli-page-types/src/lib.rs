@@ -4108,6 +4108,7 @@ mod tests {
             moli_parkable_image::ParkableImagePolicy {
                 min_size_to_park: 1,
                 parking_delay: std::time::Duration::ZERO,
+                reader_release_delay: std::time::Duration::ZERO,
             },
         );
         let encoded = manager.from_frozen_bytes(b"encoded image".to_vec());

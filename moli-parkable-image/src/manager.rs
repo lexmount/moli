@@ -27,10 +27,20 @@ struct ParkableImageManagerInner {
     policy: ParkableImagePolicy,
     next_image_id: AtomicU64,
     registry: Mutex<ParkableImageRegistry>,
+    schedule: Mutex<ParkingScheduleState>,
     schedule_wakeup: Option<ScheduleWakeup>,
 }
 
 type ScheduleWakeup = Arc<dyn Fn() + Send + Sync + 'static>;
+
+#[derive(Default)]
+struct ParkingScheduleState {
+    // A reservation miss leaves an already-expired image deadline. Wait for a
+    // real state transition instead of repeatedly sweeping it. The revision
+    // prevents a transition concurrent with disk I/O from being overwritten.
+    revision: u64,
+    waiting_for_change: bool,
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ParkableImageManagerDiagnostics {
@@ -82,6 +92,7 @@ impl ParkableImageManager {
                 policy,
                 next_image_id: AtomicU64::new(0),
                 registry: Mutex::new(ParkableImageRegistry::default()),
+                schedule: Mutex::new(ParkingScheduleState::default()),
                 schedule_wakeup,
             }),
         }
@@ -103,10 +114,12 @@ impl ParkableImageManager {
     /// Returns the earliest deadline among schedulable resident images.
     /// Parked images are kept in a separate registry and are not inspected.
     pub fn next_parking_deadline(&self) -> Option<Instant> {
-        let now = Instant::now();
+        if self.inner.schedule.lock().waiting_for_change {
+            return None;
+        }
         self.resident_images()
             .into_iter()
-            .filter_map(|image| image.parking_deadline(now))
+            .filter_map(|image| image.parking_deadline())
             .min()
     }
 
@@ -119,17 +132,22 @@ impl ParkableImageManager {
     }
 
     pub(crate) fn park_images_due_with_report(&self) -> ParkableImageSweepReport {
+        let Some(schedule_revision) = self.begin_scheduled_sweep() else {
+            return ParkableImageSweepReport::default();
+        };
         let now = Instant::now();
         let due = self
             .resident_images()
             .into_iter()
             .filter(|image| {
                 image
-                    .parking_deadline(now)
+                    .parking_deadline()
                     .is_some_and(|deadline| deadline <= now)
             })
             .collect();
-        self.sweep(due)
+        let report = self.sweep(due, ParkableImage::maybe_park);
+        self.finish_sweep(schedule_revision, report);
+        report
     }
 
     /// Immediately retries every resident image.
@@ -141,8 +159,11 @@ impl ParkableImageManager {
     }
 
     pub(crate) fn park_images_now_with_report(&self) -> ParkableImageSweepReport {
+        let schedule_revision = self.begin_forced_sweep();
         let images = self.resident_images();
-        self.sweep(images)
+        let report = self.sweep(images, ParkableImage::park_now);
+        self.finish_sweep(schedule_revision, report);
+        report
     }
 
     pub fn diagnostics(&self) -> ParkableImageManagerDiagnostics {
@@ -174,9 +195,12 @@ impl ParkableImageManager {
     }
 
     pub(crate) fn notify_schedule_changed(&self) {
-        if let Some(wakeup) = &self.inner.schedule_wakeup {
-            wakeup();
+        {
+            let mut schedule = self.inner.schedule.lock();
+            schedule.revision = schedule.revision.wrapping_add(1);
+            schedule.waiting_for_change = false;
         }
+        self.wake_scheduler();
     }
 
     /// Moves an image between the physical-residency indexes.
@@ -217,11 +241,43 @@ impl ParkableImageManager {
         self.inner.registry.lock().resident_images()
     }
 
-    fn sweep(&self, images: Vec<ParkableImage>) -> ParkableImageSweepReport {
+    fn begin_scheduled_sweep(&self) -> Option<u64> {
+        let schedule = self.inner.schedule.lock();
+        (!schedule.waiting_for_change).then_some(schedule.revision)
+    }
+
+    fn begin_forced_sweep(&self) -> u64 {
+        let mut schedule = self.inner.schedule.lock();
+        schedule.revision = schedule.revision.wrapping_add(1);
+        schedule.waiting_for_change = false;
+        schedule.revision
+    }
+
+    fn finish_sweep(&self, revision: u64, report: ParkableImageSweepReport) {
+        {
+            let mut schedule = self.inner.schedule.lock();
+            if schedule.revision == revision {
+                schedule.waiting_for_change = report.unavailable != 0;
+            }
+        }
+        self.wake_scheduler();
+    }
+
+    fn wake_scheduler(&self) {
+        if let Some(wakeup) = &self.inner.schedule_wakeup {
+            wakeup();
+        }
+    }
+
+    fn sweep(
+        &self,
+        images: Vec<ParkableImage>,
+        park: fn(&ParkableImage) -> std::io::Result<ParkOutcome>,
+    ) -> ParkableImageSweepReport {
         let mut report = ParkableImageSweepReport::default();
         for image in images {
             report.considered += 1;
-            match image.maybe_park() {
+            match park(&image) {
                 Ok(ParkOutcome::Parked) => report.parked += 1,
                 Ok(ParkOutcome::AlreadyParked) => report.already_parked += 1,
                 Ok(ParkOutcome::Delayed { .. }) => report.delayed += 1,

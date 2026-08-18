@@ -293,6 +293,7 @@ mod tests {
             ParkableImagePolicy {
                 min_size_to_park: 1,
                 parking_delay: Duration::ZERO,
+                reader_release_delay: Duration::ZERO,
             },
         );
         let encoded = manager.from_frozen_bytes(bytes.clone());

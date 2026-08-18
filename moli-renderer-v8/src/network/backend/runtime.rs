@@ -697,7 +697,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn parkable_image_scheduler_runs_when_a_used_image_becomes_due() -> Result<()> {
+    async fn parkable_image_scheduler_runs_after_the_last_reader_release_grace() -> Result<()> {
         let (root, binding) = BrowserResourceRuntimeOwnerRoot::new(registration());
         let runtime = binding.current();
         let runner = crate::network::RendererResourceTaskRunner::from_current_tokio()?;
@@ -713,7 +713,7 @@ mod tests {
             }
         })
         .await
-        .expect("an immediately due image should wake the deadline scheduler");
+        .expect("the reader-release deadline should wake the image scheduler");
 
         assert_eq!(manager.diagnostics().resident_count, 0);
         assert_eq!(manager.diagnostics().parked_count, 1);
