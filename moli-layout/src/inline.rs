@@ -14,16 +14,16 @@ use parley::{
     WhiteSpaceCollapse,
 };
 use taffy::{
-    Direction, LogicalBoxStrut, LogicalOffset, LogicalSize, MaybeResolve as _, Point, Rect, Size,
-    WritingDirection, WritingMode,
+    Direction, FontBaseline, LogicalBoxStrut, LogicalOffset, LogicalSize, MaybeResolve as _, Point,
+    Rect, Size, WritingDirection, WritingMode,
 };
 
 use crate::{
     LayoutBoxId, LayoutBoxKind, LayoutPhysicalAxis, LayoutWorld, PaintColor, PaintEdgeSizes,
     PaintRect,
     style::{
-        InlineBaselineType, InlineDirection, InlineTextTransform, InlineUnicodeBidi,
-        InlineVerticalAlign, InlineWhiteSpaceCollapse, LayoutInlineAlignment,
+        InlineDirection, InlineTextTransform, InlineUnicodeBidi, InlineVerticalAlign,
+        InlineWhiteSpaceCollapse, LayoutInlineAlignment,
     },
     stylo_to_parley::TextBrush,
     text::{DocumentLayoutServices, InlineFontMetrics},
@@ -479,7 +479,7 @@ pub(crate) struct InlineFormattingContext {
     pub(crate) root_style: LayoutBoxId,
     /// Baseline protocol of the IFC owner. This is independent from Parley's
     /// horizontal shaping coordinates and controls line-box synthesis.
-    pub(crate) baseline_type: InlineBaselineType,
+    pub(crate) font_baseline: FontBaseline,
     pub(crate) unbroken: Layout<TextBrush>,
     pub(crate) laid_out: Option<Layout<TextBrush>>,
     pub(crate) text_units: Vec<InlineTextUnit>,
@@ -1053,7 +1053,7 @@ pub(crate) fn build_inline_fragments(
                     .get(style_index)
                     .copied()
                     .flatten()
-                    .map(|metrics| inline_strut_metrics(metrics, true, context.baseline_type));
+                    .map(|metrics| inline_strut_metrics(metrics, true, context.font_baseline));
                 let ascent = font_metrics.map_or(run_metrics.ascent, |metrics| metrics.text_ascent);
                 let descent =
                     font_metrics.map_or(run_metrics.descent, |metrics| metrics.text_descent);
@@ -1224,12 +1224,12 @@ pub(crate) fn build_inline_line_placements(
                         style_index.map_or(context.root_style, |index| context.style_parent(index));
                     let primary_strut = style_index
                         .and_then(|index| context.font_metrics.get(index).copied().flatten())
-                        .map(|metrics| inline_strut_metrics(metrics, true, context.baseline_type));
+                        .map(|metrics| inline_strut_metrics(metrics, true, context.font_baseline));
                     let bounds = glyph_line_bounds(
                         primary_strut,
                         run_metrics,
                         context.box_includes_used_font_metrics(structural_parent),
-                        context.baseline_type,
+                        context.font_baseline,
                     );
                     InlineItemVerticalGeometry {
                         bounds,
@@ -1264,7 +1264,7 @@ pub(crate) fn build_inline_line_placements(
                     let baseline_ascent = internal_baseline_ascent
                         .or_else(|| {
                             is_atomic.then(|| {
-                                context.baseline_type.synthesized_ascent(positioned.height)
+                                synthesized_font_ascent(context.font_baseline, positioned.height)
                             })
                         })
                         .unwrap_or_default();
@@ -1344,7 +1344,7 @@ pub(crate) fn build_inline_line_placements(
         }
 
         let (fallback_ascent, fallback_descent) = inline_font_ascent_and_descent(
-            context.baseline_type,
+            context.font_baseline,
             metrics.ascent,
             metrics.descent,
             false,
@@ -1625,7 +1625,7 @@ fn glyph_line_bounds(
     primary_strut: Option<InlineStrutMetrics>,
     used_font: &parley::layout::RunMetrics,
     include_used_font_metrics: bool,
-    baseline_type: InlineBaselineType,
+    font_baseline: FontBaseline,
 ) -> InlineVerticalBounds {
     let used_strut = inline_strut_metrics(
         InlineFontMetrics {
@@ -1635,7 +1635,7 @@ fn glyph_line_bounds(
             x_height: used_font.x_height.unwrap_or(used_font.ascent * 0.56),
         },
         true,
-        baseline_type,
+        font_baseline,
     );
     let used_bounds = InlineVerticalBounds::from_strut(used_strut);
     let mut bounds = primary_strut.map_or(used_bounds, InlineVerticalBounds::from_strut);
@@ -2151,11 +2151,9 @@ impl InlineBuildInput {
             .map(|style| parley.inline_font_metrics(&style.text, style.sample))
             .collect();
         let style_parents = styles.iter().map(|style| style.structural_parent).collect();
-        let baseline_type = world.boxes[self.root_style.index()]
-            .style
-            .inline_baseline_type();
+        let font_baseline = world.boxes[self.root_style.index()].style.font_baseline();
         let parent_strut =
-            measure_inline_strut(parley, root_text_style.clone(), quantize, baseline_type);
+            measure_inline_strut(parley, root_text_style.clone(), quantize, font_baseline);
         let mut structural_boxes = Vec::new();
         for (_, object, _) in &self.objects {
             if object.role != InlineObjectRole::StartEdge
@@ -2171,7 +2169,7 @@ impl InlineBuildInput {
                 box_id: object.box_id,
                 parent: object.ancestors.last().copied().unwrap_or(self.root_style),
                 vertical_align: object.vertical_align,
-                strut: measure_inline_strut(parley, style, quantize, baseline_type),
+                strut: measure_inline_strut(parley, style, quantize, font_baseline),
                 include_used_font_metrics: world.boxes[object.box_id.index()]
                     .style
                     .includes_used_font_metrics(),
@@ -2191,7 +2189,7 @@ impl InlineBuildInput {
             .collect();
         InlineFormattingContext {
             root_style: self.root_style,
-            baseline_type,
+            font_baseline,
             unbroken: layout,
             laid_out: None,
             text_units: self.units,
@@ -2216,16 +2214,16 @@ fn measure_inline_strut(
     parley: &mut crate::text::ParleyDocumentServices,
     style: TextStyle<'static, 'static, TextBrush>,
     quantize: bool,
-    baseline_type: InlineBaselineType,
+    font_baseline: FontBaseline,
 ) -> Option<InlineStrutMetrics> {
     let metrics = parley.inline_font_metrics(&style, None)?;
-    Some(inline_strut_metrics(metrics, quantize, baseline_type))
+    Some(inline_strut_metrics(metrics, quantize, font_baseline))
 }
 
 fn inline_strut_metrics(
     metrics: InlineFontMetrics,
     quantize: bool,
-    baseline_type: InlineBaselineType,
+    font_baseline: FontBaseline,
 ) -> InlineStrutMetrics {
     let (ascent, descent, leading_above, leading_below) = if quantize {
         let ascent = metrics.ascent.round();
@@ -2239,7 +2237,7 @@ fn inline_strut_metrics(
         (metrics.ascent, metrics.descent, half_leading, half_leading)
     };
     let (ascent, descent) =
-        inline_font_ascent_and_descent(baseline_type, ascent, descent, quantize);
+        inline_font_ascent_and_descent(font_baseline, ascent, descent, quantize);
     InlineStrutMetrics {
         line_ascent: ascent + leading_above,
         line_descent: descent + leading_below,
@@ -2257,14 +2255,14 @@ fn inline_strut_metrics(
 /// struts. Doing the same at our Parley-to-CSS line-metrics boundary keeps
 /// line layout, fragment geometry, and exported baselines on one protocol.
 fn inline_font_ascent_and_descent(
-    baseline_type: InlineBaselineType,
+    font_baseline: FontBaseline,
     alphabetic_ascent: f32,
     alphabetic_descent: f32,
     quantize: bool,
 ) -> (f32, f32) {
-    match baseline_type {
-        InlineBaselineType::Alphabetic => (alphabetic_ascent, alphabetic_descent),
-        InlineBaselineType::Central => {
+    match font_baseline {
+        FontBaseline::Alphabetic => (alphabetic_ascent, alphabetic_descent),
+        FontBaseline::Central => {
             let height = alphabetic_ascent + alphabetic_descent;
             let descent = if quantize {
                 (height * 0.5).floor()
@@ -2273,6 +2271,18 @@ fn inline_font_ascent_and_descent(
             };
             (height - descent, descent)
         }
+    }
+}
+
+/// Distance from the line-over edge to a synthesized font baseline.
+///
+/// This is the IFC-side counterpart of Taffy's synthesized flex/grid
+/// baseline. Keeping both consumers on `FontBaseline` prevents atomic inline
+/// and container alignment from choosing different fallback baselines.
+pub(crate) const fn synthesized_font_ascent(font_baseline: FontBaseline, block_size: f32) -> f32 {
+    match font_baseline {
+        FontBaseline::Alphabetic => block_size,
+        FontBaseline::Central => block_size * 0.5,
     }
 }
 
@@ -3194,21 +3204,11 @@ mod tests {
             ..parley::layout::RunMetrics::default()
         };
 
-        let explicit = glyph_line_bounds(
-            Some(primary),
-            &fallback,
-            false,
-            InlineBaselineType::Alphabetic,
-        );
+        let explicit = glyph_line_bounds(Some(primary), &fallback, false, FontBaseline::Alphabetic);
         assert_eq!(explicit.top, -8.0);
         assert_eq!(explicit.bottom, 2.0);
 
-        let normal = glyph_line_bounds(
-            Some(primary),
-            &fallback,
-            true,
-            InlineBaselineType::Alphabetic,
-        );
+        let normal = glyph_line_bounds(Some(primary), &fallback, true, FontBaseline::Alphabetic);
         assert_eq!(normal.top, -21.0);
         assert_eq!(normal.bottom, 9.0);
     }
@@ -3223,7 +3223,7 @@ mod tests {
                 x_height: 4.0,
             },
             true,
-            InlineBaselineType::Central,
+            FontBaseline::Central,
         );
 
         // Blink's integer central baseline keeps the odd pixel on the ascent
@@ -3244,7 +3244,7 @@ mod tests {
                 x_height: 5.0,
             },
             false,
-            InlineBaselineType::Alphabetic,
+            FontBaseline::Alphabetic,
         );
         let baseline = strut.line_ascent;
 

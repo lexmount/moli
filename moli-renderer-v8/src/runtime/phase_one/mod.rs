@@ -1944,6 +1944,49 @@ html,body{margin:0;padding:0}
     }
 
     #[test]
+    fn layout_renderer_uses_alphabetic_baselines_for_sideways_vertical_content() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+.case{position:absolute;left:0;display:flex;writing-mode:vertical-lr;text-orientation:sideways;align-items:baseline}
+#synthetic-case{top:0}
+#wide{width:100px;height:50px;background:rgb(73,83,93)}
+#narrow{width:50px;height:50px;background:rgb(74,84,94)}
+#inline-case{top:120px}
+#empty{width:100px;height:50px;background:rgb(75,85,95)}
+#line{width:100px;height:50px;line-height:0;background:rgb(76,86,96)}
+#line>span{display:inline-block;width:10px;height:10px}
+</style></head><body>
+<div id=synthetic-case class=case><div id=wide></div><div id=narrow></div></div>
+<div id=inline-case class=case><div id=empty></div><div id=line><span></span></div></div>
+</body></html>"#,
+            )
+            .await;
+
+            // Sideways vertical text uses an alphabetic baseline. In
+            // vertical-lr its synthesized line-under baseline is block-start,
+            // and an atomic inline exposes that same alphabetic baseline.
+            for (color, expected) in [
+                (rgb(73, 83, 93), (0.0, 0.0, 100.0, 50.0)),
+                (rgb(74, 84, 94), (0.0, 50.0, 50.0, 50.0)),
+                (rgb(75, 85, 95), (0.0, 120.0, 100.0, 50.0)),
+                (rgb(76, 86, 96), (0.0, 170.0, 100.0, 50.0)),
+            ] {
+                assert_paint_rect(
+                    solid_paint_rect(&snapshot, color),
+                    moli_layout::PaintRect::new(expected.0, expected.1, expected.2, expected.3),
+                );
+            }
+        }));
+    }
+
+    #[test]
     fn flex_and_grid_share_first_and_last_baselines_in_logical_axes() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()

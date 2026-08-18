@@ -16,6 +16,7 @@ use style::{
     properties::generated::longhands::position::computed_value::T as StyloPosition,
     properties::generated::longhands::{
         direction::computed_value::T as StyloDirection,
+        text_orientation::computed_value::T as StyloTextOrientation,
         unicode_bidi::computed_value::T as StyloUnicodeBidi,
         writing_mode::computed_value::T as StyloWritingMode,
     },
@@ -47,7 +48,7 @@ use style::{
     },
 };
 use taffy::{
-    BoxSizing, Display as TaffyDisplay, LogicalSize, Position as TaffyPosition,
+    BoxSizing, Display as TaffyDisplay, FontBaseline, LogicalSize, Position as TaffyPosition,
     ResolvedAspectRatio, Size, SizeContainment, Style,
 };
 
@@ -316,25 +317,33 @@ pub(crate) enum InlineDirection {
     Rtl,
 }
 
-/// Dominant baseline used by an inline formatting context.
+/// Glyph orientation selected inside a vertical inline formatting context.
 ///
-/// CSS Writing Modes selects an alphabetic baseline for horizontal or
-/// sideways flow and an ideographic central baseline for upright vertical
-/// flow. Keeping this as line-layout protocol mirrors Blink's `FontBaseline`:
-/// atomic boxes without a usable child baseline synthesize against this value
-/// instead of assuming every block axis points downward.
+/// The shaping backend still owns glyph forms. Layout retains the full CSS
+/// value because it also selects the IFC's dominant baseline: `sideways`
+/// uses the alphabetic baseline while `mixed` and `upright` use the central
+/// baseline in vertical flow.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum InlineBaselineType {
+pub(crate) enum InlineTextOrientation {
     #[default]
-    Alphabetic,
-    Central,
+    Mixed,
+    Upright,
+    Sideways,
 }
 
-impl InlineBaselineType {
-    pub(crate) const fn synthesized_ascent(self, block_size: f32) -> f32 {
-        match self {
-            Self::Alphabetic => block_size,
-            Self::Central => block_size * 0.5,
+impl InlineTextOrientation {
+    const fn font_baseline(self, writing_mode: taffy::WritingMode) -> FontBaseline {
+        match writing_mode {
+            taffy::WritingMode::VerticalRl | taffy::WritingMode::VerticalLr
+                if !matches!(self, Self::Sideways) =>
+            {
+                FontBaseline::Central
+            }
+            taffy::WritingMode::HorizontalTb
+            | taffy::WritingMode::VerticalRl
+            | taffy::WritingMode::VerticalLr
+            | taffy::WritingMode::SidewaysRl
+            | taffy::WritingMode::SidewaysLr => FontBaseline::Alphabetic,
         }
     }
 }
@@ -644,6 +653,7 @@ pub struct ResolvedLayoutStyle {
     text_align: parley::Alignment,
     direction: InlineDirection,
     writing_mode: taffy::WritingMode,
+    text_orientation: InlineTextOrientation,
     unicode_bidi: InlineUnicodeBidi,
     vertical_align: InlineVerticalAlign,
     text_projection_deferred: bool,
@@ -696,6 +706,7 @@ impl std::fmt::Debug for ResolvedLayoutStyle {
             .field("text_align", &self.text_align)
             .field("direction", &self.direction)
             .field("writing_mode", &self.writing_mode)
+            .field("text_orientation", &self.text_orientation)
             .field("unicode_bidi", &self.unicode_bidi)
             .field("vertical_align", &self.vertical_align)
             .field("text_projection_deferred", &self.text_projection_deferred)
@@ -799,6 +810,11 @@ impl ResolvedLayoutStyle {
             StyloWritingMode::VerticalLr => taffy::WritingMode::VerticalLr,
             StyloWritingMode::SidewaysRl => taffy::WritingMode::SidewaysRl,
             StyloWritingMode::SidewaysLr => taffy::WritingMode::SidewaysLr,
+        };
+        let text_orientation = match computed.clone_text_orientation() {
+            StyloTextOrientation::Mixed => InlineTextOrientation::Mixed,
+            StyloTextOrientation::Upright => InlineTextOrientation::Upright,
+            StyloTextOrientation::Sideways => InlineTextOrientation::Sideways,
         };
         let unicode_bidi = match computed.clone_unicode_bidi() {
             StyloUnicodeBidi::Normal => InlineUnicodeBidi::Normal,
@@ -1047,6 +1063,7 @@ impl ResolvedLayoutStyle {
             text_align,
             direction,
             writing_mode,
+            text_orientation,
             unicode_bidi,
             vertical_align,
             text_projection_deferred,
@@ -1119,6 +1136,7 @@ impl ResolvedLayoutStyle {
             text_align: parley::Alignment::Start,
             direction,
             writing_mode: taffy::WritingMode::HorizontalTb,
+            text_orientation: InlineTextOrientation::Mixed,
             unicode_bidi: InlineUnicodeBidi::Normal,
             vertical_align: InlineVerticalAlign::default(),
             text_projection_deferred: false,
@@ -1232,15 +1250,8 @@ impl ResolvedLayoutStyle {
             .recompute(self.writing_mode, effective_zoom);
     }
 
-    pub(crate) fn inline_baseline_type(&self) -> InlineBaselineType {
-        match self.writing_mode {
-            taffy::WritingMode::VerticalRl | taffy::WritingMode::VerticalLr => {
-                InlineBaselineType::Central
-            }
-            taffy::WritingMode::HorizontalTb
-            | taffy::WritingMode::SidewaysRl
-            | taffy::WritingMode::SidewaysLr => InlineBaselineType::Alphabetic,
-        }
+    pub(crate) fn font_baseline(&self) -> FontBaseline {
+        self.text_orientation.font_baseline(self.writing_mode)
     }
 
     pub(crate) const fn writing_direction(&self) -> taffy::WritingDirection {
@@ -1949,6 +1960,7 @@ impl ResolvedLayoutStyle {
             text_align: parent.text_align,
             direction: parent.direction,
             writing_mode: parent.writing_mode,
+            text_orientation: parent.text_orientation,
             unicode_bidi: InlineUnicodeBidi::Normal,
             vertical_align: parent.vertical_align,
             text_projection_deferred: parent.text_projection_deferred,
@@ -2012,6 +2024,7 @@ impl ResolvedLayoutStyle {
             text_align: parent.text_align,
             direction: parent.direction,
             writing_mode: parent.writing_mode,
+            text_orientation: parent.text_orientation,
             unicode_bidi: InlineUnicodeBidi::Normal,
             vertical_align: parent.vertical_align,
             text_projection_deferred: parent.text_projection_deferred,
@@ -2941,7 +2954,7 @@ mod alignment_tests {
     }
 
     #[test]
-    fn inline_baseline_follows_text_orientation_of_the_writing_mode() {
+    fn inline_baseline_follows_writing_mode_and_text_orientation() {
         let mut style = ResolvedLayoutStyle::synthetic(
             LayoutDisplay::Block,
             Style::default(),
@@ -2954,14 +2967,19 @@ mod alignment_tests {
             taffy::WritingMode::SidewaysLr,
         ] {
             style.writing_mode = writing_mode;
-            assert_eq!(style.inline_baseline_type(), InlineBaselineType::Alphabetic);
+            assert_eq!(style.font_baseline(), FontBaseline::Alphabetic);
         }
         for writing_mode in [
             taffy::WritingMode::VerticalRl,
             taffy::WritingMode::VerticalLr,
         ] {
             style.writing_mode = writing_mode;
-            assert_eq!(style.inline_baseline_type(), InlineBaselineType::Central);
+            for text_orientation in [InlineTextOrientation::Mixed, InlineTextOrientation::Upright] {
+                style.text_orientation = text_orientation;
+                assert_eq!(style.font_baseline(), FontBaseline::Central);
+            }
+            style.text_orientation = InlineTextOrientation::Sideways;
+            assert_eq!(style.font_baseline(), FontBaseline::Alphabetic);
         }
     }
 
