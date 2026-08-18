@@ -4,7 +4,8 @@
 //! parked into one `DiskPool` extent. Reading a parked image unparks it
 //! synchronously; the retained disk extent lets a later park discard memory
 //! without another write. The manager keeps resident and parked registries
-//! separate and exposes the next resident parking deadline to its runtime.
+//! separate, owns parking sweeps, and exposes the next resident deadline to
+//! its runtime. Reader release uses a short grace period before re-parking.
 
 mod image;
 mod manager;

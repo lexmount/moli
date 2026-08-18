@@ -36,30 +36,17 @@ impl ParkableImageRegistry {
         self.resident.remove(&id).is_some() || self.parked.remove(&id).is_some()
     }
 
-    pub(crate) fn resident_images(&mut self) -> Vec<ParkableImage> {
-        let mut images = Vec::with_capacity(self.resident.len());
-        self.resident.retain(|_, registered| {
-            if let Some(image) = registered.upgrade() {
-                images.push(image);
-                true
-            } else {
-                false
-            }
-        });
-        images
+    pub(crate) fn resident_images(&self) -> Vec<ParkableImage> {
+        self.resident
+            .values()
+            .filter_map(WeakParkableImage::upgrade)
+            .collect()
     }
 
-    pub(crate) fn all_images(&mut self) -> Vec<ParkableImage> {
+    pub(crate) fn all_images(&self) -> Vec<ParkableImage> {
         let mut images = self.resident_images();
         images.reserve(self.parked.len());
-        self.parked.retain(|_, registered| {
-            if let Some(image) = registered.upgrade() {
-                images.push(image);
-                true
-            } else {
-                false
-            }
-        });
+        images.extend(self.parked.values().filter_map(WeakParkableImage::upgrade));
         images
     }
 }

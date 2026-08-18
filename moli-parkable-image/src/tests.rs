@@ -24,6 +24,7 @@ fn immediate_policy() -> ParkableImagePolicy {
     ParkableImagePolicy {
         min_size_to_park: 1,
         parking_delay: Duration::ZERO,
+        reader_release_delay: Duration::ZERO,
     }
 }
 
@@ -34,10 +35,19 @@ fn reference_bytes(len: usize) -> Vec<u8> {
 }
 
 #[test]
+fn default_policy_keeps_unused_and_recently_read_images_resident() {
+    let policy = ParkableImagePolicy::default();
+    assert_eq!(policy.min_size_to_park, 1024);
+    assert_eq!(policy.parking_delay, Duration::from_secs(30));
+    assert_eq!(policy.reader_release_delay, Duration::from_secs(2));
+}
+
+#[test]
 fn unused_image_observes_delay_but_used_image_can_park_immediately() {
     let (_, manager) = manager(ParkableImagePolicy {
         min_size_to_park: 1,
         parking_delay: Duration::from_secs(30),
+        reader_release_delay: Duration::ZERO,
     });
     let image = manager.from_frozen_bytes(vec![7; 128]);
     assert!(matches!(
@@ -49,6 +59,25 @@ fn unused_image_observes_delay_but_used_image_can_park_immediately() {
     assert_eq!(image.maybe_park().unwrap(), ParkOutcome::InUse);
     drop(snapshot);
     assert_eq!(image.maybe_park().unwrap(), ParkOutcome::Parked);
+}
+
+#[test]
+fn forced_sweep_bypasses_deadlines_but_not_live_readers() {
+    let (_, manager) = manager(ParkableImagePolicy {
+        min_size_to_park: 1,
+        parking_delay: Duration::from_secs(30),
+        reader_release_delay: Duration::from_secs(30),
+    });
+    let image = manager.from_frozen_bytes(vec![7; 128]);
+    let snapshot = image.snapshot().unwrap();
+
+    let report = manager.park_images_now_with_report();
+    assert_eq!(report.in_use, 1);
+    assert_eq!(report.parked, 0);
+
+    drop(snapshot);
+    let report = manager.park_images_now_with_report();
+    assert_eq!(report.parked, 1);
 }
 
 #[test]
@@ -150,6 +179,7 @@ fn below_minimum_and_capacity_failure_keep_memory() {
         ParkableImagePolicy {
             min_size_to_park: 2,
             parking_delay: Duration::ZERO,
+            reader_release_delay: Duration::ZERO,
         },
     );
     let small = manager.from_frozen_bytes(vec![1]);
@@ -218,7 +248,7 @@ fn dropping_a_parked_image_on_another_thread_releases_its_extent() {
 }
 
 #[test]
-fn manager_sweeps_live_images_and_prunes_dead_entries() {
+fn manager_sweeps_only_live_registered_images() {
     let (_, manager) = manager(immediate_policy());
     let first = manager.from_frozen_bytes(vec![1; 8]);
     let second = manager.from_frozen_bytes(vec![2; 8]);
@@ -267,6 +297,7 @@ fn minimum_size_boundary_is_inclusive() {
     let (pool, manager) = manager(ParkableImagePolicy {
         min_size_to_park: MINIMUM,
         parking_delay: Duration::ZERO,
+        reader_release_delay: Duration::ZERO,
     });
     let below = manager.from_frozen_bytes(vec![1; MINIMUM - 1]);
     let exact = manager.from_frozen_bytes(vec![2; MINIMUM]);
@@ -386,8 +417,9 @@ fn concurrent_reads_unpark_once_and_preserve_every_copy() {
 }
 
 #[test]
-fn next_deadline_tracks_creation_use_and_the_last_snapshot_drop() {
+fn next_deadline_tracks_creation_and_the_last_snapshot_release_grace() {
     let delay = Duration::from_secs(30);
+    let release_delay = Duration::from_secs(10);
     let wakeups = Arc::new(AtomicUsize::new(0));
     let wakeups_for_callback = Arc::clone(&wakeups);
     let pool = DiskPool::new(None).unwrap();
@@ -396,6 +428,7 @@ fn next_deadline_tracks_creation_use_and_the_last_snapshot_drop() {
         ParkableImagePolicy {
             min_size_to_park: 1,
             parking_delay: delay,
+            reader_release_delay: release_delay,
         },
         move || {
             wakeups_for_callback.fetch_add(1, Ordering::Relaxed);
@@ -416,14 +449,18 @@ fn next_deadline_tracks_creation_use_and_the_last_snapshot_drop() {
         "a live snapshot must remove the image from deadline candidates"
     );
     let wakeups_before_drop = wakeups.load(Ordering::Relaxed);
+    let before_drop = Instant::now();
     drop(snapshot);
     assert!(wakeups.load(Ordering::Relaxed) > wakeups_before_drop);
-    assert!(
-        manager
-            .next_parking_deadline()
-            .is_some_and(|deadline| deadline <= Instant::now()),
-        "a used image becomes immediately due after its last snapshot drops"
-    );
+    let deadline = manager
+        .next_parking_deadline()
+        .expect("the last snapshot release must schedule its grace period");
+    assert!(deadline >= before_drop + release_delay);
+    assert!(deadline <= Instant::now() + release_delay);
+    assert!(matches!(
+        image.maybe_park().unwrap(),
+        ParkOutcome::Delayed { .. }
+    ));
 }
 
 #[test]
@@ -541,7 +578,15 @@ fn parked_images_leave_the_resident_schedule_until_they_are_unparked() {
 fn capacity_failure_can_be_retried_after_an_extent_is_released() {
     const IMAGE_SIZE: usize = 4096;
     let pool = DiskPool::new(Some(IMAGE_SIZE as u64)).unwrap();
-    let manager = ParkableImageManager::new(Some(pool), immediate_policy());
+    let released_before_wakeup = Arc::new(AtomicBool::new(false));
+    let released_before_wakeup_for_callback = Arc::clone(&released_before_wakeup);
+    let pool_for_callback = pool.clone();
+    let manager =
+        ParkableImageManager::new_with_schedule_wakeup(Some(pool), immediate_policy(), move || {
+            if pool_for_callback.diagnostics().free_bytes >= IMAGE_SIZE {
+                released_before_wakeup_for_callback.store(true, Ordering::SeqCst);
+            }
+        });
     let first = manager.from_frozen_bytes(vec![1; IMAGE_SIZE]);
     let second = manager.from_frozen_bytes(vec![2; IMAGE_SIZE]);
     assert_eq!(first.maybe_park().unwrap(), ParkOutcome::Parked);
@@ -549,8 +594,22 @@ fn capacity_failure_can_be_retried_after_an_extent_is_released() {
     let report = manager.park_images_due_with_report();
     assert_eq!(report.considered, 1);
     assert_eq!(report.unavailable, 1);
+    assert_eq!(
+        manager.next_parking_deadline(),
+        None,
+        "a capacity miss must wait for a state change instead of spinning on an expired deadline"
+    );
+    assert_eq!(manager.park_images_due_with_report().considered, 0);
 
+    released_before_wakeup.store(false, Ordering::SeqCst);
     drop(first);
+    assert!(released_before_wakeup.load(Ordering::SeqCst));
+    assert!(
+        manager
+            .next_parking_deadline()
+            .is_some_and(|deadline| deadline <= Instant::now()),
+        "dropping the parked owner must release its extent before waking the scheduler"
+    );
     assert_eq!(manager.park_images_due_with_report().parked, 1);
     assert_eq!(
         second.diagnostics().storage,
