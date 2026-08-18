@@ -318,11 +318,11 @@ pub(crate) enum InlineDirection {
 
 /// Dominant baseline used by an inline formatting context.
 ///
-/// CSS Writing Modes selects an alphabetic baseline for horizontal flow and
-/// an ideographic central baseline for the vertical writing modes supported
-/// by standalone Stylo. Keeping this as line-layout protocol mirrors Blink's
-/// `FontBaseline`: atomic boxes without a usable child baseline synthesize
-/// against this value instead of assuming every block axis points downward.
+/// CSS Writing Modes selects an alphabetic baseline for horizontal or
+/// sideways flow and an ideographic central baseline for upright vertical
+/// flow. Keeping this as line-layout protocol mirrors Blink's `FontBaseline`:
+/// atomic boxes without a usable child baseline synthesize against this value
+/// instead of assuming every block axis points downward.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum InlineBaselineType {
     #[default]
@@ -1233,10 +1233,13 @@ impl ResolvedLayoutStyle {
     }
 
     pub(crate) fn inline_baseline_type(&self) -> InlineBaselineType {
-        if self.writing_mode.is_horizontal() {
-            InlineBaselineType::Alphabetic
-        } else {
-            InlineBaselineType::Central
+        match self.writing_mode {
+            taffy::WritingMode::VerticalRl | taffy::WritingMode::VerticalLr => {
+                InlineBaselineType::Central
+            }
+            taffy::WritingMode::HorizontalTb
+            | taffy::WritingMode::SidewaysRl
+            | taffy::WritingMode::SidewaysLr => InlineBaselineType::Alphabetic,
         }
     }
 
@@ -2935,6 +2938,31 @@ mod alignment_tests {
 
         rtl.text_align = parley::Alignment::Center;
         assert_eq!(rtl.resolved_text_align(), parley::Alignment::Center);
+    }
+
+    #[test]
+    fn inline_baseline_follows_text_orientation_of_the_writing_mode() {
+        let mut style = ResolvedLayoutStyle::synthetic(
+            LayoutDisplay::Block,
+            Style::default(),
+            PaintColor::TRANSPARENT,
+        );
+
+        for writing_mode in [
+            taffy::WritingMode::HorizontalTb,
+            taffy::WritingMode::SidewaysRl,
+            taffy::WritingMode::SidewaysLr,
+        ] {
+            style.writing_mode = writing_mode;
+            assert_eq!(style.inline_baseline_type(), InlineBaselineType::Alphabetic);
+        }
+        for writing_mode in [
+            taffy::WritingMode::VerticalRl,
+            taffy::WritingMode::VerticalLr,
+        ] {
+            style.writing_mode = writing_mode;
+            assert_eq!(style.inline_baseline_type(), InlineBaselineType::Central);
+        }
     }
 
     #[test]
