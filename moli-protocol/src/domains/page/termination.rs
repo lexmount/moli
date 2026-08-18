@@ -474,15 +474,12 @@ pub(super) async fn complete_crash_command_dispatch(
         pending_subresource_responses,
     ) = take_pending_fetch_state(conn, session_id);
 
-    // Page.crash is an IO-agent command in Chromium. Capture protocol-owned
-    // request residences first, then cooperatively terminate active V8 before
-    // retiring the Page so teardown cannot wait behind the JavaScript stack it
-    // is meant to destroy.
-    if let Ok(termination) = conn.start_runtime_io_protocol_message_for_session_owner(
-        session_id,
-        r#"{"id":0,"method":"Runtime.terminateExecution"}"#.to_owned(),
-    ) {
-        let _ = termination.wait().await;
+    // Chromium handles Page.crash directly at the renderer IO-agent boundary;
+    // it never enters a V8InspectorSession or an ordinary per-session IO lane.
+    // Seal both DevTools receivers and interrupt active V8 synchronously so
+    // target retirement cannot wait behind earlier JavaScript or IO work.
+    if let Ok(page) = conn.loaded_page_mut_for_interruptible_protocol_access(session_id) {
+        page.crash_devtools_target_from_io();
     }
 
     // Page.crash retires the target, not merely the DevTools session which

@@ -247,6 +247,16 @@ impl Page {
         self.handle.devtools_agent_token()
     }
 
+    /// Seals this target's Main/IO DevTools ingress and interrupts active V8.
+    ///
+    /// `Page.crash` is a terminal renderer IO control in Chromium, not an
+    /// ordinary V8 Inspector command. Protocol integrations use this boundary
+    /// to retire the Page without waiting behind a session lane.
+    #[doc(hidden)]
+    pub fn crash_devtools_target_from_io(&self) {
+        self.handle.crash_devtools_target_from_io();
+    }
+
     #[doc(hidden)]
     pub fn set_renderer_devtools_command_session_id(&mut self, session_id: Option<String>) {
         self.renderer_devtools_command_session_id = session_id;

@@ -68,6 +68,15 @@ impl RendererDevToolsTargetHandle {
         self.io.terminate_execution_for_target_close()
     }
 
+    /// Executes Chromium's terminal `Page.crash` IO control boundary.
+    ///
+    /// Unlike ordinary IO-agent commands, a crash must not wait for or occupy
+    /// a per-session first-dispatch lane. Seal both command receivers first,
+    /// then interrupt any active JavaScript so the owner can retire the Page.
+    pub(crate) fn crash_from_io(&self) {
+        let _ = self.close("Inspector target crashed through Page.crash");
+    }
+
     pub(crate) fn detach_page(&self, page_id: PageId, message: &str) {
         if self.pause.detach_page(page_id) {
             self.main.cancel_all_queued(message);
@@ -84,5 +93,95 @@ impl std::fmt::Debug for RendererDevToolsTargetHandle {
             .field("main", &self.main)
             .field("io", &self.io)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        devtools::{
+            command::{
+                RendererDevToolsIoCommandEnvelope, RendererInspectorCommandEnvelope,
+                RendererInspectorCommandRoute, RendererInspectorIngressTicket,
+            },
+            ingress::{
+                io::{RendererInspectorIoIngress, RendererRuntimeInspectorIoCommandClaim},
+                main::{
+                    RendererInspectorMainIngress, RendererRuntimeInspectorMainCommandCompletion,
+                },
+            },
+            route::RendererInspectorSessionExecutorRouteId,
+        },
+        runtime::{
+            PageId, RendererPageToken, RendererRuntimeInspectorAsyncCompletion,
+            RendererRuntimeInspectorResponseSender,
+        },
+    };
+
+    #[tokio::test]
+    async fn page_crash_is_terminal_and_bypasses_main_and_io_lanes() {
+        let pause = RendererInspectorPauseBridge::default();
+        let main = RendererInspectorMainIngress::new(
+            RendererInspectorSessionExecutorRouteId::new(1),
+            pause.pause_loop_wake(),
+        );
+        let io = RendererInspectorIoIngress::new(pause.pause_loop_wake(), None);
+        let target = RendererDevToolsTargetHandle::new(pause, main.clone(), io.clone());
+        let agent = RendererDevToolsAgentToken::allocate();
+        let session_id = Some("session-a".to_owned());
+
+        let io_route = io.enqueue_command(
+            agent,
+            RendererDevToolsIoCommandEnvelope::performance_get_metrics(
+                RendererInspectorIngressTicket::new(
+                    None,
+                    session_id.clone(),
+                    RendererInspectorCommandRoute::Io,
+                ),
+            ),
+        );
+        let (response_tx, _response_rx) =
+            tokio::sync::oneshot::channel::<RendererRuntimeInspectorAsyncCompletion>();
+        let main_route = main.enqueue_command(
+            RendererPageToken::new_for_testing(PageId::new_for_testing(1)),
+            agent,
+            RendererInspectorCommandEnvelope::new_main_protocol(
+                RendererInspectorIngressTicket::new(
+                    None,
+                    session_id,
+                    RendererInspectorCommandRoute::MainThread,
+                ),
+                None,
+                r#"{"id":1,"method":"Runtime.evaluate"}"#.to_owned(),
+                RendererRuntimeInspectorResponseSender::new(1, response_tx),
+            ),
+        );
+
+        target.crash_from_io();
+        assert_eq!(
+            io_route.wait_for_first_dispatch().await,
+            Ok(RendererRuntimeInspectorIoCommandClaim::Canceled)
+        );
+        assert!(matches!(
+            main_route.wait_for_completion().await,
+            Ok(RendererRuntimeInspectorMainCommandCompletion::Canceled)
+        ));
+
+        let late = io.enqueue_command(
+            agent,
+            RendererDevToolsIoCommandEnvelope::performance_get_metrics(
+                RendererInspectorIngressTicket::new(
+                    None,
+                    Some("session-late".to_owned()),
+                    RendererInspectorCommandRoute::Io,
+                ),
+            ),
+        );
+        assert_eq!(
+            late.wait_for_first_dispatch().await,
+            Ok(RendererRuntimeInspectorIoCommandClaim::Canceled),
+            "terminal Page.crash must reject late ordinary IO work"
+        );
     }
 }

@@ -158,6 +158,13 @@ impl RendererPageHandle {
         self.devtools_agent_token
     }
 
+    /// Applies the terminal `Page.crash` IO control without entering either
+    /// ordinary DevTools command lane.
+    #[doc(hidden)]
+    pub fn crash_devtools_target_from_io(&self) {
+        self.devtools_target.crash_from_io();
+    }
+
     #[doc(hidden)]
     pub fn take_committed_document_post_response_continuation(
         &mut self,
