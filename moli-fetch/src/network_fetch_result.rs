@@ -1,4 +1,4 @@
-use std::{error::Error as StdError, fmt, sync::Arc};
+use std::{fmt, sync::Arc};
 
 use moli_cookie_jar::StoredCookieQueryReport;
 use parking_lot::Mutex;
@@ -368,10 +368,12 @@ fn parse_status_line(line: &str) -> Option<u16> {
         .ok()
 }
 
-/// A fetch failure plus transport observations completed before that failure.
-#[derive(Debug)]
-pub struct NetworkFetchFailure {
-    source: anyhow::Error,
+/// Machine-readable context attached to a network fetch error.
+///
+/// The underlying cause remains owned by [`anyhow::Error`]. This context only
+/// carries the transport and request state needed by browser-facing protocol
+/// consumers when a transfer fails before response metadata is available.
+pub struct NetworkFetchFailureContext {
     observation_journal: NetworkObservationJournal,
     network_error_text: &'static str,
     request_context: Option<NetworkFetchFailureRequestContext>,
@@ -429,32 +431,30 @@ impl NetworkFetchFailureRequestContext {
     }
 }
 
-impl NetworkFetchFailure {
-    pub(crate) fn new(
+impl NetworkFetchFailureContext {
+    pub(crate) fn attach(
         source: anyhow::Error,
         observation_journal: NetworkObservationJournal,
-    ) -> Self {
+    ) -> anyhow::Error {
         let network_error_text = crate::error::browser_network_error_text(&source);
-        Self {
-            source,
+        source.context(Self {
             observation_journal,
             network_error_text,
             request_context: None,
-        }
+        })
     }
 
-    pub(crate) fn with_request_context(
+    pub(crate) fn attach_with_request_context(
         source: anyhow::Error,
         observation_journal: NetworkObservationJournal,
         request_context: NetworkFetchFailureRequestContext,
-    ) -> Self {
+    ) -> anyhow::Error {
         let network_error_text = crate::error::browser_network_error_text(&source);
-        Self {
-            source,
+        source.context(Self {
             observation_journal,
             network_error_text,
             request_context: Some(request_context),
-        }
+        })
     }
 
     pub fn observation_journal(&self) -> &NetworkObservationJournal {
@@ -468,21 +468,44 @@ impl NetworkFetchFailure {
     pub fn request_context(&self) -> Option<&NetworkFetchFailureRequestContext> {
         self.request_context.as_ref()
     }
-
-    pub fn into_parts(self) -> (anyhow::Error, NetworkObservationJournal) {
-        (self.source, self.observation_journal)
-    }
 }
 
-impl fmt::Display for NetworkFetchFailure {
+impl fmt::Display for NetworkFetchFailureContext {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.source.fmt(formatter)
+        match &self.request_context {
+            Some(request_context) => {
+                write!(
+                    formatter,
+                    "failed to fetch `{}`",
+                    request_context.current_url
+                )
+            }
+            None => formatter.write_str("network fetch failed"),
+        }
     }
 }
 
-impl StdError for NetworkFetchFailure {
-    fn source(&self) -> Option<&(dyn StdError + 'static)> {
-        Some(self.source.as_ref())
+impl fmt::Debug for NetworkFetchFailureContext {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut debug = formatter.debug_struct("NetworkFetchFailureContext");
+        debug
+            .field(
+                "observed_exchange_count",
+                &self.observation_journal.exchanges().len(),
+            )
+            .field("network_error_text", &self.network_error_text);
+        if let Some(request_context) = &self.request_context {
+            debug
+                .field("current_url", &request_context.current_url)
+                .field("request_method", &request_context.request_method)
+                .field("has_request_body", &request_context.request_body.is_some())
+                .field(
+                    "request_header_count",
+                    &request_context.request_headers.len(),
+                )
+                .field("redirect_count", &request_context.redirect_chain.len());
+        }
+        debug.finish()
     }
 }
 
@@ -556,6 +579,55 @@ impl<R> NetworkFetchResult<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn network_fetch_failure_context_preserves_source_without_repeating_it() {
+        let source = std::io::Error::other("transport failure sentinel");
+        let error = NetworkFetchFailureContext::attach_with_request_context(
+            anyhow::Error::new(source),
+            NetworkObservationJournal::default(),
+            NetworkFetchFailureRequestContext::new(
+                Url::parse("http://localhost/").expect("test URL should parse"),
+                "GET".to_owned(),
+                None,
+                Vec::new(),
+                Vec::new(),
+            ),
+        )
+        .context("outer failure sentinel");
+
+        let report = format!("{error:?}");
+
+        assert!(
+            report.contains("failed to fetch `http://localhost/`"),
+            "{report}"
+        );
+        assert_eq!(report.matches("transport failure sentinel").count(), 1);
+        assert!(error.downcast_ref::<NetworkFetchFailureContext>().is_some());
+        assert!(error.downcast_ref::<std::io::Error>().is_some());
+    }
+
+    #[test]
+    fn network_fetch_failure_debug_redacts_request_values() {
+        let failure = NetworkFetchFailureContext {
+            observation_journal: NetworkObservationJournal::default(),
+            network_error_text: "net::ERR_FAILED",
+            request_context: Some(NetworkFetchFailureRequestContext::new(
+                Url::parse("https://example.test/").expect("test URL should parse"),
+                "POST".to_owned(),
+                Some(b"secret request body".to_vec()),
+                vec![("Authorization".to_owned(), "secret token".to_owned())],
+                Vec::new(),
+            )),
+        };
+
+        let report = format!("{failure:?}");
+
+        assert!(!report.contains("secret request body"), "{report}");
+        assert!(!report.contains("secret token"), "{report}");
+        assert!(report.contains("has_request_body: true"), "{report}");
+        assert!(report.contains("request_header_count: 1"), "{report}");
+    }
 
     #[test]
     fn recorder_preserves_redirect_exchange_order_and_raw_response_status() {

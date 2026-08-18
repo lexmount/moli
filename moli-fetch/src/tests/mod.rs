@@ -25,7 +25,7 @@ use url::Url;
 use crate::{
     BrowserNavigationRequestKind, BrowserRequestMetadata, FetchCancelHandle, FetchClient,
     FetchClientHandle, FetchConfig, FetchPriorityHint, FetchRuntimeJoinStatus,
-    NegotiatedHttpVersion, NetworkFetchFailure, RawResponse, Request, RequestAuth,
+    NegotiatedHttpVersion, NetworkFetchFailureContext, RawResponse, Request, RequestAuth,
     RequestAuthScheme, RequestAuthTarget, RequestCacheMode, RequestCredentialsMode, RequestMode,
     RequestRedirectMode, RequestResourceType, Response, ResponseBody, ResponseHead,
     ScriptFetchRequestMetadata, ScriptFetchSchedulerPriority, StreamingResponseCollector,
@@ -3608,7 +3608,7 @@ async fn network_metadata_failure_preserves_request_sent_before_empty_response()
         .await
         .expect_err("empty response should fail");
     let failure = error
-        .downcast_ref::<NetworkFetchFailure>()
+        .downcast_ref::<NetworkFetchFailureContext>()
         .expect("metadata fetch failure should retain its typed observation journal");
     let [exchange] = failure.observation_journal().exchanges() else {
         panic!("expected exactly one observed exchange");
@@ -3668,7 +3668,7 @@ async fn network_metadata_failure_preserves_redirect_chain_and_final_request() -
         .await
         .expect_err("redirect final request should fail without a response");
     let failure = error
-        .downcast_ref::<NetworkFetchFailure>()
+        .downcast_ref::<NetworkFetchFailureContext>()
         .expect("metadata fetch failure should retain typed request context");
     let context = failure
         .request_context()

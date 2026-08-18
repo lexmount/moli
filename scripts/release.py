@@ -167,13 +167,9 @@ def copy_release_materials(package_dir: Path) -> None:
     files = [
         REPO_ROOT / "README.md",
         REPO_ROOT / "docs" / "RELEASING.md",
-        REPO_ROOT / "LICENSE",
         REPO_ROOT / "LICENSE-APACHE",
         REPO_ROOT / "LICENSE-MIT",
-    ]
-    notice_dirs = [
-        REPO_ROOT / "third_party" / "licenses",
-        REPO_ROOT / "third_party" / "notices",
+        REPO_ROOT / "license-metadata.json",
     ]
 
     for source in files:
@@ -181,12 +177,10 @@ def copy_release_materials(package_dir: Path) -> None:
             raise ReleaseError(f"required release file is missing: {source}")
         shutil.copy2(source, package_dir / source.name)
 
-    notices_dir = package_dir / "third_party"
-    notices_dir.mkdir()
-    for source in notice_dirs:
-        if not source.is_dir():
-            raise ReleaseError(f"required license directory is missing: {source}")
-        shutil.copytree(source, notices_dir / source.name)
+    licenses_dir = REPO_ROOT / "licenses"
+    if not licenses_dir.is_dir():
+        raise ReleaseError(f"required license directory is missing: {licenses_dir}")
+    shutil.copytree(licenses_dir, package_dir / licenses_dir.name)
 
 
 def write_archive(

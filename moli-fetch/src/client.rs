@@ -7,7 +7,7 @@ use crate::{
     FetchCancelHandle, FetchConfig, NetworkFetchResult, RawResponse, Request, Response,
     StreamingHtmlResponse, StreamingRawResponse,
     client_hints::ClientHintPreferences,
-    network_fetch_result::{NetworkFetchFailure, NetworkObservationRecorder},
+    network_fetch_result::{NetworkFetchFailureContext, NetworkObservationRecorder},
     runtime::{FetchRuntimeHandle, FetchRuntimeJoinReport, FetchRuntimeOwner},
 };
 
@@ -268,10 +268,11 @@ fn network_fetch_result_from_result<R>(
             response,
             observation_journal,
         )),
-        Err(source) => match source.downcast::<NetworkFetchFailure>() {
-            Ok(failure) => Err(failure.into()),
-            Err(source) => Err(NetworkFetchFailure::new(source, observation_journal).into()),
-        },
+        Err(source) if source.is::<NetworkFetchFailureContext>() => Err(source),
+        Err(source) => Err(NetworkFetchFailureContext::attach(
+            source,
+            observation_journal,
+        )),
     }
 }
 

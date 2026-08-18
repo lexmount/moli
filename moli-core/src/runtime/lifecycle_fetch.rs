@@ -8,8 +8,8 @@ use super::{
     Browser, FetchDeadline, FetchedDocument, RenderedDomWaitUntil, RendererLifecycleDecider,
     RendererLifecycleDecision, RendererLifecycleSnapshot, RendererReplyBoundary,
 };
-use anyhow::{Context, Result, anyhow};
-use moli_fetch::Request;
+use anyhow::{Result, anyhow};
+use moli_fetch::{NetworkFetchFailureContext, Request};
 use std::time::Duration;
 
 impl Browser {
@@ -67,10 +67,17 @@ impl Browser {
             Some(decider),
         )
         .await
-        .with_context(|| {
-            anyhow!(
-                "failed while applying the {wait_until:?} lifecycle-target decision or following its successor navigation"
-            )
+        .map_err(|error| {
+            // This typed context already supplies the caller-facing fetch
+            // message. Keep it outermost instead of obscuring it with a
+            // lifecycle layer that adds no actionable network information.
+            if error.is::<NetworkFetchFailureContext>() {
+                error
+            } else {
+                error.context(anyhow!(
+                    "failed while applying the {wait_until:?} lifecycle-target decision or following its successor navigation"
+                ))
+            }
         })
     }
 }

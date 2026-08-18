@@ -16,7 +16,7 @@ use clap::Parser;
 use moli_core::runtime::{
     Browser, FetchedDocument, NavigationRuntimeConfig, storage_partition::StoragePartitionState,
 };
-use moli_fetch::{Request, ensure_http_status_success};
+use moli_fetch::{NetworkFetchFailureContext, Request, ensure_http_status_success};
 use moli_protocol_server::ProtocolServer;
 
 use self::{http_error_navigation::is_http_error_status, readiness::ReadinessPlan};
@@ -52,7 +52,7 @@ pub async fn run_cli_with_config<W: Write>(
                 Ok(document) => document,
                 Err(error) => {
                     finalize_fetch_browser(browser);
-                    return Err(error).with_context(|| anyhow!("failed to fetch `{}`", args.url));
+                    return Err(with_fetch_context(error, &args.url));
                 }
             };
 
@@ -109,7 +109,7 @@ pub async fn run_cli_with_config<W: Write>(
                     );
                 }
                 finalize_fetch_browser(browser);
-                return Err(error).with_context(|| anyhow!("failed to fetch `{}`", args.url));
+                return Err(with_fetch_context(error, &args.url));
             }
 
             if let Err(error) = readiness.wait_for_page(&browser, &mut page).await {
@@ -120,7 +120,7 @@ pub async fn run_cli_with_config<W: Write>(
                     );
                 }
                 finalize_fetch_browser(browser);
-                return Err(error).with_context(|| anyhow!("failed to fetch `{}`", args.url));
+                return Err(with_fetch_context(error, &args.url));
             }
 
             if args.delay_ms > 0 {
@@ -163,6 +163,16 @@ fn build_fetch_request(url: &str, config: &AppConfig) -> Result<Request> {
     // Keep CLI-provided headers scoped to the initial document navigation.
     request.request_headers = config.fetch.request_headers.clone();
     Ok(request)
+}
+
+fn with_fetch_context(error: anyhow::Error, url: &str) -> anyhow::Error {
+    // Network failures already carry a URL-aware typed context. Adding the
+    // same CLI context again would print two "failed to fetch" chain entries.
+    if error.is::<NetworkFetchFailureContext>() {
+        error
+    } else {
+        error.context(anyhow!("failed to fetch `{url}`"))
+    }
 }
 
 fn load_cookie_state(browser: &Browser, config: &AppConfig) -> Result<()> {

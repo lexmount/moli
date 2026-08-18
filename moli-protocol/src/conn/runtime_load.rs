@@ -9,7 +9,7 @@ use moli_core::{
     },
 };
 use moli_fetch::{
-    BrowserNavigationRequestKind, FetchCancelHandle, FetchConfig, NetworkFetchFailure,
+    BrowserNavigationRequestKind, FetchCancelHandle, FetchConfig, NetworkFetchFailureContext,
     NetworkFetchResult, NetworkObservationJournal, RawResponse, Request, ResponseHead,
     StreamingRawResponse, url_pattern_matches,
 };
@@ -906,7 +906,7 @@ impl BackgroundNavigationLoadJob {
             let navigation_response = match navigation_response {
                 Ok(response) => response,
                 Err(error) => {
-                    if let Some(failure) = error.downcast_ref::<NetworkFetchFailure>() {
+                    if let Some(failure) = error.downcast_ref::<NetworkFetchFailureContext>() {
                         let unreachable_url = failure
                             .request_context()
                             .map(|request_context| request_context.current_url().clone())
@@ -929,7 +929,7 @@ impl BackgroundNavigationLoadJob {
                         }
                         tracing::debug!(
                             url = %self.raw_url,
-                            error = %error,
+                            error = ?error,
                             network_error_text = failure.network_error_text(),
                             "main document transport failed before response metadata"
                         );

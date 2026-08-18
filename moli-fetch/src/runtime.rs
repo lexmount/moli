@@ -33,7 +33,7 @@ use tokio::sync::{mpsc, oneshot};
 use url::{Host, Url};
 
 use crate::{
-    FetchCancelHandle, FetchConfig, NegotiatedHttpVersion, NetworkFetchFailure,
+    FetchCancelHandle, FetchConfig, NegotiatedHttpVersion, NetworkFetchFailureContext,
     NetworkFetchFailureRequestContext, NetworkRequestExtraInfo, NetworkResponseExtraInfo,
     RawResponse, RedirectInfo, Request, Response, ResponseHead, StreamingHtmlResponse,
     StreamingRawResponse,
@@ -3615,13 +3615,13 @@ fn network_fetch_failure_for_request(
     redirect_chain: &[RedirectInfo],
     error: anyhow::Error,
 ) -> anyhow::Error {
-    if error.downcast_ref::<NetworkFetchFailure>().is_some() {
+    if error.is::<NetworkFetchFailureContext>() {
         return error;
     }
     let Some(recorder) = request.network_observation_recorder() else {
         return error;
     };
-    NetworkFetchFailure::with_request_context(
+    NetworkFetchFailureContext::attach_with_request_context(
         error,
         recorder.snapshot(),
         NetworkFetchFailureRequestContext::new(
@@ -3632,7 +3632,6 @@ fn network_fetch_failure_for_request(
             redirect_chain.to_vec(),
         ),
     )
-    .into()
 }
 
 #[cfg(test)]
