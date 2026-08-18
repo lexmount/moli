@@ -2177,6 +2177,9 @@ impl DynamicScriptOwner {
 mod tests {
     use super::*;
     use crate::{
+        frame_owner_model::{
+            DocumentId, FrameDocumentTaskOwner, FrameSchedulerLaneId, LocalWindowId,
+        },
         planning::ScriptSource,
         types::{ScriptKind, ScriptMode},
     };
@@ -2213,6 +2216,10 @@ mod tests {
         DynamicScriptOwnerId::from_u64(raw)
     }
 
+    fn document_owner() -> FrameDocumentTaskOwner {
+        FrameDocumentTaskOwner::new(FrameSchedulerLaneId(0), LocalWindowId(0), DocumentId(0))
+    }
+
     fn runtime_module_continuation(
         id: u64,
         position: usize,
@@ -2221,7 +2228,7 @@ mod tests {
         Box::new(ModuleScriptContinuation::new_runtime(
             prepared_module_script(position, mode),
             owner_id(id),
-            0,
+            document_owner(),
         ))
     }
 

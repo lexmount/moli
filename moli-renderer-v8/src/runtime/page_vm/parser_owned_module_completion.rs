@@ -162,8 +162,7 @@ impl PageVm {
         tracing::debug!(
             url = %script_continuation.script.url,
             completion_owner = ?script_continuation.completion_owner(),
-            runtime_reset_generation_before_run =
-                script_continuation.runtime_reset_generation_before_run,
+            document_owner_before_run = ?script_continuation.document_owner(),
             active_fetch_load_id = ?script_continuation.active_fetch_load_id(),
             "finishing completed module script graph"
         );
@@ -253,8 +252,7 @@ impl PageVm {
     ) -> ModuleScriptCompletionOutcome {
         let script = script_continuation.script.clone();
         let settlement_script = script.clone();
-        let runtime_reset_generation_before_run =
-            script_continuation.runtime_reset_generation_before_run;
+        let document_owner_before_run = script_continuation.document_owner();
         let completion_owner = script_continuation.completion_owner();
         let parser_owner = script_continuation
             .parser_document_owner()
@@ -266,7 +264,7 @@ impl PageVm {
             .settle_prepared_module_success(
                 loader,
                 &script,
-                runtime_reset_generation_before_run,
+                document_owner_before_run,
                 dynamic_script_owner_id,
                 evaluation,
                 terminal_disposition,

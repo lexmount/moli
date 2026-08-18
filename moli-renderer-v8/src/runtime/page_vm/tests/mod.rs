@@ -13958,7 +13958,6 @@ async fn stale_main_parser_module_terminal_drops_after_pending_script_retirement
             Vec::new(),
             Url::parse("https://example.com/page.html").expect("document URL"),
         );
-        let old_generation = page_vm.vm().document_runtime.runtime_reset_generation();
         let old_task_owner = page_vm
             .vm()
             .current_main_document_task_owner()
@@ -13981,12 +13980,6 @@ async fn stale_main_parser_module_terminal_drops_after_pending_script_retirement
             )
             .await
             .expect("replacement script task should run");
-        assert_ne!(
-            page_vm.vm().document_runtime.runtime_reset_generation(),
-            old_generation,
-            "document replacement should advance the main runtime reset token"
-        );
-
         let stale_pending_script_id =
             crate::document_script_scheduler::ParserPendingScriptId::new(
                 old_owner,
@@ -13995,7 +13988,6 @@ async fn stale_main_parser_module_terminal_drops_after_pending_script_retirement
         let stale_continuation = ModuleScriptContinuation::new_parser(
             module_script,
             stale_pending_script_id,
-            old_generation,
         )
         .with_completed_graph(ModuleGraphHandle {
             root_entry: ModuleEntryId::for_test(1),

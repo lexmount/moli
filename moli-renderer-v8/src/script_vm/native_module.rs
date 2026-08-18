@@ -1509,11 +1509,8 @@ impl ScriptVm {
             }
             return Ok(false);
         }
-        let mut continuation = ModuleScriptContinuation::new_parser(
-            script.clone(),
-            pending_script_id,
-            self.document_runtime.runtime_reset_generation(),
-        );
+        let mut continuation =
+            ModuleScriptContinuation::new_parser(script.clone(), pending_script_id);
         if let Some(binding) = load_delay_binding.take() {
             continuation = continuation.with_main_document_load_delay_binding(binding);
         }
@@ -1587,11 +1584,13 @@ impl ScriptVm {
         if script.kind != crate::types::ScriptKind::Module || script.url.scheme() == "data" {
             return RuntimeModuleScriptGraphStart::NotModuleScript;
         }
-        let runtime_reset_generation_before_run = self.document_runtime.runtime_reset_generation();
+        let document_owner = self
+            .current_main_document_task_owner()
+            .expect("runtime module graph start requires a current main Document owner");
         let continuation = ModuleScriptContinuation::new_runtime(
             script.clone(),
             dynamic_script_owner_id,
-            runtime_reset_generation_before_run,
+            document_owner,
         );
         let job = match runtime_owned_module_script_graph_job_for_prepared_script(self, script) {
             Ok(job) => job,

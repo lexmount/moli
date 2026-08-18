@@ -278,7 +278,6 @@ for (let index = 0; index < 2; index++) {
             Some(true),
             "the admitted runtime modules must retain exact Window-load leases"
         );
-        let generation = page_vm.vm().document_runtime.runtime_reset_generation();
         let mut actions = NativeModuleOwnerActions::empty();
 
         for _ in 0..2 {
@@ -292,7 +291,7 @@ for (let index = 0; index < 2; index++) {
             else {
                 panic!("runtime module admission must become concrete execution work");
             };
-            let continuation = ModuleScriptContinuation::new_runtime(script, id, generation);
+            let continuation = ModuleScriptContinuation::new_runtime(script, id, owner);
             actions.merge(NativeModuleOwnerActions::from_runtime_module_failure(
                 continuation,
                 ModuleLoadError::new(ModuleLoadStage::Fetch, "shared dependency failed"),

@@ -942,12 +942,14 @@ impl ScriptVm {
                                 network_result,
                             );
                         }
-                        let runtime_reset_generation_before_run =
-                            self.document_runtime.runtime_reset_generation();
+                        let document_owner_before_run =
+                            self.current_main_document_task_owner().expect(
+                                "runtime script execution requires a current main Document owner",
+                            );
                         match self.execute_prepared_script_once(loader, &script).await {
                             Ok(true) => {
                                 if self.script_run_replaced_document(
-                                    runtime_reset_generation_before_run,
+                                    document_owner_before_run,
                                     &script,
                                 ) {
                                     return Ok(RuntimePendingWorkFlushOutcome::Complete);

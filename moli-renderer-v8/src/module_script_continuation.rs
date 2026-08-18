@@ -18,7 +18,6 @@ use crate::types::ScriptErrorConstructorKind;
 pub(crate) struct ModuleScriptContinuation {
     pub(crate) script: PreparedScript,
     owner: ModuleScriptContinuationOwner,
-    pub(crate) runtime_reset_generation_before_run: u64,
     active_fetch_load_id: Option<u64>,
     resumed_graph_job: Option<crate::module_runtime::NativeModuleGraphJob>,
     pub(crate) completed_graph: Option<crate::module_runtime::ModuleGraphHandle>,
@@ -28,7 +27,10 @@ pub(crate) struct ModuleScriptContinuation {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ModuleScriptContinuationOwner {
     Parser(ParserPendingScriptId<MainParserDocumentOwner>),
-    Runtime(DynamicScriptOwnerId),
+    Runtime {
+        owner_id: DynamicScriptOwnerId,
+        document_owner: FrameDocumentTaskOwner,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -49,7 +51,6 @@ impl MainParserDocumentOwner {
 #[derive(Debug)]
 pub(crate) struct MainDocumentModuleGraphReadyTarget {
     pending_script_id: ParserPendingScriptId<MainParserDocumentOwner>,
-    runtime_reset_generation_before_run: u64,
     main_document_load_delay_binding: Option<MainDocumentScriptLoadDelayLease>,
 }
 
@@ -86,10 +87,6 @@ impl MainDocumentModuleGraphReadyTarget {
         self.pending_script_id
     }
 
-    pub(crate) fn runtime_reset_generation_before_run(&self) -> u64 {
-        self.runtime_reset_generation_before_run
-    }
-
     pub(crate) fn take_main_document_load_delay_binding(
         &mut self,
     ) -> Option<MainDocumentScriptLoadDelayLease> {
@@ -109,10 +106,6 @@ impl fmt::Debug for ModuleScriptContinuation {
             .debug_struct("ModuleScriptContinuation")
             .field("script", &self.script)
             .field("owner", &self.owner)
-            .field(
-                "runtime_reset_generation_before_run",
-                &self.runtime_reset_generation_before_run,
-            )
             .field("active_fetch_load_id", &self.active_fetch_load_id)
             .field("has_resumed_graph_job", &self.resumed_graph_job.is_some())
             .field("has_completed_graph", &self.completed_graph.is_some())
@@ -168,14 +161,12 @@ impl ModuleScriptContinuation {
     pub(crate) fn new_parser(
         script: PreparedScript,
         pending_script_id: ParserPendingScriptId<MainParserDocumentOwner>,
-        runtime_reset_generation_before_run: u64,
     ) -> Self {
         debug_assert_eq!(pending_script_id.script_node_id(), script.node_id);
         debug_assert_eq!(pending_script_id.parser_position(), script.position);
         Self {
             script,
             owner: ModuleScriptContinuationOwner::Parser(pending_script_id),
-            runtime_reset_generation_before_run,
             active_fetch_load_id: None,
             resumed_graph_job: None,
             completed_graph: None,
@@ -185,13 +176,15 @@ impl ModuleScriptContinuation {
 
     pub(crate) fn new_runtime(
         script: PreparedScript,
-        owner: DynamicScriptOwnerId,
-        runtime_reset_generation_before_run: u64,
+        owner_id: DynamicScriptOwnerId,
+        document_owner: FrameDocumentTaskOwner,
     ) -> Self {
         Self {
             script,
-            owner: ModuleScriptContinuationOwner::Runtime(owner),
-            runtime_reset_generation_before_run,
+            owner: ModuleScriptContinuationOwner::Runtime {
+                owner_id,
+                document_owner,
+            },
             active_fetch_load_id: None,
             resumed_graph_job: None,
             completed_graph: None,
@@ -220,7 +213,7 @@ impl ModuleScriptContinuation {
     pub(crate) fn completion_owner(&self) -> ModuleScriptCompletionOwner {
         match self.owner {
             ModuleScriptContinuationOwner::Parser(_) => ModuleScriptCompletionOwner::Parser,
-            ModuleScriptContinuationOwner::Runtime(_) => ModuleScriptCompletionOwner::Runtime,
+            ModuleScriptContinuationOwner::Runtime { .. } => ModuleScriptCompletionOwner::Runtime,
         }
     }
 
@@ -229,7 +222,7 @@ impl ModuleScriptContinuation {
             ModuleScriptContinuationOwner::Parser(pending_script_id) => {
                 Some(pending_script_id.owner())
             }
-            ModuleScriptContinuationOwner::Runtime(_) => None,
+            ModuleScriptContinuationOwner::Runtime { .. } => None,
         }
     }
 
@@ -238,14 +231,23 @@ impl ModuleScriptContinuation {
     ) -> Option<ParserPendingScriptId<MainParserDocumentOwner>> {
         match self.owner {
             ModuleScriptContinuationOwner::Parser(pending_script_id) => Some(pending_script_id),
-            ModuleScriptContinuationOwner::Runtime(_) => None,
+            ModuleScriptContinuationOwner::Runtime { .. } => None,
         }
     }
 
     pub(crate) fn dynamic_script_owner_id(&self) -> Option<DynamicScriptOwnerId> {
         match self.owner {
             ModuleScriptContinuationOwner::Parser(_) => None,
-            ModuleScriptContinuationOwner::Runtime(owner) => Some(owner),
+            ModuleScriptContinuationOwner::Runtime { owner_id, .. } => Some(owner_id),
+        }
+    }
+
+    pub(crate) fn document_owner(&self) -> FrameDocumentTaskOwner {
+        match self.owner {
+            ModuleScriptContinuationOwner::Parser(pending_script_id) => {
+                pending_script_id.owner().task_owner()
+            }
+            ModuleScriptContinuationOwner::Runtime { document_owner, .. } => document_owner,
         }
     }
 
@@ -284,7 +286,6 @@ impl ModuleScriptContinuation {
             pending_script_id: self
                 .parser_pending_script_id()
                 .expect("main graph-ready work requires a parser pending script id"),
-            runtime_reset_generation_before_run: self.runtime_reset_generation_before_run,
             main_document_load_delay_binding: self.main_document_load_delay_binding,
         };
         MainDocumentModuleGraphReadyWork::with_target(target, self.script, graph)
@@ -294,12 +295,8 @@ impl ModuleScriptContinuation {
         work: MainDocumentModuleGraphReadyWork,
     ) -> Self {
         let (mut target, script, graph) = work.into_parts();
-        let runtime_reset_generation_before_run = target.runtime_reset_generation_before_run();
-        let mut continuation = ModuleScriptContinuation::new_parser(
-            script,
-            target.pending_script_id(),
-            runtime_reset_generation_before_run,
-        );
+        let mut continuation =
+            ModuleScriptContinuation::new_parser(script, target.pending_script_id());
         if let Some(binding) = target.take_main_document_load_delay_binding() {
             continuation = continuation.with_main_document_load_delay_binding(binding);
         }
@@ -454,12 +451,8 @@ impl DocumentScriptReadyActionDispatchRoute<MainDocumentReadyActionRoute>
 impl From<MainDocumentModuleGraphReadyWork> for Box<MainParserOwnedModuleScriptContinuation> {
     fn from(work: MainDocumentModuleGraphReadyWork) -> Self {
         let (mut target, script, graph) = work.into_parts();
-        let runtime_reset_generation_before_run = target.runtime_reset_generation_before_run();
-        let mut continuation = ModuleScriptContinuation::new_parser(
-            script,
-            target.pending_script_id(),
-            runtime_reset_generation_before_run,
-        );
+        let mut continuation =
+            ModuleScriptContinuation::new_parser(script, target.pending_script_id());
         if let Some(binding) = target.take_main_document_load_delay_binding() {
             continuation = continuation.with_main_document_load_delay_binding(binding);
         }
@@ -1106,7 +1099,7 @@ mod tests {
     fn parser_continuation(script: PreparedScript) -> ModuleScriptContinuation {
         let owner = MainParserDocumentOwner::new(main_task_owner());
         let pending_script_id = ParserPendingScriptId::new(owner, &script);
-        ModuleScriptContinuation::new_parser(script, pending_script_id, 1).with_completed_graph(
+        ModuleScriptContinuation::new_parser(script, pending_script_id).with_completed_graph(
             crate::module_runtime::ModuleGraphHandle {
                 root_entry: crate::module_runtime::ModuleEntryId::for_test(1),
                 entries: vec![crate::module_runtime::ModuleEntryId::for_test(1)],

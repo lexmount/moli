@@ -5740,14 +5740,20 @@ impl ScriptVm {
                 parser_write_insertion_point_active: run_input.parser_write_insertion_point_active,
                 parser_insertion_controller: None,
             });
-        let runtime_reset_generation_before_run = self.document_runtime.runtime_reset_generation();
+        let document_owner_before_run =
+            self.current_main_document_task_owner().ok_or_else(|| {
+                PreparedScriptExecutionError::from_message(format!(
+                    "prepared script `{}` has no current main Document owner",
+                    script.url
+                ))
+            })?;
         let result = self
             .execute_prepared_script_run_body(script, run_input.body)
             .await;
         self.document_runtime.clear_current_script_handle();
         let outcome = result?;
         let body_activity = outcome.body_activity();
-        if self.script_run_replaced_document(runtime_reset_generation_before_run, script) {
+        if self.script_run_replaced_document(document_owner_before_run, script) {
             return Ok(PreparedScriptExecutionOutcome::Dropped(body_activity));
         }
         match outcome {
@@ -5757,7 +5763,7 @@ impl ScriptVm {
                     .module_script_continuation_for_prepared_script(
                         script,
                         dynamic_script_owner_id,
-                        runtime_reset_generation_before_run,
+                        document_owner_before_run,
                     )?
                     .with_completed_graph(graph);
                 let actions = self.handle_module_script_graph_advance_for_owner(
@@ -5774,7 +5780,7 @@ impl ScriptVm {
                 let continuation = self.module_script_continuation_for_prepared_script(
                     script,
                     dynamic_script_owner_id,
-                    runtime_reset_generation_before_run,
+                    document_owner_before_run,
                 )?;
                 let actions = self.handle_module_script_graph_advance_for_owner(
                     ModuleScriptContinuationGraphAdvance::NeedFetches {
@@ -5829,7 +5835,7 @@ impl ScriptVm {
         &self,
         script: &PreparedScript,
         dynamic_script_owner_id: Option<crate::dynamic_script_owner::DynamicScriptOwnerId>,
-        runtime_reset_generation_before_run: u64,
+        document_owner_before_run: crate::frame_owner_model::FrameDocumentTaskOwner,
     ) -> std::result::Result<ModuleScriptContinuation, PreparedScriptExecutionError> {
         match self.completion_owner_for_prepared_module_script(script) {
             ModuleScriptCompletionOwner::Parser => {
@@ -5843,10 +5849,14 @@ impl ScriptVm {
                         script.url
                     ))
                 })?;
+                debug_assert_eq!(
+                    pending_script_id.owner().task_owner(),
+                    document_owner_before_run,
+                    "parser module continuation must retain its admitted Document owner"
+                );
                 Ok(ModuleScriptContinuation::new_parser(
                     script.clone(),
                     pending_script_id,
-                    runtime_reset_generation_before_run,
                 ))
             }
             ModuleScriptCompletionOwner::Runtime => {
@@ -5859,7 +5869,7 @@ impl ScriptVm {
                 Ok(ModuleScriptContinuation::new_runtime(
                     script.clone(),
                     owner,
-                    runtime_reset_generation_before_run,
+                    document_owner_before_run,
                 ))
             }
         }
@@ -5869,13 +5879,13 @@ impl ScriptVm {
         &mut self,
         loader: &ResourceRequestClient,
         script: &PreparedScript,
-        runtime_reset_generation_before_run: u64,
+        document_owner_before_run: crate::frame_owner_model::FrameDocumentTaskOwner,
         dynamic_script_owner_id: Option<crate::dynamic_script_owner::DynamicScriptOwnerId>,
         evaluation: ParserModuleEvaluationSettlement,
         terminal_disposition: ParserModuleTerminalDisposition,
         prepared_activity: PreparedScriptBodyActivity,
     ) -> std::result::Result<PreparedModuleSuccessSettlement, String> {
-        if self.script_run_replaced_document(runtime_reset_generation_before_run, script) {
+        if self.script_run_replaced_document(document_owner_before_run, script) {
             return Ok(PreparedModuleSuccessSettlement::Stale);
         }
         let uses_runtime_owned_page_task_execution =
@@ -6076,10 +6086,10 @@ impl ScriptVm {
 
     fn script_run_replaced_document(
         &mut self,
-        runtime_reset_generation_before_run: u64,
+        document_owner_before_run: crate::frame_owner_model::FrameDocumentTaskOwner,
         script: &PreparedScript,
     ) -> bool {
-        if self.document_runtime.runtime_reset_generation() == runtime_reset_generation_before_run {
+        if self.current_main_document_task_owner() == Some(document_owner_before_run) {
             return false;
         }
         self.refresh_script_vm_local_document_state();
@@ -7860,7 +7870,9 @@ impl ScriptVm {
                 parser_write_insertion_point_active,
                 parser_insertion_controller,
             });
-        let runtime_reset_generation_before_run = self.document_runtime.runtime_reset_generation();
+        let document_owner_before_run = self
+            .current_main_document_task_owner()
+            .expect("parser-owned classic execution requires a current main Document owner");
         let result = {
             let _parser_script_nesting = execution_context
                 .is_parser_blocking()
@@ -7915,7 +7927,7 @@ impl ScriptVm {
                 );
             }
         }
-        if self.script_run_replaced_document(runtime_reset_generation_before_run, script) {
+        if self.script_run_replaced_document(document_owner_before_run, script) {
             return ParserOwnedClassicScriptExecutionReport::new(
                 Ok(()),
                 None,
