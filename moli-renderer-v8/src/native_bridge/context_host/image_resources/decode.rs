@@ -52,7 +52,6 @@ pub(super) enum ImageDecodeQueueError {
 pub(super) struct ReadyDecodedImage {
     pub(super) content: DecodedImageContent,
     pub(super) decoded_bytes_permit: ImageDecodedBytesPermit,
-    pub(super) encoded: ParkableImage,
 }
 
 pub(super) enum DecodedImageContent {
@@ -217,11 +216,9 @@ impl ImageDecodeCoordinator {
                     };
                     Ok::<_, String>((content, decoded_bytes_permit))
                 })();
-                drop(snapshot);
                 result.map(|(content, decoded_bytes_permit)| ReadyDecodedImage {
                     content,
                     decoded_bytes_permit,
-                    encoded,
                 })
             })
             .await;

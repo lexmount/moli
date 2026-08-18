@@ -2150,8 +2150,7 @@ __swNonStreamFailurePromise.then(
         skip_fetch_security_validation: false,
         response_filter: None,
         network_error_text: Some(crate::network_host::FAILED_ERROR_TEXT.to_owned()),
-        parkable_image: None,
-        result: Err(rejection_message.to_owned()),
+        result: Err(rejection_message.to_owned()).into(),
     })
     .expect("async subresource failure should settle pending fetch");
 

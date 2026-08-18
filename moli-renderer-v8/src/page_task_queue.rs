@@ -852,8 +852,7 @@ mod tests {
             skip_fetch_security_validation: false,
             response_filter: None,
             network_error_text: None,
-            parkable_image: None,
-            result: Err("test failure".to_owned()),
+            result: Err("test failure".to_owned()).into(),
         }
     }
 

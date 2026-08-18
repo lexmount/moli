@@ -270,10 +270,6 @@ impl super::JsContextHost {
         self.image_resources.is_ready(element)
     }
 
-    pub(crate) fn parkable_image_for_element(&self, element: DomHandle) -> Option<ParkableImage> {
-        self.image_resources.encoded_for_element(element)
-    }
-
     pub(crate) fn has_ready_image_request(&self, request_key: &ImageRequestKey) -> bool {
         self.image_resources.has_ready_request(request_key)
     }
@@ -450,7 +446,7 @@ impl super::JsContextHost {
 
         if !self
             .image_resources
-            .complete_metadata(&identity, descriptor, encoded)
+            .complete_metadata(&identity, descriptor)
         {
             return ImageResponseCompletion::Ignored;
         }

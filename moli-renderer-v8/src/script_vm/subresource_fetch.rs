@@ -20,17 +20,18 @@ use crate::runtime::{
 };
 use crate::types::{
     AsyncSubresourceFetchCompletion, AsyncSubresourceFetchEvent,
-    AsyncSubresourceFetchResponseFilter, ChildBlockingStylesheetLoadCompletion,
-    ChildClassicScriptLoadCompletion, ChildDocumentLoadCompletion,
-    ChildModuleDependencyFetchCompletion, ChildModulepreloadFetchCompletion,
-    ChildParserModuleRootFetchCompletion, DedicatedWorkerId, NetworkBodySourceId,
-    PendingSubresourceAuthInfo, PendingSubresourceAuthState, PendingSubresourceContinuation,
-    PendingSubresourceContinueEvent, PendingSubresourceContinueOutcome,
-    PendingSubresourceFetchInfo, PendingSubresourceFetchState, PendingSubresourceResponseInfo,
-    PendingSubresourceResponseState, PopupClassicScriptLoadCompletion, PopupDocumentLoadCompletion,
-    RunningSubresourceFetchState, StreamingSubresourceFetchState, SubresourceNetworkRecord,
-    SubresourceNetworkRequestHandle, SubresourceRequestInitiatorType, SubresourceResourceType,
-    SubresourceResponseBody, SubresourceResponseBodyWriter,
+    AsyncSubresourceFetchResponseFilter, AsyncSubresourceFetchResult,
+    ChildBlockingStylesheetLoadCompletion, ChildClassicScriptLoadCompletion,
+    ChildDocumentLoadCompletion, ChildModuleDependencyFetchCompletion,
+    ChildModulepreloadFetchCompletion, ChildParserModuleRootFetchCompletion, DedicatedWorkerId,
+    NetworkBodySourceId, PendingSubresourceAuthInfo, PendingSubresourceAuthState,
+    PendingSubresourceContinuation, PendingSubresourceContinueEvent,
+    PendingSubresourceContinueOutcome, PendingSubresourceFetchInfo, PendingSubresourceFetchState,
+    PendingSubresourceResponseInfo, PendingSubresourceResponseState,
+    PopupClassicScriptLoadCompletion, PopupDocumentLoadCompletion, RunningSubresourceFetchState,
+    StreamingSubresourceFetchState, SubresourceNetworkRecord, SubresourceNetworkRequestHandle,
+    SubresourceRequestInitiatorType, SubresourceResourceType, SubresourceResponseBody,
+    SubresourceResponseBodyWriter,
 };
 use crate::util::v8_string;
 
@@ -1576,8 +1577,7 @@ impl ScriptVm {
                 skip_fetch_security_validation: true,
                 response_filter: Default::default(),
                 network_error_text: None,
-                parkable_image: None,
-                result: Err("service worker csp report fetch dispatch failed".to_owned()),
+                result: Err("service worker csp report fetch dispatch failed".to_owned()).into(),
             });
         Ok(None)
     }
@@ -3487,7 +3487,7 @@ impl ScriptVm {
         network_error_text: Option<String>,
         result: std::result::Result<crate::protocol_types::NavigationResponse, String>,
     ) -> Result<AsyncSubresourceFetchBodyActivity> {
-        self.resolve_pending_subresource_fetch_body_with_parkable_image(
+        self.resolve_pending_subresource_fetch_completion(
             pending,
             request_url,
             request_method,
@@ -3497,13 +3497,12 @@ impl ScriptVm {
             skip_fetch_security_validation,
             response_filter,
             network_error_text,
-            None,
-            result,
+            result.into(),
         )
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn resolve_pending_subresource_fetch_body_with_parkable_image(
+    fn resolve_pending_subresource_fetch_completion(
         &mut self,
         mut pending: PendingSubresourceFetchState,
         request_url: Url,
@@ -3514,9 +3513,15 @@ impl ScriptVm {
         skip_fetch_security_validation: bool,
         response_filter: Option<AsyncSubresourceFetchResponseFilter>,
         network_error_text: Option<String>,
-        supplied_parkable_image: Option<moli_parkable_image::ParkableImage>,
-        result: std::result::Result<crate::protocol_types::NavigationResponse, String>,
+        completion_result: AsyncSubresourceFetchResult,
     ) -> Result<AsyncSubresourceFetchBodyActivity> {
+        let (supplied_parkable_image, result) = match completion_result {
+            AsyncSubresourceFetchResult::Response(response) => (None, Ok(response)),
+            AsyncSubresourceFetchResult::Image { response, encoded } => {
+                (Some(encoded), Ok(response))
+            }
+            AsyncSubresourceFetchResult::Failure(error) => (None, Err(error)),
+        };
         let trace_started = moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
         let trace_fields = async_subresource_trace_fields_for_pending(
             "completion",
@@ -3672,15 +3677,7 @@ impl ScriptVm {
                     let parkable_image = (!opaque_response_blocked
                         && pending.info.resource_type == SubresourceResourceType::Image)
                         .then(|| {
-                            let existing = match &pending.continuation {
-                                PendingSubresourceContinuation::Image { image_handle, .. } => {
-                                    context_host
-                                        .borrow()
-                                        .parkable_image_for_element(*image_handle)
-                                }
-                                _ => None,
-                            };
-                            supplied_parkable_image.clone().or(existing).unwrap_or_else(|| {
+                            supplied_parkable_image.clone().unwrap_or_else(|| {
                                 let runner = pending.load.task_runner();
                                 pending
                                     .load
@@ -4104,8 +4101,7 @@ impl ScriptVm {
                 skip_fetch_security_validation: false,
                 response_filter: None,
                 network_error_text: None,
-                parkable_image: None,
-                result,
+                result: result.into(),
             });
         });
     }
@@ -4341,7 +4337,7 @@ impl ScriptVm {
                 completion.skip_fetch_security_validation,
                 completion.response_filter,
                 completion.network_error_text,
-                completion.result,
+                completion.result.into_result(),
             );
             trace_async_subresource_stage(
                 "async_subresource_complete_done",
@@ -4373,7 +4369,7 @@ impl ScriptVm {
             trace_fields,
             trace_started,
         );
-        let activity = self.resolve_pending_subresource_fetch_body_with_parkable_image(
+        let activity = self.resolve_pending_subresource_fetch_completion(
             pending,
             completion.request_url,
             completion.request_method,
@@ -4383,7 +4379,6 @@ impl ScriptVm {
             completion.skip_fetch_security_validation,
             completion.response_filter,
             completion.network_error_text,
-            completion.parkable_image,
             completion.result,
         )?;
         trace_async_subresource_stage(

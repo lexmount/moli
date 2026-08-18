@@ -7,8 +7,8 @@ use crate::service_worker_runtime::{
     service_worker_fetch_request_metadata,
 };
 use crate::types::{
-    AsyncSubresourceFetchCompletion, AsyncSubresourceNetworkContext, ImageRequestCorsMode,
-    ImageRequestKey, PendingSubresourceFetchInfo, SubresourceResourceType,
+    AsyncSubresourceFetchCompletion, AsyncSubresourceFetchResult, AsyncSubresourceNetworkContext,
+    ImageRequestCorsMode, ImageRequestKey, PendingSubresourceFetchInfo, SubresourceResourceType,
 };
 use moli_fetch::{
     BrowserRequestMetadata, FetchCancelHandle, FetchPriorityHint, RequestCredentialsMode,
@@ -366,8 +366,9 @@ pub(crate) fn start_image_element_resource_fetch(
                     skip_fetch_security_validation: false,
                     response_filter: None,
                     network_error_text: None,
-                    parkable_image: None,
-                    result: Err("service worker image fetch dispatch failed".to_owned()),
+                    result: AsyncSubresourceFetchResult::Failure(
+                        "service worker image fetch dispatch failed".to_owned(),
+                    ),
                 },
             );
         }
@@ -389,8 +390,10 @@ pub(crate) fn start_image_element_resource_fetch(
                 skip_fetch_security_validation: false,
                 response_filter: None,
                 network_error_text: None,
-                parkable_image: outcome.encoded(),
-                result: outcome.network_result().as_ref().clone(),
+                result: AsyncSubresourceFetchResult::from_image_parts(
+                    outcome.network_result().as_ref().clone(),
+                    outcome.encoded(),
+                ),
             });
         });
         return Ok(ImageElementResourceFetchStart::Pending);
