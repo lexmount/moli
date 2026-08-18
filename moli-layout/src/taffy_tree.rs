@@ -20,9 +20,8 @@ use crate::{
     LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic, LayoutWorld, PaintRect, PaintViewport,
     inline::{
         InlineCoordinateSpace, InlineFormattingContext, InlineFragments, InlineLinePlacement,
-        InlineObjectRole, LineRelativeFragments, LineRelativeOffset, break_inline_lines,
-        build_inline_fragments, build_inline_line_placements, flow_relative_line_rect,
-        relative_atomic_inset_offset,
+        InlineObjectRole, LineRelativeFragments, LineRelativeOffset, build_inline_fragments,
+        build_inline_line_placements, flow_relative_line_rect, relative_atomic_inset_offset,
     },
     style::{InlineBaselineType, InlineDirection, resolve_stylo_calc_value},
     table::{compute_table_layout, prepare_table_layout_trees},
@@ -2233,7 +2232,7 @@ where
                 contained_float_block_size = Some(alignment_float_block_size);
             }
         } else {
-            break_inline_lines(context, &mut layout, max_advance);
+            layout.break_all_lines(max_advance);
         }
         layout.align(
             alignment,
