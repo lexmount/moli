@@ -457,6 +457,34 @@ impl LayoutElementSemantics {
         matches!(&self.content, LayoutElementContent::Replaced(_))
     }
 
+    /// Whether Blink skips its computed-display type rejection when deciding
+    /// if this element can own a display lock.
+    ///
+    /// Replaced content, broken-image fallback, and HTML form controls other
+    /// than `output` use dedicated atomic layout objects even when their
+    /// computed display would otherwise look like a non-atomic inline or a
+    /// table display type. Options, optgroups, legends, and output elements do
+    /// not inherit that exception merely because Moli groups their semantics
+    /// with form-control construction.
+    pub const fn bypasses_display_lock_display_type_check(&self) -> bool {
+        if matches!(
+            &self.content,
+            LayoutElementContent::Replaced(_) | LayoutElementContent::ImageFallback(_)
+        ) {
+            return true;
+        }
+        matches!(
+            self.category,
+            LayoutElementCategory::FormControl(
+                LayoutFormControlKind::Button
+                    | LayoutFormControlKind::Input(_)
+                    | LayoutFormControlKind::TextArea
+                    | LayoutFormControlKind::Select
+                    | LayoutFormControlKind::FieldSet
+            )
+        )
+    }
+
     pub const fn replaced_kind(&self) -> Option<LayoutReplacedKind> {
         self.content.replaced_kind()
     }

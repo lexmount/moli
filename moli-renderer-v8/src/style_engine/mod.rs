@@ -82,9 +82,9 @@ mod ua;
 use cache::ComputedStyleInputCacheGeneration;
 use cleanup::StyleCacheCleanup;
 pub(crate) use computed::{
-    ComputedDisplayKind, ComputedRenderedStyleFacts, ComputedTextTransformKind,
-    ComputedTextWrapModeKind, ComputedWhiteSpaceCollapseKind, StyloAnonymousBoxKind,
-    StyloComputedStyleSnapshot,
+    ComputedContentVisibilityKind, ComputedDisplayKind, ComputedRenderedStyleFacts,
+    ComputedTextTransformKind, ComputedTextWrapModeKind, ComputedWhiteSpaceCollapseKind,
+    StyloAnonymousBoxKind, StyloComputedStyleSnapshot,
 };
 use document_world::{DocumentStyleWorld, DocumentStyleWorlds};
 pub(in crate::style_engine) use drain::StyleInvalidationDrainBoundary;

@@ -389,6 +389,12 @@ pub struct LayoutBoxGeometry {
     pub is_table_offset_parent: bool,
     pub establishes_positioned_containing_block: bool,
     pub establishes_fixed_containing_block: bool,
+    /// Whether this principal layout object can own a display lock.
+    ///
+    /// This is a box-type capability rather than the current lock state. It
+    /// remains available when an unlocked `content-visibility:auto` box is
+    /// observed after layout.
+    pub display_lock_eligible: bool,
     /// Whether this box's descendants were display-locked for this layout
     /// epoch. This is used state, not merely computed `content-visibility`.
     pub contents_skipped: bool,

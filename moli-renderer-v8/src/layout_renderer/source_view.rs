@@ -483,7 +483,11 @@ fn native_flat_children(host: &DomHost, root: DomHandle, node: DomHandle) -> Vec
         .collect()
 }
 
-fn native_flat_parent(host: &DomHost, root: DomHandle, node: DomHandle) -> Option<DomHandle> {
+pub(super) fn native_flat_parent(
+    host: &DomHost,
+    root: DomHandle,
+    node: DomHandle,
+) -> Option<DomHandle> {
     if node == root {
         return None;
     }
@@ -536,6 +540,19 @@ fn layout_element_semantics(element: &crate::dom::native::Element) -> LayoutElem
     };
     let metadata = layout_element_metadata(element, category, None, 0);
     LayoutElementSemantics::new(namespace, local_name, category, content).with_metadata(metadata)
+}
+
+/// Shares the DOM-side element exception used by layout containment with
+/// rendered-state APIs that do not construct a layout world.
+pub(crate) fn native_element_bypasses_display_lock_display_type_check(
+    runtime: &JsContextHost,
+    node: DomHandle,
+) -> bool {
+    let Some(element) = runtime.dom_host().node(node).and_then(Node::as_element) else {
+        return false;
+    };
+    layout_element_semantics(element).bypasses_display_lock_display_type_check()
+        || crate::native_bridge::element::embedded_element_uses_image_layout(runtime, node)
 }
 
 fn layout_element_semantics_for_source(

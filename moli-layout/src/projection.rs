@@ -387,6 +387,7 @@ where
                 establishes_fixed_containing_block: self
                     .world
                     .establishes_fixed_containing_block(layout_box_id),
+                display_lock_eligible: layout_box.is_eligible_for_display_lock(),
                 contents_skipped: layout_box.used_content_visibility_skips_contents(),
                 visible: layout_box.style.is_visible(),
                 pointer_events: layout_box.style.accepts_pointer_events(),

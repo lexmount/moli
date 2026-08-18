@@ -24,7 +24,12 @@ pub enum LayoutFlushReason {
     Test,
 }
 
-/// Diagnostics and cost counters for exactly one full pass.
+/// Diagnostics and cost counters for one rendering demand.
+///
+/// A demand normally performs one full layout epoch. Features such as nested
+/// `content-visibility:auto` can require additional internal epochs before a
+/// stable tree is publishable; in that case `elapsed` covers all epochs while
+/// the remaining counters describe the final published tree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LayoutPassMetrics {
     pub reason: LayoutFlushReason,

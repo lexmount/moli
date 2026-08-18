@@ -26,12 +26,7 @@ pub(super) enum ElementBoxState {
     NoBox,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ElementContentVisibility {
-    Visible,
-    Hidden,
-    Auto,
-}
+pub(super) type ElementContentVisibility = crate::style_engine::ComputedContentVisibilityKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ElementRenderedStyle {
@@ -49,13 +44,17 @@ impl ElementRenderedStyle {
     pub(super) fn read_in_scope(scope: &mut ComputedStyleReadScope<'_>, handle: DomHandle) -> Self {
         let runtime = scope.runtime();
         let style = scope.read(handle);
-        let content_visibility = inline_content_visibility(runtime, handle);
         if let Some(facts) = style.rendered_style_facts() {
             return Self {
                 display: facts.display,
                 visibility_visible: facts.visibility_visible,
-                content_visibility,
-                content_visibility_applicable: facts.content_visibility_applicable,
+                content_visibility: facts.content_visibility,
+                content_visibility_applicable: content_visibility_applicable_for_element(
+                    runtime,
+                    handle,
+                    facts.display,
+                    facts.display_type_allows_content_visibility,
+                ),
                 opacity_zero: facts.opacity_zero,
                 text_transform: facts.text_transform,
                 white_space_collapse: facts.white_space_collapse,
@@ -67,8 +66,15 @@ impl ElementRenderedStyle {
         Self {
             display,
             visibility_visible: style.property("visibility") == "visible",
-            content_visibility,
-            content_visibility_applicable: fallback_content_visibility_applicable(&display_value),
+            content_visibility: computed_content_visibility_kind(
+                &style.property("content-visibility"),
+            ),
+            content_visibility_applicable: content_visibility_applicable_for_element(
+                runtime,
+                handle,
+                display,
+                fallback_display_type_allows_content_visibility(&display_value),
+            ),
             opacity_zero: computed_opacity_is_zero(&style.property("opacity")),
             text_transform: computed_text_transform_kind(&style.property("text-transform")),
             white_space_collapse: computed_white_space_collapse_kind(
@@ -77,6 +83,21 @@ impl ElementRenderedStyle {
             text_wrap_mode: computed_text_wrap_mode_kind(&style.property("text-wrap-mode")),
         }
     }
+}
+
+fn content_visibility_applicable_for_element(
+    runtime: &JsContextHost,
+    handle: DomHandle,
+    display: ComputedDisplayKind,
+    display_type_is_eligible: bool,
+) -> bool {
+    display_type_is_eligible
+        || (!matches!(
+            display,
+            ComputedDisplayKind::None | ComputedDisplayKind::Contents
+        ) && crate::layout_renderer::native_element_bypasses_display_lock_display_type_check(
+            runtime, handle,
+        ))
 }
 
 fn computed_display_kind(value: &str) -> ComputedDisplayKind {
@@ -99,45 +120,15 @@ fn computed_display_kind(value: &str) -> ComputedDisplayKind {
     }
 }
 
-fn inline_content_visibility(
-    runtime: &JsContextHost,
-    handle: DomHandle,
-) -> ElementContentVisibility {
-    if runtime.element_inline_style_csp_state(handle)
-        == crate::style_engine::InlineStyleCspState::BlockedAttribute
-    {
-        return ElementContentVisibility::Visible;
-    }
-
-    let value = runtime
-        .element_inline_style_declaration_state(handle)
-        .and_then(|state| state.canonical_longhand_value("content-visibility"));
-    let fallback_value;
-    let value = match value {
-        Some(value) => Some(value),
-        None => {
-            fallback_value = runtime
-                .dom_host()
-                .node(handle)
-                .and_then(Node::as_element)
-                .and_then(|element| element.attribute("style"))
-                .and_then(|style| {
-                    crate::css_style::css_declaration_list_canonical_longhand_value(
-                        style,
-                        "content-visibility",
-                    )
-                });
-            fallback_value.as_deref()
-        }
-    };
-    match value.map(str::trim) {
-        Some(value) if value.eq_ignore_ascii_case("hidden") => ElementContentVisibility::Hidden,
-        Some(value) if value.eq_ignore_ascii_case("auto") => ElementContentVisibility::Auto,
+fn computed_content_visibility_kind(value: &str) -> ElementContentVisibility {
+    match value {
+        "hidden" => ElementContentVisibility::Hidden,
+        "auto" => ElementContentVisibility::Auto,
         _ => ElementContentVisibility::Visible,
     }
 }
 
-fn fallback_content_visibility_applicable(display: &str) -> bool {
+fn fallback_display_type_allows_content_visibility(display: &str) -> bool {
     !matches!(
         display,
         "none"
@@ -188,14 +179,15 @@ fn computed_text_wrap_mode_kind(value: &str) -> ComputedTextWrapModeKind {
 
 struct RenderedPathEntry {
     style: Option<ElementRenderedStyle>,
+    auto_content_visibility_locked: bool,
 }
 
 /// A single computed-style snapshot of the target's inclusive flat-tree path.
 ///
-/// Blink answers these questions from its retained layout tree. Moli has no
-/// layout tree, so this is the lightweight owner for the same observable
-/// boundary: flat-tree membership, an active render root, `display`, and
-/// `content-visibility`.
+/// Blink answers these questions from its retained layout tree and display
+/// lock contexts. Moli retains a frozen tree plus the last published auto-lock
+/// state, while this lightweight path supplies the live flat-tree membership
+/// and computed-style facts needed by DOM APIs.
 pub(super) struct ElementRenderedState {
     path: Vec<RenderedPathEntry>,
     reaches_active_root: bool,
@@ -235,7 +227,14 @@ impl ElementRenderedState {
                 .node(current)
                 .filter(|node| node.is_element())
                 .map(|_| ElementRenderedStyle::read_in_scope(scope, current));
-            path.push(RenderedPathEntry { style });
+            let auto_content_visibility_locked = style.as_ref().is_some_and(|style| {
+                style.content_visibility == ElementContentVisibility::Auto
+                    && runtime.auto_content_visibility_is_locked(current)
+            });
+            path.push(RenderedPathEntry {
+                style,
+                auto_content_visibility_locked,
+            });
 
             let Some(parent) = rendered_tree_parent(runtime, current) else {
                 return Self {
@@ -299,8 +298,26 @@ impl ElementRenderedState {
             {
                 return true;
             }
+            if style.content_visibility == ElementContentVisibility::Auto
+                && entry.auto_content_visibility_locked
+            {
+                return true;
+            }
         }
         false
+    }
+
+    fn has_auto_content_visibility_lock(&self) -> bool {
+        // Blink's display-lock paint check is exclusive by default: the lock
+        // owner keeps its principal box, while only descendants are hidden by
+        // that lock. The first path entry is this element itself.
+        self.reaches_active_root
+            && self.path.iter().skip(1).any(|entry| {
+                entry.auto_content_visibility_locked
+                    && entry.style.as_ref().is_some_and(|style| {
+                        style.content_visibility == ElementContentVisibility::Auto
+                    })
+            })
     }
 
     pub(super) fn target_style(&self) -> Option<&ElementRenderedStyle> {
@@ -451,10 +468,10 @@ pub(super) fn node_check_visibility_callback<'s>(
         return;
     }
 
-    // Moli does not skip offscreen `content-visibility:auto` subtrees because
-    // it intentionally has no viewport-driven layout locking. The option is
-    // still parsed so its Web IDL behavior matches Chromium.
-    let _ = options.content_visibility_auto;
+    if options.content_visibility_auto && rendered_state.has_auto_content_visibility_lock() {
+        rv.set_bool(false);
+        return;
+    }
     rv.set_bool(true);
 }
 
