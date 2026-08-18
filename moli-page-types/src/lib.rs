@@ -1481,7 +1481,7 @@ enum SubresourceResponseBodyInner {
 #[derive(Debug)]
 struct PooledSubresourceResponseBody {
     chunks: Vec<DiskData>,
-    trailing_bytes: Vec<u8>,
+    trailing_bytes: Box<[u8]>,
     len: usize,
 }
 
@@ -1661,7 +1661,7 @@ impl SubresourceResponseBodyWriter {
                 inner: Arc::new(SubresourceResponseBodyInner::Disk {
                     storage: PooledSubresourceResponseBody {
                         chunks: std::mem::take(&mut self.disk_chunks),
-                        trailing_bytes: std::mem::take(&mut self.memory),
+                        trailing_bytes: std::mem::take(&mut self.memory).into_boxed_slice(),
                         len: self.len,
                     },
                     text_cache: Mutex::new(None),
@@ -4032,6 +4032,23 @@ mod tests {
         body.write_bytes_to(&mut copied)
             .expect("pooled body should stream-copy into writer");
         assert_eq!(copied, b"hello world");
+    }
+
+    #[test]
+    fn pooled_response_body_releases_the_empty_staging_allocation() {
+        let memory_limit = 1024 * 1024;
+        let bytes = vec![7; memory_limit + 1];
+        let pool = DiskPool::new(None).unwrap();
+        let mut writer = pooled_body_writer(memory_limit, &pool);
+        writer.append(&bytes);
+        let body = writer.finish();
+
+        assert_eq!(body.len(), bytes.len());
+        assert_eq!(body.materialize_bytes().unwrap(), bytes);
+        assert!(
+            body.renderer_transport_retained_memory_bytes() < memory_limit,
+            "a disk-backed body must not retain its full staging allocation"
+        );
     }
 
     #[test]

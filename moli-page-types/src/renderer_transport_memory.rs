@@ -135,7 +135,7 @@ impl SubresourceResponseBody {
                 .chunks
                 .capacity()
                 .saturating_mul(std::mem::size_of::<DiskData>())
-                .saturating_add(storage.trailing_bytes.capacity())
+                .saturating_add(storage.trailing_bytes.len())
                 .saturating_add(
                     text_cache
                         .lock()
