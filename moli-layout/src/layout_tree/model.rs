@@ -319,6 +319,12 @@ pub struct LayoutScrollExtent {
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutBoxGeometry {
     pub id: LayoutOutputBoxId,
+    /// Accumulated CSS `zoom` already applied to this box's layout lengths.
+    ///
+    /// Transformed client geometry keeps the zoomed values. CSSOM integer box
+    /// metrics divide their untransformed layout values by this factor, as
+    /// Blink's `AdjustForAbsoluteZoom` does at its DOM binding boundary.
+    pub effective_zoom: f32,
     /// Source/LayoutObject ancestry before formatting-tree normalization.
     pub structural_parent: Option<LayoutOutputBoxId>,
     /// Parent in the normalized formatting tree.

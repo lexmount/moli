@@ -152,13 +152,17 @@ where
                         geometry.border_box.y,
                     ))
             });
+        let unzoom = CssomAbsoluteZoom::new(geometry.effective_zoom);
         let client_size = if geometry.uses_viewport_client_metrics {
             LayoutSize::new(
                 self.viewport.css_width as f32,
                 self.viewport.css_height as f32,
             )
         } else {
-            LayoutSize::new(geometry.padding_box.width, geometry.padding_box.height)
+            unzoom.size(LayoutSize::new(
+                geometry.padding_box.width,
+                geometry.padding_box.height,
+            ))
         };
         let (scrollport, scrollable_overflow) = if uses_viewport_scroll {
             let content_to_viewport =
@@ -179,22 +183,25 @@ where
         };
         Some(LayoutElementMetrics {
             offset_parent,
-            offset_position: LayoutPoint::new(
+            offset_position: unzoom.point(LayoutPoint::new(
                 layout_origin.x - offset_parent_origin.x,
                 layout_origin.y - offset_parent_origin.y,
-            ),
+            )),
             border_origin_in_viewport_ignoring_css_transforms,
-            offset_size,
-            content_size: LayoutSize::new(geometry.content_box.width, geometry.content_box.height),
+            offset_size: unzoom.size(offset_size),
+            content_size: unzoom.size(LayoutSize::new(
+                geometry.content_box.width,
+                geometry.content_box.height,
+            )),
             client_size,
-            client_border: LayoutPoint::new(
+            client_border: unzoom.point(LayoutPoint::new(
                 geometry.padding_box.x - geometry.border_box.x,
                 geometry.padding_box.y - geometry.border_box.y,
-            ),
-            scroll_size: extent.scroll_size,
-            scroll_offset: extent.applied_offset,
-            minimum_scroll_offset: extent.minimum_offset,
-            maximum_scroll_offset: extent.maximum_offset,
+            )),
+            scroll_size: unzoom.size(extent.scroll_size),
+            scroll_offset: unzoom.point(extent.applied_offset),
+            minimum_scroll_offset: unzoom.point(extent.minimum_offset),
+            maximum_scroll_offset: unzoom.point(extent.maximum_offset),
             scrollport,
             scrollable_overflow,
             is_scroll_container: extent.is_scroll_container,
@@ -471,6 +478,31 @@ where
     }
 }
 
+/// Converts effective-zoomed layout scalars to the coordinate space exposed
+/// by CSSOM integer box and scroll metrics. Viewport quads intentionally stay
+/// zoomed: their normalized bases map points back into these unzoomed sizes.
+#[derive(Clone, Copy)]
+struct CssomAbsoluteZoom(f32);
+
+impl CssomAbsoluteZoom {
+    fn new(effective_zoom: f32) -> Self {
+        debug_assert!(effective_zoom.is_finite() && effective_zoom > 0.0);
+        Self(if effective_zoom.is_finite() && effective_zoom > 0.0 {
+            effective_zoom
+        } else {
+            1.0
+        })
+    }
+
+    fn point(self, point: LayoutPoint) -> LayoutPoint {
+        LayoutPoint::new(point.x / self.0, point.y / self.0)
+    }
+
+    fn size(self, size: LayoutSize) -> LayoutSize {
+        LayoutSize::new(size.width / self.0, size.height / self.0)
+    }
+}
+
 impl<N> FrozenLayoutTree<N>
 where
     N: Copy + Debug + Eq + Hash,
@@ -577,6 +609,7 @@ where
             return None;
         }
         let base_is_positioned = geometry.position != LayoutPosition::Static;
+        let base_effective_zoom = geometry.effective_zoom;
         let mut in_fixed_position_chain = geometry.position == LayoutPosition::Fixed;
         let mut candidate = geometry.structural_parent;
         while let Some(id) = candidate {
@@ -608,6 +641,14 @@ where
                 || parent.is_body_element
                 || (!base_is_positioned && parent.is_table_offset_parent)
             {
+                return Some(id);
+            }
+            // CSSOM View preserves WebKit/Blink's long-standing extension:
+            // offsetParent stops at the first exposed layout ancestor whose
+            // absolute zoom differs from the target. Resolve ordinary
+            // containing-block candidates first, exactly as Blink does, then
+            // admit this geometry-coordinate boundary.
+            if base_effective_zoom != parent.effective_zoom {
                 return Some(id);
             }
             in_fixed_position_chain |= parent.position == LayoutPosition::Fixed;

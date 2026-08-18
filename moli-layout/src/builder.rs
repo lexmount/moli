@@ -318,7 +318,12 @@ where
         }
         layout_box.replaced_image = self.source.replaced_image(source_node, &style);
         layout_box.css_images = self.css_image_resources(&style);
-        layout_box.scroll_offset = self.source.scroll_offset(source_node);
+        let scroll_offset = self.source.scroll_offset(source_node);
+        let effective_zoom = style.effective_zoom();
+        layout_box.scroll_offset = crate::LayoutPoint::new(
+            scroll_offset.x * effective_zoom,
+            scroll_offset.y * effective_zoom,
+        );
         layout_box
     }
 
