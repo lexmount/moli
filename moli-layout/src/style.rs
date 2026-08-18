@@ -1383,6 +1383,18 @@ impl ResolvedLayoutStyle {
         self.size_containment
     }
 
+    /// Returns the cumulative CSS `zoom` used by this box's computed values.
+    ///
+    /// Stylo has already applied this factor to computed CSS lengths. Browser
+    /// resources expose natural sizes in their own CSS-pixel coordinate space,
+    /// so the replaced-content adapter uses the same factor when it imports
+    /// those sizes into layout space.
+    pub(crate) fn effective_zoom(&self) -> f32 {
+        self.computed
+            .as_ref()
+            .map_or(1.0, |computed| computed.effective_zoom.value())
+    }
+
     pub(crate) const fn is_visible(&self) -> bool {
         self.visible
     }

@@ -20,7 +20,11 @@ pub(crate) struct ReplacedContext {
 }
 
 impl ReplacedContext {
-    pub(crate) fn for_element(kind: LayoutReplacedKind, metrics: Option<ReplacedMetrics>) -> Self {
+    pub(crate) fn for_element(
+        kind: LayoutReplacedKind,
+        metrics: Option<ReplacedMetrics>,
+        effective_zoom: f32,
+    ) -> Self {
         let mut metrics = metrics.unwrap_or_default();
         metrics.intrinsic_width = valid_dimension(metrics.intrinsic_width);
         metrics.intrinsic_height = valid_dimension(metrics.intrinsic_height);
@@ -45,7 +49,7 @@ impl ReplacedContext {
                 height: 150.0,
             },
         };
-        let default_object_size = metrics
+        let unzoomed_default_object_size = metrics
             .default_object_size
             .filter(|size| {
                 size.width.is_finite()
@@ -66,13 +70,18 @@ impl ReplacedContext {
                 .filter(|(_, height)| *height > 0.0)
                 .map(|(width, height)| width / height)
         });
-        let natural_sizing = ReplacedNaturalSizing::new(
-            Size {
-                width: metrics.intrinsic_width,
-                height: metrics.intrinsic_height,
-            },
-            default_object_size,
-        );
+        let clamp_image_axes = kind == LayoutReplacedKind::Image && effective_zoom != 1.0;
+        let natural_dimensions = Size {
+            width: metrics
+                .intrinsic_width
+                .map(|width| zoom_natural_dimension(width, effective_zoom, clamp_image_axes)),
+            height: metrics
+                .intrinsic_height
+                .map(|height| zoom_natural_dimension(height, effective_zoom, clamp_image_axes)),
+        };
+        let default_object_size = unzoomed_default_object_size
+            .map(|dimension| zoom_natural_dimension(dimension, effective_zoom, false));
+        let natural_sizing = ReplacedNaturalSizing::new(natural_dimensions, default_object_size);
         // Canvas dimensions define its intrinsic coordinate space even while
         // its pixels remain an unavailable placeholder in Phase 4.
         let inherent_ratio = inherent_ratio.or_else(|| {
@@ -113,4 +122,73 @@ impl ReplacedContext {
 
 fn valid_dimension(value: Option<f32>) -> Option<f32> {
     value.filter(|value| value.is_finite() && *value >= 0.0)
+}
+
+fn zoom_natural_dimension(value: f32, effective_zoom: f32, clamp_nonzero: bool) -> f32 {
+    debug_assert!(effective_zoom.is_finite() && effective_zoom >= 0.0);
+    let scaled = (f64::from(value) * f64::from(effective_zoom)).min(f64::from(f32::MAX)) as f32;
+    if clamp_nonzero && value > 0.0 {
+        scaled.max(1.0)
+    } else {
+        scaled
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ReplacedObjectSize;
+
+    #[test]
+    fn effective_zoom_moves_resource_natural_sizes_into_layout_space() {
+        let context = ReplacedContext::for_element(
+            LayoutReplacedKind::Canvas,
+            Some(ReplacedMetrics {
+                intrinsic_width: Some(12.0),
+                intrinsic_height: Some(8.0),
+                default_object_size: Some(ReplacedObjectSize::new(300.0, 150.0)),
+                intrinsic_ratio: Some(1.5),
+            }),
+            2.5,
+        );
+
+        assert_eq!(
+            context.natural_sizing.dimensions,
+            Size {
+                width: Some(30.0),
+                height: Some(20.0),
+            }
+        );
+        assert_eq!(
+            context.natural_sizing.default_object_size,
+            Size {
+                width: 750.0,
+                height: 375.0,
+            }
+        );
+        assert_eq!(context.inherent_ratio, Some(1.5));
+    }
+
+    #[test]
+    fn zoomed_image_axes_preserve_chromiums_one_pixel_floor() {
+        let context = ReplacedContext::for_element(
+            LayoutReplacedKind::Image,
+            Some(ReplacedMetrics {
+                intrinsic_width: Some(2.0),
+                intrinsic_height: Some(0.5),
+                default_object_size: None,
+                intrinsic_ratio: None,
+            }),
+            0.25,
+        );
+
+        assert_eq!(
+            context.natural_sizing.dimensions,
+            Size {
+                width: Some(1.0),
+                height: Some(1.0),
+            }
+        );
+        assert_eq!(context.inherent_ratio, Some(4.0));
+    }
 }
