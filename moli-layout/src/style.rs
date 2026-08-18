@@ -627,6 +627,8 @@ impl ResolvedLayoutStyle {
             StyloWritingMode::HorizontalTb => taffy::WritingMode::HorizontalTb,
             StyloWritingMode::VerticalRl => taffy::WritingMode::VerticalRl,
             StyloWritingMode::VerticalLr => taffy::WritingMode::VerticalLr,
+            StyloWritingMode::SidewaysRl => taffy::WritingMode::SidewaysRl,
+            StyloWritingMode::SidewaysLr => taffy::WritingMode::SidewaysLr,
         };
         let unicode_bidi = match computed.clone_unicode_bidi() {
             StyloUnicodeBidi::Normal => InlineUnicodeBidi::Normal,
