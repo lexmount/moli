@@ -311,4 +311,6 @@ browser action, event, network observation, or visual result occurred.
 Unless a file or directory states otherwise, you may use Moli under either the
 [Apache License 2.0](LICENSE-APACHE) or the [MIT License](LICENSE-MIT), at your
 option. Separately licensed third-party components and fixtures remain subject
-to their own licenses and notices.
+to their own licenses and notices. [`license-metadata.json`](license-metadata.json)
+records the machine-readable default, and additional distributable notices are
+collected under [`licenses/`](licenses/).
