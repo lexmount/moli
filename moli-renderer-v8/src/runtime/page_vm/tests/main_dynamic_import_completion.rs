@@ -636,7 +636,7 @@ async fn document_open_preserves_inflight_dynamic_import_in_the_same_script_stat
                 .vm()
                 .current_main_dynamic_import_graph_fetch_target(target.load_id()),
             Some(target),
-            "rotating Moli's Document generation must not make the same-realm import stale"
+            "replacing Moli's exact Document owner must not make the same-realm import stale"
         );
         assert_eq!(
             original_loader.state(),

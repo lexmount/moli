@@ -215,7 +215,7 @@ pub(crate) enum PageServiceWorkerClientMessageTargetEffect {
     /// dispatchable event. The selected task still owns its normal
     /// checkpoint, without callback reconciliation.
     CurrentTargetProducedNoDispatchableEvent,
-    /// The target's client/document generation was no longer current.
+    /// The target's exact client/Document identity was no longer current.
     DiscardedStaleTarget,
     /// The Page task belonged to a retired root Document and may not inspect
     /// or modify a same-id client in the replacement PageVm.

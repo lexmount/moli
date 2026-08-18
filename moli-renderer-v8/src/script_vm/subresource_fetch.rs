@@ -1398,7 +1398,7 @@ impl ScriptVm {
         // Request interception may resume after the initiating Document has
         // navigated. The lease retains the request-time frozen client; looking
         // up the ambient Page loader here would silently rebind policy/backend
-        // to a newer Document generation.
+        // to a newer Document identity.
         let loader = pending.load.request_client();
         let mut request = moli_fetch::Request::new(
             &request_method,

@@ -20,7 +20,7 @@ pub(super) enum WorkerExecutionState {
         /// when `new Worker()` starts.
         ///
         /// Besides freezing the request client, the lease binds cancellation
-        /// and task execution to that Document generation. Completion may run
+        /// and task execution to that exact Document. Completion may run
         /// after navigation, but can never rebind to the then-current main
         /// Document.
         outside_settings_load: crate::network::loads::ResourceLoadLease,

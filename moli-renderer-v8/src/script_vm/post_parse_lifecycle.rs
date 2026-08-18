@@ -561,7 +561,7 @@ impl ScriptVm {
         self.enqueue_runtime_script_signal_if_needed();
     }
 
-    async fn flush_pending_runtime_script_work_until_generation_stable(
+    async fn flush_pending_runtime_script_work_until_document_owner_stable(
         &mut self,
         loader: &ResourceRequestClient,
         initial_wait_for_dynamic_loads: bool,
@@ -570,7 +570,7 @@ impl ScriptVm {
     ) -> std::result::Result<RuntimePendingWorkFlushOutcome, String> {
         let mut wait_for_dynamic_loads = initial_wait_for_dynamic_loads;
         loop {
-            let generation_before = self.document_runtime.runtime_reset_generation();
+            let document_owner_before = self.current_main_document_task_owner();
             let outcome = self
                 .flush_pending_work_with_turn_budget(
                     loader,
@@ -578,7 +578,7 @@ impl ScriptVm {
                     yield_after_one_runnable,
                 )
                 .await?;
-            if self.document_runtime.runtime_reset_generation() != generation_before {
+            if self.current_main_document_task_owner() != document_owner_before {
                 // A script replaced the Document while this bounded flush was
                 // running. Reconcile the new exact runtime owner before
                 // publishing an outcome for the post-parse caller.
@@ -1895,7 +1895,7 @@ impl ScriptVm {
             {
                 self.resume_runtime_script_work_after_deferred_page_tasks();
                 match self
-                    .flush_pending_runtime_script_work_until_generation_stable(
+                    .flush_pending_runtime_script_work_until_document_owner_stable(
                         loader, true, false, None,
                     )
                     .await?

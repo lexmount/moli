@@ -8,7 +8,7 @@ use super::DocumentResourceLoader;
 ///
 /// It is intentionally separate from the shared browser resource runtime: a
 /// frame handle may be reused after navigation, while the full
-/// `FrameDocumentTaskOwner` includes the non-reused Document generation.
+/// `FrameDocumentTaskOwner` includes the non-reused Document identity.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct DocumentResourceLoaderRegistry {
     loaders: Rc<RefCell<HashMap<WindowDocumentOwner, DocumentResourceLoader>>>,

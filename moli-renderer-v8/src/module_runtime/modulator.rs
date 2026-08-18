@@ -90,7 +90,7 @@ impl NativeDocumentModulator {
     /// Chromium's `Modulator::From(ScriptState*)` stores the module map and
     /// dynamic resolver in per-context data. `Document::open()` creates a new
     /// parser but returns the same Document and keeps that ScriptState alive.
-    /// Moli rotates an internal Document generation, so this explicit
+    /// Moli installs a new exact Document owner, so this explicit
     /// split prevents that implementation detail from canceling `import()`.
     pub(crate) fn clear_for_document_replacement(&mut self) {
         self.core

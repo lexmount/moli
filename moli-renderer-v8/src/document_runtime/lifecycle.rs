@@ -201,6 +201,11 @@ impl DocumentRuntime {
     }
 
     pub(crate) fn open_document(&mut self) {
+        // Production runtimes replace this temporary standalone identity with
+        // the exact new Frame owner in the surrounding owner transaction.
+        // Rotating first invalidates parser work from the retired Document
+        // even while that transaction is still being committed.
+        self.document_incarnation = DocumentRuntimeIncarnationIdentity::standalone();
         // Blink's Document::ImplicitOpen removes every current child and leaves
         // the Document empty. The parser creates html/head/body only when input
         // is subsequently consumed (or when it is closed with empty input).
@@ -243,7 +248,6 @@ impl DocumentRuntime {
         self.processed_meta_content_security_policy_handles
             .get_mut()
             .clear();
-        self.runtime_reset_generation = self.runtime_reset_generation.wrapping_add(1);
         self.document_input_stream_opened = true;
         self.set_document_ready_state(DocumentReadyState::Loading);
     }
@@ -274,8 +278,8 @@ impl DocumentRuntime {
         self.late_preload_stylesheet_handles.clear();
     }
 
-    pub(crate) fn runtime_reset_generation(&self) -> u64 {
-        self.runtime_reset_generation
+    pub(crate) fn bind_main_document_task_owner(&mut self, owner: FrameDocumentTaskOwner) {
+        self.document_incarnation = DocumentRuntimeIncarnationIdentity::MainFrame(owner);
     }
 
     pub(crate) fn parser_module_scripts(&self) -> &ModuleScriptContinuationStore {

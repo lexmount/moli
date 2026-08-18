@@ -13,7 +13,7 @@ use super::RendererOwnerWakeSender;
 ///
 /// The id is never reused within a PageVm. The enclosing task owner carries
 /// the root Page and Window-realm identities, so `document.open()` can preserve
-/// Window-owned WebCrypto work without projecting a Document generation into
+/// Window-owned WebCrypto work without projecting a Document identity into
 /// the task identity.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct RendererPageWebCryptoTaskId(u64);

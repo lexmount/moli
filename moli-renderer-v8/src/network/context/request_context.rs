@@ -2,7 +2,7 @@ use url::Url;
 
 use crate::native_bridge::WindowDocumentOwner;
 
-/// Request settings captured for one exact committed Document generation.
+/// Request settings captured for one exact committed Document.
 #[derive(Clone, Debug)]
 pub(crate) struct DocumentFetchContext {
     owner: WindowDocumentOwner,

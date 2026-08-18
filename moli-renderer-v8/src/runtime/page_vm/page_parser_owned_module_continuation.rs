@@ -73,7 +73,6 @@ impl PageVm {
         tracing::debug!(
             ?selected_owner,
             current_document_owner = ?self.vm().current_main_document_task_owner(),
-            current_runtime_generation = self.vm().document_runtime.runtime_reset_generation(),
             "completed selected parser-owned module continuation"
         );
         Ok(())

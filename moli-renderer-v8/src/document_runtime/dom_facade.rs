@@ -99,7 +99,7 @@ impl DocumentRuntime {
     ) {
         let connected_roots = effects.tree().connected_roots().to_vec();
         let form_owner_effects = effects.clone();
-        self.assert_active_parser_dom_generation();
+        self.assert_active_parser_document_incarnation();
         let result = {
             let dom_host = self.dom_host.borrow_mut();
             apply_runtime_mutation_effects_to_dom_host(

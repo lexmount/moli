@@ -61,11 +61,11 @@ impl Drop for DocumentResourceLoaderAuthority {
     }
 }
 
-/// Resource loading authority for one committed Document generation.
+/// Resource loading authority for one exact committed Document.
 ///
 /// Clones share the authority/lifecycle and are safe to retain in asynchronous
 /// work. Replacing the transport backend preserves that same authority; a new
-/// Document generation must instead call [`Self::fork_for_document`].
+/// Document must instead call [`Self::fork_for_document`].
 #[derive(Clone)]
 pub struct DocumentResourceLoader {
     request_client: ResourceRequestClient,
@@ -100,7 +100,7 @@ impl DocumentResourceLoaderBootstrap {
     }
 }
 
-/// Exact backend source selected when a new Document generation commits.
+/// Exact backend source selected when a new Document commits.
 ///
 /// Network navigations must transfer their attempt-local seed. Synthetic
 /// Documents such as initial `about:blank` and `srcdoc` must instead name the

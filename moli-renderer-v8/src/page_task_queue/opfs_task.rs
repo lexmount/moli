@@ -13,7 +13,7 @@ use super::RendererOwnerWakeSender;
 ///
 /// The id is never reused within a PageVm. The root Page and Window-realm
 /// identities live in [`RendererPageOpfsTaskOwner`], so `document.open()` can
-/// preserve Window-owned work without projecting a Document generation into
+/// preserve Window-owned work without projecting a Document identity into
 /// the task identity.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct RendererPageOpfsTaskId(u64);

@@ -1662,7 +1662,7 @@ impl DocumentRuntime {
         }
         self.delivered_meta_content_security_policies
             .borrow()
-            .get(&(self.runtime_reset_generation, document_handle))
+            .get(&document_handle)
             .cloned()
             .unwrap_or_default()
     }
@@ -1701,11 +1701,10 @@ impl DocumentRuntime {
                 .filter(|content| !content.is_empty())
                 .map(str::to_owned)
         };
-        let generation = self.runtime_reset_generation;
         if !self
             .processed_meta_content_security_policy_handles
             .borrow_mut()
-            .insert((generation, document_handle, handle))
+            .insert((document_handle, handle))
             || self.bypass_content_security_policy
         {
             return;
@@ -1713,7 +1712,7 @@ impl DocumentRuntime {
         if let Some(policy) = policy {
             self.delivered_meta_content_security_policies
                 .borrow_mut()
-                .entry((generation, document_handle))
+                .entry(document_handle)
                 .or_default()
                 .push(policy);
         }

@@ -179,6 +179,7 @@ impl JsContextHost {
             main_owner_snapshot.local_window_id,
             main_owner_snapshot.document_id,
         );
+        runtime.bind_main_document_task_owner(main_document_owner);
         let service_worker_storage_key = top_level_storage_key
             .as_ref()
             .map(moli_storage_key::MoliStorageKey::serialized_storage_key)
@@ -533,6 +534,7 @@ impl JsContextHost {
             .expect("main document owner must exist before document.open() replacement");
         {
             let runtime: &mut DocumentRuntime = self;
+            runtime.bind_main_document_task_owner(transition.current_owner());
             runtime.start_root_document_parser_stream();
         }
         self.dom_agent_state

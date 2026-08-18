@@ -10,7 +10,7 @@ use super::RendererOwnerWakeSender;
 /// Stable Page owner of a V8 foreground task.
 ///
 /// Foreground work belongs to the Page-lifetime isolate rather than to one
-/// Document generation. `V8ForegroundTask` itself retains the exact isolate
+/// Document incarnation. `V8ForegroundTask` itself retains the exact isolate
 /// registration generation, so a task transferred before isolate retirement
 /// becomes a no-op instead of entering a reused isolate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

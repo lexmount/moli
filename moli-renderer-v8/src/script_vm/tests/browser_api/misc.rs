@@ -20131,7 +20131,7 @@ async fn navigator_service_worker_window_client_navigate_rejects_when_overwritte
 }
 
 #[tokio::test]
-async fn service_worker_window_client_owner_requests_reject_on_stale_page_generation() {
+async fn service_worker_window_client_owner_requests_reject_on_stale_document_owner() {
     let (base_url, server) = spawn_service_worker_response_server(vec![(
         "/app/worker.js",
         "text/javascript; charset=utf-8",
@@ -20179,7 +20179,20 @@ async fn service_worker_window_client_owner_requests_reject_on_stale_page_genera
 
     let service = browser_context_runtime.service_worker_runtime();
     assert_eq!(service.pending_service_lane_event_count(), 0);
-    let stale_generation = vm.document_runtime.runtime_reset_generation() + 1;
+    let current_owner = vm
+        .current_main_document_task_owner()
+        .expect("service worker test page should retain a main Document owner");
+    let stale_owner = crate::frame_owner_model::FrameDocumentTaskOwner::new(
+        current_owner.scheduler_lane_id,
+        current_owner.local_window_id,
+        crate::frame_owner_model::DocumentId(
+            current_owner
+                .document_id
+                .0
+                .checked_add(1)
+                .expect("test Document id should have a successor"),
+        ),
+    );
     run_service_worker_client_navigate_request_task_for_test(
         &mut vm,
         &loader,
@@ -20187,7 +20200,7 @@ async fn service_worker_window_client_owner_requests_reject_on_stale_page_genera
         crate::types::ServiceWorkerClientNavigateRequestCompletion {
             target: service_worker_window_client_target_for_test(
                 crate::runtime::ServiceWorkerClientId::from_u64_for_test(1),
-                crate::native_bridge::WindowDocumentOwner::for_test(stale_generation),
+                crate::native_bridge::WindowDocumentOwner::Frame(stale_owner),
             ),
             request_id: 101,
             source_version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
@@ -20205,7 +20218,7 @@ async fn service_worker_window_client_owner_requests_reject_on_stale_page_genera
         crate::types::ServiceWorkerClientFocusRequestCompletion {
             target: service_worker_window_client_target_for_test(
                 crate::runtime::ServiceWorkerClientId::from_u64_for_test(1),
-                crate::native_bridge::WindowDocumentOwner::for_test(stale_generation),
+                crate::native_bridge::WindowDocumentOwner::Frame(stale_owner),
             ),
             request_id: 102,
             source_version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
@@ -20222,7 +20235,7 @@ async fn service_worker_window_client_owner_requests_reject_on_stale_page_genera
         crate::types::ServiceWorkerClientsOpenWindowRequestCompletion {
             host: service_worker_window_client_target_for_test(
                 crate::runtime::ServiceWorkerClientId::from_u64_for_test(1),
-                crate::native_bridge::WindowDocumentOwner::for_test(stale_generation),
+                crate::native_bridge::WindowDocumentOwner::Frame(stale_owner),
             ),
             request_id: 103,
             source_version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),

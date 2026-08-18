@@ -223,7 +223,7 @@ impl ResourceLoadRegistry {
     /// Seals this registry and transfers its existing loads to a replacement
     /// Document authority without changing their captured request policy.
     ///
-    /// `document.open()` replaces Moli's internal Document generation
+    /// `document.open()` replaces Moli's exact Document owner
     /// while preserving the LocalWindow and its active fetch group. New loads
     /// must use the replacement Document's policy, but already-started Fetch,
     /// XHR, image, and WebSocket work must remain cancellable with that same

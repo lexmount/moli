@@ -31,7 +31,7 @@ impl JsContextHost {
         else {
             return Ok(false);
         };
-        // Frame-document scheduling owns ordering and document generations.
+        // Frame-document scheduling owns ordering and exact Document identities.
         // This load payload is intentionally unbound to the main scheduler.
         let script = build_runtime_prepared_script(
             preparation,

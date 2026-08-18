@@ -517,15 +517,52 @@ impl std::fmt::Debug for StylesheetLifecycleState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ParserStepGenerationGuard {
-    runtime_reset_generation: u64,
+#[derive(Clone)]
+enum DocumentRuntimeIncarnationIdentity {
+    MainFrame(FrameDocumentTaskOwner),
+    Standalone(Arc<()>),
+}
+
+impl DocumentRuntimeIncarnationIdentity {
+    fn standalone() -> Self {
+        Self::Standalone(Arc::new(()))
+    }
+}
+
+impl std::fmt::Debug for DocumentRuntimeIncarnationIdentity {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MainFrame(owner) => formatter.debug_tuple("MainFrame").field(owner).finish(),
+            Self::Standalone(token) => formatter
+                .debug_tuple("Standalone")
+                .field(&Arc::as_ptr(token))
+                .finish(),
+        }
+    }
+}
+
+impl PartialEq for DocumentRuntimeIncarnationIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::MainFrame(left), Self::MainFrame(right)) => left == right,
+            (Self::Standalone(left), Self::Standalone(right)) => Arc::ptr_eq(left, right),
+            (Self::MainFrame(_), Self::Standalone(_))
+            | (Self::Standalone(_), Self::MainFrame(_)) => false,
+        }
+    }
+}
+
+impl Eq for DocumentRuntimeIncarnationIdentity {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParserStepOwnerGuard {
+    document_incarnation: DocumentRuntimeIncarnationIdentity,
     depth: usize,
 }
 
 #[derive(Debug, Default)]
 struct ParserReentryState {
-    active_step_generation_guard: Option<ParserStepGenerationGuard>,
+    active_step_owner_guard: Option<ParserStepOwnerGuard>,
     custom_element_reaction_queue_active: bool,
     // Counts nested synchronous parser-blocking script execution scopes,
     // including load/error completion dispatched before parser resume. This
@@ -681,8 +718,8 @@ pub(super) struct DocumentRuntime {
     script_execution_control: crate::script_execution_control::RendererScriptExecutionControl,
     bypass_content_security_policy: bool,
     policy_container: DocumentPolicyContainer,
-    delivered_meta_content_security_policies: RefCell<HashMap<(u64, DomHandle), Vec<String>>>,
-    processed_meta_content_security_policy_handles: RefCell<HashSet<(u64, DomHandle, DomHandle)>>,
+    delivered_meta_content_security_policies: RefCell<HashMap<DomHandle, Vec<String>>>,
+    processed_meta_content_security_policy_handles: RefCell<HashSet<(DomHandle, DomHandle)>>,
     document_character_set: String,
     resource_loader_binding: Option<DocumentResourceLoaderBinding>,
     script_context_stack: Vec<CurrentScriptContext>,
@@ -712,7 +749,7 @@ pub(super) struct DocumentRuntime {
     custom_element_reaction_depth: usize,
     structural_mutation_depth: usize,
     dom_content_loaded_dispatched: bool,
-    runtime_reset_generation: u64,
+    document_incarnation: DocumentRuntimeIncarnationIdentity,
     document_input_stream_opened: bool,
     next_document_write_external_script_load_id: u64,
     document_write_script_preload_scanner:
@@ -804,16 +841,20 @@ impl DocumentRuntime {
     }
 
     #[cfg(test)]
-    pub(crate) fn active_parser_step_generation(&self) -> Option<u64> {
+    fn active_parser_step_document_incarnation(
+        &self,
+    ) -> Option<DocumentRuntimeIncarnationIdentity> {
         self.parser_reentry
-            .active_step_generation_guard
-            .map(|guard| guard.runtime_reset_generation)
+            .active_step_owner_guard
+            .as_ref()
+            .map(|guard| guard.document_incarnation.clone())
     }
 
     #[cfg(test)]
     pub(crate) fn active_parser_step_depth(&self) -> Option<usize> {
         self.parser_reentry
-            .active_step_generation_guard
+            .active_step_owner_guard
+            .as_ref()
             .map(|guard| guard.depth)
     }
 
@@ -914,7 +955,7 @@ impl DocumentRuntime {
 
     /// Runs a synchronous parser step against the runtime-owned live DOM.
     ///
-    /// This keeps the active generation/depth guard owned by `DocumentRuntime`
+    /// This keeps the active Document-owner/depth guard owned by `DocumentRuntime`
     /// and guarantees the guard is released when the step returns or unwinds.
     #[track_caller]
     pub(crate) fn with_dom_host_parse_step<R>(&mut self, step: impl FnOnce(&mut Self) -> R) -> R {
@@ -935,17 +976,17 @@ impl DocumentRuntime {
 
     /// Starts one synchronous parser step against the runtime-owned live DOM.
     ///
-    /// Parser sinks do not receive this generation identity. They call back into
+    /// Parser sinks do not receive this owner identity. They call back into
     /// `DocumentRuntime`, and each callback short-borrows the current DomHost
-    /// after this runtime-private active step guard rejects stale document
-    /// replacement generation changes.
+    /// after this runtime-private active step guard rejects a replaced
+    /// Document incarnation.
     #[track_caller]
     pub(crate) fn begin_dom_host_parse_step(&mut self) {
-        let generation = self.runtime_reset_generation;
-        if let Some(active) = self.parser_reentry.active_step_generation_guard.as_mut() {
+        let document_incarnation = self.document_incarnation.clone();
+        if let Some(active) = self.parser_reentry.active_step_owner_guard.as_mut() {
             assert_eq!(
-                active.runtime_reset_generation, generation,
-                "nested parser steps must target the current document generation"
+                active.document_incarnation, document_incarnation,
+                "nested parser steps must target the current Document incarnation"
             );
             active.depth = active
                 .depth
@@ -953,8 +994,8 @@ impl DocumentRuntime {
                 .expect("parser step depth overflow");
             return;
         }
-        self.parser_reentry.active_step_generation_guard = Some(ParserStepGenerationGuard {
-            runtime_reset_generation: generation,
+        self.parser_reentry.active_step_owner_guard = Some(ParserStepOwnerGuard {
+            document_incarnation,
             depth: 1,
         });
     }
@@ -964,7 +1005,7 @@ impl DocumentRuntime {
     pub(crate) fn finish_dom_host_parse_step(&mut self) {
         let guard = self
             .parser_reentry
-            .active_step_generation_guard
+            .active_step_owner_guard
             .as_mut()
             .expect("parser step must be active before finishing");
         assert!(
@@ -973,25 +1014,26 @@ impl DocumentRuntime {
         );
         guard.depth -= 1;
         if guard.depth == 0 {
-            self.parser_reentry.active_step_generation_guard.take();
+            self.parser_reentry.active_step_owner_guard.take();
         }
     }
 
     #[track_caller]
-    fn assert_active_parser_dom_generation(&self) {
+    fn assert_active_parser_document_incarnation(&self) {
         let active = self
             .parser_reentry
-            .active_step_generation_guard
+            .active_step_owner_guard
+            .as_ref()
             .expect("parser step must be active");
         assert_eq!(
-            active.runtime_reset_generation, self.runtime_reset_generation,
-            "parser step must target the current document generation"
+            active.document_incarnation, self.document_incarnation,
+            "parser step must target the current Document incarnation"
         );
     }
 
     #[track_caller]
     fn dom_host_mut_for_active_parser_step(&mut self) -> &mut DomHost {
-        self.assert_active_parser_dom_generation();
+        self.assert_active_parser_document_incarnation();
         self.dom_host.borrow_mut()
     }
 
@@ -1073,7 +1115,7 @@ impl DocumentRuntime {
         parent: DomHandle,
         child: DomHandle,
     ) -> DomMutationEffects {
-        self.assert_active_parser_dom_generation();
+        self.assert_active_parser_document_incarnation();
         self.append_child_effects_in_structural_scope(parent, child)
     }
 
@@ -1084,7 +1126,7 @@ impl DocumentRuntime {
         child: DomHandle,
         reference_child: Option<DomHandle>,
     ) -> DomMutationEffects {
-        self.assert_active_parser_dom_generation();
+        self.assert_active_parser_document_incarnation();
         self.insert_before_effects_in_structural_scope(parent, child, reference_child)
     }
 
@@ -1094,7 +1136,7 @@ impl DocumentRuntime {
         parent: DomHandle,
         child: DomHandle,
     ) -> DomMutationEffects {
-        self.assert_active_parser_dom_generation();
+        self.assert_active_parser_document_incarnation();
         self.remove_child_effects_in_structural_scope(parent, child)
     }
 
@@ -1441,7 +1483,7 @@ mod tests {
     }
 
     #[test]
-    fn parser_runtime_dom_generation_allows_nested_steps_on_same_document_generation() {
+    fn parser_runtime_dom_owner_allows_nested_steps_on_same_document_incarnation() {
         let parser = HtmlParser;
         let document = parser.parse(
             Url::parse("https://example.com/").unwrap(),
@@ -1450,23 +1492,29 @@ mod tests {
         let mut runtime = DocumentRuntime::from_document(document);
 
         runtime.begin_dom_host_parse_step();
-        let outer_generation = runtime.active_parser_step_generation();
+        let outer_incarnation = runtime.active_parser_step_document_incarnation();
         runtime.begin_dom_host_parse_step();
-        assert_eq!(runtime.active_parser_step_generation(), outer_generation);
+        assert_eq!(
+            runtime.active_parser_step_document_incarnation(),
+            outer_incarnation
+        );
         assert_eq!(runtime.active_parser_step_depth(), Some(2));
 
         runtime.finish_dom_host_parse_step();
-        assert_eq!(runtime.active_parser_step_generation(), outer_generation);
+        assert_eq!(
+            runtime.active_parser_step_document_incarnation(),
+            outer_incarnation
+        );
         assert_eq!(runtime.active_parser_step_depth(), Some(1));
         runtime.finish_dom_host_parse_step();
 
-        assert_eq!(runtime.active_parser_step_generation(), None);
+        assert_eq!(runtime.active_parser_step_document_incarnation(), None);
         assert_eq!(runtime.active_parser_step_depth(), None);
     }
 
     #[test]
-    #[should_panic(expected = "current document generation")]
-    fn parser_runtime_dom_generation_rejects_document_generation_replacement() {
+    #[should_panic(expected = "current Document incarnation")]
+    fn parser_runtime_dom_owner_rejects_document_replacement() {
         let parser = HtmlParser;
         let document = parser.parse(
             Url::parse("https://example.com/").unwrap(),

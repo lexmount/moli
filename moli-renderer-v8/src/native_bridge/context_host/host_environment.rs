@@ -583,7 +583,7 @@ impl JsContextHost {
 
     /// Replaces a Document authority while preserving its LocalWindow loads.
     ///
-    /// `document.open()` rotates Moli's internal Document generation but
+    /// `document.open()` replaces Moli's exact Document owner but
     /// does not abort an otherwise non-navigating Document's active Fetch,
     /// XHR, image, or WebSocket work. Existing leases move to the replacement
     /// lifecycle registry while retaining their captured request clients and
