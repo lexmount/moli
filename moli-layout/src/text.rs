@@ -16,7 +16,7 @@ use parley::{
 };
 use thiserror::Error;
 
-use crate::stylo_to_parley::TextBrush;
+use crate::stylo_to_parley::{SyntheticWeight, TextBrush};
 use crate::system_fonts::SystemFontFamilyResolver;
 
 pub(crate) struct ParleyDocumentServices {
@@ -64,6 +64,11 @@ struct SegmentedWebFontCapabilityGroup {
 struct SegmentedWebFontFamily {
     groups: Vec<SegmentedWebFontCapabilityGroup>,
 }
+
+// Blink's segmented `@font-face` selection marks a request as synthetic bold
+// when the chosen capability group cannot reach the CSS bold threshold. This
+// is distinct from Fontique's general face-relative `> 200` heuristic.
+const SYNTHETIC_BOLD_THRESHOLD: f32 = 600.0;
 
 /// Primary-font metrics attached to one resolved Parley text style.
 ///
@@ -192,6 +197,15 @@ impl ParleyDocumentServices {
                 resolved.push(family);
                 continue;
             };
+            if !matches!(&style.brush.synthetic_weight, SyntheticWeight::None)
+                && style.font_weight.value() >= SYNTHETIC_BOLD_THRESHOLD
+                && group.capabilities.weight.value() < SYNTHETIC_BOLD_THRESHOLD
+            {
+                style
+                    .brush
+                    .synthetic_weight
+                    .require_for(&group.selector_font_identities);
+            }
             let default_uses_latin_metrics =
                 character.is_none() && group.faces.iter().any(|face| face.contains('x'));
             resolved.extend(
@@ -248,16 +262,16 @@ impl ParleyDocumentServices {
             let mut layout = builder.build(&candidate);
             layout.break_all_lines(None);
             let run = layout.lines().next()?.runs().next()?;
-            if primary_font
-                .is_some_and(|identity| identity != (run.font().data.id(), run.font().index))
-            {
+            if primary_font.is_some_and(|identity| {
+                identity != (run.font().font.data.id(), run.font().font.index)
+            }) {
                 return None;
             }
-            let metrics = *run.metrics();
+            let metrics = *run.font_metrics();
             Some(InlineFontMetrics {
                 ascent: metrics.ascent,
                 descent: metrics.descent,
-                line_height: metrics.line_height,
+                line_height: run.line_height(),
                 x_height: resolved_inline_x_height(metrics.ascent, metrics.x_height),
             })
         });
@@ -910,6 +924,7 @@ mod tests {
             .next()
             .expect("one shaped run")
             .font()
+            .font
             .data
             .as_ref()
             .to_vec()

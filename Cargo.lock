@@ -1036,15 +1036,6 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "font-types"
-version = "0.11.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b38ad915f6dadd993ced50848a8291a543bd41ca62bc10740d5e64e2ab4cfd7"
-dependencies = [
- "bytemuck",
-]
-
-[[package]]
-name = "font-types"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ad67eced03f5504d9cbd3a879b5958b5c54d4e5fd794361c6eb21b05fb703411"
@@ -1082,8 +1073,8 @@ dependencies = [
 
 [[package]]
 name = "fontique"
-version = "0.10.0"
-source = "git+https://github.com/ldm0/parley?rev=bc97a16495ebeaa443b3c0571b9fab315394e573#bc97a16495ebeaa443b3c0571b9fab315394e573"
+version = "0.11.0"
+source = "git+https://github.com/ldm0/parley?rev=9bccb47368cc51b26050fab8bb515c48e4cf4db6#9bccb47368cc51b26050fab8bb515c48e4cf4db6"
 dependencies = [
  "hashbrown 0.17.1",
  "linebender_resource_handle",
@@ -1093,7 +1084,7 @@ dependencies = [
  "objc2-core-text",
  "objc2-foundation",
  "parlance",
- "read-fonts 0.39.2",
+ "read-fonts",
  "roxmltree 0.21.1",
  "smallvec",
  "windows",
@@ -1248,7 +1239,7 @@ dependencies = [
  "log",
  "peniko",
  "png",
- "skrifa 0.44.0",
+ "skrifa",
  "smallvec",
  "vello_common",
 ]
@@ -1298,25 +1289,13 @@ dependencies = [
 
 [[package]]
 name = "harfrust"
-version = "0.8.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d12c7c642d4ce8c2e784b4751a6634bd89583912265add4a679a8882d123fbcd"
-dependencies = [
- "bitflags",
- "bytemuck",
- "read-fonts 0.39.2",
- "smallvec",
-]
-
-[[package]]
-name = "harfrust"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c03d949a14aa089bbb282f7dd76a498a7f684428e4257202efc119ec010376f9"
 dependencies = [
  "bitflags",
  "bytemuck",
- "read-fonts 0.41.0",
+ "read-fonts",
  "smallvec",
 ]
 
@@ -3379,15 +3358,37 @@ dependencies = [
 [[package]]
 name = "parlance"
 version = "0.1.0"
-source = "git+https://github.com/ldm0/parley?rev=bc97a16495ebeaa443b3c0571b9fab315394e573#bc97a16495ebeaa443b3c0571b9fab315394e573"
+source = "git+https://github.com/ldm0/parley?rev=9bccb47368cc51b26050fab8bb515c48e4cf4db6#9bccb47368cc51b26050fab8bb515c48e4cf4db6"
 
 [[package]]
 name = "parley"
-version = "0.10.0"
-source = "git+https://github.com/ldm0/parley?rev=bc97a16495ebeaa443b3c0571b9fab315394e573#bc97a16495ebeaa443b3c0571b9fab315394e573"
+version = "0.11.0"
+source = "git+https://github.com/ldm0/parley?rev=9bccb47368cc51b26050fab8bb515c48e4cf4db6#9bccb47368cc51b26050fab8bb515c48e4cf4db6"
 dependencies = [
  "fontique",
- "harfrust 0.8.4",
+ "hashbrown 0.17.1",
+ "linebender_resource_handle",
+ "parlance",
+ "parley_engine",
+ "skrifa",
+ "smallvec",
+]
+
+[[package]]
+name = "parley_data"
+version = "0.11.0"
+source = "git+https://github.com/ldm0/parley?rev=9bccb47368cc51b26050fab8bb515c48e4cf4db6#9bccb47368cc51b26050fab8bb515c48e4cf4db6"
+dependencies = [
+ "icu_properties",
+]
+
+[[package]]
+name = "parley_engine"
+version = "0.11.0"
+source = "git+https://github.com/ldm0/parley?rev=9bccb47368cc51b26050fab8bb515c48e4cf4db6#9bccb47368cc51b26050fab8bb515c48e4cf4db6"
+dependencies = [
+ "fontique",
+ "harfrust",
  "hashbrown 0.17.1",
  "icu_normalizer",
  "icu_properties",
@@ -3395,15 +3396,7 @@ dependencies = [
  "linebender_resource_handle",
  "parlance",
  "parley_data",
- "skrifa 0.42.1",
-]
-
-[[package]]
-name = "parley_data"
-version = "0.10.0"
-source = "git+https://github.com/ldm0/parley?rev=bc97a16495ebeaa443b3c0571b9fab315394e573#bc97a16495ebeaa443b3c0571b9fab315394e573"
-dependencies = [
- "icu_properties",
+ "skrifa",
 ]
 
 [[package]]
@@ -3708,22 +3701,12 @@ dependencies = [
 
 [[package]]
 name = "read-fonts"
-version = "0.39.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4ed38b89c2c77ff968c524145ad65fb010f38af5c7a224b53b81d47ac2daa81"
-dependencies = [
- "bytemuck",
- "font-types 0.11.3",
-]
-
-[[package]]
-name = "read-fonts"
 version = "0.41.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "046a7d674daf459825b32f5062056d6882db0d2f5a479fbd76ccfc870ac18709"
 dependencies = [
  "bytemuck",
- "font-types 0.12.1",
+ "font-types",
  "once_cell",
 ]
 
@@ -4103,22 +4086,12 @@ checksum = "b2aa850e253778c88a04c3d7323b043aeda9d3e30d5971937c1855769763678e"
 
 [[package]]
 name = "skrifa"
-version = "0.42.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c34617370ae968efb7161bb2beb517d9084659aae19e24b89e3db25b46e4564"
-dependencies = [
- "bytemuck",
- "read-fonts 0.39.2",
-]
-
-[[package]]
-name = "skrifa"
 version = "0.44.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "819ab7d62b1d3e72d9d9dea5650bac30424f9111364bb94928dbf5ecad1baa68"
 dependencies = [
  "bytemuck",
- "read-fonts 0.41.0",
+ "read-fonts",
 ]
 
 [[package]]
@@ -5004,7 +4977,7 @@ dependencies = [
  "data-url",
  "flate2",
  "fontdb",
- "harfrust 0.12.0",
+ "harfrust",
  "imagesize",
  "kurbo",
  "log",
@@ -5012,7 +4985,7 @@ dependencies = [
  "roxmltree 0.21.1",
  "simplecss",
  "siphasher",
- "skrifa 0.44.0",
+ "skrifa",
  "strict-num",
  "svgtypes",
  "tiny-skia-path",

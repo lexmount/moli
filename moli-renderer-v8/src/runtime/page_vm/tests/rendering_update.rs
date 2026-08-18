@@ -4908,7 +4908,10 @@ html,body{{margin:0;padding:0}}
         assert_points(
             "cjk segment break and emoji fallback",
             &glyphs(&whitespace, rgb(41, 42, 43)),
-            &[(0.0, 58.0), (20.0, 58.0), (0.0, 78.0), (20.0, 78.0)],
+            // The collapsed segment break creates the soft-wrap opportunity,
+            // then CSS white-space phase II removes that trailing space from
+            // the first line. Only the three authored visible glyphs paint.
+            &[(0.0, 58.0), (0.0, 78.0), (20.0, 78.0)],
         );
         assert_points(
             "preserve-breaks",

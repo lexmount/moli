@@ -167,9 +167,15 @@ fn project_text_phase<N>(
             if glyphs.is_empty() {
                 continue;
             }
-            let font = snapshot.intern_font(run.font());
+            let font = snapshot.intern_font(&run.font().font);
             let synthesis = run.synthesis();
-            let glyph_embolden = if glyph_run.style().brush.synthetic_bold && synthesis.embolden() {
+            let font_identity = (run.font().font.data.id(), run.font().font.index);
+            let should_embolden = glyph_run
+                .style()
+                .brush
+                .synthetic_weight
+                .should_embolden(font_identity, synthesis.embolden());
+            let glyph_embolden = if should_embolden {
                 let font_size = run.font_size().max(0.0);
                 crate::PaintPoint::new(
                     (SYNTHETIC_EMBOLDEN_X_EM * font_size).min(MAX_SYNTHETIC_EMBOLDEN_PX),
@@ -181,7 +187,11 @@ fn project_text_phase<N>(
             let owned_run = PaintGlyphRun {
                 font,
                 font_size: run.font_size(),
-                normalized_coords: run.normalized_coords().to_vec(),
+                normalized_coords: run
+                    .normalized_coords()
+                    .iter()
+                    .map(|coord| coord.to_bits())
+                    .collect(),
                 color: if phase == TextPaintPhase::ClipMask {
                     PaintColor::BLACK
                 } else {
@@ -204,7 +214,7 @@ fn project_text_phase<N>(
                 }
             }
 
-            let metrics = run.metrics();
+            let metrics = run.font_metrics();
             let logical_baseline = glyph_run.baseline() + vertical_offset;
             let inline_offset = glyph_run.offset();
             let inline_advance = glyph_run.advance().max(0.0);

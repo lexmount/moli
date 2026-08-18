@@ -300,6 +300,17 @@ pub(crate) enum InlineWhiteSpaceCollapse {
     BreakSpaces,
 }
 
+impl InlineWhiteSpaceCollapse {
+    pub(crate) const fn to_parley(self) -> parley::WhiteSpaceCollapse {
+        match self {
+            Self::Collapse => parley::WhiteSpaceCollapse::Collapse,
+            Self::Preserve => parley::WhiteSpaceCollapse::Preserve,
+            Self::PreserveBreaks => parley::WhiteSpaceCollapse::PreserveBreaks,
+            Self::BreakSpaces => parley::WhiteSpaceCollapse::BreakSpaces,
+        }
+    }
+}
+
 /// Case transform applied while producing an IFC's shared logical text.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum InlineTextTransform {
@@ -1835,7 +1846,7 @@ impl ResolvedLayoutStyle {
 
     /// Resolves CSS flow-relative alignment before crossing into Parley.
     ///
-    /// Parley 0.10 derives `start` and `end` from the first strong character
+    /// Parley derives `start` and `end` from the first strong character
     /// in the text. CSS derives them from the containing block's `direction`,
     /// including for empty, numeric, and neutral-only lines. Physical
     /// alignment is therefore part of this browser-owned style seam.
@@ -1865,15 +1876,19 @@ impl ResolvedLayoutStyle {
         &self,
     ) -> parley::TextStyle<'static, 'static, crate::stylo_to_parley::TextBrush> {
         if let Some(computed) = self.computed.as_ref() {
-            return crate::stylo_to_parley::text_style(computed);
+            return crate::stylo_to_parley::text_style(
+                computed,
+                self.white_space_collapse.to_parley(),
+            );
         }
         parley::TextStyle {
             font_size: self.font_size,
             line_height: parley::LineHeight::Absolute(self.line_height),
+            white_space_collapse: self.white_space_collapse.to_parley(),
             brush: crate::stylo_to_parley::TextBrush {
                 color: self.text_color,
                 paint: true,
-                synthetic_bold: false,
+                synthetic_weight: crate::stylo_to_parley::SyntheticWeight::default(),
                 decoration: crate::stylo_to_parley::TextDecorationBrush::default(),
                 shadows: std::sync::Arc::from([]),
             },

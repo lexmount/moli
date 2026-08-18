@@ -2448,7 +2448,7 @@ where
                     state.set_line_max_advance(next_slot.width.max(0.0));
                     state.set_line_x(next_slot.x);
                     state.set_line_y(f64::from(next_slot.y));
-                    state.append_inline_box_to_line(data.advance, 0.0);
+                    state.append_inline_box_to_line(data.advance, 0.0, 0.0, context.quantize);
                 }
             }
         }
@@ -2853,6 +2853,7 @@ fn single_subject_block_alignment_offset(alignment: Option<AlignContent>, free_s
 fn empty_inline_context() -> InlineFormattingContext {
     InlineFormattingContext {
         root_style: LayoutBoxId::from_index(0),
+        quantize: true,
         font_baseline: FontBaseline::Alphabetic,
         unbroken: parley::Layout::default(),
         laid_out: None,
@@ -2864,7 +2865,6 @@ fn empty_inline_context() -> InlineFormattingContext {
         parent_strut: None,
         root_includes_used_font_metrics: false,
         style_parents: Vec::new(),
-        resolved_style_runs: Vec::new(),
         structural_boxes: Vec::new(),
         line_placements: Vec::new(),
         fragments: InlineFragments::default(),

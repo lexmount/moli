@@ -9,10 +9,7 @@
 
 use std::{collections::BTreeMap, fmt::Debug, hash::Hash, ops::Range};
 
-use parley::{
-    BreakReason, InlineBox, InlineBoxKind, Layout, PositionedLayoutItem, TextStyle,
-    WhiteSpaceCollapse,
-};
+use parley::{BreakReason, InlineBox, InlineBoxKind, Layout, PositionedLayoutItem, TextStyle};
 use taffy::{
     Direction, FontBaseline, LogicalBoxStrut, LogicalOffset, LogicalSize, MaybeResolve as _, Point,
     Rect, Size, WritingDirection, WritingMode,
@@ -428,12 +425,6 @@ impl InlineTextUnitKind {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct InlineResolvedStyleRun {
-    output_range: Range<usize>,
-    style_index: usize,
-}
-
-#[derive(Clone, Debug)]
 pub(crate) struct SourceOrigin {
     pub(crate) box_id: LayoutBoxId,
     pub(crate) byte_range: Range<usize>,
@@ -477,6 +468,9 @@ pub(crate) struct InlineStructuralBox {
 #[derive(Clone, Debug)]
 pub(crate) struct InlineFormattingContext {
     pub(crate) root_style: LayoutBoxId,
+    /// Whether Parley quantizes inline metrics to device-independent pixels.
+    /// Callers that resume the line breaker must use the same policy.
+    pub(crate) quantize: bool,
     /// Baseline protocol of the IFC owner. This is independent from Parley's
     /// horizontal shaping coordinates and controls line-box synthesis.
     pub(crate) font_baseline: FontBaseline,
@@ -500,10 +494,6 @@ pub(crate) struct InlineFormattingContext {
     /// in style deduplication prevents glyph runs from crossing a box-state
     /// boundary even when their paint/font properties are otherwise equal.
     pub(crate) style_parents: Vec<LayoutBoxId>,
-    /// Browser-side index for Parley's resolved style runs. Glyphless flow
-    /// controls do not expose a glyph style index, but still need the exact
-    /// inline box strut and parent state used while shaping their text range.
-    pub(crate) resolved_style_runs: Vec<InlineResolvedStyleRun>,
     pub(crate) structural_boxes: Vec<InlineStructuralBox>,
     pub(crate) line_placements: Vec<InlineLinePlacement>,
     pub(crate) fragments: InlineFragments,
@@ -631,13 +621,6 @@ impl InlineFormattingContext {
             .get(index)
             .copied()
             .unwrap_or(self.root_style)
-    }
-
-    fn style_index_for_range(&self, range: &Range<usize>) -> Option<usize> {
-        self.resolved_style_runs
-            .iter()
-            .find(|run| ranges_overlap(&run.output_range, range))
-            .map(|run| run.style_index)
     }
 
     fn box_includes_used_font_metrics(&self, box_id: LayoutBoxId) -> bool {
@@ -1032,15 +1015,10 @@ pub(crate) fn build_inline_fragments(
         }
 
         for run in line.runs() {
-            let run_metrics = run.metrics();
+            let run_metrics = run.font_metrics();
             for cluster in run.visual_clusters() {
                 let range = cluster.text_range();
-                let style_index = cluster
-                    .glyphs()
-                    .next()
-                    .map(|glyph| glyph.style_index())
-                    .or_else(|| context.style_index_for_range(&range))
-                    .unwrap_or_default();
+                let style_index = usize::from(cluster.style_index());
                 let vertical_offset = placement.map_or(0.0, |placement| {
                     placement.glyph_offset(run.index(), style_index)
                 });
@@ -1190,7 +1168,7 @@ pub(crate) fn build_inline_fragments(
     fragments
 }
 
-/// Builds the pass-local vertical placement sidecar that Parley 0.10 does not
+/// Builds the pass-local vertical placement sidecar that Parley does not
 /// provide for CSS `vertical-align`. The sidecar leaves Parley's shaped data
 /// immutable and applies the same offsets to glyph projection, atomic boxes,
 /// out-of-flow static positions, and fragment geometry.
@@ -1213,21 +1191,20 @@ pub(crate) fn build_inline_line_placements(
             .map(|item| match item {
                 PositionedLayoutItem::GlyphRun(glyph_run) => {
                     let run = glyph_run.run();
-                    let run_metrics = run.metrics();
+                    let run_metrics = run.font_metrics();
                     let paint = glyph_run.style().brush.paint;
-                    let style_index = glyph_run
-                        .glyphs()
-                        .next()
-                        .map(|glyph| glyph.style_index())
-                        .or_else(|| context.style_index_for_range(&run.text_range()));
-                    let structural_parent =
-                        style_index.map_or(context.root_style, |index| context.style_parent(index));
-                    let primary_strut = style_index
-                        .and_then(|index| context.font_metrics.get(index).copied().flatten())
+                    let style_index = usize::from(glyph_run.style_index());
+                    let structural_parent = context.style_parent(style_index);
+                    let primary_strut = context
+                        .font_metrics
+                        .get(style_index)
+                        .copied()
+                        .flatten()
                         .map(|metrics| inline_strut_metrics(metrics, true, context.font_baseline));
                     let bounds = glyph_line_bounds(
                         primary_strut,
                         run_metrics,
+                        run.line_height(),
                         context.box_includes_used_font_metrics(structural_parent),
                         context.font_baseline,
                     );
@@ -1237,17 +1214,9 @@ pub(crate) fn build_inline_line_placements(
                         structural_parent,
                         edge_box: None,
                         vertical_align: InlineVerticalAlign::default(),
-                        // Parley may expose an empty root-style run next to
-                        // float/out-of-flow placeholders. It carries the font
-                        // style but no glyph geometry and is not in-flow line
-                        // content by itself.
-                        contributes_to_line: paint && style_index.is_some(),
-                        creates_line: paint && style_index.is_some(),
-                        glyph_key: if paint {
-                            style_index.map(|index| (run.index(), index))
-                        } else {
-                            None
-                        },
+                        contributes_to_line: paint,
+                        creates_line: paint,
+                        glyph_key: paint.then_some((run.index(), style_index)),
                         anchor: LineVerticalAnchor::Root,
                         relative_offset: 0.0,
                     }
@@ -1343,15 +1312,9 @@ pub(crate) fn build_inline_line_placements(
             );
         }
 
-        let (fallback_ascent, fallback_descent) = inline_font_ascent_and_descent(
-            context.font_baseline,
-            metrics.ascent,
-            metrics.descent,
-            false,
-        );
         let fallback_root_bounds = InlineVerticalBounds {
-            top: -fallback_ascent - metrics.leading * 0.5,
-            bottom: fallback_descent + metrics.leading * 0.5,
+            top: metrics.block_min_coord - metrics.baseline,
+            bottom: metrics.block_max_coord - metrics.baseline,
         };
         let mut root_bounds = (!phantom).then(|| {
             context
@@ -1623,7 +1586,8 @@ impl InlineVerticalBounds {
 
 fn glyph_line_bounds(
     primary_strut: Option<InlineStrutMetrics>,
-    used_font: &parley::layout::RunMetrics,
+    used_font: &parley::layout::FontMetrics,
+    used_line_height: f32,
     include_used_font_metrics: bool,
     font_baseline: FontBaseline,
 ) -> InlineVerticalBounds {
@@ -1631,7 +1595,7 @@ fn glyph_line_bounds(
         InlineFontMetrics {
             ascent: used_font.ascent,
             descent: used_font.descent,
-            line_height: used_font.line_height,
+            line_height: used_line_height,
             x_height: used_font.x_height.unwrap_or(used_font.ascent * 0.56),
         },
         true,
@@ -1961,7 +1925,6 @@ struct InlineBuildInput {
 
 struct ResolvedInlineTextStyle {
     text: TextStyle<'static, 'static, TextBrush>,
-    white_space_collapse: InlineWhiteSpaceCollapse,
     structural_parent: LayoutBoxId,
     sample: Option<char>,
 }
@@ -1969,22 +1932,18 @@ struct ResolvedInlineTextStyle {
 fn intern_resolved_inline_style(
     styles: &mut Vec<ResolvedInlineTextStyle>,
     style: TextStyle<'static, 'static, TextBrush>,
-    white_space_collapse: InlineWhiteSpaceCollapse,
     structural_parent: LayoutBoxId,
     sample: Option<char>,
 ) -> usize {
     let style_slot = styles
         .iter()
         .position(|candidate| {
-            candidate.text == style
-                && candidate.white_space_collapse == white_space_collapse
-                && candidate.structural_parent == structural_parent
+            candidate.text == style && candidate.structural_parent == structural_parent
         })
         .unwrap_or_else(|| {
             let index = styles.len();
             styles.push(ResolvedInlineTextStyle {
                 text: style,
-                white_space_collapse,
                 structural_parent,
                 sample: None,
             });
@@ -1994,15 +1953,6 @@ fn intern_resolved_inline_style(
         styles[style_slot].sample = sample;
     }
     style_slot
-}
-
-const fn parley_white_space_collapse(mode: InlineWhiteSpaceCollapse) -> WhiteSpaceCollapse {
-    match mode {
-        InlineWhiteSpaceCollapse::Collapse => WhiteSpaceCollapse::Collapse,
-        InlineWhiteSpaceCollapse::Preserve => WhiteSpaceCollapse::Preserve,
-        InlineWhiteSpaceCollapse::PreserveBreaks => WhiteSpaceCollapse::PreserveBreaks,
-        InlineWhiteSpaceCollapse::BreakSpaces => WhiteSpaceCollapse::BreakSpaces,
-    }
 }
 
 fn append_resolved_inline_run(
@@ -2036,11 +1986,16 @@ impl InlineBuildInput {
         parley.resolve_font_families(&mut root_text_style, None);
         let quantize = true;
         let mut styles = Vec::new();
+        let root_style_slot = intern_resolved_inline_style(
+            &mut styles,
+            root_text_style.clone(),
+            self.root_style,
+            None,
+        );
         let mut resolved_runs = Vec::<(Range<usize>, usize)>::new();
         for unit in &self.units {
             let unit_style = &world.boxes[unit.style_box.index()].style;
             let mut base_style = unit_style.parley_text_style();
-            let white_space_mode = unit_style.white_space_collapse();
             // `vertical-align` belongs to the structural inline box, not to
             // each descendant glyph. Keep glyphs baseline-aligned within their
             // direct box state; closing that state moves the complete subtree.
@@ -2054,7 +2009,6 @@ impl InlineBuildInput {
                 let style_slot = intern_resolved_inline_style(
                     &mut styles,
                     base_style,
-                    white_space_mode,
                     structural_parent,
                     sample,
                 );
@@ -2073,12 +2027,31 @@ impl InlineBuildInput {
                 let style_slot = intern_resolved_inline_style(
                     &mut styles,
                     style,
-                    white_space_mode,
                     structural_parent,
                     (!unit.kind.is_control()).then_some(character),
                 );
                 append_resolved_inline_run(&mut resolved_runs, start..end, style_slot);
             }
+        }
+        let mut object_transition_style_slots = Vec::with_capacity(self.objects.len());
+        for (_, object, _) in &self.objects {
+            let style_box = match object.role {
+                InlineObjectRole::StartEdge => Some(object.box_id),
+                InlineObjectRole::EndEdge => {
+                    Some(object.ancestors.last().copied().unwrap_or(self.root_style))
+                }
+                InlineObjectRole::Atomic
+                | InlineObjectRole::Float
+                | InlineObjectRole::OutOfFlow => None,
+            };
+            let Some(style_box) = style_box else {
+                object_transition_style_slots.push(None);
+                continue;
+            };
+            let mut style = world.boxes[style_box.index()].style.parley_text_style();
+            parley.resolve_font_families(&mut style, None);
+            let style_slot = intern_resolved_inline_style(&mut styles, style, style_box, None);
+            object_transition_style_slots.push(Some(style_slot));
         }
         let mut builder = parley.layout_context.style_run_builder(
             &mut parley.font_context,
@@ -2086,61 +2059,36 @@ impl InlineBuildInput {
             1.0,
             quantize,
         );
-        builder.set_initial_text_wrap_mode(root_text_style.text_wrap_mode);
+        builder.reserve(styles.len(), resolved_runs.len().max(1));
         let style_indices = styles
             .iter()
-            .map(|style| {
-                builder.push_style_with_white_space_collapse(
-                    style.text.clone(),
-                    parley_white_space_collapse(style.white_space_collapse),
-                )
-            })
+            .map(|style| builder.push_style(style.text.clone()))
             .collect::<Vec<_>>();
+        builder.set_root_style(style_indices[root_style_slot]);
         if resolved_runs.is_empty() {
-            let root_mode = world.boxes[self.root_style.index()]
-                .style
-                .white_space_collapse();
-            let style_index = builder.push_style_with_white_space_collapse(
-                root_text_style.clone(),
-                parley_white_space_collapse(root_mode),
-            );
-            builder.push_style_run(style_index, 0..0);
+            builder.push_style_run(style_indices[root_style_slot], 0..0);
         } else {
             for (range, style_slot) in &resolved_runs {
                 builder.push_style_run(style_indices[*style_slot], range.clone());
             }
         }
-        for (object_id, (byte_index, _, kind)) in self.objects.iter().enumerate() {
+        for (object_id, ((byte_index, _, kind), transition_style_slot)) in self
+            .objects
+            .iter()
+            .zip(&object_transition_style_slots)
+            .enumerate()
+        {
             let inline_box = InlineBox {
                 id: u64::try_from(object_id).expect("one IFC exceeded the u64 object limit"),
                 kind: *kind,
                 index: *byte_index,
                 width: 0.0,
                 height: 0.0,
+                baseline: None,
             };
-            let object = &self.objects[object_id].1;
-            let text_wrap_mode_after = match object.role {
-                InlineObjectRole::StartEdge => Some(
-                    world.boxes[object.box_id.index()]
-                        .style
-                        .parley_text_style()
-                        .text_wrap_mode,
-                ),
-                InlineObjectRole::EndEdge => {
-                    let parent = object.ancestors.last().copied().unwrap_or(self.root_style);
-                    Some(
-                        world.boxes[parent.index()]
-                            .style
-                            .parley_text_style()
-                            .text_wrap_mode,
-                    )
-                }
-                InlineObjectRole::Atomic
-                | InlineObjectRole::Float
-                | InlineObjectRole::OutOfFlow => None,
-            };
-            if let Some(text_wrap_mode_after) = text_wrap_mode_after {
-                builder.push_inline_box_with_text_wrap_mode(inline_box, text_wrap_mode_after);
+            if let Some(style_slot) = transition_style_slot {
+                builder
+                    .push_inline_box_with_style_transition(inline_box, style_indices[*style_slot]);
             } else {
                 builder.push_inline_box(inline_box);
             }
@@ -2175,13 +2123,6 @@ impl InlineBuildInput {
                     .includes_used_font_metrics(),
             });
         }
-        let resolved_style_runs = resolved_runs
-            .into_iter()
-            .map(|(output_range, style_index)| InlineResolvedStyleRun {
-                output_range,
-                style_index,
-            })
-            .collect();
         let objects = self
             .objects
             .drain(..)
@@ -2189,6 +2130,7 @@ impl InlineBuildInput {
             .collect();
         InlineFormattingContext {
             root_style: self.root_style,
+            quantize,
             font_baseline,
             unbroken: layout,
             laid_out: None,
@@ -2202,7 +2144,6 @@ impl InlineBuildInput {
                 .style
                 .includes_used_font_metrics(),
             style_parents,
-            resolved_style_runs,
             structural_boxes,
             line_placements: Vec::new(),
             fragments: InlineFragments::default(),
@@ -3197,18 +3138,35 @@ mod tests {
             text_descent: 2.0,
             x_height: 4.0,
         };
-        let fallback = parley::layout::RunMetrics {
+        let fallback = parley::layout::FontMetrics {
             ascent: 18.0,
             descent: 6.0,
-            line_height: 30.0,
-            ..parley::layout::RunMetrics::default()
+            leading: 6.0,
+            underline_offset: 0.0,
+            underline_size: 0.0,
+            strikethrough_offset: 0.0,
+            strikethrough_size: 0.0,
+            cap_height: None,
+            x_height: None,
         };
 
-        let explicit = glyph_line_bounds(Some(primary), &fallback, false, FontBaseline::Alphabetic);
+        let explicit = glyph_line_bounds(
+            Some(primary),
+            &fallback,
+            30.0,
+            false,
+            FontBaseline::Alphabetic,
+        );
         assert_eq!(explicit.top, -8.0);
         assert_eq!(explicit.bottom, 2.0);
 
-        let normal = glyph_line_bounds(Some(primary), &fallback, true, FontBaseline::Alphabetic);
+        let normal = glyph_line_bounds(
+            Some(primary),
+            &fallback,
+            30.0,
+            true,
+            FontBaseline::Alphabetic,
+        );
         assert_eq!(normal.top, -21.0);
         assert_eq!(normal.bottom, 9.0);
     }

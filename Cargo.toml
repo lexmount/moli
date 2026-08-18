@@ -85,7 +85,7 @@ license = "MIT OR Apache-2.0"
 
 [patch.crates-io]
 xml5ever = { path = "vendor/xml5ever-0.39.0" }
-parley = { git = "https://github.com/ldm0/parley", rev = "bc97a16495ebeaa443b3c0571b9fab315394e573" }
+parley = { git = "https://github.com/ldm0/parley", rev = "9bccb47368cc51b26050fab8bb515c48e4cf4db6" }
 curl = { git = "https://github.com/ldm0/curl-rust", branch = "lightmount" }
 curl-sys = { git = "https://github.com/ldm0/curl-rust", branch = "lightmount" }
 cookie = { git = "https://github.com/ldm0/cookie-rs", branch = "priority" }

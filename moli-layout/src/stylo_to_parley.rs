@@ -10,7 +10,7 @@ use parley::setting::Tag;
 use parley::{
     FontFamily, FontFamilyName, FontFeature, FontFeatures, FontStyle, FontVariation,
     FontVariations, FontWeight, FontWidth, GenericFamily, LineHeight, OverflowWrap, TextStyle,
-    TextWrapMode, WordBreak,
+    TextWrapMode, WhiteSpaceCollapse, WordBreak,
 };
 use style::{
     computed_values::text_decoration_style::T as StyloTextDecorationStyle,
@@ -30,11 +30,58 @@ use style::{
 
 use crate::{PaintColor, PaintPoint, PaintTextDecorationStyle, style::absolute_paint_color};
 
-// Blink only requests synthetic bold for CSS weights at or above 600. Fontique
-// reports any requested weight above the selected face as embolden-able, which
-// also includes the CSS 500 -> regular 400 match unless we preserve this
-// browser-level threshold at the style bridge.
-const SYNTHETIC_BOLD_THRESHOLD: f32 = 600.0;
+/// Browser-owned weight-synthesis decision carried with a shaped style run.
+///
+/// Fontique supplies the normal face-relative synthesis suggestion. Blink has
+/// one additional rule for segmented `@font-face` families: selecting a group
+/// below the bold threshold for a bold request requires faux bold even when
+/// the numeric weight delta is exactly 200. Keep that exception keyed by the
+/// selected font identity so a later family fallback cannot inherit it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum SyntheticWeight {
+    /// Use Parley/Fontique's face-relative suggestion, plus any segmented
+    /// web-font faces for which Blink requires faux bold.
+    Auto { required_fonts: Arc<[(u64, u32)]> },
+    /// CSS `font-synthesis-weight: none` forbids faux bold.
+    None,
+}
+
+impl Default for SyntheticWeight {
+    fn default() -> Self {
+        Self::Auto {
+            required_fonts: Arc::from([]),
+        }
+    }
+}
+
+impl SyntheticWeight {
+    pub(crate) fn require_for(&mut self, identities: &[(u64, u32)]) {
+        let Self::Auto { required_fonts } = self else {
+            return;
+        };
+        let mut merged = required_fonts.to_vec();
+        merged.extend(
+            identities
+                .iter()
+                .copied()
+                .filter(|identity| !required_fonts.contains(identity)),
+        );
+        *required_fonts = Arc::from(merged);
+    }
+
+    pub(crate) fn should_embolden(
+        &self,
+        font_identity: (u64, u32),
+        fontique_suggests: bool,
+    ) -> bool {
+        match self {
+            Self::Auto { required_fonts } => {
+                fontique_suggests || required_fonts.contains(&font_identity)
+            }
+            Self::None => false,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct TextDecorationBrush {
@@ -64,8 +111,7 @@ pub(crate) struct TextBrush {
     /// participate in shaping and line breaking, but never become glyph
     /// fragments in the immutable paint snapshot.
     pub(crate) paint: bool,
-    /// Whether this style run is eligible for synthetic bold.
-    pub(crate) synthetic_bold: bool,
+    pub(crate) synthetic_weight: SyntheticWeight,
     pub(crate) decoration: TextDecorationBrush,
     pub(crate) shadows: Arc<[TextShadowBrush]>,
 }
@@ -75,14 +121,17 @@ impl Default for TextBrush {
         Self {
             color: PaintColor::default(),
             paint: true,
-            synthetic_bold: false,
+            synthetic_weight: SyntheticWeight::default(),
             decoration: TextDecorationBrush::default(),
             shadows: Arc::from([]),
         }
     }
 }
 
-pub(crate) fn text_style(computed: &ComputedValues) -> TextStyle<'static, 'static, TextBrush> {
+pub(crate) fn text_style(
+    computed: &ComputedValues,
+    white_space_collapse: WhiteSpaceCollapse,
+) -> TextStyle<'static, 'static, TextBrush> {
     let font = computed.get_font();
     let inherited_text = computed.get_inherited_text();
     let font_size = font.font_size.used_size.0.px();
@@ -183,6 +232,7 @@ pub(crate) fn text_style(computed: &ComputedValues) -> TextStyle<'static, 'stati
             style::computed_values::text_wrap_mode::T::Wrap => TextWrapMode::Wrap,
             style::computed_values::text_wrap_mode::T::Nowrap => TextWrapMode::NoWrap,
         },
+        white_space_collapse,
         overflow_wrap: match inherited_text.overflow_wrap {
             StyloOverflowWrap::Normal => OverflowWrap::Normal,
             StyloOverflowWrap::BreakWord => OverflowWrap::BreakWord,
@@ -196,8 +246,10 @@ pub(crate) fn text_style(computed: &ComputedValues) -> TextStyle<'static, 'stati
         brush: TextBrush {
             color: fill_color,
             paint: true,
-            synthetic_bold: font.font_synthesis_weight == FontSynthesis::Auto
-                && font.font_weight.value() >= SYNTHETIC_BOLD_THRESHOLD,
+            synthetic_weight: match font.font_synthesis_weight {
+                FontSynthesis::Auto => SyntheticWeight::default(),
+                FontSynthesis::None => SyntheticWeight::None,
+            },
             decoration,
             shadows: shadows.into(),
         },
