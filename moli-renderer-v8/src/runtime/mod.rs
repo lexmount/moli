@@ -402,11 +402,12 @@ pub use self::protocol_output::{
 };
 pub use self::service_worker_run::RendererServiceWorkerRunIdentity;
 pub use crate::devtools::command::{
-    RendererDevToolsMainCommandEnvelope, RendererInspectorCommandEnvelope,
-    RendererInspectorCommandRoute, RendererInspectorFirstDispatchLifecycle,
-    RendererInspectorIngressTicket,
+    RendererDevToolsIoCommandEnvelope, RendererDevToolsMainCommandEnvelope,
+    RendererInspectorCommandEnvelope, RendererInspectorCommandRoute,
+    RendererInspectorFirstDispatchLifecycle, RendererInspectorIngressTicket,
 };
 pub(crate) use crate::devtools::command::{
+    RendererDevToolsIoCommandKind, RendererDevToolsIoCommandPayload,
     RendererDevToolsMainNestedDispatch, RendererInspectorPauseCommandEffect,
 };
 pub use crate::devtools::ingress::io::{

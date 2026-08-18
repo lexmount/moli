@@ -20,6 +20,7 @@ use crate::{
     },
     inspector_microtasks::with_scoped_inspector_microtasks,
     runtime::{
+        RendererDevToolsIoCommandKind, RendererDevToolsIoCommandPayload,
         RendererDevToolsMainNestedDispatch, RendererOwnerReply,
         RendererRuntimeInspectorResponseSender, dispatch_nested_main_page_command,
     },
@@ -223,13 +224,15 @@ impl RendererInspectorSessionExecutorLocal {
     }
 
     fn dispatch_io_command(&self, context_group_id: i32, command: RendererInspectorIoCommand) {
-        let session_key = command.ticket().session().clone();
-        let session = self
-            .sessions
-            .borrow()
-            .get(&(context_group_id, session_key))
-            .filter(|session| session.agent_token == command.agent_token)
-            .cloned();
+        let session = (command.kind() == RendererDevToolsIoCommandKind::Inspector).then(|| {
+            let session_key = command.ticket().session().clone();
+            self.sessions
+                .borrow()
+                .get(&(context_group_id, session_key))
+                .filter(|session| session.agent_token == command.agent_token)
+                .cloned()
+        });
+        let session = session.flatten();
         self.dispatch_io_command_to_session(command, session);
     }
 
@@ -262,12 +265,14 @@ impl RendererInspectorSessionExecutorLocal {
         let Some(command) = self.target.io_ref().claim_for_interrupt() else {
             return;
         };
-        let session_key = command.ticket().session();
-        let session = self
-            .interrupt_sessions
-            .borrow()
-            .get(&(command.agent_token, session_key.clone()))
-            .cloned();
+        let session = (command.kind() == RendererDevToolsIoCommandKind::Inspector).then(|| {
+            let session_key = command.ticket().session();
+            self.interrupt_sessions
+                .borrow()
+                .get(&(command.agent_token, session_key.clone()))
+                .cloned()
+        });
+        let session = session.flatten();
         self.dispatch_io_command_to_session(command, session);
     }
 
@@ -275,12 +280,14 @@ impl RendererInspectorSessionExecutorLocal {
         let Some(command) = self.target.io_ref().claim_for_owner() else {
             return;
         };
-        let session_key = command.ticket().session();
-        let session = self
-            .interrupt_sessions
-            .borrow()
-            .get(&(command.agent_token, session_key.clone()))
-            .cloned();
+        let session = (command.kind() == RendererDevToolsIoCommandKind::Inspector).then(|| {
+            let session_key = command.ticket().session();
+            self.interrupt_sessions
+                .borrow()
+                .get(&(command.agent_token, session_key.clone()))
+                .cloned()
+        });
+        let session = session.flatten();
         self.dispatch_io_command_to_session(command, session);
     }
 
@@ -327,7 +334,33 @@ impl RendererInspectorSessionExecutorLocal {
         mut command: RendererInspectorIoCommand,
         session: Option<RendererInspectorSessionRoute>,
     ) {
-        let mut first_dispatch = self.target.io_ref().first_dispatch_guard(&command);
+        let mut first_dispatch = self.target.io_ref().first_dispatch_guard(&mut command);
+        match command.kind() {
+            RendererDevToolsIoCommandKind::Performance => {
+                assert!(
+                    matches!(
+                        command.into_payload(),
+                        RendererDevToolsIoCommandPayload::PerformanceGetMetrics
+                    ),
+                    "Performance IO command kind must carry a Performance payload"
+                );
+                first_dispatch.release();
+                return;
+            }
+            RendererDevToolsIoCommandKind::Emulation => {
+                let RendererDevToolsIoCommandPayload::SetScriptExecutionDisabled {
+                    control,
+                    disabled,
+                } = command.into_payload()
+                else {
+                    unreachable!("Emulation IO command kind must carry an Emulation payload")
+                };
+                control.set_disabled(disabled);
+                first_dispatch.release();
+                return;
+            }
+            RendererDevToolsIoCommandKind::Inspector => {}
+        }
         let Some(session) = session else {
             send_inspector_dispatch_error(
                 command.take_response(),

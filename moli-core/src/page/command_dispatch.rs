@@ -16,9 +16,21 @@ pub struct PendingRuntimeInspectorCommandDispatch {
     kind: PendingRuntimeInspectorCommandDispatchKind,
 }
 
+/// One non-V8 renderer agent command admitted through the Page IO
+/// `DevToolsSession` receiver.
+pub struct PendingDevToolsIoCommandDispatch {
+    route: RendererRuntimeInspectorIoCommandRoute,
+}
+
 enum PendingRuntimeInspectorCommandDispatchKind {
     MainIngress(Box<RendererRuntimeInspectorMainCommandRoute>),
-    Io(RendererRuntimeInspectorIoCommandRoute),
+    Io(PendingDevToolsIoCommandDispatch),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CompletedDevToolsIoCommandDispatch {
+    Dispatched,
+    Canceled,
 }
 
 /// Identifies which execution owner consumed one routable Inspector command.
@@ -144,8 +156,16 @@ impl Page {
         route: RendererRuntimeInspectorIoCommandRoute,
     ) -> PendingRuntimeInspectorCommandDispatch {
         Self::pending_runtime_inspector_command_dispatch(
-            PendingRuntimeInspectorCommandDispatchKind::Io(route),
+            PendingRuntimeInspectorCommandDispatchKind::Io(
+                Self::pending_devtools_io_command_dispatch(route),
+            ),
         )
+    }
+
+    pub(crate) fn pending_devtools_io_command_dispatch(
+        route: RendererRuntimeInspectorIoCommandRoute,
+    ) -> PendingDevToolsIoCommandDispatch {
+        PendingDevToolsIoCommandDispatch { route }
     }
 
     pub(crate) fn pending_main_ingress_runtime_inspector_command_dispatch(
@@ -403,15 +423,33 @@ impl PendingRuntimeInspectorCommandDispatch {
                     }
                 }
             }
-            PendingRuntimeInspectorCommandDispatchKind::Io(route) => {
-                match route.wait_for_claim().await.map_err(anyhow::Error::msg)? {
-                    RendererRuntimeInspectorIoCommandClaim::Inspector => {
+            PendingRuntimeInspectorCommandDispatchKind::Io(pending) => {
+                match pending.wait().await? {
+                    CompletedDevToolsIoCommandDispatch::Dispatched => {
                         Ok(CompletedRuntimeInspectorCommandDispatch::Inspector)
                     }
-                    RendererRuntimeInspectorIoCommandClaim::Canceled => {
+                    CompletedDevToolsIoCommandDispatch::Canceled => {
                         Ok(CompletedRuntimeInspectorCommandDispatch::Canceled)
                     }
                 }
+            }
+        }
+    }
+}
+
+impl PendingDevToolsIoCommandDispatch {
+    pub async fn wait(self) -> Result<CompletedDevToolsIoCommandDispatch> {
+        match self
+            .route
+            .wait_for_first_dispatch()
+            .await
+            .map_err(anyhow::Error::msg)?
+        {
+            RendererRuntimeInspectorIoCommandClaim::Dispatched => {
+                Ok(CompletedDevToolsIoCommandDispatch::Dispatched)
+            }
+            RendererRuntimeInspectorIoCommandClaim::Canceled => {
+                Ok(CompletedDevToolsIoCommandDispatch::Canceled)
             }
         }
     }

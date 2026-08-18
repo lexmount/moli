@@ -173,9 +173,28 @@ impl RendererPageHandle {
         &self,
         envelope: RendererInspectorCommandEnvelope,
     ) -> RendererRuntimeInspectorIoCommandRoute {
-        self.devtools_target
-            .io_ref()
-            .enqueue_command(self.devtools_agent_token, envelope)
+        self.devtools_target.io_ref().enqueue_command(
+            self.devtools_agent_token,
+            RendererDevToolsIoCommandEnvelope::inspector(envelope),
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn enqueue_performance_get_metrics_io_command(
+        &self,
+        attachment: Option<RendererAgentAttachmentId>,
+        inspector_session_id: Option<String>,
+    ) -> RendererRuntimeInspectorIoCommandRoute {
+        self.devtools_target.io_ref().enqueue_command(
+            self.devtools_agent_token,
+            RendererDevToolsIoCommandEnvelope::performance_get_metrics(
+                RendererInspectorIngressTicket::new(
+                    attachment,
+                    inspector_session_id,
+                    RendererInspectorCommandRoute::Io,
+                ),
+            ),
+        )
     }
 
     pub fn enqueue_runtime_inspector_main_command(
@@ -193,10 +212,27 @@ impl RendererPageHandle {
         self.devtools_target.pause_ref().is_pause_active()
     }
 
-    /// Publishes the DevTools IO-agent script policy without borrowing the
+    /// Enqueues the DevTools IO-agent script policy without borrowing the
     /// owner-resident `PageVm` that may currently be executing JavaScript.
-    pub fn set_script_execution_disabled_from_io(&self, disabled: bool) {
-        self.script_execution_control.set_disabled(disabled);
+    #[doc(hidden)]
+    pub fn enqueue_set_script_execution_disabled_io_command(
+        &self,
+        attachment: Option<RendererAgentAttachmentId>,
+        inspector_session_id: Option<String>,
+        disabled: bool,
+    ) -> RendererRuntimeInspectorIoCommandRoute {
+        self.devtools_target.io_ref().enqueue_command(
+            self.devtools_agent_token,
+            RendererDevToolsIoCommandEnvelope::set_script_execution_disabled(
+                RendererInspectorIngressTicket::new(
+                    attachment,
+                    inspector_session_id,
+                    RendererInspectorCommandRoute::Io,
+                ),
+                self.script_execution_control.clone(),
+                disabled,
+            ),
+        )
     }
 
     pub fn arm_runtime_inspector_session_detach(

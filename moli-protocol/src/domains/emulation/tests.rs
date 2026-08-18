@@ -183,7 +183,7 @@ async fn bidi_set_extra_headers_merges_global_user_context_and_context_layers() 
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn script_execution_disabled_completes_without_waiting_for_main_owner() {
+async fn script_execution_disabled_completes_through_io_pending_dispatch() {
     let mut ctx = TestContext::new();
     load_session_page_for_pending_emulation_test(&mut ctx).await;
 
@@ -194,10 +194,11 @@ async fn script_execution_disabled_completes_without_waiting_for_main_owner() {
         "params": { "value": true }
     })
     .to_string();
-    let CdpCommandTaskStep::Complete(outcome) = ctx.conn.start_command_dispatch(&raw) else {
-        panic!("the IO-routed script execution override must not wait for the Main owner");
-    };
-    let messages = outcome.into_parts().0;
+    let pending = ctx
+        .conn
+        .try_start_pending_command_dispatch(&raw)
+        .expect("the script execution override should use IO pending dispatch");
+    let messages = complete_pending_command_task_for_test(&mut ctx, pending).await;
 
     assert!(messages.iter().any(|message| {
         message["id"] == json!(9101)

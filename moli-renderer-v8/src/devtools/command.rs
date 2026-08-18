@@ -3,6 +3,7 @@
 use crate::runtime::{
     RendererInspectorPageCommand, RendererPageCommand, RendererRuntimeInspectorResponseSender,
 };
+use crate::script_execution_control::RendererScriptExecutionControl;
 use moli_page_types::{DevToolsSessionKey, RendererAgentAttachmentId};
 use serde_json::Value;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -131,6 +132,120 @@ pub struct RendererInspectorCommandEnvelope {
     pause_effect: RendererInspectorPauseCommandEffect,
     main_dispatch_boundary: RendererInspectorMainDispatchBoundary,
     payload: RendererInspectorCommandPayload,
+}
+
+/// One command delivered by the renderer's IO DevTools receiver.
+///
+/// Chromium chooses the IO receiver at the `DevToolsSession` boundary, before
+/// it chooses the renderer agent that will execute the command. Keep that
+/// ordering structural here as well: V8 Inspector, Performance, and Emulation
+/// commands share one `(target, session, IO)` first-dispatch lane.
+#[doc(hidden)]
+pub struct RendererDevToolsIoCommandEnvelope {
+    ticket: RendererInspectorIngressTicket,
+    payload: RendererDevToolsIoCommandPayload,
+}
+
+pub(crate) enum RendererDevToolsIoCommandPayload {
+    Inspector(RendererInspectorCommandEnvelope),
+    PerformanceGetMetrics,
+    SetScriptExecutionDisabled {
+        control: RendererScriptExecutionControl,
+        disabled: bool,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RendererDevToolsIoCommandKind {
+    Inspector,
+    Performance,
+    Emulation,
+}
+
+impl RendererDevToolsIoCommandEnvelope {
+    pub(crate) fn inspector(envelope: RendererInspectorCommandEnvelope) -> Self {
+        assert_eq!(
+            envelope.ticket().route(),
+            RendererInspectorCommandRoute::Io,
+            "an Inspector payload entering the IO receiver must use the IO route"
+        );
+        Self {
+            ticket: envelope.ticket().clone(),
+            payload: RendererDevToolsIoCommandPayload::Inspector(envelope),
+        }
+    }
+
+    pub(crate) fn performance_get_metrics(ticket: RendererInspectorIngressTicket) -> Self {
+        Self::new_agent_command(
+            ticket,
+            RendererDevToolsIoCommandPayload::PerformanceGetMetrics,
+        )
+    }
+
+    pub(crate) fn set_script_execution_disabled(
+        ticket: RendererInspectorIngressTicket,
+        control: RendererScriptExecutionControl,
+        disabled: bool,
+    ) -> Self {
+        Self::new_agent_command(
+            ticket,
+            RendererDevToolsIoCommandPayload::SetScriptExecutionDisabled { control, disabled },
+        )
+    }
+
+    fn new_agent_command(
+        ticket: RendererInspectorIngressTicket,
+        payload: RendererDevToolsIoCommandPayload,
+    ) -> Self {
+        assert_eq!(
+            ticket.route(),
+            RendererInspectorCommandRoute::Io,
+            "a renderer IO agent payload must use the IO route"
+        );
+        Self { ticket, payload }
+    }
+
+    pub(crate) fn ticket(&self) -> &RendererInspectorIngressTicket {
+        &self.ticket
+    }
+
+    pub(crate) fn first_dispatch_lifecycle(&self) -> RendererInspectorFirstDispatchLifecycle {
+        RendererInspectorFirstDispatchLifecycle::OrderedUntilFirstDispatch
+    }
+
+    pub(crate) fn kind(&self) -> RendererDevToolsIoCommandKind {
+        match &self.payload {
+            RendererDevToolsIoCommandPayload::Inspector(_) => {
+                RendererDevToolsIoCommandKind::Inspector
+            }
+            RendererDevToolsIoCommandPayload::PerformanceGetMetrics => {
+                RendererDevToolsIoCommandKind::Performance
+            }
+            RendererDevToolsIoCommandPayload::SetScriptExecutionDisabled { .. } => {
+                RendererDevToolsIoCommandKind::Emulation
+            }
+        }
+    }
+
+    pub(crate) fn inspector_envelope(&self) -> Option<&RendererInspectorCommandEnvelope> {
+        match &self.payload {
+            RendererDevToolsIoCommandPayload::Inspector(envelope) => Some(envelope),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn inspector_envelope_mut(
+        &mut self,
+    ) -> Option<&mut RendererInspectorCommandEnvelope> {
+        match &mut self.payload {
+            RendererDevToolsIoCommandPayload::Inspector(envelope) => Some(envelope),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn into_payload(self) -> RendererDevToolsIoCommandPayload {
+        self.payload
+    }
 }
 
 /// One command delivered by the renderer's Main DevTools receiver.

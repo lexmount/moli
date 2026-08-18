@@ -7,7 +7,7 @@ use super::protocol_support::{
     EmulatedIdleOverride, EmulatedMediaOverrides, PermissionOverrideRegistration,
     SubresourceResourceType, ViewportSurface,
 };
-use super::{CompletedPageCommand, Page, PendingPageCommand};
+use super::{CompletedPageCommand, Page, PendingDevToolsIoCommandDispatch, PendingPageCommand};
 use crate::renderer::{
     RendererPageCommand, RendererPageCookieFacadeSnapshotReply, RendererPageReply,
 };
@@ -235,10 +235,20 @@ impl Page {
         .await
     }
 
-    /// Applies the DevTools IO-agent setting without entering the renderer
-    /// owner's Main command queue.
-    pub fn set_script_execution_disabled_from_io(&self, disabled: bool) {
-        self.handle.set_script_execution_disabled_from_io(disabled);
+    /// Admits the DevTools IO-agent setting through the target's shared IO
+    /// session lane without entering the renderer owner's Main command queue.
+    pub fn start_set_script_execution_disabled_from_io(
+        &self,
+        disabled: bool,
+    ) -> PendingDevToolsIoCommandDispatch {
+        let route = self
+            .handle
+            .enqueue_set_script_execution_disabled_io_command(
+                self.renderer_agent_attachment_id,
+                self.renderer_devtools_command_session_id.clone(),
+                disabled,
+            );
+        Self::pending_devtools_io_command_dispatch(route)
     }
 
     pub async fn set_bypass_content_security_policy_async(&mut self, bypass: bool) -> Result<()> {

@@ -8,9 +8,10 @@ use super::protocol_support::{
     RuntimeIsolatedWorldDefinition,
 };
 use super::{
-    CompletedPageCommand, PendingPageCommand, PendingRuntimeInspectorCommandDispatch,
-    RendererCommandTurnOutput, RendererInspectorSessionRestoreSnapshot,
-    RendererRuntimeCommandOutput, RendererRuntimeInspectorMessage, RendererRuntimeRealmInfo,
+    CompletedPageCommand, PendingDevToolsIoCommandDispatch, PendingPageCommand,
+    PendingRuntimeInspectorCommandDispatch, RendererCommandTurnOutput,
+    RendererInspectorSessionRestoreSnapshot, RendererRuntimeCommandOutput,
+    RendererRuntimeInspectorMessage, RendererRuntimeRealmInfo,
 };
 use crate::RendererOutputFence;
 use crate::renderer::{
@@ -824,6 +825,26 @@ impl Page {
 
     pub fn start_performance_metric_snapshot(&self) -> Result<PendingPageCommand> {
         self.start_page_command(RendererPageCommand::PerformanceMetricSnapshot)
+    }
+
+    /// Admits `Performance.getMetrics` through the same IO session lane used
+    /// by interruptible V8 Inspector commands. The snapshot remains the latest
+    /// owner-published value because collecting a fresh JS-derived snapshot is
+    /// not re-entrant while the isolate is executing JavaScript.
+    pub fn start_performance_metric_snapshot_from_io(
+        &self,
+    ) -> (
+        PendingDevToolsIoCommandDispatch,
+        RendererPerformanceMetricSnapshot,
+    ) {
+        let route = self.handle.enqueue_performance_get_metrics_io_command(
+            self.renderer_agent_attachment_id,
+            self.renderer_devtools_command_session_id.clone(),
+        );
+        (
+            Self::pending_devtools_io_command_dispatch(route),
+            self.cached_performance_metric_snapshot(),
+        )
     }
 
     pub fn cached_performance_metric_snapshot(&self) -> RendererPerformanceMetricSnapshot {

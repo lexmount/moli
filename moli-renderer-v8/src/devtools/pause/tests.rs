@@ -54,14 +54,16 @@ fn enqueue_command(
 ) -> crate::devtools::ingress::io::RendererRuntimeInspectorIoCommandRoute {
     ingress.enqueue_command(
         agent_token,
-        crate::runtime::RendererInspectorCommandEnvelope::new_io(
-            crate::runtime::RendererInspectorIngressTicket::new(
-                None,
-                inspector_session_id,
-                crate::runtime::RendererInspectorCommandRoute::Io,
+        crate::runtime::RendererDevToolsIoCommandEnvelope::inspector(
+            crate::runtime::RendererInspectorCommandEnvelope::new_io(
+                crate::runtime::RendererInspectorIngressTicket::new(
+                    None,
+                    inspector_session_id,
+                    crate::runtime::RendererInspectorCommandRoute::Io,
+                ),
+                raw_json,
+                Some(response),
             ),
-            raw_json,
-            Some(response),
         ),
     )
 }
@@ -133,10 +135,10 @@ fn step_transition_keeps_the_exact_command_cause_through_repause() {
         command_route.ticket().route(),
         RendererInspectorCommandRoute::Io
     );
-    let command = io_ingress
+    let mut command = io_ingress
         .wait_and_claim_for_pause(&bridge)
         .expect("the nested pause loop should claim stepOut");
-    let first_dispatch = io_ingress.first_dispatch_guard(&command);
+    let first_dispatch = io_ingress.first_dispatch_guard(&mut command);
     assert_eq!(command.ticket(), command_route.ticket());
     let dispatch = bridge.begin_command_dispatch(
         command.command_id(),
@@ -200,10 +202,10 @@ fn step_cause_ends_with_the_owner_turn_when_no_repause_occurs() {
         r#"{"id":43,"method":"Debugger.stepOut","params":{}}"#.to_owned(),
         response,
     );
-    let command = io_ingress
+    let mut command = io_ingress
         .wait_and_claim_for_pause(&bridge)
         .expect("the nested pause loop should claim stepOut");
-    let first_dispatch = io_ingress.first_dispatch_guard(&command);
+    let first_dispatch = io_ingress.first_dispatch_guard(&mut command);
     let dispatch = bridge.begin_command_dispatch(
         command.command_id(),
         command.ticket(),
@@ -259,10 +261,10 @@ fn failed_step_command_does_not_own_a_later_resume_transition() {
         r#"{"id":42,"method":"Debugger.stepOut","params":{}}"#.to_owned(),
         response,
     );
-    let command = io_ingress
+    let mut command = io_ingress
         .wait_and_claim_for_pause(&bridge)
         .expect("the nested pause loop should claim stepOut");
-    let first_dispatch = io_ingress.first_dispatch_guard(&command);
+    let first_dispatch = io_ingress.first_dispatch_guard(&mut command);
     let dispatch = bridge.begin_command_dispatch(
         command.command_id(),
         command.ticket(),

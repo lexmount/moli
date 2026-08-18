@@ -17,7 +17,10 @@ use crate::domains::actions::EmulationAction;
 use crate::domains::command_output::CommandOutputPlan;
 use moli_core::{
     RendererRuntimeInspectorResponseSender,
-    page::{CompletedPageCommand, PendingPageCommand},
+    page::{
+        CompletedDevToolsIoCommandDispatch, CompletedPageCommand, PendingDevToolsIoCommandDispatch,
+        PendingPageCommand,
+    },
 };
 use serde_json::json;
 
@@ -31,13 +34,23 @@ mod tests;
 pub(crate) struct PendingEmulationCommandDispatch {
     command_id: Option<u64>,
     session_id: Option<String>,
-    pending: Vec<PendingEmulationPageCommand>,
+    pending: PendingEmulationRendererDispatch,
 }
 
 pub(crate) struct CompletedEmulationCommandDispatch {
     command_id: Option<u64>,
     session_id: Option<String>,
-    completed: Vec<CompletedEmulationPageCommand>,
+    completed: CompletedEmulationRendererDispatch,
+}
+
+enum PendingEmulationRendererDispatch {
+    Pages(Vec<PendingEmulationPageCommand>),
+    Io(PendingDevToolsIoCommandDispatch),
+}
+
+enum CompletedEmulationRendererDispatch {
+    Pages(Vec<CompletedEmulationPageCommand>),
+    Io(Result<CompletedDevToolsIoCommandDispatch, String>),
 }
 
 struct PendingEmulationPageCommand {
@@ -88,26 +101,36 @@ enum PendingEmulationPageOperation {
 
 impl PendingEmulationCommandDispatch {
     pub(crate) async fn wait(self) -> CompletedEmulationCommandDispatch {
-        let mut completed = Vec::with_capacity(self.pending.len());
-        for pending in self.pending {
-            let PendingEmulationPageCommand {
-                target,
-                operation,
-                pending,
-                runtime_response_rx,
-            } = pending;
-            let completed_page = pending.wait().await.map_err(|error| error.to_string());
-            if completed_page.is_ok()
-                && let Some(response_rx) = runtime_response_rx
-            {
-                let _ = response_rx.await;
+        let completed = match self.pending {
+            PendingEmulationRendererDispatch::Pages(pending_pages) => {
+                let mut completed = Vec::with_capacity(pending_pages.len());
+                for pending in pending_pages {
+                    let PendingEmulationPageCommand {
+                        target,
+                        operation,
+                        pending,
+                        runtime_response_rx,
+                    } = pending;
+                    let completed_page = pending.wait().await.map_err(|error| error.to_string());
+                    if completed_page.is_ok()
+                        && let Some(response_rx) = runtime_response_rx
+                    {
+                        let _ = response_rx.await;
+                    }
+                    completed.push(CompletedEmulationPageCommand {
+                        target,
+                        operation,
+                        completed: completed_page,
+                    });
+                }
+                CompletedEmulationRendererDispatch::Pages(completed)
             }
-            completed.push(CompletedEmulationPageCommand {
-                target,
-                operation,
-                completed: completed_page,
-            });
-        }
+            PendingEmulationRendererDispatch::Io(pending) => {
+                CompletedEmulationRendererDispatch::Io(
+                    pending.wait().await.map_err(|error| error.to_string()),
+                )
+            }
+        };
         CompletedEmulationCommandDispatch {
             command_id: self.command_id,
             session_id: self.session_id,
@@ -325,8 +348,12 @@ fn start_script_execution_disabled_command(
     let Some(page) = loaded_page_mut_for_session(conn, cmd.session_id) else {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     };
-    page.set_script_execution_disabled_from_io(params.value);
-    EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})))
+    let pending = page.start_set_script_execution_disabled_from_io(params.value);
+    EmulationCommandTaskStep::Pending(PendingEmulationCommandDispatch {
+        command_id: cmd.id,
+        session_id: cmd.session_id.map(str::to_owned),
+        pending: PendingEmulationRendererDispatch::Io(pending),
+    })
 }
 
 fn start_locale_override_command(
@@ -377,7 +404,7 @@ fn start_locale_override_command(
     EmulationCommandTaskStep::Pending(PendingEmulationCommandDispatch {
         command_id: cmd.id,
         session_id: cmd.session_id.map(str::to_owned),
-        pending,
+        pending: PendingEmulationRendererDispatch::Pages(pending),
     })
 }
 
@@ -560,7 +587,7 @@ fn start_update_geolocation_override_command(
     EmulationCommandTaskStep::Pending(PendingEmulationCommandDispatch {
         command_id: cmd.id,
         session_id: cmd.session_id.map(str::to_owned),
-        pending,
+        pending: PendingEmulationRendererDispatch::Pages(pending),
     })
 }
 
@@ -625,7 +652,7 @@ fn start_emulated_media_command(
     EmulationCommandTaskStep::Pending(PendingEmulationCommandDispatch {
         command_id: cmd.id,
         session_id: cmd.session_id.map(str::to_owned),
-        pending,
+        pending: PendingEmulationRendererDispatch::Pages(pending),
     })
 }
 
@@ -649,12 +676,12 @@ fn start_user_agent_override_command(
         Ok(Some(pending)) => EmulationCommandTaskStep::Pending(PendingEmulationCommandDispatch {
             command_id: cmd.id,
             session_id: cmd.session_id.map(str::to_owned),
-            pending: vec![PendingEmulationPageCommand {
+            pending: PendingEmulationRendererDispatch::Pages(vec![PendingEmulationPageCommand {
                 target: PendingEmulationPageTarget::SessionOwner { owner_scope },
                 operation: PendingEmulationPageOperation::SetUserAgentLoader,
                 pending,
                 runtime_response_rx: None,
-            }],
+            }]),
         }),
         Ok(None) => EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({}))),
         Err(message) if message == "BrowserContextNotLoaded" => EmulationCommandTaskStep::Complete(
@@ -779,7 +806,7 @@ fn start_clear_device_metrics_override_command(
             EmulationCommandTaskStep::Pending(PendingEmulationCommandDispatch {
                 command_id: cmd.id,
                 session_id: session_id.clone(),
-                pending: vec![
+                pending: PendingEmulationRendererDispatch::Pages(vec![
                     PendingEmulationPageCommand {
                         target: PendingEmulationPageTarget::SessionOwner {
                             owner_scope: owner_scope.clone(),
@@ -794,7 +821,7 @@ fn start_clear_device_metrics_override_command(
                         pending: pending_runtime,
                         runtime_response_rx,
                     },
-                ],
+                ]),
             })
         }
         Err(error) => EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error)),
@@ -844,7 +871,7 @@ fn start_devtools_set_viewport_command(
     Ok(Some(PendingEmulationCommandDispatch {
         command_id,
         session_id: session_id.clone(),
-        pending: vec![
+        pending: PendingEmulationRendererDispatch::Pages(vec![
             PendingEmulationPageCommand {
                 target: PendingEmulationPageTarget::SessionOwner {
                     owner_scope: owner_scope.clone(),
@@ -859,7 +886,7 @@ fn start_devtools_set_viewport_command(
                 pending: pending_runtime,
                 runtime_response_rx,
             },
-        ],
+        ]),
     }))
 }
 
@@ -1532,7 +1559,7 @@ async fn complete_emulation_page_updates(
         PendingEmulationCommandDispatch {
             command_id: None,
             session_id,
-            pending,
+            pending: PendingEmulationRendererDispatch::Pages(pending),
         }
         .wait()
         .await,
@@ -2111,7 +2138,7 @@ async fn execute_devtools_set_viewport_for_browser_contexts(
                 .session_id
                 .as_ref()
                 .map(|session_id| session_id.as_str().to_owned()),
-            pending,
+            pending: PendingEmulationRendererDispatch::Pages(pending),
         }
         .wait()
         .await,
@@ -2280,7 +2307,13 @@ fn complete_pending_devtools_emulation_command(
     conn: &mut CdpConnection,
     completed: CompletedEmulationCommandDispatch,
 ) -> Result<DevToolsCommandResult, DevToolsError> {
-    for completed_page in completed.completed {
+    let CompletedEmulationRendererDispatch::Pages(completed_pages) = completed.completed else {
+        return Err(DevToolsError::new(
+            DevToolsErrorKind::Internal,
+            "DevTools emulation command completed through the CDP-only IO receiver",
+        ));
+    };
+    for completed_page in completed_pages {
         let completion = completed_page
             .completed
             .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))?;
@@ -2335,7 +2368,21 @@ pub(crate) fn complete_pending_emulation_command(
     conn: &mut CdpConnection,
     completed: CompletedEmulationCommandDispatch,
 ) -> CommandOutputPlan {
-    for completed_page in completed.completed {
+    let completed_pages = match completed.completed {
+        CompletedEmulationRendererDispatch::Pages(completed_pages) => completed_pages,
+        CompletedEmulationRendererDispatch::Io(completed) => {
+            return match completed {
+                Ok(CompletedDevToolsIoCommandDispatch::Dispatched) => {
+                    CommandOutputPlan::result(json!({}))
+                }
+                Ok(CompletedDevToolsIoCommandDispatch::Canceled) => {
+                    CommandOutputPlan::error(-32000, "Emulation IO command was canceled")
+                }
+                Err(error) => CommandOutputPlan::error(-32000, error),
+            };
+        }
+    };
+    for completed_page in completed_pages {
         let completion = match completed_page.completed {
             Ok(completion) => completion,
             Err(error) => return CommandOutputPlan::error(-32000, error),
@@ -2401,12 +2448,12 @@ fn single_pending_emulation_dispatch(
     PendingEmulationCommandDispatch {
         command_id,
         session_id: session_id.clone(),
-        pending: vec![PendingEmulationPageCommand {
+        pending: PendingEmulationRendererDispatch::Pages(vec![PendingEmulationPageCommand {
             target: PendingEmulationPageTarget::SessionOwner { owner_scope },
             operation,
             pending,
             runtime_response_rx,
-        }],
+        }]),
     }
 }
 

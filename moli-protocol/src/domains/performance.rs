@@ -5,7 +5,8 @@ use crate::conn::{
 use crate::domains::actions::PerformanceAction;
 use crate::domains::command_output::CommandOutputPlan;
 use moli_core::page::{
-    CompletedPageCommand, Page, PendingPageCommand, RendererPerformanceMetricSnapshot,
+    CompletedDevToolsIoCommandDispatch, CompletedPageCommand, Page,
+    PendingDevToolsIoCommandDispatch, PendingPageCommand, RendererPerformanceMetricSnapshot,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -27,7 +28,7 @@ pub(crate) struct PendingPerformanceCommandDispatch {
     owner_scope: CommandOwnerScope,
     renderer_access: CdpRendererCommandAccess,
     renderer_page: crate::conn::RendererPageResidenceIdentity,
-    pending: PendingPageCommand,
+    pending: Box<PendingPerformanceRendererCommand>,
 }
 
 pub(crate) struct CompletedPerformanceCommandDispatch {
@@ -35,7 +36,20 @@ pub(crate) struct CompletedPerformanceCommandDispatch {
     owner_scope: CommandOwnerScope,
     renderer_access: CdpRendererCommandAccess,
     renderer_page: crate::conn::RendererPageResidenceIdentity,
-    completed: Result<CompletedPageCommand, String>,
+    completed: Result<CompletedPerformanceRendererCommand, String>,
+}
+
+enum PendingPerformanceRendererCommand {
+    Main(PendingPageCommand),
+    Io {
+        pending: PendingDevToolsIoCommandDispatch,
+        snapshot: RendererPerformanceMetricSnapshot,
+    },
+}
+
+enum CompletedPerformanceRendererCommand {
+    Main(CompletedPageCommand),
+    Io(RendererPerformanceMetricSnapshot),
 }
 
 pub(crate) enum PerformanceCommandTaskStep {
@@ -49,12 +63,29 @@ impl PendingPerformanceCommandDispatch {
     }
 
     pub async fn wait(self) -> CompletedPerformanceCommandDispatch {
+        let completed = match *self.pending {
+            PendingPerformanceRendererCommand::Main(pending) => pending
+                .wait()
+                .await
+                .map(CompletedPerformanceRendererCommand::Main),
+            PendingPerformanceRendererCommand::Io { pending, snapshot } => {
+                match pending.wait().await {
+                    Ok(CompletedDevToolsIoCommandDispatch::Dispatched) => {
+                        Ok(CompletedPerformanceRendererCommand::Io(snapshot))
+                    }
+                    Ok(CompletedDevToolsIoCommandDispatch::Canceled) => {
+                        Err(anyhow::anyhow!("Performance IO command was canceled"))
+                    }
+                    Err(error) => Err(error),
+                }
+            }
+        };
         CompletedPerformanceCommandDispatch {
             command_id: self.command_id,
             owner_scope: self.owner_scope,
             renderer_access: self.renderer_access,
             renderer_page: self.renderer_page,
-            completed: self.pending.wait().await.map_err(|error| error.to_string()),
+            completed: completed.map_err(|error| error.to_string()),
         }
     }
 }
@@ -198,9 +229,15 @@ pub(crate) fn try_start_performance_command_dispatch(
         }
     };
     if renderer_access == CdpRendererCommandAccess::Io {
-        return PerformanceCommandTaskStep::Complete(performance_metrics_command_output_plan(
-            &page.cached_performance_metric_snapshot(),
-        ));
+        let renderer_page = crate::conn::RendererPageResidenceIdentity::from_page(page);
+        let (pending, snapshot) = page.start_performance_metric_snapshot_from_io();
+        return PerformanceCommandTaskStep::Pending(PendingPerformanceCommandDispatch {
+            command_id: cmd.id,
+            owner_scope,
+            renderer_access,
+            renderer_page,
+            pending: Box::new(PendingPerformanceRendererCommand::Io { pending, snapshot }),
+        });
     }
     let renderer_page = crate::conn::RendererPageResidenceIdentity::from_page(page);
     let pending = match page.start_performance_metric_snapshot() {
@@ -214,7 +251,7 @@ pub(crate) fn try_start_performance_command_dispatch(
         owner_scope,
         renderer_access,
         renderer_page,
-        pending,
+        pending: Box::new(PendingPerformanceRendererCommand::Main(pending)),
     })
 }
 
@@ -246,15 +283,35 @@ pub(crate) async fn complete_pending_performance_command(
     let session_id = owner_scope.session_id().map(str::to_owned);
     let mut owner_scope = owner_scope.enter(conn);
     let snapshot = match completed {
-        Ok(completed_page) => loaded_page_mut_for_renderer_access(
-            owner_scope.conn_mut(),
-            session_id.as_deref(),
-            renderer_access,
-        )
-        .ok()
-        .filter(|page| crate::conn::RendererPageResidenceIdentity::from_page(page) == renderer_page)
-        .and_then(|page| page.finish_performance_metric_snapshot(completed_page).ok())
-        .unwrap_or_default(),
+        Ok(CompletedPerformanceRendererCommand::Main(completed_page)) => {
+            loaded_page_mut_for_renderer_access(
+                owner_scope.conn_mut(),
+                session_id.as_deref(),
+                renderer_access,
+            )
+            .ok()
+            .filter(|page| {
+                crate::conn::RendererPageResidenceIdentity::from_page(page) == renderer_page
+            })
+            .and_then(|page| page.finish_performance_metric_snapshot(completed_page).ok())
+            .unwrap_or_default()
+        }
+        Ok(CompletedPerformanceRendererCommand::Io(snapshot)) => {
+            let remains_current = loaded_page_mut_for_renderer_access(
+                owner_scope.conn_mut(),
+                session_id.as_deref(),
+                renderer_access,
+            )
+            .ok()
+            .is_some_and(|page| {
+                crate::conn::RendererPageResidenceIdentity::from_page(page) == renderer_page
+            });
+            if remains_current {
+                snapshot
+            } else {
+                RendererPerformanceMetricSnapshot::default()
+            }
+        }
         Err(_) => RendererPerformanceMetricSnapshot::default(),
     };
     CommandOutputPlan::result(json!({ "metrics": build_performance_metrics(&snapshot) }))
@@ -756,8 +813,8 @@ mod tests {
             "sessionId": "SID-1"
         })
         .to_string();
-        let old_messages =
-            complete_immediate_command_task_step_for_test(ctx.conn.start_command_dispatch(&raw));
+        let step = ctx.conn.start_command_dispatch(&raw);
+        let old_messages = complete_command_task_step_for_test(&mut ctx, step).await;
         let old_response = old_messages
             .iter()
             .find(|message| message["id"] == json!(4_011))
@@ -789,9 +846,8 @@ mod tests {
             "sessionId": "SID-1"
         })
         .to_string();
-        let replacement_messages = complete_immediate_command_task_step_for_test(
-            ctx.conn.start_command_dispatch(&replacement_raw),
-        );
+        let step = ctx.conn.start_command_dispatch(&replacement_raw);
+        let replacement_messages = complete_command_task_step_for_test(&mut ctx, step).await;
         let replacement_response = replacement_messages
             .iter()
             .find(|message| message["id"] == json!(4_012))

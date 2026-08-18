@@ -39,7 +39,8 @@ use crate::renderer::{
 };
 use anyhow::Result;
 pub use command_dispatch::{
-    CompletedPageCommand, CompletedRuntimeInspectorCommandDispatch, PendingPageCommand,
+    CompletedDevToolsIoCommandDispatch, CompletedPageCommand,
+    CompletedRuntimeInspectorCommandDispatch, PendingDevToolsIoCommandDispatch, PendingPageCommand,
     PendingRuntimeInspectorCommandDispatch,
 };
 
