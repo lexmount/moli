@@ -1910,6 +1910,40 @@ html,body{margin:0;padding:0}
     }
 
     #[test]
+    fn layout_renderer_uses_central_baselines_for_vertical_inline_content() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+#target{display:flex;writing-mode:vertical-rl;align-items:baseline;text-orientation:mixed}
+#text{background:rgb(71,81,91);line-height:100px;height:50px;color:transparent}
+#synthetic{background:rgb(72,82,92);width:100px;height:50px}
+</style></head><body>
+<div id=target><div id=text>text</div><div id=synthetic></div></div>
+</body></html>"#,
+            )
+            .await;
+
+            // Vertical upright text uses the ideographic central baseline.
+            // The empty sibling synthesizes the same baseline at the middle
+            // of its border box, so neither item receives a cross-axis shim.
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(71, 81, 91)),
+                moli_layout::PaintRect::new(0.0, 0.0, 100.0, 50.0),
+            );
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(72, 82, 92)),
+                moli_layout::PaintRect::new(0.0, 50.0, 100.0, 50.0),
+            );
+        }));
+    }
+
+    #[test]
     fn flex_and_grid_share_first_and_last_baselines_in_logical_axes() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
