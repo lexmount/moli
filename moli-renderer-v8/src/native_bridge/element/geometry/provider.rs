@@ -689,6 +689,10 @@ fn mock_element_metrics(
     Some(LayoutElementMetrics {
         offset_parent: compute_mock_offset_parent(runtime, source),
         offset_position: LayoutPoint::new(rect.left as f32, rect.top as f32),
+        border_origin_in_viewport_ignoring_css_transforms: LayoutPoint::new(
+            rect.left as f32,
+            rect.top as f32,
+        ),
         offset_size: size,
         content_size: size,
         client_size: size,

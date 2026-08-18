@@ -14,6 +14,13 @@ use super::{
     tree::FrozenLayoutTree,
 };
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct InlineOffsetGeometry {
+    layout_origin_in_document: LayoutPoint,
+    border_origin_in_viewport_ignoring_css_transforms: LayoutPoint,
+    size: LayoutSize,
+}
+
 impl<N> FrozenLayoutTree<N>
 where
     N: Copy + Debug + Eq + Hash,
@@ -128,12 +135,22 @@ where
             .unwrap_or(LayoutPoint::ZERO);
         let inline_offset_geometry = self.inline_offset_geometry(&output, box_id);
         let layout_origin = inline_offset_geometry
-            .map(|geometry| geometry.0)
+            .map(|geometry| geometry.layout_origin_in_document)
             .unwrap_or(geometry.layout_origin_in_document);
         let offset_size = inline_offset_geometry
-            .map(|geometry| geometry.1)
+            .map(|geometry| geometry.size)
             .unwrap_or_else(|| {
                 LayoutSize::new(geometry.border_box.width, geometry.border_box.height)
+            });
+        let border_origin_in_viewport_ignoring_css_transforms = inline_offset_geometry
+            .map(|geometry| geometry.border_origin_in_viewport_ignoring_css_transforms)
+            .unwrap_or_else(|| {
+                coordinate_space
+                    .local_to_viewport_ignoring_css_transforms
+                    .map_point(LayoutPoint::new(
+                        geometry.border_box.x,
+                        geometry.border_box.y,
+                    ))
             });
         let client_size = if geometry.uses_viewport_client_metrics {
             LayoutSize::new(
@@ -166,6 +183,7 @@ where
                 layout_origin.x - offset_parent_origin.x,
                 layout_origin.y - offset_parent_origin.y,
             ),
+            border_origin_in_viewport_ignoring_css_transforms,
             offset_size,
             content_size: LayoutSize::new(geometry.content_box.width, geometry.content_box.height),
             client_size,
@@ -468,8 +486,8 @@ where
         &self,
         output: &LayoutNodeOutput,
         box_id: LayoutOutputBoxId,
-    ) -> Option<(LayoutPoint, LayoutSize)> {
-        let mut first_origin = None;
+    ) -> Option<InlineOffsetGeometry> {
+        let mut first_origins = None;
         let mut bounds = None::<LayoutRect>;
 
         for id in &output.fragments {
@@ -485,11 +503,18 @@ where
                 continue;
             }
             let mut border = fragment.box_model?.border;
-            let owner = self.coordinate_space(fragment.coordinate_space)?.owner?;
+            let coordinate_space = self.coordinate_space(fragment.coordinate_space)?;
+            let local_border_origin = LayoutPoint::new(border.x, border.y);
+            let owner = coordinate_space.owner?;
             let owner_origin = self.box_geometry(owner)?.layout_origin_in_document;
             border.x += owner_origin.x;
             border.y += owner_origin.y;
-            first_origin.get_or_insert(LayoutPoint::new(border.x, border.y));
+            first_origins.get_or_insert((
+                LayoutPoint::new(border.x, border.y),
+                coordinate_space
+                    .local_to_viewport_ignoring_css_transforms
+                    .map_point(local_border_origin),
+            ));
 
             // Blink's BoundingBoxRelativeToFirstFragment uses UniteIfNonZero:
             // an empty fragment supplies the offset anchor but cannot stretch
@@ -500,11 +525,16 @@ where
             bounds = Some(bounds.map_or(border, |current| current.union(border)));
         }
 
-        let origin = first_origin?;
+        let (layout_origin_in_document, border_origin_in_viewport_ignoring_css_transforms) =
+            first_origins?;
         let size = bounds.map_or(LayoutSize::ZERO, |rect| {
             LayoutSize::new(rect.width, rect.height)
         });
-        Some((origin, size))
+        Some(InlineOffsetGeometry {
+            layout_origin_in_document,
+            border_origin_in_viewport_ignoring_css_transforms,
+            size,
+        })
     }
 
     fn project_fragment_box_models(
