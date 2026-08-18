@@ -557,12 +557,10 @@ pub(in crate::native_bridge) fn select_options_getter_function<'s>(
         rv.set_null();
         return;
     };
-    let generation = unsafe { &*runtime_ptr }.runtime_reset_generation();
     let descriptor = LiveCollectionDescriptor {
         collection_kind: CollectionKind::OptionsCollection,
         query_kind: LiveCollectionQueryKind::Options,
         root: handle,
-        generation,
         query: None,
         include_root: false,
         tag_name_html_document: None,
@@ -582,12 +580,10 @@ pub(in crate::native_bridge) fn select_selected_options_getter_function<'s>(
         rv.set_null();
         return;
     };
-    let generation = unsafe { &*runtime_ptr }.runtime_reset_generation();
     let descriptor = LiveCollectionDescriptor {
         collection_kind: CollectionKind::HtmlCollection,
         query_kind: LiveCollectionQueryKind::SelectedOptions,
         root: handle,
-        generation,
         query: None,
         include_root: false,
         tag_name_html_document: None,

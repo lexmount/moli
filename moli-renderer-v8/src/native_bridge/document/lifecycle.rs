@@ -196,21 +196,6 @@ fn clear_window_event_handlers(scope: &mut v8::PinScope<'_, '_>) {
     }
 }
 
-fn require_collision_free_wrapper_generation_rebind(
-    rebound: Option<usize>,
-    old_generation: u64,
-    new_generation: u64,
-) -> usize {
-    // Page.setDocumentContent may replace a document before page script has
-    // materialized any DOM wrapper. Some(0) is therefore a successful no-op;
-    // None alone reports an identity-key collision.
-    rebound.unwrap_or_else(|| {
-        panic!(
-            "wrapper identity collision while rebinding document replacement from generation {old_generation} to {new_generation}"
-        )
-    })
-}
-
 impl JsContextHost {
     fn prepare_root_document_replacement(
         &mut self,
@@ -218,7 +203,6 @@ impl JsContextHost {
         host_ptr: *mut JsContextHost,
         document_handle: DomHandle,
     ) {
-        let old_generation = self.runtime_reset_generation();
         self.dispatch_document_open_descendant_frame_unload_lifecycle(scope, document_handle);
         self.clear_event_callbacks_for_document_replacement(document_handle, true);
         custom_elements::with_custom_element_reaction_scope(scope, host_ptr, |scope| {
@@ -229,16 +213,6 @@ impl JsContextHost {
             );
         });
         self.open_root_document(scope);
-
-        let new_generation = self.runtime_reset_generation();
-        let rebound = self
-            .native_bridge_mut()
-            .rebind_wrapper_generation(old_generation, new_generation);
-        let _ = require_collision_free_wrapper_generation_rebind(
-            rebound,
-            old_generation,
-            new_generation,
-        );
     }
 
     /// Replaces the active root document through the native document stream.
@@ -987,18 +961,4 @@ fn boundary_after_protected_inert_root(
         .child_index(parent, protected_inert_root)?;
     let offset = u32::try_from(index + 1).ok()?;
     Some((parent, offset))
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn document_replacement_accepts_an_empty_wrapper_identity_store() {
-        let mut identity = crate::native_bridge::identity::BridgeIdentityStore::default();
-        let rebound = identity.rebind_generation(4, 5);
-
-        assert_eq!(
-            super::require_collision_free_wrapper_generation_rebind(rebound, 4, 5),
-            0
-        );
-    }
 }

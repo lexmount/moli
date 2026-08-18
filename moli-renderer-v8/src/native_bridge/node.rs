@@ -1236,27 +1236,15 @@ pub(crate) fn node_runtime_and_handle_from_object(
 ) -> std::result::Result<(*mut JsContextHost, DomHandle), String> {
     let (runtime_ptr, handle) = super::bridge_handle_from_object(scope, object)?;
     match handle {
-        super::BridgeHandle::Node(handle, _) => Ok((runtime_ptr, handle)),
+        super::BridgeHandle::Node(handle) => Ok((runtime_ptr, handle)),
         super::BridgeHandle::Window
-        | super::BridgeHandle::ClassList(_, _, _)
-        | super::BridgeHandle::Dataset(_, _)
-        | super::BridgeHandle::Style(_, _)
-        | super::BridgeHandle::ComputedStyle(_, _, _) => {
+        | super::BridgeHandle::ClassList(_, _)
+        | super::BridgeHandle::Dataset(_)
+        | super::BridgeHandle::Style(_)
+        | super::BridgeHandle::ComputedStyle(_, _) => {
             Err("wrapper did not contain a node identity".to_owned())
         }
     }
-}
-
-pub(crate) fn stale_node_runtime_and_handle_from_object(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-) -> Option<(*mut JsContextHost, DomHandle)> {
-    let (runtime_ptr, handle) = super::bridge_handle_from_object(scope, object).ok()?;
-    let super::BridgeHandle::Node(handle, generation) = handle else {
-        return None;
-    };
-    (generation != unsafe { &*runtime_ptr }.runtime_reset_generation())
-        .then_some((runtime_ptr, handle))
 }
 
 pub(crate) fn object_is_node_wrapper_or_detached<'s>(

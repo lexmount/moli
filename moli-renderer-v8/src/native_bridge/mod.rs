@@ -86,6 +86,6 @@ pub(crate) fn object_is_native_event_target_wrapper_or_detached<'s>(
         return true;
     }
     bridge_handle_from_object(scope, object)
-        .is_ok_and(|(_, handle)| matches!(handle, BridgeHandle::Node(_, _) | BridgeHandle::Window))
+        .is_ok_and(|(_, handle)| matches!(handle, BridgeHandle::Node(_) | BridgeHandle::Window))
 }
 pub(crate) use traversal::install_traversal_template_bindings;

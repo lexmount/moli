@@ -6,12 +6,12 @@ pub(super) fn class_list_runtime_handle_and_kind_from_object(
 ) -> std::result::Result<(*mut JsContextHost, DomHandle, DomTokenListKind), String> {
     let (runtime_ptr, handle) = bridge_handle_from_object(scope, object)?;
     match handle {
-        BridgeHandle::ClassList(handle, _, kind) => Ok((runtime_ptr, handle, kind)),
+        BridgeHandle::ClassList(handle, kind) => Ok((runtime_ptr, handle, kind)),
         BridgeHandle::Window
-        | BridgeHandle::Node(_, _)
-        | BridgeHandle::Dataset(_, _)
-        | BridgeHandle::Style(_, _)
-        | BridgeHandle::ComputedStyle(_, _, _) => {
+        | BridgeHandle::Node(_)
+        | BridgeHandle::Dataset(_)
+        | BridgeHandle::Style(_)
+        | BridgeHandle::ComputedStyle(_, _) => {
             Err("wrapper did not contain a DOMTokenList identity".to_owned())
         }
     }

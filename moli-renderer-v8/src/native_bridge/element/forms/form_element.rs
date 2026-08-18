@@ -255,12 +255,10 @@ pub(in crate::native_bridge) fn form_elements_getter_function<'s>(
         rv.set_null();
         return;
     };
-    let generation = unsafe { &*runtime_ptr }.runtime_reset_generation();
     let descriptor = LiveCollectionDescriptor {
         collection_kind: CollectionKind::FormControlsCollection,
         query_kind: LiveCollectionQueryKind::FormControls,
         root: handle,
-        generation,
         query: None,
         include_root: false,
         tag_name_html_document: None,
@@ -440,12 +438,10 @@ pub(in crate::native_bridge) fn fieldset_elements_getter_function<'s>(
         rv.set_null();
         return;
     };
-    let generation = unsafe { &*runtime_ptr }.runtime_reset_generation();
     let descriptor = LiveCollectionDescriptor {
         collection_kind: CollectionKind::HtmlCollection,
         query_kind: LiveCollectionQueryKind::FormControls,
         root: handle,
-        generation,
         query: None,
         include_root: false,
         tag_name_html_document: None,
@@ -571,7 +567,6 @@ pub(in crate::native_bridge) fn form_named_getter(
             collection_kind: CollectionKind::RadioNodeList,
             query_kind: LiveCollectionQueryKind::FormControlsByName,
             root: handle,
-            generation: runtime.runtime_reset_generation(),
             query: Some(key),
             include_root: false,
             tag_name_html_document: None,
@@ -631,7 +626,6 @@ pub(in crate::native_bridge) fn form_named_descriptor(
             collection_kind: CollectionKind::RadioNodeList,
             query_kind: LiveCollectionQueryKind::FormControlsByName,
             root: handle,
-            generation: runtime.runtime_reset_generation(),
             query: Some(key),
             include_root: false,
             tag_name_html_document: None,

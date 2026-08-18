@@ -118,14 +118,13 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'_, '_>,
         document_handle: DomHandle,
     ) {
-        let host_ptr = self as *mut JsContextHost;
         let mut stack = vec![document_handle];
         while let Some(current) = stack.pop() {
             let children = self.dom_host().child_handles(current).collect::<Vec<_>>();
             stack.extend(children);
             if let Some(wrapper) = self
                 .native_bridge_mut()
-                .cached_handle_wrapper(scope, host_ptr, current)
+                .cached_handle_wrapper(scope, current)
             {
                 let undefined = v8::undefined(scope);
                 set_private_value(

@@ -88,7 +88,7 @@ pub(crate) fn mutate_live_element_attribute_for_inspector(
             if let Some((namespace, local_name)) = attr_cache_target
                 && let Some(wrapper) = unsafe { &mut *runtime_ptr }
                     .native_bridge_mut()
-                    .cached_handle_wrapper(scope, runtime_ptr, handle)
+                    .cached_handle_wrapper(scope, handle)
             {
                 clear_live_attr_cache_entry_ns(scope, wrapper, namespace.as_deref(), &local_name);
             }

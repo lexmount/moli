@@ -215,7 +215,6 @@ fn bridge_create_live_collection_callback(
         return;
     };
 
-    let generation = unsafe { &*runtime_ptr }.runtime_reset_generation();
     let tag_name_html_document = (query_kind == LiveCollectionQueryKind::TagName).then(|| {
         unsafe { &*runtime_ptr }
             .dom_host()
@@ -226,7 +225,6 @@ fn bridge_create_live_collection_callback(
         collection_kind,
         query_kind,
         root,
-        generation,
         query,
         include_root,
         tag_name_html_document,

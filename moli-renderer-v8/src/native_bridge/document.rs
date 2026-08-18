@@ -1234,7 +1234,6 @@ fn document_html_collection_getter<'s>(
         }
         return;
     }
-    let generation = runtime.runtime_reset_generation();
     let (query_kind, query, tag_name_html_document) = match kind {
         DocumentCollectionAccessorKind::Forms => (LiveCollectionQueryKind::Forms, None, None),
         DocumentCollectionAccessorKind::Images => (LiveCollectionQueryKind::Images, None, None),
@@ -1256,7 +1255,6 @@ fn document_html_collection_getter<'s>(
         collection_kind: CollectionKind::HtmlCollection,
         query_kind,
         root: handle,
-        generation,
         query,
         include_root: true,
         tag_name_html_document,

@@ -5,15 +5,13 @@ use super::super::{
         node_runtime_and_handle_from_args_or_detached,
         node_runtime_and_handle_from_object_or_detached, receiver_has_detached_state,
         require_element_method_receiver, require_parent_node_receiver, set_wrapped_node_or_null,
-        stale_node_runtime_and_handle_from_object, throw_incompatible_method_receiver,
-        throw_native_selector_error_for_selector,
+        throw_incompatible_method_receiver, throw_native_selector_error_for_selector,
     },
 };
 use super::forms::control_matches_validity_pseudo;
 use crate::{
     util::{
-        call_object_method, constructor_prototype, object_chain_contains, object_number_property,
-        object_property_as_object, v8_string, v8str, walk_object_chain,
+        call_object_method, object_number_property, object_property_as_object, v8_string, v8str,
     },
     webidl,
 };
@@ -195,27 +193,6 @@ pub(in crate::native_bridge) fn node_matches_callback<'s>(
         super::super::document::detached_matches_method_callback(scope, args, rv);
         return;
     }
-    if stale_node_is_element_receiver(scope, args.this()) {
-        let Some(parsed) = webidl::parse_args::<ElementMatchesArgs>(scope, &args) else {
-            return;
-        };
-        if let Some((runtime_ptr, _)) =
-            stale_node_runtime_and_handle_from_object(scope, args.this())
-        {
-            match unsafe { &*runtime_ptr }.matches(
-                unsafe { &*runtime_ptr }.document_handle(),
-                &parsed.selectors,
-            ) {
-                Ok(_) => rv.set_bool(false),
-                Err(error) => {
-                    throw_native_selector_error_for_selector(scope, &parsed.selectors, &error)
-                }
-            }
-        } else {
-            rv.set_bool(false);
-        }
-        return;
-    }
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, args.this())
     else {
@@ -254,23 +231,6 @@ pub(in crate::native_bridge) fn node_matches_callback<'s>(
         Ok(false) => rv.set_bool(false),
         Err(error) => throw_native_selector_error_for_selector(scope, &parsed.selectors, &error),
     }
-}
-
-fn stale_node_is_element_receiver<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    receiver: v8::Local<'s, v8::Object>,
-) -> bool {
-    if stale_node_runtime_and_handle_from_object(scope, receiver).is_none() {
-        return false;
-    }
-    let global = scope.get_current_context().global(scope);
-    let Some(element_prototype) = constructor_prototype(scope, global, "Element") else {
-        return false;
-    };
-    object_chain_contains(
-        &walk_object_chain(scope, receiver, "__proto__"),
-        element_prototype,
-    )
 }
 
 fn node_matches_needs_owner_document_query<'s>(

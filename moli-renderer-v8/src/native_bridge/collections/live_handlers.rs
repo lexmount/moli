@@ -369,7 +369,6 @@ fn live_collection_named_value<'s>(
             collection_kind: CollectionKind::RadioNodeList,
             query_kind: LiveCollectionQueryKind::FormControlsByName,
             root: descriptor.root,
-            generation: descriptor.generation,
             query: Some(key),
             include_root: false,
             tag_name_html_document: None,

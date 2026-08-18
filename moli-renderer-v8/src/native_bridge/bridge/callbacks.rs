@@ -136,12 +136,12 @@ pub(crate) fn callback_value_dom_handle(
     let object = v8::Local::<v8::Object>::try_from(value).ok()?;
     let (_, handle) = bridge_handle_from_object(scope, object).ok()?;
     match handle {
-        BridgeHandle::Node(handle, _) => Some(handle),
+        BridgeHandle::Node(handle) => Some(handle),
         BridgeHandle::Window
-        | BridgeHandle::ClassList(_, _, _)
-        | BridgeHandle::Dataset(_, _)
-        | BridgeHandle::Style(_, _)
-        | BridgeHandle::ComputedStyle(_, _, _) => None,
+        | BridgeHandle::ClassList(_, _)
+        | BridgeHandle::Dataset(_)
+        | BridgeHandle::Style(_)
+        | BridgeHandle::ComputedStyle(_, _) => None,
     }
 }
 

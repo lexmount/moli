@@ -15,20 +15,17 @@ impl NativeDomBridge {
         host_ptr: *mut JsContextHost,
         handle: DomHandle,
     ) -> Option<v8::Local<'s, v8::Object>> {
-        let generation = unsafe { &*host_ptr }.runtime_reset_generation();
-        self.wrap_bridge_handle(scope, host_ptr, BridgeHandle::Node(handle, generation))
+        self.wrap_bridge_handle(scope, host_ptr, BridgeHandle::Node(handle))
     }
 
     pub(crate) fn cached_handle_wrapper<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
-        host_ptr: *mut JsContextHost,
         handle: DomHandle,
     ) -> Option<v8::Local<'s, v8::Object>> {
-        let generation = unsafe { &*host_ptr }.runtime_reset_generation();
         let reflector_id = self
             .identity
-            .existing_reflector_id(BridgeHandle::Node(handle, generation))?;
+            .existing_reflector_id(BridgeHandle::Node(handle))?;
         self.identity.cached_wrapper(scope, reflector_id)
     }
 
@@ -38,15 +35,6 @@ impl NativeDomBridge {
     ) {
         self.identity
             .retire_default_world_wrappers_for_realm(realm_token);
-    }
-
-    pub(crate) fn rebind_wrapper_generation(
-        &mut self,
-        old_generation: u64,
-        new_generation: u64,
-    ) -> Option<usize> {
-        self.identity
-            .rebind_generation(old_generation, new_generation)
     }
 
     pub(crate) fn wrap_window<'s, 'i>(
@@ -87,8 +75,7 @@ impl NativeDomBridge {
         handle: DomHandle,
     ) -> Option<v8::Local<'s, v8::Object>> {
         let creation_context = receiver.get_creation_context(scope)?;
-        let generation = unsafe { &*host_ptr }.runtime_reset_generation();
-        let bridge_handle = BridgeHandle::Node(handle, generation);
+        let bridge_handle = BridgeHandle::Node(handle);
         if creation_context == scope.get_current_context() {
             return self.wrap_bridge_handle(scope, host_ptr, bridge_handle);
         }
@@ -107,11 +94,10 @@ impl NativeDomBridge {
         runtime_ptr: *mut JsContextHost,
         handle: DomHandle,
     ) -> Option<v8::Local<'s, v8::Object>> {
-        let generation = unsafe { &*runtime_ptr }.runtime_reset_generation();
         self.wrap_bridge_handle(
             scope,
             runtime_ptr,
-            BridgeHandle::ClassList(handle, generation, DomTokenListKind::Class),
+            BridgeHandle::ClassList(handle, DomTokenListKind::Class),
         )
     }
 
@@ -121,11 +107,10 @@ impl NativeDomBridge {
         runtime_ptr: *mut JsContextHost,
         handle: DomHandle,
     ) -> Option<v8::Local<'s, v8::Object>> {
-        let generation = unsafe { &*runtime_ptr }.runtime_reset_generation();
         self.wrap_bridge_handle(
             scope,
             runtime_ptr,
-            BridgeHandle::ClassList(handle, generation, DomTokenListKind::Part),
+            BridgeHandle::ClassList(handle, DomTokenListKind::Part),
         )
     }
 
@@ -135,11 +120,10 @@ impl NativeDomBridge {
         runtime_ptr: *mut JsContextHost,
         handle: DomHandle,
     ) -> Option<v8::Local<'s, v8::Object>> {
-        let generation = unsafe { &*runtime_ptr }.runtime_reset_generation();
         self.wrap_bridge_handle(
             scope,
             runtime_ptr,
-            BridgeHandle::ClassList(handle, generation, DomTokenListKind::Rel),
+            BridgeHandle::ClassList(handle, DomTokenListKind::Rel),
         )
     }
 
@@ -149,12 +133,7 @@ impl NativeDomBridge {
         runtime_ptr: *mut JsContextHost,
         handle: DomHandle,
     ) -> Option<v8::Local<'s, v8::Object>> {
-        let generation = unsafe { &*runtime_ptr }.runtime_reset_generation();
-        self.wrap_bridge_handle(
-            scope,
-            runtime_ptr,
-            BridgeHandle::Dataset(handle, generation),
-        )
+        self.wrap_bridge_handle(scope, runtime_ptr, BridgeHandle::Dataset(handle))
     }
 
     pub(crate) fn wrap_style<'s, 'i>(
@@ -163,8 +142,7 @@ impl NativeDomBridge {
         runtime_ptr: *mut JsContextHost,
         handle: DomHandle,
     ) -> Option<v8::Local<'s, v8::Object>> {
-        let generation = unsafe { &*runtime_ptr }.runtime_reset_generation();
-        self.wrap_bridge_handle(scope, runtime_ptr, BridgeHandle::Style(handle, generation))
+        self.wrap_bridge_handle(scope, runtime_ptr, BridgeHandle::Style(handle))
     }
 
     pub(crate) fn wrap_computed_style<'s, 'i>(
@@ -174,23 +152,22 @@ impl NativeDomBridge {
         handle: DomHandle,
         descriptor: ComputedStyleDescriptor,
     ) -> Option<v8::Local<'s, v8::Object>> {
-        let generation = unsafe { &*runtime_ptr }.runtime_reset_generation();
         self.wrap_bridge_handle(
             scope,
             runtime_ptr,
-            BridgeHandle::ComputedStyle(handle, generation, descriptor),
+            BridgeHandle::ComputedStyle(handle, descriptor),
         )
     }
 
     pub(crate) fn resolve_node_handle(&self, reflector_id: ReflectorId) -> Option<DomHandle> {
         match self.bridge_handle(reflector_id) {
-            Some(BridgeHandle::Node(handle, _)) => Some(handle),
+            Some(BridgeHandle::Node(handle)) => Some(handle),
             Some(
                 BridgeHandle::Window
-                | BridgeHandle::ClassList(_, _, _)
-                | BridgeHandle::Dataset(_, _)
-                | BridgeHandle::Style(_, _)
-                | BridgeHandle::ComputedStyle(_, _, _),
+                | BridgeHandle::ClassList(_, _)
+                | BridgeHandle::Dataset(_)
+                | BridgeHandle::Style(_)
+                | BridgeHandle::ComputedStyle(_, _),
             )
             | None => None,
         }

@@ -5384,7 +5384,10 @@ fn document_open_preserves_document_identity_and_detaches_the_replaced_tree() {
               const oldBody = document.body;
               const oldText = oldNode.firstChild;
               const oldClassList = oldNode.classList;
+              const oldDataset = oldNode.dataset;
               const oldStyle = oldNode.style;
+              const oldDocumentMains = document.getElementsByTagName("main");
+              const oldBodyChildren = oldBody.children;
               const oldShadowHost = document.createElement("section");
               oldBody.append(oldShadowHost);
               const oldShadow = oldShadowHost.attachShadow({ mode: "open" });
@@ -5423,7 +5426,17 @@ fn document_open_preserves_document_identity_and_detaches_the_replaced_tree() {
                 oldNodeParentPreserved: oldNode.parentNode === oldBody,
                 oldTextIdentityPreserved: oldNode.firstChild === oldText,
                 oldClassListIdentityPreserved: oldNode.classList === oldClassList,
+                oldDatasetIdentityPreserved: oldNode.dataset === oldDataset,
                 oldStyleIdentityPreserved: oldNode.style === oldStyle,
+                documentCollectionIdentityPreserved:
+                  document.getElementsByTagName("main") === oldDocumentMains,
+                documentCollectionTracksReplacement:
+                  Array.from(oldDocumentMains, node => node.id).join(","),
+                detachedCollectionIdentityPreserved:
+                  oldBody.children === oldBodyChildren,
+                detachedCollectionKeepsOldTree:
+                  Array.from(oldBodyChildren, node => node.id || node.localName).join(","),
+                oldNodeStillMatches: oldNode.matches('#old'),
                 oldBodyConnected: oldBody.isConnected,
                 oldShadowIdentityPreserved: oldShadowHost.shadowRoot === oldShadow,
                 oldShadowChildIdentityPreserved: oldShadow.firstChild === oldShadowChild,
@@ -5440,7 +5453,7 @@ fn document_open_preserves_document_identity_and_detaches_the_replaced_tree() {
 
     assert_eq!(
         result,
-        r#"{"sameDocument":true,"oldNodeConnected":false,"oldNodeText":"old text","oldNodeOwnerPreserved":true,"oldNodeParentPreserved":true,"oldTextIdentityPreserved":true,"oldClassListIdentityPreserved":true,"oldStyleIdentityPreserved":true,"oldBodyConnected":false,"oldShadowIdentityPreserved":true,"oldShadowChildIdentityPreserved":true,"oldShadowText":"shadow text","oldShadowConnected":false,"listenerRuns":{"node":0,"document":0,"window":0,"handler":0,"preDetachedNode":1,"preDetachedHandler":1},"oldLookupMissing":true,"newText":"new text"}"#
+        r#"{"sameDocument":true,"oldNodeConnected":false,"oldNodeText":"old text","oldNodeOwnerPreserved":true,"oldNodeParentPreserved":true,"oldTextIdentityPreserved":true,"oldClassListIdentityPreserved":true,"oldDatasetIdentityPreserved":true,"oldStyleIdentityPreserved":true,"documentCollectionIdentityPreserved":true,"documentCollectionTracksReplacement":"new","detachedCollectionIdentityPreserved":true,"detachedCollectionKeepsOldTree":"old,section","oldNodeStillMatches":true,"oldBodyConnected":false,"oldShadowIdentityPreserved":true,"oldShadowChildIdentityPreserved":true,"oldShadowText":"shadow text","oldShadowConnected":false,"listenerRuns":{"node":0,"document":0,"window":0,"handler":0,"preDetachedNode":1,"preDetachedHandler":1},"oldLookupMissing":true,"newText":"new text"}"#
     );
 }
 

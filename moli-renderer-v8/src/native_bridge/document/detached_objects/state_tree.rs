@@ -492,7 +492,7 @@ pub(crate) fn paired_detached_native_object_for_handle<'s>(
         let runtime = unsafe { &mut *runtime_ptr };
         runtime
             .native_bridge_mut()
-            .cached_handle_wrapper(scope, runtime_ptr, handle)
+            .cached_handle_wrapper(scope, handle)
     }?;
     get_private_object(scope, wrapper, DOM_PARSER_FOREIGN_NODE_SLOT)
 }

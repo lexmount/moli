@@ -1,7 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    hash::Hash,
-};
+use std::{collections::HashMap, hash::Hash};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ReflectorId(u64);
@@ -82,7 +79,7 @@ where
             return Reflector { id: existing, key };
         }
 
-        self.next_id += 1;
+        self.next_id = self.next_id.checked_add(1).expect("reflector id overflow");
         let id = ReflectorId(self.next_id);
         self.ids_by_key.insert(key.clone(), id);
         self.keys_by_id.insert(id, key.clone());
@@ -104,45 +101,6 @@ where
 
     pub fn key_for_id(&self, id: ReflectorId) -> Option<K> {
         self.keys_by_id.get(&id).cloned()
-    }
-
-    pub fn rekey(&mut self, old_key: K, new_key: K) -> Option<ReflectorId> {
-        if old_key == new_key {
-            return self.ids_by_key.get(&old_key).copied();
-        }
-        if self.ids_by_key.contains_key(&new_key) {
-            return None;
-        }
-
-        let id = self.ids_by_key.remove(&old_key)?;
-        self.ids_by_key.insert(new_key.clone(), id);
-        self.keys_by_id.insert(id, new_key);
-        Some(id)
-    }
-
-    pub fn rekey_matching(
-        &mut self,
-        mut replacement: impl FnMut(&K) -> Option<K>,
-    ) -> Option<usize> {
-        let replacements = self
-            .ids_by_key
-            .keys()
-            .filter_map(|old_key| replacement(old_key).map(|new_key| (old_key.clone(), new_key)))
-            .collect::<Vec<_>>();
-        let mut destinations = HashSet::with_capacity(replacements.len());
-        if replacements
-            .iter()
-            .any(|(_, new_key)| !destinations.insert(new_key.clone()))
-            || replacements.iter().any(|(old_key, new_key)| {
-                old_key != new_key && self.ids_by_key.contains_key(new_key)
-            })
-        {
-            return None;
-        }
-        for (old_key, new_key) in &replacements {
-            self.rekey(old_key.clone(), new_key.clone())?;
-        }
-        Some(replacements.len())
     }
 
     pub fn len(&self) -> usize {
@@ -203,55 +161,5 @@ mod tests {
         assert_eq!(registry.key_for_id(second.id()), Some(2_u32));
         assert_eq!(registry.len(), 2);
         assert!(!registry.is_empty());
-    }
-
-    #[test]
-    fn reflector_registry_rekeys_an_existing_identity_without_changing_its_id() {
-        let mut registry = ReflectorRegistry::default();
-        let reflector = registry.intern(7_u32);
-
-        assert_eq!(registry.rekey(7, 9), Some(reflector.id()));
-        assert_eq!(registry.existing(7), None);
-        assert_eq!(
-            registry.existing(9).map(|entry| entry.id()),
-            Some(reflector.id())
-        );
-        assert_eq!(registry.key_for_id(reflector.id()), Some(9));
-        assert_eq!(registry.len(), 1);
-    }
-
-    #[test]
-    fn reflector_registry_does_not_rekey_over_an_existing_identity() {
-        let mut registry = ReflectorRegistry::default();
-        let first = registry.intern(7_u32);
-        let second = registry.intern(9_u32);
-
-        assert_eq!(registry.rekey(7, 9), None);
-        assert_eq!(registry.existing(7), Some(first));
-        assert_eq!(registry.existing(9), Some(second));
-    }
-
-    #[test]
-    fn reflector_registry_rekeys_a_matching_key_set_atomically() {
-        let mut registry = ReflectorRegistry::default();
-        let first = registry.intern((7_u32, 1_u32));
-        let second = registry.intern((9_u32, 1_u32));
-        let unchanged = registry.intern((11_u32, 2_u32));
-
-        assert_eq!(
-            registry.rekey_matching(|(value, generation)| {
-                (*generation == 1).then_some((*value, 3))
-            }),
-            Some(2)
-        );
-        assert_eq!(
-            registry.existing((7, 3)).map(|entry| entry.id()),
-            Some(first.id())
-        );
-        assert_eq!(
-            registry.existing((9, 3)).map(|entry| entry.id()),
-            Some(second.id())
-        );
-        assert_eq!(registry.existing((11, 2)), Some(unchanged));
     }
 }

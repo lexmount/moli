@@ -15,45 +15,11 @@ use super::{JsContextHost, RuntimeObservableContextToken};
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(super) enum BridgeHandle {
     Window,
-    Node(DomHandle, u64),
-    ClassList(DomHandle, u64, DomTokenListKind),
-    Dataset(DomHandle, u64),
-    Style(DomHandle, u64),
-    ComputedStyle(DomHandle, u64, ComputedStyleDescriptor),
-}
-
-impl BridgeHandle {
-    fn with_rebound_generation(&self, old_generation: u64, new_generation: u64) -> Option<Self> {
-        match self {
-            Self::Window => None,
-            Self::Node(handle, generation) if *generation == old_generation => {
-                Some(Self::Node(*handle, new_generation))
-            }
-            Self::ClassList(handle, generation, kind) if *generation == old_generation => {
-                Some(Self::ClassList(*handle, new_generation, *kind))
-            }
-            Self::Dataset(handle, generation) if *generation == old_generation => {
-                Some(Self::Dataset(*handle, new_generation))
-            }
-            Self::Style(handle, generation) if *generation == old_generation => {
-                Some(Self::Style(*handle, new_generation))
-            }
-            Self::ComputedStyle(handle, generation, descriptor)
-                if *generation == old_generation =>
-            {
-                Some(Self::ComputedStyle(
-                    *handle,
-                    new_generation,
-                    descriptor.clone(),
-                ))
-            }
-            Self::Node(_, _)
-            | Self::ClassList(_, _, _)
-            | Self::Dataset(_, _)
-            | Self::Style(_, _)
-            | Self::ComputedStyle(_, _, _) => None,
-        }
-    }
+    Node(DomHandle),
+    ClassList(DomHandle, DomTokenListKind),
+    Dataset(DomHandle),
+    Style(DomHandle),
+    ComputedStyle(DomHandle, ComputedStyleDescriptor),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -223,7 +189,6 @@ pub(super) struct LiveCollectionDescriptor {
     pub(super) collection_kind: CollectionKind,
     pub(super) query_kind: LiveCollectionQueryKind,
     pub(super) root: DomHandle,
-    pub(super) generation: u64,
     pub(super) query: Option<String>,
     pub(super) include_root: bool,
     pub(super) tag_name_html_document: Option<bool>,
@@ -237,7 +202,6 @@ pub(super) struct LiveCollectionResolutionCache(
 
 #[derive(Debug)]
 struct LiveCollectionResolutionCacheEntry {
-    runtime_generation: u64,
     query_version: u64,
     handles: Rc<[DomHandle]>,
 }
@@ -247,7 +211,6 @@ impl PartialEq for LiveCollectionDescriptor {
         self.collection_kind == other.collection_kind
             && self.query_kind == other.query_kind
             && self.root == other.root
-            && self.generation == other.generation
             && self.query == other.query
             && self.include_root == other.include_root
             && self.tag_name_html_document == other.tag_name_html_document
@@ -261,7 +224,6 @@ impl Hash for LiveCollectionDescriptor {
         self.collection_kind.hash(state);
         self.query_kind.hash(state);
         self.root.hash(state);
-        self.generation.hash(state);
         self.query.hash(state);
         self.include_root.hash(state);
         self.tag_name_html_document.hash(state);
@@ -270,20 +232,13 @@ impl Hash for LiveCollectionDescriptor {
 
 impl LiveCollectionDescriptor {
     pub(super) fn resolve(&self, host: &JsContextHost) -> Rc<[DomHandle]> {
-        let runtime_generation = host.runtime_reset_generation();
-        if self.generation != runtime_generation {
-            return Rc::from(Vec::<DomHandle>::new());
-        }
         let query_version = host.dom_host().query_version();
         if let Some(handles) = self
             .resolution_cache
             .0
             .borrow()
             .as_ref()
-            .filter(|entry| {
-                entry.runtime_generation == runtime_generation
-                    && entry.query_version == query_version
-            })
+            .filter(|entry| entry.query_version == query_version)
             .map(|entry| entry.handles.clone())
         {
             return handles;
@@ -333,7 +288,6 @@ impl LiveCollectionDescriptor {
         };
         let handles = Rc::<[DomHandle]>::from(handles);
         *self.resolution_cache.0.borrow_mut() = Some(LiveCollectionResolutionCacheEntry {
-            runtime_generation,
             query_version,
             handles: handles.clone(),
         });
@@ -359,8 +313,15 @@ impl Default for LiveCollectionStore {
 impl LiveCollectionStore {
     fn register(&mut self, descriptor: LiveCollectionDescriptor) -> u32 {
         let collection_id = self.next_id;
-        self.next_id += 1;
-        self.descriptors.insert(collection_id, descriptor);
+        self.next_id = self
+            .next_id
+            .checked_add(1)
+            .expect("live collection id overflow");
+        let replaced = self.descriptors.insert(collection_id, descriptor);
+        assert!(
+            replaced.is_none(),
+            "live collection ids must never be reused"
+        );
         collection_id
     }
 
@@ -387,8 +348,15 @@ impl Default for StaticHandleCollectionStore {
 impl StaticHandleCollectionStore {
     fn register(&mut self, handles: Vec<DomHandle>) -> u32 {
         let collection_id = self.next_id;
-        self.next_id += 1;
-        self.handles.insert(collection_id, handles);
+        self.next_id = self
+            .next_id
+            .checked_add(1)
+            .expect("static handle collection id overflow");
+        let replaced = self.handles.insert(collection_id, handles);
+        assert!(
+            replaced.is_none(),
+            "static handle collection ids must never be reused"
+        );
         collection_id
     }
 
@@ -551,15 +519,6 @@ impl BridgeIdentityStore {
 
     pub(super) fn bridge_handle(&self, reflector_id: ReflectorId) -> Option<BridgeHandle> {
         self.reflectors.key_for_id(reflector_id)
-    }
-
-    pub(super) fn rebind_generation(
-        &mut self,
-        old_generation: u64,
-        new_generation: u64,
-    ) -> Option<usize> {
-        self.reflectors
-            .rekey_matching(|handle| handle.with_rebound_generation(old_generation, new_generation))
     }
 
     pub(super) fn cached_wrapper<'s>(

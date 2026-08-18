@@ -113,7 +113,7 @@ fn style_object_forces_empty_computed<'s>(
         return value.boolean_value(scope);
     }
     match bridge_handle {
-        BridgeHandle::ComputedStyle(handle, _, descriptor) => match descriptor.target {
+        BridgeHandle::ComputedStyle(handle, descriptor) => match descriptor.target {
             ComputedStyleTargetKey::ChildFrame(frame_handle) => {
                 let runtime = unsafe { &*runtime_ptr };
                 let empty = !child_frame_target_document_is_current(runtime, handle, frame_handle)

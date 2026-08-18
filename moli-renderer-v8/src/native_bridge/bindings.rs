@@ -68,21 +68,21 @@ pub(crate) struct NativeBridgeBindings {
 fn wrapper_kind_for_handle(handle: &BridgeHandle) -> WrapperKind {
     match handle {
         BridgeHandle::Window => WrapperKind::Window,
-        BridgeHandle::ClassList(_, _, _) => WrapperKind::ClassList,
-        BridgeHandle::Dataset(_, _) => WrapperKind::Dataset,
-        BridgeHandle::Style(_, _) => WrapperKind::Style,
-        BridgeHandle::ComputedStyle(_, _, _) => WrapperKind::ComputedStyle,
-        BridgeHandle::Node(_, _) => WrapperKind::Node,
+        BridgeHandle::ClassList(_, _) => WrapperKind::ClassList,
+        BridgeHandle::Dataset(_) => WrapperKind::Dataset,
+        BridgeHandle::Style(_) => WrapperKind::Style,
+        BridgeHandle::ComputedStyle(_, _) => WrapperKind::ComputedStyle,
+        BridgeHandle::Node(_) => WrapperKind::Node,
     }
 }
 
 fn prototype_name_for_handle(host_ptr: *mut JsContextHost, handle: &BridgeHandle) -> &'static str {
     match handle {
         BridgeHandle::Window => "Window",
-        BridgeHandle::ClassList(_, _, _) => "DOMTokenList",
-        BridgeHandle::Dataset(_, _) => "DOMStringMap",
-        BridgeHandle::Style(_, _) | BridgeHandle::ComputedStyle(_, _, _) => "CSSStyleProperties",
-        BridgeHandle::Node(node_handle, _) => {
+        BridgeHandle::ClassList(_, _) => "DOMTokenList",
+        BridgeHandle::Dataset(_) => "DOMStringMap",
+        BridgeHandle::Style(_) | BridgeHandle::ComputedStyle(_, _) => "CSSStyleProperties",
+        BridgeHandle::Node(node_handle) => {
             let runtime = unsafe { &*host_ptr };
             if runtime.dom_host().is_shadow_root(*node_handle) {
                 "ShadowRoot"
@@ -275,7 +275,7 @@ impl NativeBridgeBindings {
             window::sync_window_wrapper_function_identity(scope, wrapper);
             return;
         }
-        let BridgeHandle::Node(node_handle, _) = handle else {
+        let BridgeHandle::Node(node_handle) = handle else {
             return;
         };
         let child_handle = {

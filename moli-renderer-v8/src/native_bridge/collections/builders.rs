@@ -182,7 +182,6 @@ pub(in crate::native_bridge) fn build_live_collection_for_node<'s>(
     query: Option<String>,
     include_root: bool,
 ) -> v8::Local<'s, v8::Object> {
-    let generation = unsafe { &*runtime_ptr }.runtime_reset_generation();
     let tag_name_html_document = (query_kind == LiveCollectionQueryKind::TagName).then(|| {
         unsafe { &*runtime_ptr }
             .dom_host()
@@ -196,7 +195,6 @@ pub(in crate::native_bridge) fn build_live_collection_for_node<'s>(
             collection_kind,
             query_kind,
             root,
-            generation,
             query,
             include_root,
             tag_name_html_document,

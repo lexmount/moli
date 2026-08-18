@@ -46,12 +46,12 @@ fn dataset_runtime_and_handle_from_object(
 ) -> std::result::Result<(*mut JsContextHost, DomHandle), String> {
     let (runtime_ptr, handle) = bridge_handle_from_object(scope, object)?;
     match handle {
-        BridgeHandle::Dataset(handle, _) => Ok((runtime_ptr, handle)),
+        BridgeHandle::Dataset(handle) => Ok((runtime_ptr, handle)),
         BridgeHandle::Window
-        | BridgeHandle::Node(_, _)
-        | BridgeHandle::ClassList(_, _, _)
-        | BridgeHandle::Style(_, _)
-        | BridgeHandle::ComputedStyle(_, _, _) => {
+        | BridgeHandle::Node(_)
+        | BridgeHandle::ClassList(_, _)
+        | BridgeHandle::Style(_)
+        | BridgeHandle::ComputedStyle(_, _) => {
             Err("wrapper did not contain a DOMStringMap identity".to_owned())
         }
     }
