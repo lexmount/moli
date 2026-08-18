@@ -116,6 +116,7 @@ mod child_parser_module_root_start_completion;
 mod child_realm_materialization;
 mod child_realm_materialization_completion;
 mod command_checkpoint;
+mod cssom_zoom;
 mod dedicated_worker_client_event;
 mod document_script_completion;
 mod element_toggle_event;

@@ -1385,12 +1385,13 @@ impl ResolvedLayoutStyle {
         self.size_containment
     }
 
-    /// Returns the cumulative CSS `zoom` used by this box's computed values.
+    /// Returns the accumulated CSS `zoom` applied to this box's layout values.
     ///
-    /// Stylo has already applied this factor to computed CSS lengths. Browser
-    /// resources expose natural sizes in their own CSS-pixel coordinate space,
-    /// so the replaced-content adapter uses the same factor when it imports
-    /// those sizes into layout space.
+    /// Stylo has already applied this factor to computed CSS lengths. Layout,
+    /// paint, and client rects retain that zoomed space. Browser resources are
+    /// scaled into it on import, while CSSOM integer box and scroll metrics
+    /// remove the factor when they are published. Synthetic styles have no
+    /// Stylo value and therefore use the initial factor.
     pub(crate) fn effective_zoom(&self) -> f32 {
         self.computed
             .as_ref()
