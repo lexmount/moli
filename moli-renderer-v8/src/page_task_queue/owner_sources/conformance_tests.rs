@@ -760,7 +760,7 @@ impl WebCryptoTaskLane {
     ) -> bool {
         let producer = sender.bind_task(
             execution_context,
-            RendererPageWebCryptoTaskId::new(sequence, 1),
+            RendererPageWebCryptoTaskId::new(sequence),
         );
         assert_eq!(producer.owner().task().task_id(), sequence);
         producer.send(Ok(WebCryptoTaskResult::Bool(true))).is_ok()
@@ -2445,7 +2445,7 @@ fn unified_ready_descriptors_expose_one_fifo_head_per_typed_source() {
         .webcrypto_task_sender(document_token(1))
         .bind_task(
             window_execution_context(88),
-            RendererPageWebCryptoTaskId::new(13, 1),
+            RendererPageWebCryptoTaskId::new(13),
         )
         .send(Ok(WebCryptoTaskResult::Bool(true)))
         .expect("WebCrypto task should enter the unified source set");

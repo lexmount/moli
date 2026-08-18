@@ -11,29 +11,33 @@ use super::RendererOwnerWakeSender;
 
 /// PageVm-local identity of one pending WebCrypto Promise.
 ///
-/// `transport_generation` pairs the blocking completion with the exact
-/// pending entry. It intentionally does not mean "current Document":
-/// `document.open()` preserves Window-owned WebCrypto work.
+/// The id is never reused within a PageVm. The enclosing task owner carries
+/// the root Page and Window-realm identities, so `document.open()` can preserve
+/// Window-owned WebCrypto work without projecting a Document generation into
+/// the task identity.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) struct RendererPageWebCryptoTaskId {
-    task_id: u64,
-    transport_generation: u64,
-}
+pub(crate) struct RendererPageWebCryptoTaskId(u64);
 
 impl RendererPageWebCryptoTaskId {
-    pub(crate) const fn new(task_id: u64, transport_generation: u64) -> Self {
-        Self {
-            task_id,
-            transport_generation,
-        }
+    pub(crate) const fn first() -> Self {
+        Self(1)
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn new(task_id: u64) -> Self {
+        assert!(task_id != 0, "WebCrypto task id must be non-zero");
+        Self(task_id)
     }
 
     pub(crate) const fn task_id(self) -> u64 {
-        self.task_id
+        self.0
     }
 
-    pub(crate) const fn transport_generation(self) -> u64 {
-        self.transport_generation
+    pub(crate) const fn checked_next(self) -> Option<Self> {
+        match self.0.checked_add(1) {
+            Some(task_id) => Some(Self(task_id)),
+            None => None,
+        }
     }
 }
 

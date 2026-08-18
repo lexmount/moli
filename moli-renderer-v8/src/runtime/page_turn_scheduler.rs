@@ -808,7 +808,7 @@ mod tests {
                     RuntimeObservableContextToken::from_raw(11),
                     WindowExecutionContextAccessPolicy::EnforceWebOrigin,
                 ),
-                RendererPageWebCryptoTaskId::new(order, 1),
+                RendererPageWebCryptoTaskId::new(order),
             ),
         }
     }
@@ -845,7 +845,7 @@ mod tests {
                     RuntimeObservableContextToken::from_raw(11),
                     WindowExecutionContextAccessPolicy::EnforceWebOrigin,
                 ),
-                RendererPageOpfsTaskId::new(order, 1),
+                RendererPageOpfsTaskId::new(order),
             ),
         }
     }

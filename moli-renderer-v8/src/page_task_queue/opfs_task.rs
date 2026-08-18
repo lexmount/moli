@@ -11,30 +11,33 @@ use super::RendererOwnerWakeSender;
 
 /// PageVm-local identity of one pending OPFS settlement.
 ///
-/// `transport_generation` binds the storage-owner result to the exact pending
-/// entry that was registered in the relevant Window realm. The root Page and
-/// realm identity live in [`RendererPageOpfsTaskOwner`], so a reused local id
-/// cannot authorize a completion from a retired PageVm.
+/// The id is never reused within a PageVm. The root Page and Window-realm
+/// identities live in [`RendererPageOpfsTaskOwner`], so `document.open()` can
+/// preserve Window-owned work without projecting a Document generation into
+/// the task identity.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) struct RendererPageOpfsTaskId {
-    task_id: u64,
-    transport_generation: u64,
-}
+pub(crate) struct RendererPageOpfsTaskId(u64);
 
 impl RendererPageOpfsTaskId {
-    pub(crate) const fn new(task_id: u64, transport_generation: u64) -> Self {
-        Self {
-            task_id,
-            transport_generation,
-        }
+    pub(crate) const fn first() -> Self {
+        Self(1)
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn new(task_id: u64) -> Self {
+        assert!(task_id != 0, "OPFS task id must be non-zero");
+        Self(task_id)
     }
 
     pub(crate) const fn task_id(self) -> u64 {
-        self.task_id
+        self.0
     }
 
-    pub(crate) const fn transport_generation(self) -> u64 {
-        self.transport_generation
+    pub(crate) const fn checked_next(self) -> Option<Self> {
+        match self.0.checked_add(1) {
+            Some(task_id) => Some(Self(task_id)),
+            None => None,
+        }
     }
 }
 

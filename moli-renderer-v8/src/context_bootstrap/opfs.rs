@@ -376,8 +376,12 @@ impl OpfsCompletionSink {
 /// closure. It says which owner accepted the pending entry; it cannot publish a
 /// completion and carries no scheduler route.
 enum RegisteredOpfsTaskCancellation {
-    Page { task_id: u64 },
-    Worker { task_id: u64 },
+    Page {
+        task_id: crate::page_task_queue::RendererPageOpfsTaskId,
+    },
+    Worker {
+        task_id: u64,
+    },
 }
 
 struct RegisteredOpfsTask {
@@ -387,7 +391,7 @@ struct RegisteredOpfsTask {
 
 impl RegisteredOpfsTask {
     fn page(
-        task_id: u64,
+        task_id: crate::page_task_queue::RendererPageOpfsTaskId,
         completion: crate::page_task_queue::RendererPageOpfsTaskProducer,
     ) -> Self {
         Self {

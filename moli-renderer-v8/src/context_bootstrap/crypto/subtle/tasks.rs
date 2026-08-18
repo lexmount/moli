@@ -43,7 +43,7 @@ pub(crate) fn register_webcrypto_task<'s>(
         // SAFETY: the global bridge stores the current realm's live
         // JsContextHost. Registration runs synchronously inside the V8
         // callback before control returns to the owner. The returned producer
-        // captures the exact PageVm, Window realm, task id, and generation.
+        // captures the exact PageVm, Window realm, and never-reused task id.
         let producer =
             unsafe { &mut *host_ptr }.register_pending_webcrypto_task(scope, promise.resolver())?;
         return Some((handle, WebCryptoCompletionSink::Page(producer)));

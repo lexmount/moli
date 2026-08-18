@@ -938,8 +938,11 @@ pub(crate) struct JsContextHost {
     next_image_decode_id: u64,
     pending_image_decode_requests: HashMap<ImageDecodeRequestId, PendingImageDecodeRequest>,
     resource_timing_buffers: SharedResourceTimingBufferRegistry,
-    next_webcrypto_task_id: u64,
-    pending_webcrypto_tasks: HashMap<u64, webcrypto_tasks::PendingWebCryptoTask>,
+    next_webcrypto_task_id: crate::page_task_queue::RendererPageWebCryptoTaskId,
+    pending_webcrypto_tasks: HashMap<
+        crate::page_task_queue::RendererPageWebCryptoTaskId,
+        webcrypto_tasks::PendingWebCryptoTask,
+    >,
     opfs_owner_state: Option<opfs_tasks::WindowOpfsOwnerState>,
     pub(super) history_queue: HistoryQueueState,
     rendering_updates: rendering_updates::RenderingUpdateState,

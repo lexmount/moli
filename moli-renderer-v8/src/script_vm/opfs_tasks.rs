@@ -17,7 +17,7 @@ impl ScriptVm {
     }
 
     /// Settle one page-side OPFS task body after the Page arbiter has matched
-    /// its exact PageVm, Window realm, transport generation, and pending entry.
+    /// its exact PageVm, Window realm, and pending entry.
     ///
     /// Storage settlement may queue Promise reactions, but this body
     /// deliberately leaves them pending. The unique selected Page-task
