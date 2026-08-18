@@ -737,16 +737,12 @@ pub(crate) async fn collect_image_response_into_parkable(
         head.redirect_chain = redirect_chain;
         head.redirected = true;
     }
-    let encoded = manager.create(0);
+    let mut encoded = Vec::new();
     while let Some(bytes) = response.next_chunk().await {
-        encoded
-            .append(&bytes)
-            .map_err(|error| format!("failed to append image response bytes: {error:?}"))?;
+        encoded.extend_from_slice(&bytes);
     }
     response.finish().await.map_err(format_network_error)?;
-    encoded
-        .freeze()
-        .map_err(|error| format!("failed to freeze image response bytes: {error:?}"))?;
+    let encoded = manager.from_frozen_bytes(encoded);
     let response = crate::protocol_types::NavigationResponse::from_head_and_body(
         head,
         String::new(),
@@ -1342,7 +1338,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn image_body_is_received_directly_into_one_frozen_parkable_image() -> Result<()> {
+    async fn image_body_is_received_directly_into_one_parkable_image() -> Result<()> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;
         let server = tokio::spawn(async move {
@@ -1414,7 +1410,6 @@ mod tests {
             .parkable_image
             .as_ref()
             .expect("image completion must carry its encoded backing");
-        assert!(encoded.is_frozen());
         assert_eq!(encoded.snapshot()?.as_ref(), b"firsttail");
 
         server.await?;

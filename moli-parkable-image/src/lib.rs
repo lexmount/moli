@@ -1,8 +1,7 @@
 //! Parkable encoded image storage.
 //!
-//! This follows Blink's `ParkableImage` boundary: callers append encoded bytes,
-//! freeze the completed image, decode through read-only snapshots, and park an
-//! eligible image into one `DiskPool` extent. Reading a parked image unparks it
+//! Completed encoded images are decoded through read-only snapshots and may be
+//! parked into one `DiskPool` extent. Reading a parked image unparks it
 //! synchronously; the retained disk extent lets a later park discard memory
 //! without another write. The manager keeps resident and parked registries
 //! separate and exposes the next resident parking deadline to its runtime.
@@ -13,8 +12,8 @@ mod policy;
 mod registry;
 
 pub use image::{
-    ParkOutcome, ParkableImage, ParkableImageDiagnostics, ParkableImageMutationError,
-    ParkableImageSnapshot, ParkableImageStorageState, WeakParkableImage,
+    ParkOutcome, ParkableImage, ParkableImageDiagnostics, ParkableImageSnapshot,
+    ParkableImageStorageState, WeakParkableImage,
 };
 pub use manager::{
     ParkableImageManager, ParkableImageManagerDiagnostics, ParkableImageSweepReport,

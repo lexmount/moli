@@ -9,10 +9,7 @@ use std::{
 use moli_disk_pool::DiskPool;
 use parking_lot::Mutex;
 
-use crate::{
-    ParkOutcome, ParkableImageManager, ParkableImageMutationError, ParkableImagePolicy,
-    ParkableImageStorageState,
-};
+use crate::{ParkOutcome, ParkableImageManager, ParkableImagePolicy, ParkableImageStorageState};
 
 fn manager(policy: ParkableImagePolicy) -> (DiskPool, ParkableImageManager) {
     let pool = DiskPool::new(None).unwrap();
@@ -31,48 +28,6 @@ fn reference_bytes(len: usize) -> Vec<u8> {
     (0..len)
         .map(|offset| u8::try_from((offset * 37) % 251).unwrap())
         .collect()
-}
-
-#[test]
-fn initial_capacity_does_not_change_image_size() {
-    let (_, manager) = manager(immediate_policy());
-    let image = manager.create(32 * 1024);
-
-    assert!(image.is_empty());
-    assert_eq!(image.len(), 0);
-    image.append(b"encoded image").unwrap();
-    assert_eq!(image.len(), 13);
-}
-
-#[test]
-fn append_then_freeze_makes_bytes_immutable() {
-    let (_, manager) = manager(immediate_policy());
-    let image = manager.create(8);
-    image.append(b"abc").unwrap();
-    image.append(b"def").unwrap();
-    assert_eq!(&*image.snapshot().unwrap(), b"abcdef");
-    image.freeze().unwrap();
-    assert_eq!(
-        image.append(b"late"),
-        Err(ParkableImageMutationError::Frozen)
-    );
-    assert_eq!(
-        image.freeze(),
-        Err(ParkableImageMutationError::AlreadyFrozen)
-    );
-}
-
-#[test]
-fn mutable_snapshot_keeps_its_size_and_contents_after_append() {
-    let (_, manager) = manager(immediate_policy());
-    let image = manager.create(16);
-    image.append(b"12345").unwrap();
-    let snapshot = image.snapshot().unwrap();
-
-    image.append(b"67890").unwrap();
-
-    assert_eq!(&*snapshot, b"12345");
-    assert_eq!(&*image.snapshot().unwrap(), b"1234567890");
 }
 
 #[test]
@@ -264,21 +219,21 @@ fn manager_sweeps_live_images_and_prunes_dead_entries() {
     let (_, manager) = manager(immediate_policy());
     let first = manager.from_frozen_bytes(vec![1; 8]);
     let second = manager.from_frozen_bytes(vec![2; 8]);
-    let mutable = manager.create(0);
+    let small = manager.from_frozen_bytes(Vec::new());
     drop(second);
 
     let report = manager.maybe_park_images();
-    assert_eq!(report.considered, 2);
+    assert_eq!(report.considered, 1);
     assert_eq!(report.parked, 1);
-    assert_eq!(report.ineligible, 1);
+    assert_eq!(report.ineligible, 0);
     let diagnostics = manager.diagnostics();
-    assert_eq!(diagnostics.image_count, 2);
+    assert_eq!(diagnostics.image_count, 1);
     assert_eq!(diagnostics.parked_count, 1);
-    assert_eq!(diagnostics.mutable_count, 1);
     assert_eq!(diagnostics.resident_count, 0);
     assert_eq!(diagnostics.parking_count, 0);
     assert_eq!(diagnostics.resident_with_disk_backup_count, 0);
-    drop((first, mutable));
+    assert!(small.is_empty());
+    drop((first, small));
     assert_eq!(manager.diagnostics().image_count, 0);
 }
 
@@ -293,13 +248,12 @@ fn weak_handle_does_not_extend_image_lifetime() {
 }
 
 #[test]
-fn mutable_and_empty_frozen_images_never_allocate_disk_space() {
+fn empty_images_are_not_registered_or_parked() {
     let (pool, manager) = manager(immediate_policy());
-    let image = manager.create(1024);
+    let image = manager.from_frozen_bytes(Vec::new());
 
-    assert_eq!(image.maybe_park().unwrap(), ParkOutcome::NotFrozen);
-    image.freeze().unwrap();
     assert_eq!(image.maybe_park().unwrap(), ParkOutcome::BelowMinimum);
+    assert_eq!(manager.diagnostics().image_count, 0);
     assert_eq!(pool.diagnostics().disk_footprint_bytes, 0);
     assert_eq!(pool.diagnostics().free_bytes, 0);
 }
@@ -429,7 +383,7 @@ fn concurrent_reads_unpark_once_and_preserve_every_copy() {
 }
 
 #[test]
-fn next_deadline_tracks_freeze_use_and_the_last_snapshot_drop() {
+fn next_deadline_tracks_creation_use_and_the_last_snapshot_drop() {
     let delay = Duration::from_secs(30);
     let wakeups = Arc::new(AtomicUsize::new(0));
     let wakeups_for_callback = Arc::clone(&wakeups);
@@ -444,16 +398,12 @@ fn next_deadline_tracks_freeze_use_and_the_last_snapshot_drop() {
             wakeups_for_callback.fetch_add(1, Ordering::Relaxed);
         },
     );
-    let image = manager.create(0);
-    image.append(b"encoded image").unwrap();
-    assert_eq!(manager.next_parking_deadline(), None);
-
-    let before_freeze = Instant::now();
-    image.freeze().unwrap();
+    let before_creation = Instant::now();
+    let image = manager.from_frozen_bytes(b"encoded image".to_vec());
     let deadline = manager
         .next_parking_deadline()
-        .expect("freezing an unused eligible image must schedule its delay");
-    assert!(deadline >= before_freeze + delay);
+        .expect("creating an unused eligible image must schedule its delay");
+    assert!(deadline >= before_creation + delay);
     assert!(deadline <= Instant::now() + delay);
 
     let snapshot = image.snapshot().unwrap();
@@ -585,7 +535,7 @@ fn parked_images_leave_the_resident_schedule_until_they_are_unparked() {
 }
 
 #[test]
-fn capacity_failure_has_no_expired_deadline_until_an_extent_is_released() {
+fn capacity_failure_can_be_retried_after_an_extent_is_released() {
     const IMAGE_SIZE: usize = 4096;
     let pool = DiskPool::new(Some(IMAGE_SIZE as u64)).unwrap();
     let manager = ParkableImageManager::new(Some(pool), immediate_policy());
@@ -596,18 +546,8 @@ fn capacity_failure_has_no_expired_deadline_until_an_extent_is_released() {
     let report = manager.park_images_due();
     assert_eq!(report.considered, 1);
     assert_eq!(report.unavailable, 1);
-    assert_eq!(
-        manager.next_parking_deadline(),
-        None,
-        "a full pool must not leave an already-expired deadline spinning"
-    );
 
     drop(first);
-    assert!(
-        manager
-            .next_parking_deadline()
-            .is_some_and(|deadline| deadline <= Instant::now())
-    );
     assert_eq!(manager.park_images_due().parked, 1);
     assert_eq!(
         second.diagnostics().storage,

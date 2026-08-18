@@ -467,7 +467,6 @@ async fn memory_diagnostics_reports_resource_runtime_storage() {
         resource_runtime["parkableImages"],
         json!({
             "imageCount": 1,
-            "mutableCount": 0,
             "residentCount": 0,
             "parkingCount": 0,
             "residentWithDiskBackupCount": 0,
