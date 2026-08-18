@@ -258,6 +258,47 @@ fn pass_result_owns_complete_box_models_and_answers_a_batch_from_one_pass() {
 }
 
 #[test]
+fn own_border_is_visual_geometry_not_scrollable_content() {
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("bordered-child", Vec::new()),
+    ]);
+    let mut styles = Styles::default();
+    styles
+        .0
+        .insert(0, fixed_size(LayoutDisplay::Block, 320.0, 240.0));
+    styles.0.insert(
+        1,
+        resolved(
+            LayoutDisplay::Block,
+            Style {
+                box_sizing: BoxSizing::ContentBox,
+                size: Size {
+                    width: length(100.0),
+                    height: length(60.0),
+                },
+                border: Rect {
+                    left: length(7.0),
+                    right: length(11.0),
+                    top: length(5.0),
+                    bottom: length(13.0),
+                },
+                ..Style::default()
+            },
+        ),
+    );
+
+    let output = build(&source, &mut styles);
+    let metrics = output.element_metrics_for_source(1).unwrap();
+    assert_eq!(
+        metrics.client_size,
+        moli_layout::LayoutSize::new(100.0, 60.0)
+    );
+    assert_eq!(metrics.scroll_size, metrics.client_size);
+    assert_eq!(metrics.client_border, LayoutPoint::new(7.0, 5.0));
+}
+
+#[test]
 fn pass_output_freezes_into_the_sole_queryable_retained_tree() {
     let source = Source(vec![
         Node::element("root", vec![1]),
