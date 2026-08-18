@@ -403,14 +403,6 @@ fn script_handoff_from_main_parser_blocking_execution(
 
 pub(super) fn bind_parser_owned_script_handle(page_vm: &mut PageVm, script: &mut PreparedScript) {
     if script.host_script_handle.is_some() {
-        if matches!(
-            script.runtime_generation,
-            crate::planning::PreparedScriptRuntimeGeneration::PendingBinding
-        ) {
-            script.runtime_generation = crate::planning::PreparedScriptRuntimeGeneration::Live(
-                page_vm.vm().document_runtime.runtime_reset_generation(),
-            );
-        }
         return;
     }
     let handle = page_vm
@@ -428,9 +420,6 @@ pub(super) fn bind_parser_owned_script_handle(page_vm: &mut PageVm, script: &mut
             ),
         );
     script.host_script_handle = Some(handle);
-    script.runtime_generation = crate::planning::PreparedScriptRuntimeGeneration::Live(
-        page_vm.vm().document_runtime.runtime_reset_generation(),
-    );
 }
 
 pub(super) struct ParserDriver<'loader, 'state> {

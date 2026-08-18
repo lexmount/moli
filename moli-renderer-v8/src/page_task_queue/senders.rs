@@ -670,11 +670,10 @@ impl PageRuntimeWakeSender {
     pub(crate) fn bind_main_document_runtime_continuation(
         &self,
         document_owner: crate::frame_owner_model::FrameDocumentTaskOwner,
-        runtime_generation: u64,
     ) -> MainDocumentRuntimeContinuationSender {
         match &self.main_document_runtime {
             Some(sender) => MainDocumentRuntimeContinuationSender::OwnerAttached(
-                sender.bind_producer(document_owner, runtime_generation),
+                sender.bind_producer(document_owner),
             ),
             None => panic!("owner-attached Page runtime continuation sender is required"),
         }
@@ -759,10 +758,8 @@ impl PageTaskSender {
     pub(crate) fn bind_main_document_runtime_producer(
         &self,
         document_owner: crate::frame_owner_model::FrameDocumentTaskOwner,
-        runtime_generation: u64,
     ) -> RendererPageMainDocumentRuntimeProducer {
-        self.main_document_runtime
-            .bind_producer(document_owner, runtime_generation)
+        self.main_document_runtime.bind_producer(document_owner)
     }
 }
 

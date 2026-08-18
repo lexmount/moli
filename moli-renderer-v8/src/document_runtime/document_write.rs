@@ -10,7 +10,7 @@ use crate::parser::{
     DocumentStream, ParserPumpStep, ParserScriptHandoff, ParserYield, PreparedImportMap,
     PreparedImportMapSource,
 };
-use crate::planning::{PreparedScriptRuntimeGeneration, SharedScriptSourceLoad};
+use crate::planning::SharedScriptSourceLoad;
 use crate::stylesheet_blocking::DocumentBlockingStylesheetSignature;
 use crate::types::{ScriptKind, ScriptMode};
 use html5ever::tree_builder::QuirksMode;
@@ -2129,13 +2129,6 @@ impl DocumentRuntime {
         mut script: PreparedScript,
     ) {
         self.note_parser_script_start_position(node, start_line, start_column);
-        if matches!(
-            script.runtime_generation,
-            PreparedScriptRuntimeGeneration::PendingBinding
-        ) {
-            script.runtime_generation =
-                PreparedScriptRuntimeGeneration::Live(self.runtime_reset_generation());
-        }
         if script.host_script_handle.is_none() {
             script.host_script_handle = Some(self.bind_parser_owned_script_handle_for_node(node));
         }
@@ -2744,7 +2737,6 @@ mod tests {
             base_url: url.clone(),
             initiator_url: url,
             host_script_handle: None,
-            runtime_generation: PreparedScriptRuntimeGeneration::PendingBinding,
         }
     }
 

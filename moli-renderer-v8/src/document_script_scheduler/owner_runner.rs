@@ -601,7 +601,7 @@ mod tests {
     use crate::{
         document_script_scheduler::PageOwnedDocumentScriptBodyActivity,
         dom::NodeId,
-        planning::{PreparedScriptRuntimeGeneration, ScriptFetchMetadata, ScriptSource},
+        planning::{ScriptFetchMetadata, ScriptSource},
         protocol_types::NavigationResponse,
         types::{ScriptKind, ScriptMode, ScriptRun, ScriptRunOutcome, ScriptSourceKind},
     };
@@ -716,7 +716,6 @@ mod tests {
             base_url: url::Url::parse("https://example.com/owner-hook.js").unwrap(),
             initiator_url: url::Url::parse("https://example.com/index.html").unwrap(),
             host_script_handle: None,
-            runtime_generation: PreparedScriptRuntimeGeneration::PendingBinding,
         }
     }
 

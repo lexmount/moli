@@ -3,8 +3,8 @@ use crate::{
     frame_owner_model::MainDocumentScriptLoadDelayLease,
     host::ModuleFailurePolicy,
     planning::{
-        PreparedScript, PreparedScriptRuntimeGeneration, PreparedScriptSourceLoadOutcome,
-        SharedScriptSourceLoad, prepared_script_with_loaded_source,
+        PreparedScript, PreparedScriptSourceLoadOutcome, SharedScriptSourceLoad,
+        prepared_script_with_loaded_source,
     },
     types::{ScriptErrorConstructorKind, SharedNavigationResponseResult},
 };
@@ -99,10 +99,9 @@ pub(crate) enum PageOwnedDocumentScriptWork {
 }
 
 impl PageOwnedDocumentScriptWork {
-    pub(crate) fn bind_main_document_runtime_target(
-        &mut self,
+    pub(crate) fn matches_main_document_runtime_target(
+        &self,
         owner: crate::frame_owner_model::FrameDocumentTaskOwner,
-        runtime_generation: u64,
     ) -> bool {
         let (load_delay_owner, runtime_script_owner) = match self {
             Self::AsyncSourceFailure {
@@ -129,15 +128,7 @@ impl PageOwnedDocumentScriptWork {
         {
             return false;
         }
-        let script = self.as_script_mut();
-        match script.runtime_generation {
-            PreparedScriptRuntimeGeneration::PendingBinding => {
-                script.runtime_generation =
-                    PreparedScriptRuntimeGeneration::Live(runtime_generation);
-                true
-            }
-            PreparedScriptRuntimeGeneration::Live(generation) => generation == runtime_generation,
-        }
+        true
     }
 
     pub(crate) fn script(lane: DocumentScriptExecutionLane, script: PreparedScript) -> Self {

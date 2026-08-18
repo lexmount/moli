@@ -1042,7 +1042,7 @@ mod tests {
         ModuleLoadStage, NativeDynamicModuleImportReady, NativeModuleGraphFetchRequest,
         NativeModuleGraphJob, PendingDynamicModuleImport,
     };
-    use crate::planning::{PreparedScriptRuntimeGeneration, ScriptFetchMetadata, ScriptSource};
+    use crate::planning::{ScriptFetchMetadata, ScriptSource};
     use crate::types::{ScriptKind, ScriptMode, ScriptSourceKind};
     use url::Url;
 
@@ -1100,7 +1100,6 @@ mod tests {
             base_url: Url::parse(&format!("https://example.test/{node}.mjs")).expect("module url"),
             initiator_url: Url::parse("https://example.test/page").expect("page url"),
             host_script_handle: None,
-            runtime_generation: PreparedScriptRuntimeGeneration::Live(1),
         }
     }
 

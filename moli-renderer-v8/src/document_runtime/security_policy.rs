@@ -1546,12 +1546,12 @@ impl DocumentRuntime {
         send_report: bool,
     ) -> anyhow::Result<()> {
         self.record_content_security_policy_inspector_issue(target, violation);
+        let host = unsafe { &mut *host_ptr };
+        let document_owner = host
+            .current_main_document_task_owner()
+            .ok_or_else(|| anyhow::anyhow!("main CSP violation document owner is unavailable"))?;
         if send_report {
             let fields = ContentSecurityPolicyViolationEventFields::from(violation);
-            let host = unsafe { &mut *host_ptr };
-            let document_owner = host.current_main_document_task_owner().ok_or_else(|| {
-                anyhow::anyhow!("main CSP violation document owner is unavailable")
-            })?;
             crate::network_host::send_content_security_policy_reports_for_window(
                 scope,
                 host,
@@ -1565,13 +1565,13 @@ impl DocumentRuntime {
         let event_task = match target {
             Some(target) => {
                 crate::page_task_queue::ContentSecurityPolicyViolationEventTask::for_element(
-                    self.runtime_reset_generation(),
+                    document_owner,
                     target,
                     violation.clone(),
                 )
             }
             None => crate::page_task_queue::ContentSecurityPolicyViolationEventTask::new(
-                self.runtime_reset_generation(),
+                document_owner,
                 violation.clone(),
             ),
         };
@@ -1596,7 +1596,7 @@ impl DocumentRuntime {
         host_ptr: *mut JsContextHost,
         task: &crate::page_task_queue::ContentSecurityPolicyViolationEventTask,
     ) -> anyhow::Result<()> {
-        if task.runtime_generation() != self.runtime_reset_generation() {
+        if unsafe { &*host_ptr }.current_main_document_task_owner() != Some(task.owner()) {
             return Ok(());
         }
         let violation = task.violation();

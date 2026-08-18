@@ -37,7 +37,7 @@ fn page_bound_script_scheduler(
     let runtime_sender = queue.owner_attached_runtime_page_task_sender_for_test();
     let mut scripts =
         HostScriptScheduler::with_page_task_injection(runtime_sender.page_task_sender());
-    assert!(scripts.bind_main_document_runtime_producer(test_main_document_owner(), 0));
+    assert!(scripts.bind_main_document_runtime_producer(test_main_document_owner()));
     scripts
 }
 

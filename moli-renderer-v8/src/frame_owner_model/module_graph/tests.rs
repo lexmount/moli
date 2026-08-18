@@ -53,9 +53,7 @@ use crate::module_runtime::{
     NativeModuleGraphJobAdvance, NativeModuleScriptSingleModuleClient,
     NativeModuleSingleFetchRequest, NativeParserModuleTreeJobResume, PendingDynamicModuleImport,
 };
-use crate::planning::{
-    PreparedScript, PreparedScriptRuntimeGeneration, ScriptFetchMetadata, ScriptSource,
-};
+use crate::planning::{PreparedScript, ScriptFetchMetadata, ScriptSource};
 use crate::types::{ScriptKind, ScriptMode, ScriptSourceKind};
 use moli_module_script_tree as module_tree;
 use url::Url;
@@ -162,7 +160,6 @@ fn parser_root_script(handle: usize, url: &Url) -> PreparedScript {
         base_url: url.clone(),
         initiator_url: url.clone(),
         host_script_handle: None,
-        runtime_generation: PreparedScriptRuntimeGeneration::PendingBinding,
     }
 }
 

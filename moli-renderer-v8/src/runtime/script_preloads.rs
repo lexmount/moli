@@ -1043,7 +1043,6 @@ impl BufferedScriptPreloadRequest {
             base_url: self.url.clone(),
             initiator_url: self.initiator_url.clone(),
             host_script_handle: None,
-            runtime_generation: crate::planning::PreparedScriptRuntimeGeneration::PendingBinding,
         }
     }
 

@@ -25,32 +25,19 @@ use super::{
 /// Exact main-Document binding selected by a post-parse carrier.
 ///
 /// The PageVm root token remains the outer scheduler's authority. This value
-/// is the ScriptVm-local half: `document_owner` separates `document.open()`
-/// replacements and `runtime_generation` separates runtime resets that can
-/// reuse the same PageVm.
+/// is the ScriptVm-local half and separates `document.open()` replacements.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct MainDocumentPostParseOwner {
     document_owner: FrameDocumentTaskOwner,
-    runtime_generation: u64,
 }
 
 impl MainDocumentPostParseOwner {
-    pub(crate) const fn new(
-        document_owner: FrameDocumentTaskOwner,
-        runtime_generation: u64,
-    ) -> Self {
-        Self {
-            document_owner,
-            runtime_generation,
-        }
+    pub(crate) const fn new(document_owner: FrameDocumentTaskOwner) -> Self {
+        Self { document_owner }
     }
 
     pub(crate) const fn document_owner(self) -> FrameDocumentTaskOwner {
         self.document_owner
-    }
-
-    pub(crate) const fn runtime_generation(self) -> u64 {
-        self.runtime_generation
     }
 }
 

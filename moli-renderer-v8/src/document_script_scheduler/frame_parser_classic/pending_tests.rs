@@ -36,9 +36,7 @@ use crate::{
         runner::ParserClassicScriptRunner,
         slot::ParserClassicScriptRunnerSlot,
     },
-    planning::{
-        PreparedScript, PreparedScriptRuntimeGeneration, ScriptFetchMetadata, ScriptSource,
-    },
+    planning::{PreparedScript, ScriptFetchMetadata, ScriptSource},
     types::{
         ChildClassicScriptLoadCompletion, ChildClassicScriptNetworkAttribution, ScriptKind,
         ScriptMode, ScriptSourceKind,
@@ -306,7 +304,6 @@ fn external_script(script_handle: DomHandle, script_url: Url) -> PreparedScript 
         base_url: script_url.clone(),
         initiator_url: script_url,
         host_script_handle: None,
-        runtime_generation: PreparedScriptRuntimeGeneration::PendingBinding,
     }
 }
 

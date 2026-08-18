@@ -18,8 +18,7 @@ use crate::{
 
 pub(crate) use moli_parser::{
     ParserPlanningReadView, ParserScriptRead, PrepareScriptOutcome, PreparedScript,
-    PreparedScriptRuntimeGeneration, ScriptFetchMetadata, ScriptSource, build_prepared_script,
-    classify_parser_script,
+    ScriptFetchMetadata, ScriptSource, build_prepared_script, classify_parser_script,
 };
 
 #[derive(Clone)]
@@ -770,7 +769,6 @@ mod tests {
             base_url: url.clone(),
             initiator_url: url,
             host_script_handle: None,
-            runtime_generation: PreparedScriptRuntimeGeneration::PendingBinding,
         }
     }
 
@@ -834,7 +832,6 @@ mod tests {
             base_url: url.clone(),
             initiator_url,
             host_script_handle: None,
-            runtime_generation: PreparedScriptRuntimeGeneration::PendingBinding,
         }
     }
 

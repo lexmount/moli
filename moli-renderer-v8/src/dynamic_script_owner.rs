@@ -2200,7 +2200,6 @@ mod tests {
             base_url: Url::parse("https://example.test/script.js").expect("test url should parse"),
             url: Url::parse("https://example.test/script.js").expect("test url should parse"),
             host_script_handle: Some(format!("script-{position}")),
-            runtime_generation: crate::planning::PreparedScriptRuntimeGeneration::Live(0),
         }
     }
 

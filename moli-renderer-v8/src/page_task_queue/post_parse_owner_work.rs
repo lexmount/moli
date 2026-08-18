@@ -66,7 +66,6 @@ impl PostParseLifecycleWork {
     pub(crate) fn matches_main_document_runtime_target(
         &self,
         owner: FrameDocumentTaskOwner,
-        runtime_generation: u64,
     ) -> bool {
         if self
             .main_parser_deferred_scripts_owner()
@@ -75,12 +74,10 @@ impl PostParseLifecycleWork {
         {
             return false;
         }
-        match self {
-            Self::DispatchContentSecurityPolicyViolation(task) => {
-                task.runtime_generation() == runtime_generation
-            }
-            _ => true,
-        }
+        !matches!(
+            self,
+            Self::DispatchContentSecurityPolicyViolation(task) if task.owner() != owner
+        )
     }
 
     #[cfg(test)]
@@ -323,18 +320,15 @@ impl PostParseLifecycleWork {
 }
 
 impl PostParsePageOwnedWork {
-    pub(crate) fn bind_main_document_runtime_target(
-        &mut self,
+    pub(crate) fn matches_main_document_runtime_target(
+        &self,
         owner: FrameDocumentTaskOwner,
-        runtime_generation: u64,
     ) -> bool {
         match self {
-            Self::Lifecycle(work) => {
-                work.matches_main_document_runtime_target(owner, runtime_generation)
-            }
+            Self::Lifecycle(work) => work.matches_main_document_runtime_target(owner),
             Self::DocumentScript(work)
             | Self::DocumentScriptWithStylesheetSnapshot { work, .. } => {
-                work.bind_main_document_runtime_target(owner, runtime_generation)
+                work.matches_main_document_runtime_target(owner)
             }
         }
     }

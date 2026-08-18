@@ -717,9 +717,7 @@ mod tests {
             action::ParserPendingClassicScriptSourceLoadClientAction,
             payload::ParserClassicScriptMetadata,
         },
-        planning::{
-            PreparedScript, PreparedScriptRuntimeGeneration, ScriptFetchMetadata, ScriptSource,
-        },
+        planning::{PreparedScript, ScriptFetchMetadata, ScriptSource},
         runtime::RendererPageToken,
         types::{ScriptKind, ScriptMode, ScriptSourceKind},
     };
@@ -749,7 +747,6 @@ mod tests {
             base_url: script_url.clone(),
             initiator_url: script_url,
             host_script_handle: None,
-            runtime_generation: PreparedScriptRuntimeGeneration::PendingBinding,
         };
         let pending_script_id = crate::document_script_scheduler::ParserPendingScriptId::new(
             owner.document_owner(),
@@ -783,7 +780,6 @@ mod tests {
             base_url: document_url.clone(),
             initiator_url: document_url,
             host_script_handle: None,
-            runtime_generation: PreparedScriptRuntimeGeneration::PendingBinding,
         };
         let pending_script_id = crate::document_script_scheduler::ParserPendingScriptId::new(
             owner.document_owner(),

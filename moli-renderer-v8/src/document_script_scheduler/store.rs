@@ -933,9 +933,7 @@ mod tests {
         FrameRealmId, FrameSchedulerLaneId, LocalWindowId,
     };
     use crate::module_runtime::{ModuleEntryId, ModuleMapKey};
-    use crate::planning::{
-        PreparedScript, PreparedScriptRuntimeGeneration, ScriptFetchMetadata, ScriptSource,
-    };
+    use crate::planning::{PreparedScript, ScriptFetchMetadata, ScriptSource};
     use crate::types::{ScriptKind, ScriptMode, ScriptSourceKind};
     use moli_module_script_tree as module_tree;
 
@@ -953,7 +951,6 @@ mod tests {
             base_url: script_url.clone(),
             initiator_url: script_url,
             host_script_handle: None,
-            runtime_generation: PreparedScriptRuntimeGeneration::PendingBinding,
         }
     }
 

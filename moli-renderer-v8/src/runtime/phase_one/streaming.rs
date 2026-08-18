@@ -1041,7 +1041,6 @@ mod tests {
             base_url: url.clone(),
             url,
             host_script_handle: None,
-            runtime_generation: crate::planning::PreparedScriptRuntimeGeneration::PendingBinding,
         }
     }
 

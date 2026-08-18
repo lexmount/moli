@@ -809,9 +809,7 @@ mod tests {
             ParserScriptReadyOwner, ParserScriptSourceFailureOwner,
         },
         parser_script::projection::ParserClassicScriptNextActionWithBlockedScript,
-        planning::{
-            PreparedScript, PreparedScriptRuntimeGeneration, ScriptFetchMetadata, ScriptSource,
-        },
+        planning::{PreparedScript, ScriptFetchMetadata, ScriptSource},
         types::{ScriptKind, ScriptMode, ScriptSourceKind},
     };
     use url::Url;
@@ -943,7 +941,6 @@ mod tests {
             base_url: script_url.clone(),
             initiator_url: script_url,
             host_script_handle: None,
-            runtime_generation: PreparedScriptRuntimeGeneration::PendingBinding,
         };
         ParserPreparedClassicScript::new(
             ParserClassicScriptMetadata::new(script_handle, start_line),

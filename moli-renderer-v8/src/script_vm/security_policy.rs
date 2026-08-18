@@ -13,11 +13,11 @@ use crate::{
 
 /// Body-only result for one queued `securitypolicyviolation` task.
 ///
-/// Runtime-generation rejection happens before entering V8. Once dispatch is
+/// Exact-Document rejection happens before entering V8. Once dispatch is
 /// attempted, its `Result` remains separate so a best-effort failure cannot be
 /// mistaken for a stale task that owes no task-end checkpoint.
 pub(super) enum ContentSecurityPolicyViolationBodyExecution {
-    DiscardedStaleRuntime,
+    DiscardedStaleDocument,
     DispatchAttempted(Result<()>),
 }
 
@@ -83,8 +83,8 @@ impl ScriptVm {
         &mut self,
         task: &ContentSecurityPolicyViolationEventTask,
     ) -> ContentSecurityPolicyViolationBodyExecution {
-        if task.runtime_generation() != self.document_runtime.runtime_reset_generation() {
-            return ContentSecurityPolicyViolationBodyExecution::DiscardedStaleRuntime;
+        if self.current_main_document_task_owner() != Some(task.owner()) {
+            return ContentSecurityPolicyViolationBodyExecution::DiscardedStaleDocument;
         }
         let result = self
             .renderer_document_isolate

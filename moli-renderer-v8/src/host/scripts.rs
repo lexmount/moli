@@ -54,7 +54,7 @@ pub(crate) struct HostScriptScheduler {
     pending_failed_dynamic_scripts: VecDeque<FailedDynamicScript>,
     page_task_tx: Option<PageTaskSender>,
     main_document_runtime_producer: Option<RendererPageMainDocumentRuntimeProducer>,
-    main_document_runtime_target: Option<(crate::frame_owner_model::FrameDocumentTaskOwner, u64)>,
+    main_document_runtime_target: Option<crate::frame_owner_model::FrameDocumentTaskOwner>,
     main_document_completion_recheck_turn_queued: bool,
     dynamic_module_job_turn_queued: bool,
     native_module_owner_event_turn_queued: bool,
@@ -1226,16 +1226,15 @@ impl HostScriptScheduler {
     pub(crate) fn bind_main_document_runtime_producer(
         &mut self,
         owner: crate::frame_owner_model::FrameDocumentTaskOwner,
-        runtime_generation: u64,
     ) -> bool {
-        let next_target = (owner, runtime_generation);
+        let next_target = owner;
         if self.main_document_runtime_target != Some(next_target) {
             self.main_document_completion_recheck_turn_queued = false;
         }
         self.main_document_runtime_producer = self
             .page_task_tx
             .as_ref()
-            .map(|tx| tx.bind_main_document_runtime_producer(owner, runtime_generation));
+            .map(|tx| tx.bind_main_document_runtime_producer(owner));
         self.main_document_runtime_target = self
             .main_document_runtime_producer
             .as_ref()
@@ -1314,7 +1313,7 @@ impl HostScriptScheduler {
     ) -> bool {
         if self
             .main_document_runtime_target
-            .is_none_or(|(target_owner, _)| target_owner != owner)
+            .is_none_or(|target_owner| target_owner != owner)
         {
             return false;
         }
@@ -1527,7 +1526,6 @@ impl HostScriptScheduler {
             NativeNodeId::new(node_id.index()),
             position,
             Some(host_script_handle.to_owned()),
-            crate::planning::PreparedScriptRuntimeGeneration::PendingBinding,
             source,
             source_kind,
             kind,
@@ -1622,8 +1620,6 @@ impl HostScriptScheduler {
                 base_url: url.clone(),
                 url,
                 host_script_handle: Some(host_script_handle.to_owned()),
-                runtime_generation:
-                    crate::planning::PreparedScriptRuntimeGeneration::PendingBinding,
             },
             message: message.to_owned(),
             failure_kind,

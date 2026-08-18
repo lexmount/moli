@@ -1024,7 +1024,6 @@ async fn prepared_parser_inline_script_csp_blocks_before_v8_execution_and_report
         base_url: document_url.clone(),
         initiator_url: document_url,
         host_script_handle: Some(host_script_handle),
-        runtime_generation: PreparedScriptRuntimeGeneration::Live(0),
     };
     vm.execute_loaded_prepared_script_source(&script, source, None)
         .await

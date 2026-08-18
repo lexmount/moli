@@ -1688,7 +1688,6 @@ document.body.setAttribute('data-error-state', [
             base_url: url.clone(),
             url,
             host_script_handle: None,
-            runtime_generation: crate::planning::PreparedScriptRuntimeGeneration::PendingBinding,
         }
     }
 

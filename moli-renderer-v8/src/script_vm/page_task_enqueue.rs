@@ -456,10 +456,9 @@ impl ScriptVm {
             ));
             return;
         };
-        let runtime_generation = self.document_runtime.runtime_reset_generation();
         let producer = self
             .post_domcontentloaded_page_task_tx
-            .bind_main_document_runtime_producer(document_owner, runtime_generation);
+            .bind_main_document_runtime_producer(document_owner);
         if producer.send_post_parse_work_when_ready(work).is_err() {
             self.record_runtime_warning(format_args!(
                 "main-Document runtime work could not bind its ready-source admission"
@@ -480,7 +479,7 @@ impl ScriptVm {
         }
         let continuation = self
             .page_runtime_wake_tx
-            .bind_main_document_runtime_continuation(document_owner, runtime_generation);
+            .bind_main_document_runtime_continuation(document_owner);
         if continuation.send_runtime_script_continuation().is_ok() {
             self.queued_main_document_runtime_continuation_generation = Some(runtime_generation);
         } else {
@@ -514,7 +513,7 @@ impl ScriptVm {
         }
         let queued = self
             .page_runtime_wake_tx
-            .bind_main_document_runtime_continuation(document_owner, runtime_generation)
+            .bind_main_document_runtime_continuation(document_owner)
             .send_parser_owned_module_continuation()
             .is_ok();
         if queued {

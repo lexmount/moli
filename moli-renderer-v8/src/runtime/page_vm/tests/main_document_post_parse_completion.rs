@@ -35,7 +35,10 @@ fn csp_violation_task(
         .url()
         .to_string();
     crate::page_task_queue::ContentSecurityPolicyViolationEventTask::new(
-        page_vm.vm().document_runtime.runtime_reset_generation(),
+        page_vm
+            .vm()
+            .current_main_document_task_owner()
+            .expect("main Document owner"),
         crate::content_security_policy::ContentSecurityPolicyUrlViolation {
             effective_directive: "script-src",
             blocked_uri: "https://blocked-post-parse.test/script.js".to_owned(),

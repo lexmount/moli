@@ -27,8 +27,8 @@ use crate::page_task_queue::{
 use crate::page_task_queue::{PostParseLifecycleQueueStats, PostParsePageOwnedWork};
 use crate::parser::HtmlParser;
 use crate::planning::{
-    ParserPlanningReadView, PrepareScriptOutcome, PreparedScript, PreparedScriptRuntimeGeneration,
-    build_prepared_script, classify_parser_script,
+    ParserPlanningReadView, PrepareScriptOutcome, PreparedScript, build_prepared_script,
+    classify_parser_script,
 };
 use crate::runtime::PageDomManipulationTestFamily;
 use crate::types::{
@@ -7120,7 +7120,6 @@ async fn child_module_producer_boundaries_require_exact_task_owner() {
         base_url: request_url.clone(),
         initiator_url: request_url,
         host_script_handle: None,
-        runtime_generation: crate::planning::PreparedScriptRuntimeGeneration::PendingBinding,
     };
     let document_owner = owner.document_owner();
     vm._context_host
@@ -7298,7 +7297,6 @@ globalThis.__childParserModuleEvalValue = 144;"#
         base_url: key.url().clone(),
         initiator_url: key.url().clone(),
         host_script_handle: None,
-        runtime_generation: crate::planning::PreparedScriptRuntimeGeneration::PendingBinding,
     };
     let pending_script_id = vm
         ._context_host
@@ -7922,7 +7920,6 @@ parent.__childParserModuleTlaEvents.push("module-after");"#
         base_url: key.url().clone(),
         initiator_url: key.url().clone(),
         host_script_handle: None,
-        runtime_generation: crate::planning::PreparedScriptRuntimeGeneration::PendingBinding,
     };
     let pending_script_id = vm
         ._context_host
@@ -8103,7 +8100,6 @@ async fn child_parser_module_graph_failure_dispatches_error_from_scheduler_lane(
         base_url: key.url().clone(),
         initiator_url: key.url().clone(),
         host_script_handle: None,
-        runtime_generation: crate::planning::PreparedScriptRuntimeGeneration::PendingBinding,
     };
     let pending_script_id = vm
         ._context_host

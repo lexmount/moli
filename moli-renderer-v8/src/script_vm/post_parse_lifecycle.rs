@@ -38,7 +38,6 @@ use crate::page_task_queue::{
     post_parse_lifecycle_queue_stats,
 };
 use crate::planning::PreparedScript;
-use crate::planning::PreparedScriptRuntimeGeneration;
 use crate::script_vm::{
     ImmediateRuntimeScriptWorkSignal, ParserFinishDomContentLoadedTask,
     ParserFinishDomContentLoadedWork, PostParseDriverStep, PostParseLifecycleAdvance,
@@ -465,7 +464,7 @@ impl ScriptVm {
         }
         let queued = self
             .page_runtime_wake_tx
-            .bind_main_document_runtime_continuation(document_owner, runtime_generation)
+            .bind_main_document_runtime_continuation(document_owner)
             .send_runtime_module_continuation()
             .is_ok();
         if queued {
@@ -2118,9 +2117,6 @@ impl ScriptVm {
             base_url: Url::parse("https://example.com/pending-runtime.js").unwrap(),
             initiator_url: Url::parse("https://example.com/").unwrap(),
             host_script_handle: None,
-            runtime_generation: PreparedScriptRuntimeGeneration::Live(
-                self.document_runtime.runtime_reset_generation(),
-            ),
         }
     }
 
@@ -2171,9 +2167,6 @@ impl ScriptVm {
             base_url: self.document_runtime.document_url().clone(),
             initiator_url: self.document_runtime.document_url().clone(),
             host_script_handle: Some(host_script_handle),
-            runtime_generation: PreparedScriptRuntimeGeneration::Live(
-                self.document_runtime.runtime_reset_generation(),
-            ),
         };
         self.document_runtime
             .runtime_script_work_mut()
@@ -2199,10 +2192,7 @@ impl ScriptVm {
         };
         let continuation = self
             .page_runtime_wake_tx
-            .bind_main_document_runtime_continuation(
-                document_owner,
-                self.document_runtime.runtime_reset_generation(),
-            );
+            .bind_main_document_runtime_continuation(document_owner);
         self.document_runtime
             .runtime_script_work_mut()
             .dynamic_scripts
@@ -2288,14 +2278,6 @@ impl ScriptVm {
         script: &mut PreparedScript,
         source: ScriptHandleSource,
     ) {
-        if matches!(
-            script.runtime_generation,
-            PreparedScriptRuntimeGeneration::PendingBinding
-        ) {
-            script.runtime_generation = PreparedScriptRuntimeGeneration::Live(
-                self.document_runtime.runtime_reset_generation(),
-            );
-        }
         let allow_missing_handle = script.kind == ScriptKind::Classic
             && script.source_kind == ScriptSourceKind::Inline
             && script.mode == ScriptMode::Normal;

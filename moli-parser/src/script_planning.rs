@@ -245,7 +245,6 @@ pub struct PreparedScript {
     pub base_url: Url,
     pub initiator_url: Url,
     pub host_script_handle: Option<String>,
-    pub runtime_generation: PreparedScriptRuntimeGeneration,
 }
 
 #[derive(Debug, Clone)]
@@ -337,12 +336,6 @@ fn normalize_referrer_policy(value: Option<&str>) -> Option<String> {
 fn normalize_non_empty_attr(value: Option<&str>) -> Option<String> {
     let value = value?.trim();
     (!value.is_empty()).then(|| value.to_owned())
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PreparedScriptRuntimeGeneration {
-    PendingBinding,
-    Live(u64),
 }
 
 impl PreparedScript {
@@ -512,7 +505,6 @@ pub fn build_prepared_script(
                 url,
                 initiator_url: document_url,
                 host_script_handle: None,
-                runtime_generation: PreparedScriptRuntimeGeneration::PendingBinding,
             })),
             Err(error) => PrepareScriptOutcome::UrlResolutionFailed(format!(
                 "failed to resolve script src `{src}`: {error}"
@@ -533,7 +525,6 @@ pub fn build_prepared_script(
                     base_url: document_base_url,
                     initiator_url: document_url,
                     host_script_handle: None,
-                    runtime_generation: PreparedScriptRuntimeGeneration::PendingBinding,
                 }))
             }
             _ => PrepareScriptOutcome::EmptyInlineSource,

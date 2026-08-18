@@ -74,7 +74,6 @@ fn ready_dynamic_runtime_script(position: usize) -> PreparedScript {
         base_url: Url::parse(&format!("https://example.com/dynamic-{position}.js")).unwrap(),
         initiator_url: Url::parse("https://example.com/").unwrap(),
         host_script_handle: None,
-        runtime_generation: PreparedScriptRuntimeGeneration::PendingBinding,
     }
 }
 
@@ -242,7 +241,6 @@ fn ready_dynamic_runtime_module_script(position: usize, node_id: NodeId) -> Prep
         base_url: Url::parse(&format!("https://example.com/dynamic-module-{position}.js")).unwrap(),
         initiator_url: Url::parse("https://example.com/").unwrap(),
         host_script_handle: Some(format!("runtime-module-{position}")),
-        runtime_generation: PreparedScriptRuntimeGeneration::Live(0),
     }
 }
 
@@ -289,7 +287,6 @@ fn external_script_redirect_final_url_obeys_script_src_csp() {
         base_url: Url::parse("https://app.test/redirect.js").unwrap(),
         initiator_url: Url::parse("https://app.test/page.html").unwrap(),
         host_script_handle: None,
-        runtime_generation: PreparedScriptRuntimeGeneration::PendingBinding,
     };
     let final_url = Url::parse("https://cdn.test/final.js").unwrap();
     let response = Ok(crate::types::NavigationResponse::from_head_and_text_body(
@@ -3228,7 +3225,6 @@ fn explicitly_domcontentloaded_gated_runtime_head_is_not_admitted_early() {
     let mut script = ready_dynamic_runtime_script(9);
     script.node_id = script_node;
     script.host_script_handle = Some(handle);
-    script.runtime_generation = PreparedScriptRuntimeGeneration::Live(0);
     vm.document_runtime
         .runtime_script_work_mut()
         .dynamic_scripts
@@ -3294,7 +3290,6 @@ async fn reentrant_runtime_admission_survives_page_task_claim_in_stable_authorit
     let mut script = ready_dynamic_runtime_script(8);
     script.node_id = script_node;
     script.host_script_handle = Some("runtime-classic-8".to_owned());
-    script.runtime_generation = PreparedScriptRuntimeGeneration::Live(0);
     script.source_kind = ScriptSourceKind::Inline;
     script.source = ScriptSource::Inline("globalThis.runtimeClassicRan = true;".to_owned());
     let owner = vm
@@ -3333,7 +3328,6 @@ async fn reentrant_runtime_admission_survives_page_task_claim_in_stable_authorit
     let mut second_script = ready_dynamic_runtime_script(9);
     second_script.node_id = second_script_node;
     second_script.host_script_handle = Some(second_handle);
-    second_script.runtime_generation = PreparedScriptRuntimeGeneration::Live(0);
     second_script.source_kind = ScriptSourceKind::Inline;
     second_script.source =
         ScriptSource::Inline("globalThis.runtimeClassicSecondRan = true;".to_owned());
@@ -3567,7 +3561,6 @@ fn runtime_dynamic_script_terminal_consumes_its_accepted_document_lease_inline()
     script.kind = ScriptKind::Module;
     script.source_kind = ScriptSourceKind::Inline;
     script.source = ScriptSource::Inline("globalThis.__dynamicBindingRan = true;".to_owned());
-    script.runtime_generation = PreparedScriptRuntimeGeneration::Live(0);
 
     let owner = vm
         .current_main_document_task_owner()
@@ -3699,7 +3692,6 @@ fn runtime_owned_inline_importmap_bypasses_dcl_gate() {
         base_url: Url::parse("https://example.com/").unwrap(),
         initiator_url: Url::parse("https://example.com/").unwrap(),
         host_script_handle: Some(handle),
-        runtime_generation: PreparedScriptRuntimeGeneration::Live(0),
     };
 
     assert!(
@@ -3929,7 +3921,6 @@ fn document_write_owned_inline_normal_defers_already_started_until_execution_wit
         base_url: Url::parse("https://example.com/inline.js").unwrap(),
         initiator_url: Url::parse("https://example.com/").unwrap(),
         host_script_handle: None,
-        runtime_generation: PreparedScriptRuntimeGeneration::PendingBinding,
     };
 
     assert!(

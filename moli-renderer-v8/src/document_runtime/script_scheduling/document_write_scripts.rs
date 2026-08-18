@@ -3,7 +3,7 @@ use crate::host::{
     ScriptEventKind, ScriptEventTask, ScriptHandleSource,
     begin_prepared_document_write_script_start,
 };
-use crate::planning::{PreparedScriptRuntimeGeneration, ScriptSource};
+use crate::planning::ScriptSource;
 use crate::script_vm::perform_microtask_checkpoint_and_report_pending_promise_rejections;
 use crate::types::ScriptKind;
 use crate::util::create_script_origin;
@@ -78,8 +78,6 @@ impl DocumentRuntime {
             );
         script.node_id = node;
         script.host_script_handle = Some(host_script_handle.clone());
-        script.runtime_generation =
-            PreparedScriptRuntimeGeneration::Live(self.runtime_reset_generation());
         let inline_classic_source = match (&script.kind, &script.source) {
             (ScriptKind::Classic, ScriptSource::Inline(source)) => Some(source.clone()),
             _ => None,

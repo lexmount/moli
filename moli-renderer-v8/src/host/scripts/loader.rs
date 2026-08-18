@@ -2,9 +2,7 @@ use crate::{
     dom::native::{DomHost, NativeNodeId, Node},
     {
         host::HostDocumentState,
-        planning::{
-            PreparedScript, PreparedScriptRuntimeGeneration, ScriptFetchMetadata, ScriptSource,
-        },
+        planning::{PreparedScript, ScriptFetchMetadata, ScriptSource},
         types::{
             ScriptElementClassificationInput, ScriptKind, ScriptMode,
             ScriptPreparationClassificationInput, ScriptSkipReason, ScriptSourceKind,
@@ -146,7 +144,6 @@ pub(crate) fn build_runtime_prepared_script(
     node: NativeNodeId,
     position: usize,
     host_script_handle: Option<String>,
-    runtime_generation: PreparedScriptRuntimeGeneration,
     source: &str,
     source_kind: ScriptSourceKind,
     kind: ScriptKind,
@@ -179,7 +176,6 @@ pub(crate) fn build_runtime_prepared_script(
         base_url: url.clone(),
         url,
         host_script_handle,
-        runtime_generation,
     })
 }
 

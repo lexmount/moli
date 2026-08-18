@@ -210,7 +210,7 @@ mod tests {
 
     use crate::{
         dom::NodeId,
-        planning::{PreparedScript, PreparedScriptRuntimeGeneration, ScriptFetchMetadata},
+        planning::{PreparedScript, ScriptFetchMetadata},
         types::{ScriptKind, ScriptMode, ScriptSourceKind},
     };
 
@@ -245,7 +245,6 @@ mod tests {
                 initiator_url: Url::parse("https://example.test/")
                     .expect("initiator URL should parse"),
                 host_script_handle: Some(handle.to_owned()),
-                runtime_generation: PreparedScriptRuntimeGeneration::Live(0),
             },
             ready_state: DynamicScriptReadyState::Ready {
                 order: ready_order,

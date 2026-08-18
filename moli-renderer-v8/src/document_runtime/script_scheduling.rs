@@ -128,7 +128,6 @@ mod tests {
             base_url: Url::parse("https://example.com/script.js").unwrap(),
             url: Url::parse("https://example.com/script.js").unwrap(),
             host_script_handle: None,
-            runtime_generation: crate::planning::PreparedScriptRuntimeGeneration::PendingBinding,
         }
     }
 

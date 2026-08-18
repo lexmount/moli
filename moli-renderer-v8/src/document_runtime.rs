@@ -3531,8 +3531,6 @@ mod tests {
                 base_url: Url::parse("https://example.com/app.js").unwrap(),
                 url: Url::parse("https://example.com/app.js").unwrap(),
                 host_script_handle: None,
-                runtime_generation:
-                    crate::planning::PreparedScriptRuntimeGeneration::PendingBinding,
             },
         );
         task_queue.extend_post_parse_work([

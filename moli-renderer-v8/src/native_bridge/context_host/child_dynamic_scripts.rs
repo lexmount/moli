@@ -7,7 +7,6 @@ use crate::{
         FrameRealmId, PendingChildDynamicDocumentScript,
     },
     host::{RuntimeScriptPreparationContext, build_runtime_prepared_script},
-    planning::PreparedScriptRuntimeGeneration,
     types::{ScriptKind, ScriptMode, ScriptSourceKind},
 };
 
@@ -39,7 +38,6 @@ impl JsContextHost {
             script_handle,
             0,
             None,
-            PreparedScriptRuntimeGeneration::PendingBinding,
             source,
             source_kind,
             kind,

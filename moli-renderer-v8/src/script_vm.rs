@@ -617,7 +617,7 @@ use super::{
         JsContextHost, JsContextHostBridgeRef, RuntimeObservableContextToken,
         SharedPrebootstrappedChildDefaultContexts, node_runtime_and_handle_from_object,
     },
-    planning::{PreparedScript, PreparedScriptRuntimeGeneration},
+    planning::PreparedScript,
     renderer_resource_scheduler::RendererResourceScheduler,
     runtime::{
         RendererActivityDiagnostics, RendererInputDispatchOutcome, RendererPageContextCancelReason,
@@ -6113,37 +6113,7 @@ impl ScriptVm {
         handle
     }
 
-    fn prepared_script_is_bound_for_live_execution(&mut self, script: &PreparedScript) -> bool {
-        match script.runtime_generation {
-            PreparedScriptRuntimeGeneration::PendingBinding => {
-                let node_is_live_script = self
-                    .document_runtime
-                    .dom_host()
-                    .node(script.node_id)
-                    .is_some_and(|node| node.is_connected() && node.is_script_element());
-                self.record_runtime_warning(format_args!(
-                    "skipping prepared script `{}` because runtime generation is still pending binding",
-                    script.url
-                ));
-                debug_assert!(
-                    !node_is_live_script,
-                    "prepared script execution requires a live runtime generation binding"
-                );
-                return false;
-            }
-            PreparedScriptRuntimeGeneration::Live(runtime_generation)
-                if runtime_generation != self.document_runtime.runtime_reset_generation() =>
-            {
-                self.record_runtime_warning(format_args!(
-                    "skipping stale prepared script `{}` because generation {} != live {}",
-                    script.url,
-                    runtime_generation,
-                    self.document_runtime.runtime_reset_generation()
-                ));
-                return false;
-            }
-            PreparedScriptRuntimeGeneration::Live(_) => {}
-        }
+    fn prepared_script_is_live_for_execution(&mut self, script: &PreparedScript) -> bool {
         let Some(handle) = script.host_script_handle.as_deref() else {
             let allow_missing_handle = script.kind == ScriptKind::Classic
                 && script.source_kind == ScriptSourceKind::Inline
@@ -7619,7 +7589,7 @@ impl ScriptVm {
             >,
         >,
     ) -> std::result::Result<Option<PreparedScriptRunInput>, PreparedScriptExecutionError> {
-        if !self.prepared_script_is_bound_for_live_execution(script) {
+        if !self.prepared_script_is_live_for_execution(script) {
             return Ok(None);
         }
         debug!(

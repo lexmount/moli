@@ -48,10 +48,9 @@ impl DocumentRuntime {
         &mut self,
         owner: crate::frame_owner_model::FrameDocumentTaskOwner,
     ) -> bool {
-        let runtime_generation = self.runtime_reset_generation();
         self.script_lifecycle
             .scripts_mut()
-            .bind_main_document_runtime_producer(owner, runtime_generation)
+            .bind_main_document_runtime_producer(owner)
     }
 
     pub(crate) fn has_main_document_runtime_route(&self) -> bool {
@@ -544,7 +543,7 @@ mod tests {
             },
             document_script_scheduler::{DocumentScriptExecutionLane, PageOwnedDocumentScriptWork},
             page_task_queue::{PageTask, PostParseLifecycleWork, PostParsePageOwnedWork},
-            planning::{PreparedScriptRuntimeGeneration, ScriptSource, SharedScriptSourceLoad},
+            planning::{ScriptSource, SharedScriptSourceLoad},
             types::{ScriptKind, ScriptMode, ScriptRun, ScriptSkipReason, ScriptSourceKind},
         },
     };
@@ -668,7 +667,6 @@ mod tests {
             base_url: Url::parse(&format!("https://example.com/{position}.js")).unwrap(),
             initiator_url: Url::parse("https://example.com/index.html").unwrap(),
             host_script_handle: None,
-            runtime_generation: PreparedScriptRuntimeGeneration::PendingBinding,
         }
     }
 

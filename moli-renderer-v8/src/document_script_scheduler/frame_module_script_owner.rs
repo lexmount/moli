@@ -940,9 +940,7 @@ mod tests {
         frame_owner_model::{DocumentId, FrameSchedulerLaneId, LocalWindowId},
         module_runtime::{ModuleGraphHandle, ModuleLoadStage, ModuleMapKey},
         parser_module_evaluation::ParserModuleEvaluationStore,
-        planning::{
-            PreparedScript, PreparedScriptRuntimeGeneration, ScriptFetchMetadata, ScriptSource,
-        },
+        planning::{PreparedScript, ScriptFetchMetadata, ScriptSource},
         types::{ScriptKind, ScriptMode, ScriptSourceKind},
     };
     use moli_module_script_tree as module_tree;
@@ -1328,7 +1326,6 @@ mod tests {
             base_url: script_url.clone(),
             initiator_url: script_url,
             host_script_handle: None,
-            runtime_generation: PreparedScriptRuntimeGeneration::PendingBinding,
         }
     }
 

@@ -169,12 +169,10 @@ impl RendererPageMainDocumentRuntimeSender {
     pub(crate) fn bind_producer(
         &self,
         document_owner: FrameDocumentTaskOwner,
-        runtime_generation: u64,
     ) -> RendererPageMainDocumentRuntimeProducer {
         RendererPageMainDocumentRuntimeProducer {
             sender: self.clone(),
             document_owner,
-            runtime_generation,
         }
     }
 
@@ -221,14 +219,11 @@ impl RendererPageMainDocumentRuntimeSender {
 /// Asynchronous runtime state may retain this value, and the Document-owned
 /// host scheduler replaces its current producer only at the synchronous
 /// `document.open()` owner transition. Already-created producers therefore
-/// cannot rebind work to a later Document. `runtime_generation` remains only
-/// as transitional metadata for binding pending `PreparedScript` payloads; it
-/// is not part of the Page task's authorization identity.
+/// cannot rebind work to a later Document.
 #[derive(Clone, Debug)]
 pub(crate) struct RendererPageMainDocumentRuntimeProducer {
     sender: RendererPageMainDocumentRuntimeSender,
     document_owner: FrameDocumentTaskOwner,
-    runtime_generation: u64,
 }
 
 impl RendererPageMainDocumentRuntimeProducer {
@@ -306,7 +301,7 @@ impl RendererPageMainDocumentRuntimeProducer {
         &self,
         mut work: PostParsePageOwnedWork,
     ) -> Result<(), RendererPageMainDocumentRuntimeAdmissionError> {
-        if !work.bind_main_document_runtime_target(self.document_owner, self.runtime_generation) {
+        if !work.matches_main_document_runtime_target(self.document_owner) {
             return Err(RendererPageMainDocumentRuntimeAdmissionError::TargetMismatch);
         }
         work.complete_source_load_if_ready();
@@ -913,10 +908,7 @@ mod tests {
         PageId,
         document_script_scheduler::{DocumentScriptExecutionLane, PageOwnedDocumentScriptWork},
         frame_owner_model::{DocumentId, FrameSchedulerLaneId, LocalWindowId},
-        planning::{
-            PreparedScript, PreparedScriptRuntimeGeneration, ScriptFetchMetadata, ScriptSource,
-            SharedScriptSourceLoad,
-        },
+        planning::{PreparedScript, ScriptFetchMetadata, ScriptSource, SharedScriptSourceLoad},
         runtime::RendererPageToken,
         types::{ScriptKind, ScriptMode, ScriptSourceKind},
     };
@@ -938,7 +930,7 @@ mod tests {
         }
     }
 
-    fn prepared_script(runtime_generation: PreparedScriptRuntimeGeneration) -> PreparedScript {
+    fn prepared_script() -> PreparedScript {
         let url = Url::parse("https://main-runtime.test/async.js").expect("script URL");
         PreparedScript {
             position: 1,
@@ -952,13 +944,27 @@ mod tests {
             base_url: url.clone(),
             initiator_url: url,
             host_script_handle: None,
-            runtime_generation,
+        }
+    }
+
+    fn csp_violation() -> crate::content_security_policy::ContentSecurityPolicyUrlViolation {
+        crate::content_security_policy::ContentSecurityPolicyUrlViolation {
+            effective_directive: "script-src",
+            blocked_uri: "https://blocked.test/script.js".to_owned(),
+            document_uri: "https://main-runtime.test/".to_owned(),
+            original_policy: "script-src 'none'".to_owned(),
+            disposition: crate::content_security_policy::ContentSecurityPolicyDisposition::Enforce,
+            report_uri_endpoints: Vec::new(),
+            report_to_endpoints: Vec::new(),
+            sample: String::new(),
+            source_file: String::new(),
+            line_number: 0,
+            column_number: 0,
         }
     }
 
     fn source_and_producer(
         owner: FrameDocumentTaskOwner,
-        runtime_generation: u64,
     ) -> (
         RendererPageMainDocumentRuntimeSource,
         RendererPageMainDocumentRuntimeProducer,
@@ -972,14 +978,14 @@ mod tests {
         let producer = source
             .route()
             .sender(document_token(1))
-            .bind_producer(owner, runtime_generation);
+            .bind_producer(owner);
         (source, producer, wake_rx)
     }
 
     #[test]
     fn lifecycle_owner_mismatch_is_rejected_before_readiness() {
         let owner = task_owner(3);
-        let (mut source, producer, mut wake_rx) = source_and_producer(owner, 5);
+        let (mut source, producer, mut wake_rx) = source_and_producer(owner);
 
         assert_eq!(
             producer.send_lifecycle_work(
@@ -994,17 +1000,18 @@ mod tests {
     }
 
     #[test]
-    fn prepared_script_generation_mismatch_is_rejected_before_readiness() {
+    fn csp_violation_owner_mismatch_is_rejected_before_readiness() {
         let owner = task_owner(3);
-        let (mut source, producer, mut wake_rx) = source_and_producer(owner, 5);
-        let work =
-            PostParsePageOwnedWork::document_script_work(PageOwnedDocumentScriptWork::script(
-                DocumentScriptExecutionLane::AsyncPhase,
-                prepared_script(PreparedScriptRuntimeGeneration::Live(6)),
-            ));
+        let (mut source, producer, mut wake_rx) = source_and_producer(owner);
+        let task = super::super::ContentSecurityPolicyViolationEventTask::new(
+            task_owner(4),
+            csp_violation(),
+        );
 
         assert_eq!(
-            producer.send_post_parse_work_when_ready(work),
+            producer.send_lifecycle_work(
+                super::super::PostParseLifecycleWork::DispatchContentSecurityPolicyViolation(task,),
+            ),
             Err(RendererPageMainDocumentRuntimeAdmissionError::TargetMismatch)
         );
         assert!(!source.has_ready_task());
@@ -1014,8 +1021,7 @@ mod tests {
     #[test]
     fn parser_owned_module_continuation_is_one_exact_ready_action() {
         let owner = task_owner(3);
-        let runtime_generation = 5;
-        let (mut source, producer, mut wake_rx) = source_and_producer(owner, runtime_generation);
+        let (mut source, producer, mut wake_rx) = source_and_producer(owner);
 
         producer
             .send_parser_owned_module_continuation()
@@ -1040,8 +1046,7 @@ mod tests {
     #[test]
     fn native_module_owner_event_is_one_exact_ready_action() {
         let owner = task_owner(3);
-        let runtime_generation = 5;
-        let (mut source, producer, mut wake_rx) = source_and_producer(owner, runtime_generation);
+        let (mut source, producer, mut wake_rx) = source_and_producer(owner);
 
         producer
             .send_native_module_owner_event()
@@ -1066,8 +1071,7 @@ mod tests {
     #[tokio::test]
     async fn pending_source_load_becomes_ready_once_under_its_bound_document() {
         let owner = task_owner(3);
-        let runtime_generation = 5;
-        let (mut source, producer, mut wake_rx) = source_and_producer(owner, runtime_generation);
+        let (mut source, producer, mut wake_rx) = source_and_producer(owner);
         let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
         let source_load = SharedScriptSourceLoad::spawn_for_test(async move {
             finish_rx.await.expect("source release");
@@ -1076,7 +1080,7 @@ mod tests {
         let work = PostParsePageOwnedWork::document_script_work(
             PageOwnedDocumentScriptWork::script_waiting_for_source(
                 DocumentScriptExecutionLane::AsyncPhase,
-                prepared_script(PreparedScriptRuntimeGeneration::PendingBinding),
+                prepared_script(),
                 source_load,
             ),
         );
@@ -1102,13 +1106,13 @@ mod tests {
         else {
             panic!("source completion must preserve the concrete post-parse action");
         };
-        assert_eq!(
+        assert!(matches!(
             work.into_post_parse_work()
                 .as_script()
                 .expect("document-script work")
-                .runtime_generation,
-            PreparedScriptRuntimeGeneration::Live(runtime_generation)
-        );
+                .source,
+            ScriptSource::Loaded(_)
+        ));
         assert!(!source.has_ready_task());
         assert!(wake_rx.try_recv().is_err());
     }

@@ -437,7 +437,6 @@ fn inline_module_graph_roots_use_trusted_types_compliant_source() {
     );
 
     let document_url = vm.document_runtime.document_url().clone();
-    let generation = vm.document_runtime.runtime_reset_generation();
     let prepared = |node_id, position| PreparedScript {
         position,
         node_id,
@@ -450,7 +449,6 @@ fn inline_module_graph_roots_use_trusted_types_compliant_source() {
         base_url: document_url.clone(),
         initiator_url: document_url.clone(),
         host_script_handle: None,
-        runtime_generation: PreparedScriptRuntimeGeneration::Live(generation),
     };
     let html_module = prepared(html_script, 1);
     let svg_module = prepared(svg_script, 2);

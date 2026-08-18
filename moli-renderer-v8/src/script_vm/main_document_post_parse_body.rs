@@ -23,9 +23,8 @@ impl ScriptVm {
     pub(crate) fn current_main_document_post_parse_owner(
         &self,
     ) -> Option<MainDocumentPostParseOwner> {
-        self.current_main_document_task_owner().map(|owner| {
-            MainDocumentPostParseOwner::new(owner, self.document_runtime.runtime_reset_generation())
-        })
+        self.current_main_document_task_owner()
+            .map(MainDocumentPostParseOwner::new)
     }
 
     fn applied_main_document_post_parse_target(
@@ -75,14 +74,14 @@ impl ScriptVm {
                 )
             }
             MainDocumentPostParseWork::DispatchContentSecurityPolicyViolation(task) => {
-                if task.runtime_generation() != selected_owner.runtime_generation() {
+                if task.owner() != selected_owner.document_owner() {
                     return MainDocumentPostParseWork::DispatchContentSecurityPolicyViolation(task)
                         .discarded_stale(self.current_main_document_post_parse_owner());
                 }
                 let settlement = match self
                     .dispatch_content_security_policy_violation_event_body(&task)
                 {
-                    ContentSecurityPolicyViolationBodyExecution::DiscardedStaleRuntime => {
+                    ContentSecurityPolicyViolationBodyExecution::DiscardedStaleDocument => {
                         return MainDocumentPostParseWork::DispatchContentSecurityPolicyViolation(
                             task,
                         )

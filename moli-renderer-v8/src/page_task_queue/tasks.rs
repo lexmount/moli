@@ -93,37 +93,37 @@ impl WindowScriptFailureReportTask {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ContentSecurityPolicyViolationEventTask {
-    runtime_generation: u64,
+    owner: crate::frame_owner_model::FrameDocumentTaskOwner,
     target: Option<DomHandle>,
     violation: ContentSecurityPolicyUrlViolation,
 }
 
 impl ContentSecurityPolicyViolationEventTask {
     pub(crate) fn new(
-        runtime_generation: u64,
+        owner: crate::frame_owner_model::FrameDocumentTaskOwner,
         violation: ContentSecurityPolicyUrlViolation,
     ) -> Self {
         Self {
-            runtime_generation,
+            owner,
             target: None,
             violation,
         }
     }
 
     pub(crate) fn for_element(
-        runtime_generation: u64,
+        owner: crate::frame_owner_model::FrameDocumentTaskOwner,
         target: DomHandle,
         violation: ContentSecurityPolicyUrlViolation,
     ) -> Self {
         Self {
-            runtime_generation,
+            owner,
             target: Some(target),
             violation,
         }
     }
 
-    pub(crate) fn runtime_generation(&self) -> u64 {
-        self.runtime_generation
+    pub(crate) fn owner(&self) -> crate::frame_owner_model::FrameDocumentTaskOwner {
+        self.owner
     }
 
     pub(crate) fn violation(&self) -> &ContentSecurityPolicyUrlViolation {

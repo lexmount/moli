@@ -38,8 +38,8 @@ use crate::page_task_queue::{
 use crate::page_task_queue::{PostParseLifecycleWork, PostParsePageOwnedWork};
 use crate::parser::HtmlParser;
 use crate::planning::{
-    PreparedScript, PreparedScriptRuntimeGeneration, PreparedScriptSourceLoadOutcome,
-    ScriptFetchMetadata, ScriptSource, SharedScriptSourceLoad,
+    PreparedScript, PreparedScriptSourceLoadOutcome, ScriptFetchMetadata, ScriptSource,
+    SharedScriptSourceLoad,
 };
 use crate::runtime::{
     RendererOwnerResourceActivitySource, RendererPageCommand, RendererRuntimeObservableSourceItem,
@@ -1851,9 +1851,6 @@ fn prepared_external_module_for_page_vm_test_with_node(
         base_url: url.clone(),
         url,
         host_script_handle: None,
-        runtime_generation: PreparedScriptRuntimeGeneration::Live(
-            page_vm.vm().document_runtime.runtime_reset_generation(),
-        ),
     }
 }
 
@@ -2081,9 +2078,6 @@ fn prepared_inline_module_for_page_vm_test(
         base_url: page_vm.vm().document_runtime.document_url().clone(),
         url: page_vm.vm().document_runtime.document_url().clone(),
         host_script_handle: None,
-        runtime_generation: PreparedScriptRuntimeGeneration::Live(
-            page_vm.vm().document_runtime.runtime_reset_generation(),
-        ),
     }
 }
 
@@ -2104,9 +2098,6 @@ fn prepared_loaded_classic_for_page_vm_test(
         base_url: page_vm.vm().document_runtime.document_url().clone(),
         url: page_vm.vm().document_runtime.document_url().clone(),
         host_script_handle: None,
-        runtime_generation: PreparedScriptRuntimeGeneration::Live(
-            page_vm.vm().document_runtime.runtime_reset_generation(),
-        ),
     }
 }
 
@@ -2159,9 +2150,6 @@ fn append_parser_owned_external_classic_defer_for_page_vm_test(
         base_url: script_url.clone(),
         url: script_url,
         host_script_handle: Some(host_script_handle),
-        runtime_generation: PreparedScriptRuntimeGeneration::Live(
-            page_vm.vm().document_runtime.runtime_reset_generation(),
-        ),
     }
 }
 
