@@ -946,8 +946,8 @@ document.close();
 }
 
 #[test]
-fn runtime_generation_mismatch_is_rejected_by_the_page_arbiter() {
-    super::tests::run_phase_one_large_stack_test("document-write-stale-runtime-generation", || {
+fn load_id_mismatch_is_rejected_by_the_page_arbiter() {
+    super::tests::run_phase_one_large_stack_test("document-write-stale-load-id", || {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -973,12 +973,14 @@ fn runtime_generation_mismatch_is_rejected_by_the_page_arbiter() {
                 .expect("current pending load should expose its exact target");
             let stale_target = DocumentWriteExternalScriptFetchTarget::new(
                 current_target.task_owner(),
-                current_target.load_id(),
-                current_target.runtime_generation().wrapping_add(1),
+                current_target
+                    .load_id()
+                    .checked_add(1)
+                    .expect("test load id should have a successor"),
             );
             let stale_completion = DocumentWriteExternalScriptLoadCompletion::new(
                 stale_target,
-                Ok("globalThis.__staleGenerationScriptRan = true;".to_owned()),
+                Ok("globalThis.__staleLoadIdScriptRan = true;".to_owned()),
                 None,
                 DocumentWriteExternalScriptNetworkAttribution::new(
                     document_url,
@@ -992,23 +994,23 @@ fn runtime_generation_mismatch_is_rejected_by_the_page_arbiter() {
                     root_document,
                     stale_completion,
                 ))
-                .expect("stale generation terminal should enter the test queue");
+                .expect("stale load-id terminal should enter the test queue");
 
             let executor = pending.runtime.page_vm.local_executor.clone();
             let (pending, outcome) = super::access::run_named_owner_local_task(
                 executor,
-                "document.write stale-generation arbitration channel closed",
+                "document.write stale-load-id arbitration channel closed",
                 async move {
                     let outcome = pending
                         .runtime
                         .page_vm
                         .apply_one_page_resource_terminal_owner_admission_for_test(&mut stale_queue)?
-                        .expect("stale generation terminal should consume one bounded turn");
+                        .expect("stale load-id terminal should consume one bounded turn");
                     Ok((pending, outcome))
                 },
             )
             .await
-            .expect("stale generation arbitration should succeed");
+            .expect("stale load-id arbitration should succeed");
             assert_eq!(
                 outcome.action.document_effect,
                 PageResourceCompletionDocumentEffect::DiscardedStaleOwner {
@@ -1027,16 +1029,16 @@ fn runtime_generation_mismatch_is_rejected_by_the_page_arbiter() {
                     .vm()
                     .current_document_write_external_script_fetch_target(),
                 Some(current_target),
-                "a mismatched generation must not consume the current pending load"
+                "a mismatched load id must not consume the current pending load"
             );
             let (pending, result) = evaluate_pending_on_owner_local_task(
                 pending,
-                "String(globalThis.__staleGenerationScriptRan)",
+                "String(globalThis.__staleLoadIdScriptRan)",
             )
             .await;
             assert_eq!(result.get("value").and_then(serde_json::Value::as_str), Some("undefined"));
             // Keep the pending page, and therefore its request client, alive until the server has
-            // accepted and served the current-generation script. Dropping it before this await can
+            // accepted and served the current script load. Dropping it before this await can
             // cancel the connect while the server is still blocked in `accept()`.
             server
                 .await
@@ -1106,7 +1108,7 @@ fn root_document_namespace_rejects_cross_page_target_collision() {
                     .expect("current PageVm should expose its pending exact target");
                 assert_eq!(
                     retired_target, current_target,
-                    "fresh PageVms naturally reuse their PageVm-local owner/load/generation namespace"
+                    "fresh PageVms naturally reuse their PageVm-local owner/load namespace"
                 );
                 assert_ne!(
                     retired_root, current_root,
@@ -1266,10 +1268,6 @@ globalThis.__documentWriteEvents.push('inline-after');
                 second_target.task_owner(),
                 first_target.task_owner(),
                 "both sequential loads belong to the same exact Document"
-            );
-            assert_eq!(
-                second_target.runtime_generation(),
-                first_target.runtime_generation()
             );
             assert!(
                 second_target.load_id() > first_target.load_id(),

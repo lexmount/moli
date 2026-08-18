@@ -1183,7 +1183,8 @@ impl DocumentRuntime {
         let load_id = self.next_document_write_external_script_load_id;
         self.next_document_write_external_script_load_id = self
             .next_document_write_external_script_load_id
-            .wrapping_add(1);
+            .checked_add(1)
+            .expect("document.write external-script load id space exhausted");
         load_id
     }
 
@@ -1244,11 +1245,8 @@ impl DocumentRuntime {
                 continue;
             }
             let load_id = self.allocate_document_write_external_script_load_id();
-            let target = crate::types::DocumentWriteExternalScriptFetchTarget::new(
-                task_owner,
-                load_id,
-                self.runtime_reset_generation,
-            );
+            let target =
+                crate::types::DocumentWriteExternalScriptFetchTarget::new(task_owner, load_id);
             let script = request.to_preload_script();
             let resource_type_hint = request.resource_type_hint();
             self.document_write_script_preloads.insert(
@@ -1393,11 +1391,7 @@ impl DocumentRuntime {
                 };
                 let load_id = self.allocate_document_write_external_script_load_id();
                 (
-                    crate::types::DocumentWriteExternalScriptFetchTarget::new(
-                        task_owner,
-                        load_id,
-                        self.runtime_reset_generation,
-                    ),
+                    crate::types::DocumentWriteExternalScriptFetchTarget::new(task_owner, load_id),
                     false,
                     None,
                 )
@@ -1686,7 +1680,6 @@ impl DocumentRuntime {
         }
         if unsafe { &*host_ptr }.current_main_document_task_owner()
             != Some(completion_target.task_owner())
-            || self.runtime_reset_generation != completion_target.runtime_generation()
         {
             return super::DocumentWriteExternalScriptLoadApplication::RejectedStaleTarget;
         }
@@ -1697,7 +1690,6 @@ impl DocumentRuntime {
         if pending.target != completion_target
             || unsafe { &*host_ptr }.current_main_document_task_owner()
                 != Some(completion_target.task_owner())
-            || self.runtime_reset_generation != completion_target.runtime_generation()
         {
             self.pending_document_write_external_script_load = Some(pending);
             return super::DocumentWriteExternalScriptLoadApplication::RejectedStaleTarget;
@@ -1808,7 +1800,6 @@ impl DocumentRuntime {
 
         if unsafe { &*host_ptr }.current_main_document_task_owner()
             != Some(completion_target.task_owner())
-            || self.runtime_reset_generation != completion_target.runtime_generation()
         {
             return super::DocumentWriteExternalScriptLoadApplication::SupersededDuringApplication;
         }
@@ -1829,7 +1820,6 @@ impl DocumentRuntime {
         let _ = self.finish_root_document_parser_stream_if_ready(scope, host_ptr);
         if unsafe { &*host_ptr }.current_main_document_task_owner()
             == Some(completion_target.task_owner())
-            && self.runtime_reset_generation == completion_target.runtime_generation()
         {
             super::DocumentWriteExternalScriptLoadApplication::Applied
         } else {
@@ -2754,6 +2744,17 @@ mod tests {
             .expect("root replacement parser session");
         assert_eq!(parser.lifetime(), DocumentParserLifetime::Open);
         assert!(parser.has_exclusive_stream_handle());
+    }
+
+    #[test]
+    #[should_panic(expected = "document.write external-script load id space exhausted")]
+    fn document_write_external_script_load_ids_never_wrap() {
+        let document_url = Url::parse("https://document-write.test/load-id.html").unwrap();
+        let document = HtmlParser.parse(document_url, "<!doctype html>".to_owned());
+        let mut runtime = DocumentRuntime::new(&document);
+        runtime.next_document_write_external_script_load_id = u64::MAX;
+
+        let _ = runtime.allocate_document_write_external_script_load_id();
     }
 
     #[test]

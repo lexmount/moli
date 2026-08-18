@@ -5821,7 +5821,6 @@ impl ScriptVm {
         self.document_runtime
             .has_document_write_external_script_fetch_target(expected)
             && self.current_main_document_task_owner() == Some(expected.task_owner())
-            && self.document_runtime.runtime_reset_generation() == expected.runtime_generation()
     }
 
     pub(crate) fn apply_current_document_write_external_script_load_completion(

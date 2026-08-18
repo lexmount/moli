@@ -944,19 +944,16 @@ pub(super) struct XhrStreamingChunkDelivery<'s> {
 pub(crate) struct DocumentWriteExternalScriptFetchTarget {
     task_owner: crate::frame_owner_model::FrameDocumentTaskOwner,
     load_id: u64,
-    runtime_generation: u64,
 }
 
 impl DocumentWriteExternalScriptFetchTarget {
     pub(crate) fn new(
         task_owner: crate::frame_owner_model::FrameDocumentTaskOwner,
         load_id: u64,
-        runtime_generation: u64,
     ) -> Self {
         Self {
             task_owner,
             load_id,
-            runtime_generation,
         }
     }
 
@@ -966,10 +963,6 @@ impl DocumentWriteExternalScriptFetchTarget {
 
     pub(crate) fn load_id(self) -> u64 {
         self.load_id
-    }
-
-    pub(crate) fn runtime_generation(self) -> u64 {
-        self.runtime_generation
     }
 }
 
@@ -1052,7 +1045,7 @@ impl DocumentWriteExternalScriptLoadCompletion {
             crate::frame_owner_model::DocumentId(79),
         );
         Self::new(
-            DocumentWriteExternalScriptFetchTarget::new(task_owner, load_id, 0),
+            DocumentWriteExternalScriptFetchTarget::new(task_owner, load_id),
             Ok("window.documentWriteExternalScriptLoaded = true".to_owned()),
             None,
             DocumentWriteExternalScriptNetworkAttribution::new(

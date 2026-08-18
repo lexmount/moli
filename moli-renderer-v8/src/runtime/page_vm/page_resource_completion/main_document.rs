@@ -13,7 +13,7 @@ use crate::{
 use super::super::PageVm;
 
 /// Proof that the Page lane executor matched one `document.write()` fetch
-/// terminal against its complete current root/main-Document/runtime target.
+/// terminal against its complete current root/main-Document/load target.
 pub(crate) struct AuthorizedCurrentDocumentWriteExternalScriptLoadCompletion(
     DocumentWriteExternalScriptLoadCompletion,
 );
