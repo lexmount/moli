@@ -5,6 +5,7 @@ use moli_layout::{
     LayoutElementMetrics, LayoutError, LayoutFlushReason, LayoutHit, LayoutIntersectionGeometry,
     LayoutPassMetrics, LayoutPoint, LayoutQuad, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch,
     LayoutScrollContainerMetrics, LayoutScrollIntoViewGeometry, LayoutScrollbarHit, LayoutSize,
+    LayoutTransform2D, LayoutViewport,
 };
 
 use super::layout::{
@@ -15,6 +16,16 @@ use super::layout::{
 use crate::{document_runtime::DomHandle, dom::native::Node, native_bridge::JsContextHost};
 
 const HIT_TEST_CHILD_FRAME_DEPTH_LIMIT: usize = 16;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ObservableInputHit {
+    pub(crate) handle: DomHandle,
+    /// Converts a root-frame input position to viewport-relative CSS
+    /// coordinates in `handle`'s owner Document. Keeping the affine map lets
+    /// boundary and capture events convert a new root position into a
+    /// previously targeted child Document.
+    pub(crate) root_to_client: LayoutTransform2D,
+}
 
 pub(crate) fn observable_geometry_batch(
     runtime: &JsContextHost,
@@ -149,6 +160,29 @@ pub(crate) fn observable_bounding_client_rects(
         .collect()
 }
 
+pub(crate) fn observable_box_model(
+    runtime: &JsContextHost,
+    source: DomHandle,
+    reason: LayoutFlushReason,
+) -> Result<Option<LayoutBoxModel>, LayoutError> {
+    if !runtime.dom_host().is_connected(source) {
+        return Ok(None);
+    }
+    let Some(document) = runtime.layout_document_for_source(source) else {
+        return Ok(None);
+    };
+    let answers = observable_geometry_batch(
+        runtime,
+        document,
+        reason,
+        &LayoutQueryBatch::new(vec![LayoutQuery::BoxModel { source }]),
+    )?;
+    match answers.answers.into_iter().next() {
+        Some(LayoutQueryAnswer::BoxModel(model)) => Ok(model),
+        _ => Err(provider_contract_error("box model")),
+    }
+}
+
 /// Resolve one viewport-relative box for scroll anchoring. Real layout already
 /// projects root scrolling into viewport coordinates; the explicit adjustment
 /// is retained only inside the legacy Mock provider.
@@ -260,6 +294,32 @@ fn observable_hit_test(
     }
 }
 
+fn observable_hit_test_with_viewport(
+    runtime: &JsContextHost,
+    document: DomHandle,
+    viewport: LayoutViewport,
+    point: LayoutPoint,
+    ignore_pointer_events_none: bool,
+    reason: LayoutFlushReason,
+) -> Result<Option<LayoutHit<DomHandle>>, LayoutError> {
+    if !runtime.layout_policy().uses_real_layout() {
+        return observable_hit_test(runtime, document, point, ignore_pointer_events_none, reason);
+    }
+    let answers = runtime.answer_layout_for_document_with_exact_viewport(
+        document,
+        reason,
+        viewport,
+        &LayoutQueryBatch::new(vec![LayoutQuery::HitTest {
+            point,
+            ignore_pointer_events_none,
+        }]),
+    )?;
+    match answers.answers.into_iter().next() {
+        Some(LayoutQueryAnswer::HitTest(hit)) => Ok(hit),
+        _ => Err(provider_contract_error("viewport-scoped hit test")),
+    }
+}
+
 pub(crate) fn observable_caret_position(
     runtime: &JsContextHost,
     document: DomHandle,
@@ -295,8 +355,8 @@ pub(crate) fn observable_input_hit_test(
     runtime: &JsContextHost,
     document: DomHandle,
     point: LayoutPoint,
-) -> Result<Option<DomHandle>, LayoutError> {
-    observable_deep_hit_test(runtime, document, point, false)
+) -> Result<Option<ObservableInputHit>, LayoutError> {
+    observable_deep_input_hit_test(runtime, document, point, false)
 }
 
 pub(crate) fn observable_scrollbar_hit_test(
@@ -307,17 +367,14 @@ pub(crate) fn observable_scrollbar_hit_test(
     if !runtime.layout_policy().uses_real_layout() {
         return Ok(None);
     }
-    // Publish a current tree through the normal on-demand layout boundary;
-    // the control hit itself deliberately does not become another query model.
-    let _ = observable_geometry_batch(
+    observable_deep_scrollbar_hit_test_inner(
         runtime,
         document,
-        LayoutFlushReason::HitTest,
-        &LayoutQueryBatch::new(vec![LayoutQuery::DocumentMetrics]),
-    )?;
-    Ok(runtime
-        .with_latest_layout_tree_for_document(document, |tree| tree.scrollbar_hit_test(point))
-        .flatten())
+        runtime.layout_viewport_for_document(document),
+        point,
+        LayoutTransform2D::IDENTITY,
+        0,
+    )
 }
 
 pub(crate) fn observable_deep_hit_test(
@@ -326,19 +383,150 @@ pub(crate) fn observable_deep_hit_test(
     point: LayoutPoint,
     ignore_pointer_events_none: bool,
 ) -> Result<Option<DomHandle>, LayoutError> {
-    observable_deep_hit_test_inner(runtime, document, point, ignore_pointer_events_none, 0)
+    Ok(
+        observable_deep_input_hit_test(runtime, document, point, ignore_pointer_events_none)?
+            .map(|hit| hit.handle),
+    )
 }
 
-fn observable_deep_hit_test_inner(
+fn observable_deep_input_hit_test(
     runtime: &JsContextHost,
     document: DomHandle,
     point: LayoutPoint,
     ignore_pointer_events_none: bool,
-    depth: usize,
-) -> Result<Option<DomHandle>, LayoutError> {
-    let first_hit = observable_hit_test(
+) -> Result<Option<ObservableInputHit>, LayoutError> {
+    observable_deep_input_hit_test_inner(
         runtime,
         document,
+        runtime.layout_viewport_for_document(document),
+        point,
+        LayoutTransform2D::IDENTITY,
+        ignore_pointer_events_none,
+        0,
+    )
+}
+
+fn observable_deep_input_hit_test_inner(
+    runtime: &JsContextHost,
+    document: DomHandle,
+    viewport: LayoutViewport,
+    point: LayoutPoint,
+    root_to_viewport: LayoutTransform2D,
+    ignore_pointer_events_none: bool,
+    depth: usize,
+) -> Result<Option<ObservableInputHit>, LayoutError> {
+    let Some((hit, target)) = observable_live_hit_with_viewport(
+        runtime,
+        document,
+        viewport,
+        point,
+        ignore_pointer_events_none,
+    )?
+    else {
+        return Ok(None);
+    };
+    let target_hit = ObservableInputHit {
+        handle: target,
+        root_to_client: root_to_viewport,
+    };
+    if depth >= HIT_TEST_CHILD_FRAME_DEPTH_LIMIT {
+        return Ok(Some(target_hit));
+    }
+    let Some(child_document) = runtime.child_browsing_context_document_handle(target) else {
+        return Ok(Some(target_hit));
+    };
+    let Some(content_box) = hit.local_content_box else {
+        return Ok(Some(target_hit));
+    };
+    if !content_box.contains(hit.local_point) {
+        return Ok(Some(target_hit));
+    }
+    let viewport_to_child = LayoutTransform2D::translation(-content_box.x, -content_box.y)
+        .concatenate(hit.viewport_to_local);
+    let child_point = viewport_to_child.map_point(point);
+    let root_to_child = viewport_to_child.concatenate(root_to_viewport);
+    let child_viewport = LayoutViewport::new(
+        css_viewport_dimension(content_box.width),
+        css_viewport_dimension(content_box.height),
+        viewport.device_pixel_ratio,
+    );
+    Ok(observable_deep_input_hit_test_inner(
+        runtime,
+        child_document,
+        child_viewport,
+        child_point,
+        root_to_child,
+        ignore_pointer_events_none,
+        depth + 1,
+    )?
+    .or(Some(target_hit)))
+}
+
+fn observable_deep_scrollbar_hit_test_inner(
+    runtime: &JsContextHost,
+    document: DomHandle,
+    viewport: LayoutViewport,
+    point: LayoutPoint,
+    root_to_viewport: LayoutTransform2D,
+    depth: usize,
+) -> Result<Option<LayoutScrollbarHit<DomHandle>>, LayoutError> {
+    // Publish a current tree through the same exact-viewport hit-test
+    // boundary used for DOM input. Scrollbar geometry intentionally remains a
+    // frozen-tree control query because it is user-agent chrome, not a DOM
+    // target.
+    let live_hit = observable_live_hit_with_viewport(runtime, document, viewport, point, false)?;
+    if let Some(mut hit) = runtime
+        .with_latest_layout_tree_for_document(document, |tree| tree.scrollbar_hit_test(point))
+        .flatten()
+    {
+        hit.viewport_to_local = hit.viewport_to_local.concatenate(root_to_viewport);
+        return Ok(Some(hit));
+    }
+    if depth >= HIT_TEST_CHILD_FRAME_DEPTH_LIMIT {
+        return Ok(None);
+    }
+    let Some((frame_hit, frame)) = live_hit else {
+        return Ok(None);
+    };
+    let Some(child_document) = runtime.child_browsing_context_document_handle(frame) else {
+        return Ok(None);
+    };
+    let Some(content_box) = frame_hit.local_content_box else {
+        return Ok(None);
+    };
+    if !content_box.contains(frame_hit.local_point) {
+        return Ok(None);
+    }
+    let viewport_to_child = LayoutTransform2D::translation(-content_box.x, -content_box.y)
+        .concatenate(frame_hit.viewport_to_local);
+    let root_to_child = viewport_to_child.concatenate(root_to_viewport);
+    let child_point = viewport_to_child.map_point(point);
+    let child_viewport = LayoutViewport::new(
+        css_viewport_dimension(content_box.width),
+        css_viewport_dimension(content_box.height),
+        viewport.device_pixel_ratio,
+    );
+    observable_deep_scrollbar_hit_test_inner(
+        runtime,
+        child_document,
+        child_viewport,
+        child_point,
+        root_to_child,
+        depth + 1,
+    )
+}
+
+fn observable_live_hit_with_viewport(
+    runtime: &JsContextHost,
+    document: DomHandle,
+    viewport: LayoutViewport,
+    point: LayoutPoint,
+    ignore_pointer_events_none: bool,
+) -> Result<Option<(LayoutHit<DomHandle>, DomHandle)>, LayoutError> {
+    let first_hit = observable_hit_test_with_viewport(
+        runtime,
+        document,
+        viewport,
         point,
         ignore_pointer_events_none,
         LayoutFlushReason::HitTest,
@@ -355,55 +543,24 @@ fn observable_deep_hit_test_inner(
     // paint stack only on that stale-source path until it identifies a
     // currently connected element. This live DOM check neither refreshes nor
     // invalidates layout; the common case retains the single-hit fast path.
-    let fallback_hit = if live_first_hit.is_none() && first_hit.is_some() {
-        let (_, hits) = observable_hit_test_all(
-            runtime,
-            document,
-            point,
-            ignore_pointer_events_none,
-            LayoutFlushReason::HitTest,
-        )?;
-        hits.into_iter().find_map(|hit| {
-            let target = element_for_hit_source(runtime, hit.source)?;
-            runtime
-                .dom_host()
-                .is_connected(target)
-                .then_some((hit, target))
-        })
-    } else {
-        None
-    };
-    let Some((hit, target)) = live_first_hit.or(fallback_hit) else {
-        return Ok(None);
-    };
-    if depth >= HIT_TEST_CHILD_FRAME_DEPTH_LIMIT {
-        return Ok(Some(target));
+    if live_first_hit.is_some() || first_hit.is_none() {
+        return Ok(live_first_hit);
     }
-    let Some(child_document) = runtime.child_browsing_context_document_handle(target) else {
-        return Ok(Some(target));
-    };
-    let Some(content_quad) = hit.box_model.map(|model| model.content) else {
-        return Ok(Some(target));
-    };
-    let child_viewport = runtime.layout_viewport_for_document(child_document);
-    let Some(child_point) = map_point_into_quad(
-        point,
-        content_quad,
-        LayoutSize::new(
-            child_viewport.css_width as f32,
-            child_viewport.css_height as f32,
-        ),
-    ) else {
-        return Ok(Some(target));
-    };
-    Ok(observable_deep_hit_test_inner(
+    let hits = observable_hit_test_all_with_viewport(
         runtime,
-        child_document,
-        child_point,
+        document,
+        viewport,
+        point,
         ignore_pointer_events_none,
-        depth + 1,
-    )?
-    .or(Some(target)))
+        LayoutFlushReason::HitTest,
+    )?;
+    Ok(hits.into_iter().find_map(|hit| {
+        let target = element_for_hit_source(runtime, hit.source)?;
+        runtime
+            .dom_host()
+            .is_connected(target)
+            .then_some((hit, target))
+    }))
 }
 
 fn element_for_hit_source(runtime: &JsContextHost, mut source: DomHandle) -> Option<DomHandle> {
@@ -418,36 +575,6 @@ fn element_for_hit_source(runtime: &JsContextHost, mut source: DomHandle) -> Opt
         }
         source = parent;
     }
-}
-
-fn map_point_into_quad(
-    point: LayoutPoint,
-    quad: LayoutQuad,
-    target_size: LayoutSize,
-) -> Option<LayoutPoint> {
-    let [origin, x_corner, _, y_corner] = quad.points;
-    let basis_x = (
-        f64::from(x_corner.x - origin.x),
-        f64::from(x_corner.y - origin.y),
-    );
-    let basis_y = (
-        f64::from(y_corner.x - origin.x),
-        f64::from(y_corner.y - origin.y),
-    );
-    let relative = (f64::from(point.x - origin.x), f64::from(point.y - origin.y));
-    let determinant = basis_x.0 * basis_y.1 - basis_x.1 * basis_y.0;
-    if !determinant.is_finite() || determinant.abs() <= f64::EPSILON {
-        return None;
-    }
-    let u = (relative.0 * basis_y.1 - relative.1 * basis_y.0) / determinant;
-    let v = (basis_x.0 * relative.1 - basis_x.1 * relative.0) / determinant;
-    if !(0.0..=1.0).contains(&u) || !(0.0..=1.0).contains(&v) {
-        return None;
-    }
-    Some(LayoutPoint::new(
-        (u * f64::from(target_size.width)) as f32,
-        (v * f64::from(target_size.height)) as f32,
-    ))
 }
 
 pub(crate) fn observable_hit_test_all(
@@ -477,6 +604,46 @@ pub(crate) fn observable_hit_test_all(
         ) => Ok((metrics, hits)),
         _ => Err(provider_contract_error("complete hit test")),
     }
+}
+
+fn observable_hit_test_all_with_viewport(
+    runtime: &JsContextHost,
+    document: DomHandle,
+    viewport: LayoutViewport,
+    point: LayoutPoint,
+    ignore_pointer_events_none: bool,
+    reason: LayoutFlushReason,
+) -> Result<Vec<LayoutHit<DomHandle>>, LayoutError> {
+    if !runtime.layout_policy().uses_real_layout() {
+        return observable_hit_test_all(
+            runtime,
+            document,
+            point,
+            ignore_pointer_events_none,
+            reason,
+        )
+        .map(|(_, hits)| hits);
+    }
+    let answers = runtime.answer_layout_for_document_with_exact_viewport(
+        document,
+        reason,
+        viewport,
+        &LayoutQueryBatch::new(vec![LayoutQuery::HitTestAll {
+            point,
+            ignore_pointer_events_none,
+        }]),
+    )?;
+    match answers.answers.into_iter().next() {
+        Some(LayoutQueryAnswer::HitTestAll(hits)) => Ok(hits),
+        _ => Err(provider_contract_error("viewport-scoped complete hit test")),
+    }
+}
+
+fn css_viewport_dimension(value: f32) -> u32 {
+    if !value.is_finite() {
+        return 0;
+    }
+    value.round().clamp(0.0, u32::MAX as f32) as u32
 }
 
 fn answer_mock_queries(
@@ -554,6 +721,8 @@ fn answer_mock_queries(
                         fragment: None,
                         local_point: *point,
                         is_text: false,
+                        local_content_box: None,
+                        viewport_to_local: moli_layout::LayoutTransform2D::IDENTITY,
                         box_model: mock_box_model(runtime, source),
                     }),
             ),
@@ -568,6 +737,8 @@ fn answer_mock_queries(
                             fragment: None,
                             local_point: *point,
                             is_text: false,
+                            local_content_box: None,
+                            viewport_to_local: moli_layout::LayoutTransform2D::IDENTITY,
                             box_model: mock_box_model(runtime, source),
                         }]
                     })

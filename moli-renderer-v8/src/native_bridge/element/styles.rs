@@ -692,6 +692,15 @@ fn iframe_handle_viewport_with_depth(
         .filter(|parent_frame| *parent_frame != frame_handle)
         .and_then(|parent_frame| iframe_handle_viewport_with_depth(host, parent_frame, depth + 1));
     let parent_viewport = parent_viewport.unwrap_or_else(|| host.style_viewport());
+    if let Some(viewport) = host.retained_iframe_layout_viewport(frame_handle) {
+        return Some(
+            StyleViewport::new(
+                Some(f64::from(viewport.css_width)),
+                Some(f64::from(viewport.css_height)),
+            )
+            .with_screen_size(parent_viewport.screen_width, parent_viewport.screen_height),
+        );
+    }
     let computed_width = style_property_value_with_context(
         host,
         frame_handle,

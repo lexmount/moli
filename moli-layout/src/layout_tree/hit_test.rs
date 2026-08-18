@@ -34,6 +34,18 @@ pub struct LayoutHit<N> {
     pub fragment: Option<LayoutFragmentId>,
     pub local_point: LayoutPoint,
     pub is_text: bool,
+    /// The exact physical content box in the hit fragment's own coordinate
+    /// space.
+    ///
+    /// Unlike `box_model`, this rectangle has not been projected through CSS
+    /// transforms. Embedded-content consumers use it to enter the child frame
+    /// without reconstructing the iframe's used size from authored CSS.
+    pub local_content_box: Option<LayoutRect>,
+    /// Converts a point from this tree's viewport into the hit fragment's
+    /// coordinate space. This is retained on the short-lived hit result so
+    /// frame and native-scrollbar routing can compose the same inverse
+    /// transforms that produced `local_point`.
+    pub viewport_to_local: LayoutTransform2D,
     /// Box geometry copied from the same frozen tree when the hit source owns a
     /// CSS box. Consumers use it for source-dependent follow-up work such as
     /// descending through a transformed child-frame content box without
@@ -363,11 +375,21 @@ where
             .local_to_viewport
             .inverse()?;
         let local_point = inverse.map_point(viewport_point);
+        let local_content_box = self
+            .fragment(entry.fragment)
+            .and_then(|fragment| fragment.box_model.map(|model| model.content))
+            .or_else(|| {
+                let box_id = self.fragment_box_id(entry.fragment)?;
+                let geometry = self.box_geometry(box_id)?;
+                Some(geometry.content_box)
+            });
         entry.local_rect.contains(local_point).then_some(LayoutHit {
             source: entry.source,
             fragment: Some(entry.fragment),
             local_point,
             is_text: entry.is_text,
+            local_content_box,
+            viewport_to_local: inverse,
             box_model: self.box_model_for_source(entry.source),
         })
     }

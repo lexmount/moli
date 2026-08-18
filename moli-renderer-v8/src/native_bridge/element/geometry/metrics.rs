@@ -10,7 +10,7 @@ use super::super::super::{
 use super::super::styles::raw_inline_style_property_value;
 use super::super::{queue_revealed_lazy_image_loads, queue_revealed_lazy_media_loads};
 use super::{
-    ClientRect, compute_mock_client_rect, observable_element_metrics,
+    ClientRect, compute_mock_client_rect, observable_box_model, observable_element_metrics,
     observable_scroll_into_view_geometry,
 };
 
@@ -499,6 +499,7 @@ pub(crate) fn scroll_node_into_view_if_needed(
         runtime_ptr,
         handle,
         relative_rect,
+        None,
         ScrollIntoViewAlignment::Nearest,
         ScrollIntoViewAlignment::Nearest,
         true,
@@ -517,6 +518,7 @@ fn scroll_node_into_view(
         scope,
         runtime_ptr,
         handle,
+        None,
         None,
         horizontal,
         vertical,
@@ -544,6 +546,7 @@ fn scroll_node_into_view_with_geometry(
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
     relative_rect: Option<DomScrollIntoViewRect>,
+    target_rects_override: Option<Vec<moli_layout::LayoutQuad>>,
     horizontal: ScrollIntoViewAlignment,
     vertical: ScrollIntoViewAlignment,
     center_if_fully_hidden: bool,
@@ -575,9 +578,6 @@ fn scroll_node_into_view_with_geometry(
     else {
         return Ok(None);
     };
-    if geometry.target_rects.is_empty() {
-        return Ok(None);
-    }
     if let Some(relative) = relative_rect {
         let Some(bounds) = quads_bounding_rect(&geometry.target_rects) else {
             return Ok(None);
@@ -591,6 +591,15 @@ fn scroll_node_into_view_with_geometry(
                     relative.height().max(0.0) as f32,
                 )),
             ];
+    }
+    if let Some(target_rects) = target_rects_override {
+        if target_rects.is_empty() {
+            return Ok(None);
+        }
+        geometry.target_rects = target_rects;
+    }
+    if geometry.target_rects.is_empty() {
+        return Ok(None);
     }
 
     let target_document = runtime.dom_host().owner_document_handle(target);
@@ -686,17 +695,30 @@ fn scroll_node_into_view_with_geometry(
         );
     }
     if frame_depth < 16
-        && let Some(frame) = target_document.and_then(|document| {
+        && let Some((document, frame)) = target_document.and_then(|document| {
             let runtime = unsafe { &*runtime_ptr };
             (document != runtime.document_handle())
                 .then(|| runtime.child_browsing_context_host_for_document_handle(document))
                 .flatten()
+                .map(|frame| (document, frame))
         })
+        && let Some(frame_content) = observable_box_model(
+            unsafe { &*runtime_ptr },
+            frame,
+            moli_layout::LayoutFlushReason::SynchronousGeometry,
+        )?
+        .map(|model| model.content)
+        && let Some(parent_target_rects) = map_child_viewport_quads_to_parent(
+            &geometry.target_rects,
+            unsafe { &*runtime_ptr }.layout_viewport_for_document(document),
+            frame_content,
+        )
         && let Some(parent_changed) = scroll_node_into_view_with_geometry(
             scope,
             runtime_ptr,
             frame,
             None,
+            Some(parent_target_rects),
             ScrollIntoViewAlignment::Nearest,
             ScrollIntoViewAlignment::Nearest,
             center_if_fully_hidden,
@@ -706,6 +728,40 @@ fn scroll_node_into_view_with_geometry(
         changed |= parent_changed;
     }
     Ok(Some(changed))
+}
+
+/// Convert a rectangle carried by a child frame into the parent document's
+/// viewport coordinates. This mirrors Blink's cross-frame scroll bubbling:
+/// the target rectangle is converted through the frame owner's content box,
+/// rather than replacing it with the bounds of the whole frame.
+fn map_child_viewport_quads_to_parent(
+    child_quads: &[moli_layout::LayoutQuad],
+    child_viewport: moli_layout::LayoutViewport,
+    parent_content: moli_layout::LayoutQuad,
+) -> Option<Vec<moli_layout::LayoutQuad>> {
+    let width = child_viewport.css_width as f32;
+    let height = child_viewport.css_height as f32;
+    if width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+    let [origin, x_corner, _, y_corner] = parent_content.points;
+    let x_basis = moli_layout::LayoutPoint::new(x_corner.x - origin.x, x_corner.y - origin.y);
+    let y_basis = moli_layout::LayoutPoint::new(y_corner.x - origin.x, y_corner.y - origin.y);
+    Some(
+        child_quads
+            .iter()
+            .map(|quad| moli_layout::LayoutQuad {
+                points: quad.points.map(|point| {
+                    let u = point.x / width;
+                    let v = point.y / height;
+                    moli_layout::LayoutPoint::new(
+                        origin.x + x_basis.x * u + y_basis.x * v,
+                        origin.y + x_basis.y * u + y_basis.y * v,
+                    )
+                }),
+            })
+            .collect(),
+    )
 }
 
 fn quads_bounding_rect(quads: &[moli_layout::LayoutQuad]) -> Option<moli_layout::LayoutRect> {
@@ -1312,7 +1368,7 @@ fn reveal_lazy_images_for_scroll(
 
 #[cfg(test)]
 mod scroll_alignment_tests {
-    use super::scroll_axis_to_expose;
+    use super::{map_child_viewport_quads_to_parent, scroll_axis_to_expose};
 
     #[test]
     fn center_if_needed_returns_the_unclamped_chromium_alignment_position() {
@@ -1327,5 +1383,53 @@ mod scroll_alignment_tests {
         assert_eq!(scroll_axis_to_expose(90.0, 120.0, 0.0, viewport), 20.0);
         assert_eq!(scroll_axis_to_expose(200.0, 220.0, 0.0, viewport), 160.0);
         assert_eq!(scroll_axis_to_expose(0.0, 20.0, 200.0, viewport), -40.0);
+    }
+
+    #[test]
+    fn child_viewport_rect_maps_through_the_parent_content_quad() {
+        let child_quad = moli_layout::LayoutTransform2D::IDENTITY
+            .map_rect(moli_layout::LayoutRect::new(50.0, 25.0, 100.0, 50.0));
+        let parent_content = moli_layout::LayoutQuad {
+            points: [
+                moli_layout::LayoutPoint::new(10.0, 20.0),
+                moli_layout::LayoutPoint::new(110.0, 40.0),
+                moli_layout::LayoutPoint::new(90.0, 100.0),
+                moli_layout::LayoutPoint::new(-10.0, 80.0),
+            ],
+        };
+
+        let mapped = map_child_viewport_quads_to_parent(
+            &[child_quad],
+            moli_layout::LayoutViewport::new(200, 100, 1.0),
+            parent_content,
+        )
+        .expect("non-empty child viewport should map");
+
+        assert_eq!(
+            mapped[0].points,
+            [
+                moli_layout::LayoutPoint::new(30.0, 40.0),
+                moli_layout::LayoutPoint::new(80.0, 50.0),
+                moli_layout::LayoutPoint::new(70.0, 80.0),
+                moli_layout::LayoutPoint::new(20.0, 70.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_child_viewport_cannot_produce_parent_geometry() {
+        let child_quad = moli_layout::LayoutTransform2D::IDENTITY
+            .map_rect(moli_layout::LayoutRect::new(0.0, 0.0, 10.0, 10.0));
+        let parent_content = moli_layout::LayoutTransform2D::IDENTITY
+            .map_rect(moli_layout::LayoutRect::new(0.0, 0.0, 10.0, 10.0));
+
+        assert!(
+            map_child_viewport_quads_to_parent(
+                &[child_quad],
+                moli_layout::LayoutViewport::new(0, 100, 1.0),
+                parent_content,
+            )
+            .is_none()
+        );
     }
 }

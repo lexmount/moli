@@ -53,6 +53,19 @@ where
         self.element_metrics_for_source_with_offset_parent_filter(source, |_| true)
     }
 
+    /// Returns the exact unprojected content box produced for a source's
+    /// principal layout box.
+    ///
+    /// Embedded browsing contexts use this as their LocalFrameView size. The
+    /// value deliberately comes from used layout geometry rather than
+    /// authored width/height CSS, and therefore remains correct for
+    /// percentages, `calc()`, box sizing, borders, padding, and transforms.
+    pub fn local_content_box_for_source(&self, source: N) -> Option<LayoutRect> {
+        let box_id = self.source_output(source)?.principal_box?;
+        self.box_geometry(box_id)
+            .map(|geometry| geometry.content_box)
+    }
+
     /// Resolves CSSOM View element metrics while allowing the renderer to hide
     /// flat-tree ancestors that do not belong to the queried element's
     /// ancestor tree scopes.

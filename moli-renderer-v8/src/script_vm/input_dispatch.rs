@@ -480,11 +480,13 @@ impl ScriptVm {
             return Ok(outcome);
         }
 
-        let hit_handle = observable_input_hit_test(
+        let root_point = moli_layout::LayoutPoint::new(x as f32, y as f32);
+        let hit = observable_input_hit_test(
             &self._context_host.borrow(),
             self.document_runtime.document_handle(),
-            moli_layout::LayoutPoint::new(x as f32, y as f32),
+            root_point,
         )?;
+        let hit_handle = hit.map(|hit| hit.handle);
         let pointer_event_name = pointer_event_name_for_mouse_event(event_name);
         let mut pending_pointer_capture_events = Vec::new();
         if pointer_event_name.is_some() {
@@ -539,12 +541,22 @@ impl ScriptVm {
         let Some(handle) = capture_handle.or(hit_handle).or(wheel_fallback_handle) else {
             return Ok(input_dispatch_outcome(false));
         };
+        let root_to_client = hit
+            .filter(|hit| hit.handle == handle)
+            .map(|hit| hit.root_to_client)
+            .unwrap_or(moli_layout::LayoutTransform2D::IDENTITY);
+        let client_point = root_to_client.map_point(root_point);
+        let client_x = f64::from(client_point.x);
+        let client_y = f64::from(client_point.y);
         let hover_transition = if tracks_mouse_hover_for_event(event_name) {
             let previous = self.hovered_mouse_handle;
             if previous != Some(handle) {
+                let previous_root_to_client = self.hovered_mouse_root_to_client;
                 self.hovered_mouse_handle = Some(handle);
-                Some(previous)
+                self.hovered_mouse_root_to_client = root_to_client;
+                Some((previous, previous_root_to_client))
             } else {
+                self.hovered_mouse_root_to_client = root_to_client;
                 None
             }
         } else {
@@ -588,13 +600,16 @@ impl ScriptVm {
 
         let result = self.with_default_context_scope(|scope, runtime_ptr| {
             let mut pointer_dispatch_handle = handle;
-            if let Some(Some(previous_handle)) = hover_transition {
+            if let Some((Some(previous_handle), previous_root_to_client)) = hover_transition {
+                let previous_client_point = previous_root_to_client.map_point(root_point);
+                let previous_client_x = f64::from(previous_client_point.x);
+                let previous_client_y = f64::from(previous_client_point.y);
                 let related_target = related_target_value(scope, Some(handle));
                 if let Some(event) = construct_pointer_event_with_related_target_and_modifiers(
                     scope,
                     "pointerout",
-                    x,
-                    y,
+                    previous_client_x,
+                    previous_client_y,
                     button,
                     buttons,
                     &pointer,
@@ -607,8 +622,8 @@ impl ScriptVm {
                 if let Some(event) = construct_pointer_event_with_related_target_and_modifiers(
                     scope,
                     "pointerleave",
-                    x,
-                    y,
+                    previous_client_x,
+                    previous_client_y,
                     button,
                     buttons,
                     &pointer,
@@ -618,13 +633,13 @@ impl ScriptVm {
                     let _ = dispatch_public_event(scope, runtime_ptr, previous_handle, event);
                 }
             }
-            if let Some(previous_handle) = hover_transition {
+            if let Some((previous_handle, _)) = hover_transition {
                 let related_target = related_target_value(scope, previous_handle);
                 if let Some(event) = construct_pointer_event_with_related_target_and_modifiers(
                     scope,
                     "pointerover",
-                    x,
-                    y,
+                    client_x,
+                    client_y,
                     button,
                     buttons,
                     &pointer,
@@ -637,8 +652,8 @@ impl ScriptVm {
                 if let Some(event) = construct_pointer_event_with_related_target_and_modifiers(
                     scope,
                     "pointerenter",
-                    x,
-                    y,
+                    client_x,
+                    client_y,
                     button,
                     buttons,
                     &pointer,
@@ -652,8 +667,8 @@ impl ScriptVm {
                 && let Some(event) = construct_pointer_event_with_modifiers(
                     scope,
                     "pointerrawupdate",
-                    x,
-                    y,
+                    client_x,
+                    client_y,
                     button,
                     buttons,
                     &pointer,
@@ -670,8 +685,8 @@ impl ScriptVm {
                     runtime_ptr,
                     MOUSE_POINTER_ID,
                     &post_raw_update_capture_events,
-                    x,
-                    y,
+                    client_x,
+                    client_y,
                     button,
                     buttons,
                     &pointer,
@@ -684,13 +699,16 @@ impl ScriptVm {
                         .unwrap_or(pointer_dispatch_handle);
                 }
             }
-            if let Some(Some(previous_handle)) = hover_transition {
+            if let Some((Some(previous_handle), previous_root_to_client)) = hover_transition {
+                let previous_client_point = previous_root_to_client.map_point(root_point);
+                let previous_client_x = f64::from(previous_client_point.x);
+                let previous_client_y = f64::from(previous_client_point.y);
                 let related_target = related_target_value(scope, Some(handle));
                 if let Some(event) = construct_mouse_event_with_related_target_and_modifiers(
                     scope,
                     "mouseout",
-                    x,
-                    y,
+                    previous_client_x,
+                    previous_client_y,
                     button,
                     buttons,
                     related_target,
@@ -702,8 +720,8 @@ impl ScriptVm {
                 if let Some(event) = construct_mouse_event_with_related_target_and_modifiers(
                     scope,
                     "mouseleave",
-                    x,
-                    y,
+                    previous_client_x,
+                    previous_client_y,
                     button,
                     buttons,
                     related_target,
@@ -712,13 +730,13 @@ impl ScriptVm {
                     let _ = dispatch_public_event(scope, runtime_ptr, previous_handle, event);
                 }
             }
-            if let Some(previous_handle) = hover_transition {
+            if let Some((previous_handle, _)) = hover_transition {
                 let related_target = related_target_value(scope, previous_handle);
                 if let Some(event) = construct_mouse_event_with_related_target_and_modifiers(
                     scope,
                     "mouseover",
-                    x,
-                    y,
+                    client_x,
+                    client_y,
                     button,
                     buttons,
                     related_target,
@@ -730,8 +748,8 @@ impl ScriptVm {
                 if let Some(event) = construct_mouse_event_with_related_target_and_modifiers(
                     scope,
                     "mouseenter",
-                    x,
-                    y,
+                    client_x,
+                    client_y,
                     button,
                     buttons,
                     related_target,
@@ -744,8 +762,8 @@ impl ScriptVm {
                 && let Some(event) = construct_pointer_event_with_modifiers(
                     scope,
                     pointer_event_name,
-                    x,
-                    y,
+                    client_x,
+                    client_y,
                     button,
                     buttons,
                     &pointer,
@@ -763,8 +781,8 @@ impl ScriptVm {
                     scope,
                     runtime_ptr,
                     MOUSE_POINTER_ID,
-                    x,
-                    y,
+                    client_x,
+                    client_y,
                     button,
                     buttons,
                     &pointer,
@@ -776,11 +794,12 @@ impl ScriptVm {
             if !suppress_current_mouse_event {
                 let event = if event_name == "wheel" {
                     construct_wheel_event(
-                        scope, event_name, x, y, delta_x, delta_y, button, buttons, modifiers,
+                        scope, event_name, client_x, client_y, delta_x, delta_y, button, buttons,
+                        modifiers,
                     )
                 } else {
                     construct_mouse_event_with_modifiers(
-                        scope, event_name, x, y, button, buttons, modifiers,
+                        scope, event_name, client_x, client_y, button, buttons, modifiers,
                     )
                 };
                 if let Some(event) = event {
@@ -824,8 +843,14 @@ impl ScriptVm {
                 };
                 if let Some(data_transfer) =
                     crate::context_bootstrap::build_data_transfer_object(scope, &empty_drag_data)
-                    && let Some(event) =
-                        construct_drag_event(scope, "dragstart", x, y, data_transfer.into(), 0)
+                    && let Some(event) = construct_drag_event(
+                        scope,
+                        "dragstart",
+                        client_x,
+                        client_y,
+                        data_transfer.into(),
+                        0,
+                    )
                 {
                     if dispatch_public_event(scope, runtime_ptr, drag_start_handle, event)
                         .allows_default()
@@ -843,9 +868,14 @@ impl ScriptVm {
                 let active_drag_session = unsafe { &mut *active_drag_session };
                 if let Some(session) = active_drag_session.as_mut() {
                     let data_transfer = v8::Local::new(scope, &session.data_transfer);
-                    if let Some(event) =
-                        construct_drag_event(scope, "dragover", x, y, data_transfer.into(), 0)
-                    {
+                    if let Some(event) = construct_drag_event(
+                        scope,
+                        "dragover",
+                        client_x,
+                        client_y,
+                        data_transfer.into(),
+                        0,
+                    ) {
                         session.drop_allowed =
                             !dispatch_public_event(scope, runtime_ptr, handle, event)
                                 .allows_default();
@@ -859,9 +889,14 @@ impl ScriptVm {
                 if let Some(session) = active_drag_session.as_mut() {
                     if session.drop_allowed {
                         let data_transfer = v8::Local::new(scope, &session.data_transfer);
-                        let allows_default = if let Some(event) =
-                            construct_drag_event(scope, "drop", x, y, data_transfer.into(), 0)
-                        {
+                        let allows_default = if let Some(event) = construct_drag_event(
+                            scope,
+                            "drop",
+                            client_x,
+                            client_y,
+                            data_transfer.into(),
+                            0,
+                        ) {
                             dispatch_public_event(scope, runtime_ptr, handle, event)
                                 .allows_default()
                         } else {
@@ -888,8 +923,8 @@ impl ScriptVm {
                         scope,
                         runtime_ptr,
                         handle,
-                        x,
-                        y,
+                        client_x,
+                        client_y,
                         button,
                         buttons,
                         click_count.max(1),
@@ -899,8 +934,8 @@ impl ScriptVm {
                         && let Some(event) = construct_mouse_event_with_detail_and_modifiers(
                             scope,
                             "dblclick",
-                            x,
-                            y,
+                            client_x,
+                            client_y,
                             click_count,
                             button,
                             buttons,
@@ -918,8 +953,8 @@ impl ScriptVm {
                     if let Some(event) = construct_mouse_event_with_modifiers(
                         scope,
                         follow_up_event_name,
-                        x,
-                        y,
+                        client_x,
+                        client_y,
                         button,
                         buttons,
                         modifiers,
@@ -1047,7 +1082,8 @@ impl ScriptVm {
             &self._context_host.borrow(),
             self.document_runtime.document_handle(),
             moli_layout::LayoutPoint::new(x as f32, y as f32),
-        )?;
+        )?
+        .map(|hit| hit.handle);
         if event_name == "touchstart" && hit_handle.is_none() {
             return Ok(input_dispatch_outcome(false));
         }
@@ -1278,7 +1314,8 @@ impl ScriptVm {
                 &self._context_host.borrow(),
                 self.document_runtime.document_handle(),
                 moli_layout::LayoutPoint::new(point.x as f32, point.y as f32),
-            )?;
+            )?
+            .map(|hit| hit.handle);
             let target = match event_name {
                 "touchstart" => hit_handle,
                 "touchmove" | "touchend" | "touchcancel" => self
@@ -1505,7 +1542,7 @@ impl ScriptVm {
             self.document_runtime.document_handle(),
             moli_layout::LayoutPoint::new(x as f32, y as f32),
         )?
-        else {
+        .map(|hit| hit.handle) else {
             return Ok(input_dispatch_outcome(false));
         };
 

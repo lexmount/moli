@@ -93,6 +93,21 @@ impl JsContextHost {
         )
     }
 
+    /// Returns the last exact used content viewport published by the iframe's
+    /// parent layout. A non-blocking borrow is intentional: child style
+    /// resolution can run while the document layout state is already lent to
+    /// a recursive paint pass, in which case the caller uses its ordinary
+    /// authored-style fallback.
+    pub(crate) fn retained_iframe_layout_viewport(
+        &self,
+        frame: DomHandle,
+    ) -> Option<LayoutViewport> {
+        self.document_layout_state
+            .try_borrow()
+            .ok()?
+            .embedded_frame_viewport(frame)
+    }
+
     pub(crate) fn with_fresh_layout_pass_for_document<T>(
         &self,
         document: DomHandle,
@@ -106,12 +121,16 @@ impl JsContextHost {
         else {
             return Ok(None);
         };
+        let pass_viewport = request.viewport;
         let _active = ActiveLayoutPass::enter(&self.layout_pass_active)?;
         let mut pass = {
             let mut state = self.document_layout_state.borrow_mut();
             state.retain_live_embedded_document_services(|candidate| {
                 self.child_browsing_context_host_for_document_handle(candidate)
                     .is_some()
+            });
+            state.retain_live_embedded_frame_viewports(|frame| {
+                self.child_browsing_context_is_live(frame)
             });
             state.with_services_for_document(
                 document,
@@ -137,10 +156,30 @@ impl JsContextHost {
         pass.validate_retention_budget()?;
         let consumed = consume(&mut pass)?;
         let metrics = pass.metrics;
+        let embedded_frame_viewports = self
+            .child_browsing_context_handles_in_document_order()
+            .into_iter()
+            .filter(|frame| self.dom_host().owner_document_handle(*frame) == Some(document))
+            .map(|frame| {
+                let viewport = pass
+                    .tree
+                    .local_content_box_for_source(frame)
+                    .map(|content| {
+                        LayoutViewport::new(
+                            css_viewport_dimension(f64::from(content.width)),
+                            css_viewport_dimension(f64::from(content.height)),
+                            pass_viewport.device_pixel_ratio,
+                        )
+                    });
+                (frame, viewport)
+            })
+            .collect::<Vec<_>>();
         let tree = pass.into_tree();
-        self.document_layout_state
-            .borrow_mut()
-            .publish_latest_layout(document, tree);
+        {
+            let mut state = self.document_layout_state.borrow_mut();
+            state.publish_latest_layout(document, tree);
+            state.publish_embedded_frame_viewports(embedded_frame_viewports);
+        }
         self.last_layout_pass_metrics.set(Some(metrics));
         self.layout_snapshot_cache_publishes
             .set(self.layout_snapshot_cache_publishes.get().saturating_add(1));
@@ -190,17 +229,45 @@ impl JsContextHost {
         viewport: LayoutViewport,
         queries: &LayoutQueryBatch<DomHandle>,
     ) -> Result<LayoutAnswers<DomHandle>, LayoutError> {
+        self.answer_layout_for_document_with_viewport_policy(
+            document, reason, viewport, queries, false,
+        )
+    }
+
+    pub(crate) fn answer_layout_for_document_with_exact_viewport(
+        &self,
+        document: DomHandle,
+        reason: LayoutFlushReason,
+        viewport: LayoutViewport,
+        queries: &LayoutQueryBatch<DomHandle>,
+    ) -> Result<LayoutAnswers<DomHandle>, LayoutError> {
+        self.answer_layout_for_document_with_viewport_policy(
+            document, reason, viewport, queries, true,
+        )
+    }
+
+    fn answer_layout_for_document_with_viewport_policy(
+        &self,
+        document: DomHandle,
+        reason: LayoutFlushReason,
+        viewport: LayoutViewport,
+        queries: &LayoutQueryBatch<DomHandle>,
+        require_exact_viewport: bool,
+    ) -> Result<LayoutAnswers<DomHandle>, LayoutError> {
         #[cfg(test)]
         let reuse_latest = !self.force_fresh_layout_reads_for_test;
         #[cfg(not(test))]
         let reuse_latest = true;
         let cached = if reuse_latest {
             let state = self.document_layout_state.borrow();
-            state.latest_layout(document).and_then(|tree| {
-                self.last_layout_pass_metrics
-                    .get()
-                    .map(|metrics| self.answer_layout_queries(tree, metrics, viewport, queries))
-            })
+            state
+                .latest_layout(document)
+                .filter(|tree| !require_exact_viewport || tree.viewport == viewport)
+                .and_then(|tree| {
+                    self.last_layout_pass_metrics
+                        .get()
+                        .map(|metrics| self.answer_layout_queries(tree, metrics, viewport, queries))
+                })
         } else {
             None
         };
