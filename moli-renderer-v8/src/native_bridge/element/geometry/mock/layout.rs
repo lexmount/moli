@@ -2,35 +2,15 @@ use crate::document_runtime::DomHandle;
 use moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE;
 use std::time::Instant;
 
-use super::super::super::JsContextHost;
-use super::super::styles::{ComputedStyleRead, iframe_handle_viewport};
+use super::super::super::super::JsContextHost;
+use super::super::super::styles::{ComputedStyleRead, iframe_handle_viewport};
+use super::super::client_rect::{ClientRect, zero_client_rect};
 use crate::native_bridge::element::raw_inline_style_property_value;
 
 const MOCK_FLOW_STEP_PX: f64 = 24.0;
 const CHILD_DOCUMENT_VISIBLE_FLOW_ORIGIN_PX: f64 = 1.0;
 const MOCK_FLOW_COUNT_LIMIT: usize = 4096;
 const HIT_TEST_CHILD_FRAME_DEPTH_LIMIT: usize = 16;
-
-#[derive(Clone, Copy, Debug)]
-pub struct ClientRect {
-    pub left: f64,
-    pub top: f64,
-    pub right: f64,
-    pub bottom: f64,
-    pub width: f64,
-    pub height: f64,
-}
-
-pub(super) fn zero_client_rect() -> ClientRect {
-    ClientRect {
-        left: 0.0,
-        top: 0.0,
-        right: 0.0,
-        bottom: 0.0,
-        width: 0.0,
-        height: 0.0,
-    }
-}
 
 fn viewport_client_rect(runtime: &JsContextHost, handle: DomHandle) -> ClientRect {
     let child_viewport = runtime

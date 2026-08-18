@@ -1,12 +1,13 @@
-mod layout;
+mod client_rect;
+mod hit_test;
 mod metrics;
+mod mock;
 mod provider;
 mod rects;
 
-pub use layout::ClientRect;
-pub(crate) use layout::{
-    compute_mock_client_rect, compute_mock_intersection_client_rect,
-    compute_mock_intersection_scrollport_client_rect,
+pub use client_rect::ClientRect;
+pub(crate) use hit_test::{
+    observable_deep_hit_test, observable_input_hit_test, observable_scrollbar_hit_test,
 };
 pub(crate) use metrics::{
     apply_scroll_observable_effects, perform_scrollbar_scroll_default_action,
@@ -24,12 +25,15 @@ pub(in crate::native_bridge) use metrics::{
     node_scroll_top_getter_function, node_scroll_top_setter_function,
     node_scroll_width_getter_function,
 };
+pub(crate) use mock::{
+    compute_mock_client_rect, compute_mock_intersection_client_rect,
+    compute_mock_intersection_scrollport_client_rect,
+};
 pub(crate) use provider::{
     observable_bounding_client_rect, observable_bounding_client_rects, observable_box_model,
-    observable_caret_position, observable_client_rects, observable_deep_hit_test,
-    observable_element_metrics, observable_event_offset, observable_geometry_batch,
-    observable_hit_test_all, observable_input_hit_test, observable_scroll_adjusted_client_rect,
-    observable_scroll_into_view_geometry, observable_scrollbar_hit_test,
+    observable_caret_position, observable_client_rects, observable_element_metrics,
+    observable_event_offset, observable_geometry_batch, observable_hit_test_all,
+    observable_scroll_adjusted_client_rect, observable_scroll_into_view_geometry,
     observable_sources_with_fragments,
 };
 pub(in crate::native_bridge) use rects::{
