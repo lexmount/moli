@@ -60,7 +60,6 @@ pub(crate) struct HostScriptScheduler {
     native_module_owner_event_turn_queued: bool,
     module_owner: ModuleOwnerState,
     script_handles: HashMap<String, ScriptHandleState>,
-    current_generation: u64,
     next_virtual_script_node_index: usize,
     next_dynamic_script_position: usize,
 }
@@ -308,7 +307,6 @@ impl Default for HostScriptScheduler {
             native_module_owner_event_turn_queued: false,
             module_owner: ModuleOwnerState::default(),
             script_handles: HashMap::new(),
-            current_generation: 0,
             next_virtual_script_node_index: 1_000_000,
             next_dynamic_script_position: 0,
         }
@@ -432,7 +430,6 @@ impl HostScriptScheduler {
         self.native_module_owner_event_turn_queued = false;
         self.module_owner.clear_for_document_replacement();
         self.script_handles.clear();
-        self.current_generation = self.current_generation.wrapping_add(1);
     }
 
     pub(crate) fn register_script_handle_with_source(
@@ -1530,7 +1527,7 @@ impl HostScriptScheduler {
             NativeNodeId::new(node_id.index()),
             position,
             Some(host_script_handle.to_owned()),
-            crate::planning::PreparedScriptRuntimeGeneration::Live(self.current_generation),
+            crate::planning::PreparedScriptRuntimeGeneration::PendingBinding,
             source,
             source_kind,
             kind,
@@ -1625,9 +1622,8 @@ impl HostScriptScheduler {
                 base_url: url.clone(),
                 url,
                 host_script_handle: Some(host_script_handle.to_owned()),
-                runtime_generation: crate::planning::PreparedScriptRuntimeGeneration::Live(
-                    self.current_generation,
-                ),
+                runtime_generation:
+                    crate::planning::PreparedScriptRuntimeGeneration::PendingBinding,
             },
             message: message.to_owned(),
             failure_kind,
