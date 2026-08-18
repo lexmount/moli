@@ -131,6 +131,10 @@ pub enum LayoutQuery<N> {
     ElementMetrics {
         source: N,
     },
+    /// CSSOM resolved `width`/`height` for a principal CSS box.
+    UsedBoxSize {
+        source: N,
+    },
     ScrollIntoViewGeometry {
         source: N,
     },
@@ -181,6 +185,7 @@ pub enum LayoutQueryAnswer<N> {
     ContentQuads(Vec<LayoutQuad>),
     TextRangeRects(Vec<LayoutQuad>),
     ElementMetrics(Option<LayoutElementMetrics<N>>),
+    UsedBoxSize(Option<LayoutSize>),
     ScrollIntoViewGeometry(Option<LayoutScrollIntoViewGeometry<N>>),
     IntersectionGeometry(Option<LayoutIntersectionGeometry>),
     HitTest(Option<LayoutHit<N>>),
@@ -256,6 +261,9 @@ where
                 ),
                 LayoutQuery::ElementMetrics { source } => {
                     LayoutQueryAnswer::ElementMetrics(self.element_metrics_for_source(*source))
+                }
+                LayoutQuery::UsedBoxSize { source } => {
+                    LayoutQueryAnswer::UsedBoxSize(self.used_box_size_for_source(*source))
                 }
                 LayoutQuery::ScrollIntoViewGeometry { source } => {
                     LayoutQueryAnswer::ScrollIntoViewGeometry(

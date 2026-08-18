@@ -213,6 +213,17 @@ where
         })
     }
 
+    /// Returns the layout-dependent CSSOM resolved size for one principal
+    /// CSS box. Both box applicability and `box-sizing` were captured by the
+    /// same frozen layout epoch; this projection only removes its retained
+    /// effective zoom.
+    pub fn used_box_size_for_source(&self, source: N) -> Option<LayoutSize> {
+        let output = self.source_output(source)?;
+        let geometry = self.box_geometry(output.principal_box?)?;
+        let size = geometry.used_box_size?;
+        Some(CssomAbsoluteZoom::new(geometry.effective_zoom).size(size))
+    }
+
     /// Resolves a viewport point into the coordinate system Blink uses for
     /// `MouseEvent.offsetX/Y`: a box target's padding edge, or the shared IFC
     /// coordinate space for a flattened inline layout object.

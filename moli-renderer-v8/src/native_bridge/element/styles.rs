@@ -342,6 +342,7 @@ fn style_object_computation_context<'s>(
     let read_document = style_object_read_document(scope, style);
     StyleComputationContext::new(style_object_viewport(scope, style))
         .with_read_document(read_document)
+        .with_resolved_values()
 }
 
 fn style_object_property_count_with_context<'s>(
