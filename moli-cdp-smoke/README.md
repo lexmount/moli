@@ -129,7 +129,7 @@ Covered well:
   response/event crossover, foreign flattened and legacy session rejection,
   and staged peer-disconnect isolation.
 - Raw CDP websocket command flow for `Runtime.evaluate(awaitPromise=true)` resolving page `fetch()`, timer-triggered `fetch()`, and WebSocket echo work without any follow-up client command; emitted `Runtime.executionContextCreated.uniqueId` round-tripping through DevTools-shaped `Runtime.evaluate` and `Runtime.callFunctionOn`; Chromium-calibrated pre-commit navigation suspension where DOM/Runtime/Debugger main-thread commands wait while `Performance.getMetrics`, `Runtime.terminateExecution`, and browser commands remain dispatchable; `Debugger.pause` responding before `Debugger.paused`, interrupting an in-flight `Runtime.evaluate`, and resuming that evaluation; commands queued behind a winning `Debugger.resume` completing through normal owner dispatch rather than synthetic cancellation; deterministic nested-function `Debugger.stepOut` response/resumed/caller-pause ordering; browser-global Tracing ownership across independent browser/page WebSocket frontends, including exactly one response for a synchronously completed start and the stop-before-start-ack `end response -> start error -> data -> complete` sequence; shared worker target discovery through `Target.getTargets`, worker-session `Runtime.executionContextCreated` / console log replay, and `Profiler.enable` / `Profiler.start` / `Profiler.stop` through `Target.setAutoAttach`; plus Chromium-calibrated DedicatedWorker target creation/update/attach ordering, exact worker-isolate Runtime/Console routing, `Inspector.workerScriptLoaded`, terminate, and owner-navigation cleanup.
-- The default raw `inspector-routing` group is the executable DevToolsSession boundary matrix. It covers per-session Main/IO FIFO and exactly-once completion, IO preemption of non-yielding JavaScript, all 13 methods in Chromium 147's `ShouldSendOnIO`, normal debugger-pause pumping of one mixed V8/Page/DOM Main receiver, instrumentation-pause IO-only behavior, navigation replacement, auxiliary-session detach, BrowserContext teardown with interrupts in flight, and `Page.crash`. Every scenario runs in an isolated target and records its Chromium-derived contract.
+- The default raw `inspector-routing` group is the executable DevToolsSession boundary matrix. It covers per-session Main/IO FIFO and exactly-once completion, IO preemption of non-yielding JavaScript, DedicatedWorker and SharedWorker interrupt overtaking plus FIFO recovery, all 13 methods in Chromium 147's `ShouldSendOnIO`, normal debugger-pause pumping of one mixed V8/Page/DOM Main receiver, instrumentation-pause IO-only behavior, navigation replacement, auxiliary-session detach, BrowserContext teardown with interrupts in flight, and `Page.crash`. Every scenario runs in an isolated target and records its Chromium-derived contract.
 - The focused raw `agent-episode` group copies the recorded RL
   `Runtime.evaluate(awaitPromise=true)` observe/fill/click path. It requires the
   action response before destructive cross-document realm events, observes only
@@ -330,6 +330,9 @@ MOLI_INSPECTOR_ROUTING_SCENARIOS=raw_cdp_active_javascript_main_io_lane_matrix \
 
 MOLI_INSPECTOR_ROUTING_SCENARIOS=raw_cdp_nested_v8_main_receiver_matrix,raw_cdp_nested_non_v8_main_receiver_matrix \
   uv run moli-cdp-smoke --group inspector-routing
+
+MOLI_INSPECTOR_ROUTING_SCENARIOS=raw_cdp_dedicated_worker_active_javascript_interrupt,raw_cdp_shared_worker_active_javascript_interrupt \
+  uv run moli-cdp-smoke --group inspector-routing
 ```
 
 The Chromium 147 IO catalog exercised by the complete group is:
@@ -360,7 +363,8 @@ uv run moli-cdp-smoke \
 The complete `inspector-routing` group was calibrated on 2026-08-16 against
 the local Chromium build `Chrome/147.0.7709.0`. Point the same command at a
 Chromium remote-debugging endpoint to re-run the oracle before changing a
-routing contract:
+routing contract. The two Worker active-JavaScript interrupt regressions were
+also cross-checked on 2026-08-18 against `Chromium/145.0.7632.116`:
 
 ```bash
 uv run moli-cdp-smoke \

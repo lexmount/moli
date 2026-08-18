@@ -40,6 +40,18 @@ async def run_inspector_routing_group(
             ),
         ),
         (
+            "raw_cdp_dedicated_worker_active_javascript_interrupt",
+            lambda client, page: _worker_active_javascript_interrupt(
+                client, page, fixture, results, target_type="worker"
+            ),
+        ),
+        (
+            "raw_cdp_shared_worker_active_javascript_interrupt",
+            lambda client, page: _worker_active_javascript_interrupt(
+                client, page, fixture, results, target_type="shared_worker"
+            ),
+        ),
+        (
             "raw_cdp_debugger_io_catalog_during_active_javascript",
             lambda client, page: _debugger_io_catalog_during_active_javascript(
                 client, page, fixture, results
@@ -367,6 +379,297 @@ for (;;) {}"""
             "Runtime.terminateExecution",
         ],
         observed={"responseOrder": response_order},
+    )
+
+
+async def _worker_active_javascript_interrupt(
+    client: RawCdpClient,
+    page: InspectorRoutingPage,
+    fixture: str,
+    results: list[dict[str, Any]],
+    *,
+    target_type: str,
+) -> None:
+    if target_type == "worker":
+        kind = "dedicated_worker"
+        label = "DedicatedWorker"
+        worker_path = "/worker.js?inspector-routing-active"
+        auto_attach_session_id = page.primary_session_id
+        create_source = f"""
+            new Promise((resolve, reject) => {{
+              const worker = new Worker({json.dumps(fixture + worker_path)}, {{
+                name: 'inspector-routing-active-worker',
+              }});
+              globalThis.__inspectorRoutingWorker = worker;
+              const timer = setTimeout(
+                () => reject(new Error('DedicatedWorker ready timeout')),
+                5000,
+              );
+              worker.onmessage = event => {{
+                if (event.data && event.data.echoed === '__inspector_routing_worker_ready__') {{
+                  clearTimeout(timer);
+                  resolve(true);
+                }}
+              }};
+              worker.onerror = event => {{
+                clearTimeout(timer);
+                reject(new Error(event.message || 'DedicatedWorker failed'));
+              }};
+              worker.postMessage('__inspector_routing_worker_ready__');
+            }})
+        """
+    elif target_type == "shared_worker":
+        kind = "shared_worker"
+        label = "SharedWorker"
+        worker_path = "/shared-worker.js?inspector-routing-active"
+        auto_attach_session_id = None
+        create_source = f"""
+            new Promise((resolve, reject) => {{
+              const worker = new SharedWorker(
+                {json.dumps(fixture + worker_path)},
+                'inspector-routing-active-shared-worker',
+              );
+              globalThis.__inspectorRoutingSharedWorker = worker;
+              const timer = setTimeout(
+                () => reject(new Error('SharedWorker ready timeout')),
+                5000,
+              );
+              worker.port.onmessage = event => {{
+                if (event.data && event.data.ready === true) {{
+                  clearTimeout(timer);
+                  resolve(true);
+                }}
+              }};
+              worker.port.start();
+              worker.port.postMessage({{kind: 'ready'}});
+            }})
+        """
+    else:
+        raise AssertionError(f"unsupported Worker target type: {target_type}")
+
+    scenario_name = f"raw_cdp_{kind}_active_javascript_interrupt"
+    await _reset_witness(fixture)
+    auto_attach_id = await client.send(
+        "Target.setAutoAttach",
+        {
+            "autoAttach": True,
+            "waitForDebuggerOnStart": False,
+            "flatten": True,
+            "filter": [
+                {"type": target_type, "exclude": False},
+                {"exclude": True},
+            ],
+        },
+        session_id=auto_attach_session_id,
+    )
+    await client.recv_until_id(auto_attach_id, timeout=5)
+
+    create_id = await client.send(
+        "Runtime.evaluate",
+        {
+            "expression": create_source,
+            "awaitPromise": True,
+            "returnByValue": True,
+        },
+        session_id=page.primary_session_id,
+    )
+
+    worker_session_id: str | None = None
+    worker_target_id: str | None = None
+    create_response: dict[str, Any] | None = None
+    creation_seen: list[dict[str, Any]] = []
+    deadline = asyncio.get_running_loop().time() + 10
+    while create_response is None or worker_session_id is None:
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            raise SmokeError(
+                f"timed out creating auto-attached {label}; "
+                f"response={create_response} session={worker_session_id} "
+                f"seen={creation_seen[-20:]}"
+            )
+        message = await asyncio.wait_for(client.recv(), timeout=remaining)
+        creation_seen.append(message)
+        if message.get("id") == create_id:
+            create_response = message
+        if message.get("method") != "Target.attachedToTarget":
+            continue
+        params = message.get("params", {})
+        target_info = params.get("targetInfo", {})
+        if target_info.get("type") != target_type:
+            continue
+        target_url = target_info.get("url")
+        if not isinstance(target_url, str) or worker_path not in target_url:
+            continue
+        session_id = params.get("sessionId")
+        target_id = target_info.get("targetId")
+        if not isinstance(session_id, str) or not session_id:
+            raise SmokeError(f"{label} attach event had no session id: {message}")
+        if not isinstance(target_id, str) or not target_id:
+            raise SmokeError(f"{label} attach event had no target id: {message}")
+        worker_session_id = session_id
+        worker_target_id = target_id
+
+    assert create_response is not None
+    assert worker_session_id is not None
+    assert worker_target_id is not None
+    if "error" in create_response:
+        raise SmokeError(f"creating {label} failed: {create_response}")
+    assert_equal(
+        create_response.get("result", {}).get("result", {}).get("value"),
+        True,
+        f"{label} ready result",
+    )
+
+    runtime_enable_id = await client.send(
+        "Runtime.enable",
+        session_id=worker_session_id,
+    )
+    await client.recv_until_id(runtime_enable_id, timeout=5)
+
+    busy_source = f"""(() => {{
+  const xhr = new XMLHttpRequest();
+  xhr.open('GET', {json.dumps(fixture + '/inspector-routing-witness/entered')}, false);
+  xhr.send();
+  globalThis.__inspectorRoutingWorkerLoopEntered =
+    (globalThis.__inspectorRoutingWorkerLoopEntered || 0) + 1;
+  for (;;) {{}}
+}})()"""
+    busy_id = await client.send(
+        "Runtime.evaluate",
+        {"expression": busy_source},
+        session_id=worker_session_id,
+    )
+    await _wait_for_witness(fixture, expected_count=1)
+
+    follower_one_id = await client.send(
+        "Runtime.evaluate",
+        {
+            "expression": "(globalThis.__inspectorRoutingWorkerOrder ??= []).push('f1')",
+            "returnByValue": True,
+        },
+        session_id=worker_session_id,
+    )
+    follower_two_id = await client.send(
+        "Runtime.evaluate",
+        {
+            "expression": "globalThis.__inspectorRoutingWorkerOrder.push('f2')",
+            "returnByValue": True,
+        },
+        session_id=worker_session_id,
+    )
+    blocked_ids = {busy_id, follower_one_id, follower_two_id}
+    observed = await _recv_for(client, 0.2)
+    early = [message for message in observed if message.get("id") in blocked_ids]
+    if early:
+        raise SmokeError(
+            f"{label} Runtime.evaluate must not interrupt active JavaScript: "
+            f"{early}"
+        )
+
+    terminate_id = await client.send(
+        "Runtime.terminateExecution",
+        session_id=worker_session_id,
+    )
+    expected_ids = blocked_ids | {terminate_id}
+    responses, during_interrupt = await _recv_responses(
+        client,
+        expected_ids,
+        timeout=10,
+    )
+    observed.extend(during_interrupt)
+    observed.extend(await _recv_for(client, 0.1))
+
+    for message_id in expected_ids:
+        count = sum(message.get("id") == message_id for message in observed)
+        assert_equal(
+            count,
+            1,
+            f"exactly one {label} Inspector response for id {message_id}",
+        )
+    terminate_response = responses[terminate_id]
+    if "error" in terminate_response:
+        raise SmokeError(
+            f"Runtime.terminateExecution failed to interrupt {label}: "
+            f"{terminate_response}"
+        )
+    assert_equal(
+        terminate_response.get("result"),
+        {},
+        f"{label} Runtime.terminateExecution result",
+    )
+    busy_response = responses[busy_id]
+    if "error" not in busy_response and not isinstance(
+        busy_response.get("result", {}).get("exceptionDetails"), dict
+    ):
+        raise SmokeError(
+            f"terminated {label} Runtime.evaluate did not report termination: "
+            f"{busy_response}"
+        )
+    for message_id, expected_value in (
+        (follower_one_id, 1),
+        (follower_two_id, 2),
+    ):
+        response = responses[message_id]
+        if "error" in response:
+            raise SmokeError(f"{label} follower failed after termination: {response}")
+        assert_equal(
+            response.get("result", {}).get("result", {}).get("value"),
+            expected_value,
+            f"{label} follower {message_id} value",
+        )
+
+    response_order = [
+        message["id"] for message in observed if message.get("id") in expected_ids
+    ]
+    expected_response_order = [
+        terminate_id,
+        busy_id,
+        follower_one_id,
+        follower_two_id,
+    ]
+    if response_order != expected_response_order:
+        raise SmokeError(
+            f"{label} interrupt response must overtake the active evaluation before "
+            "DontInterrupt followers resume in FIFO order: "
+            f"expected={expected_response_order} actual={response_order}"
+        )
+
+    recovery_id = await client.send(
+        "Runtime.evaluate",
+        {
+            "expression": "JSON.stringify({loop: __inspectorRoutingWorkerLoopEntered, order: __inspectorRoutingWorkerOrder})",
+            "returnByValue": True,
+        },
+        session_id=worker_session_id,
+    )
+    recovery, _ = await client.recv_until_id(recovery_id, timeout=5)
+    assert_equal(
+        json.loads(recovery.get("result", {}).get("result", {}).get("value", "null")),
+        {"loop": 1, "order": ["f1", "f2"]},
+        f"{label} active-JS interrupt recovery state",
+    )
+    record_contract(
+        results,
+        scenario_name,
+        contract=(
+            "A Runtime.terminateExecution command overtakes earlier DontInterrupt evaluations "
+            f"on the same {label} session, interrupts non-yielding JavaScript, then "
+            "releases the queued evaluations in FIFO order with exactly-once responses."
+        ),
+        source=(
+            "Chromium Worker DevTools IO-session executable probe; regression for Moli's "
+            "former owner-only Worker Inspector queue"
+        ),
+        commands=[
+            "Runtime.evaluate (non-yielding worker JavaScript)",
+            "Runtime.evaluate x2 (DontInterrupt followers)",
+            "Runtime.terminateExecution",
+            "Runtime.evaluate (recovery)",
+        ],
+        observed={
+            "targetId": worker_target_id,
+            "responseOrder": response_order,
+        },
     )
 
 
