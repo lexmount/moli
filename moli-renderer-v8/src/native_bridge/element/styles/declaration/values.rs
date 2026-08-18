@@ -16,7 +16,7 @@ use crate::{
         document_runtime::DomHandle,
         native_bridge::element::geometry::{
             ClientRect, observable_bounding_client_rect, observable_bounding_client_rects,
-            observable_used_box_size,
+            observable_used_box_size, observable_used_grid_tracks,
         },
         style_engine::{
             ComputedDisplayKind, ComputedRenderedStyleFacts, StyleSourceId, StyleViewport,
@@ -5772,6 +5772,11 @@ fn resolve_moli_computed_style_value(
     if property == "font-family" {
         return normalize_cssom_font_family_value(value).unwrap_or_else(|| value.to_owned());
     }
+    if matches!(property, "grid-template-columns" | "grid-template-rows")
+        && let Some(tracks) = resolved_grid_template_tracks(runtime, handle, property, context)
+    {
+        return tracks;
+    }
     if matches!(property, "width" | "height") {
         match resolved_layout_box_dimension(runtime, handle, property, context) {
             Some(ResolvedLayoutBoxDimension::Used(size)) => return size,
@@ -5827,6 +5832,85 @@ fn resolve_moli_computed_style_value(
         return resolve_computed_auto_min_size(runtime, handle, resolution);
     }
     value.to_owned()
+}
+
+fn resolved_grid_template_tracks(
+    runtime: &JsContextHost,
+    handle: DomHandle,
+    property: &str,
+    context: StyleComputationContext,
+) -> Option<String> {
+    if !context.reads_resolved_values() || !runtime.layout_policy().uses_real_layout() {
+        return None;
+    }
+    let grid = observable_used_grid_tracks(
+        runtime,
+        handle,
+        moli_layout::LayoutFlushReason::SynchronousGeometry,
+    )
+    .ok()??;
+    let tracks = match property {
+        "grid-template-columns" => &grid.columns,
+        "grid-template-rows" => &grid.rows,
+        _ => return None,
+    };
+
+    serialize_used_grid_track_list(tracks)
+}
+
+fn serialize_used_grid_track_list(tracks: &moli_layout::LayoutGridTrackGeometry) -> Option<String> {
+    if tracks.track_count() != tracks.sizes.len() {
+        return None;
+    }
+    if tracks.sizes.is_empty() {
+        return Some("none".to_owned());
+    }
+    if tracks.explicit_line_names.len() != tracks.explicit_track_count.saturating_add(1) {
+        return None;
+    }
+    let mut components = Vec::with_capacity(
+        tracks.sizes.len().saturating_add(
+            tracks
+                .explicit_line_names
+                .iter()
+                .filter(|names| !names.is_empty())
+                .count(),
+        ),
+    );
+    let mut size_index = 0usize;
+    for _ in 0..tracks.negative_implicit_track_count {
+        components.push(format_non_negative_used_css_px(f64::from(
+            *tracks.sizes.get(size_index)?,
+        )));
+        size_index += 1;
+    }
+    for (track_index, names) in tracks.explicit_line_names.iter().enumerate() {
+        if !names.is_empty() {
+            let mut serialized = String::from("[");
+            for (index, name) in names.iter().enumerate() {
+                if index > 0 {
+                    serialized.push(' ');
+                }
+                serialize_identifier(name, &mut serialized)
+                    .expect("serializing an identifier into String cannot fail");
+            }
+            serialized.push(']');
+            components.push(serialized);
+        }
+        if track_index < tracks.explicit_track_count {
+            components.push(format_non_negative_used_css_px(f64::from(
+                *tracks.sizes.get(size_index)?,
+            )));
+            size_index += 1;
+        }
+    }
+    for _ in 0..tracks.positive_implicit_track_count {
+        components.push(format_non_negative_used_css_px(f64::from(
+            *tracks.sizes.get(size_index)?,
+        )));
+        size_index += 1;
+    }
+    (size_index == tracks.sizes.len()).then(|| components.join(" "))
 }
 
 enum ResolvedLayoutBoxDimension {

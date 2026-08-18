@@ -846,6 +846,11 @@ where
                 .next()
                 .expect("a frozen layout tree always owns the viewport coordinate space"),
         );
+        let grid_geometries = self
+            .world
+            .boxes
+            .iter()
+            .map(|layout_box| layout_box.grid_geometry.clone());
         let boxes = self
             .boxes
             .into_iter()
@@ -854,10 +859,17 @@ where
             .zip(self.hit_sources)
             .zip(self.scroll_extents)
             .zip(coordinate_spaces.map(FrozenCoordinateSpace::from))
+            .zip(grid_geometries)
             .map(
                 |(
-                    ((((geometry, geometry_source), principal_source), hit_source), scroll_extent),
-                    coordinate_space,
+                    (
+                        (
+                            (((geometry, geometry_source), principal_source), hit_source),
+                            scroll_extent,
+                        ),
+                        coordinate_space,
+                    ),
+                    grid_geometry,
                 )| FrozenLayoutBox {
                     geometry,
                     scroll_extent,
@@ -865,6 +877,7 @@ where
                     geometry_source,
                     principal_source,
                     hit_source,
+                    grid_geometry,
                 },
             )
             .collect();

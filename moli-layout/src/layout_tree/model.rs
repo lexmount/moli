@@ -55,6 +55,39 @@ impl LayoutSize {
     }
 }
 
+/// Used geometry for one axis of a CSS Grid formatting context.
+///
+/// Track and gutter sizes are retained in layout CSS pixels. The explicit
+/// range is kept separately from leading and trailing implicit tracks so
+/// resolved-style consumers can merge used sizes with authored line names
+/// without retaining a layout-backend track tree.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LayoutGridTrackGeometry {
+    pub negative_implicit_track_count: usize,
+    pub explicit_track_count: usize,
+    pub positive_implicit_track_count: usize,
+    pub sizes: Vec<f32>,
+    pub gutters: Vec<f32>,
+    /// Expanded names for each explicit grid line. The length is the explicit
+    /// track count plus one; names at repeat boundaries are already merged.
+    pub explicit_line_names: Vec<Vec<String>>,
+}
+
+impl LayoutGridTrackGeometry {
+    pub fn track_count(&self) -> usize {
+        self.negative_implicit_track_count
+            .saturating_add(self.explicit_track_count)
+            .saturating_add(self.positive_implicit_track_count)
+    }
+}
+
+/// Used row and column geometry retained for a CSS Grid container.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LayoutGridGeometry {
+    pub rows: LayoutGridTrackGeometry,
+    pub columns: LayoutGridTrackGeometry,
+}
+
 /// An axis-aligned rectangle in one explicit layout coordinate space.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct LayoutRect {

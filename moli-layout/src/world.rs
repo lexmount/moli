@@ -4,8 +4,8 @@ use style::Atom;
 use taffy::{Cache, Dimension, Layout, LayoutEnvironment, LogicalStaticPosition, Size, Style};
 
 use crate::{
-    LayoutElementSemantics, LayoutError, LayoutPoint, LayoutPseudo, ResolvedLayoutStyle,
-    inline::InlineFormattingContext, replaced::ReplacedContext,
+    LayoutElementSemantics, LayoutError, LayoutGridGeometry, LayoutPoint, LayoutPseudo,
+    ResolvedLayoutStyle, inline::InlineFormattingContext, replaced::ReplacedContext,
 };
 
 /// Dense identifier scoped to exactly one [`LayoutWorld`].
@@ -299,6 +299,11 @@ pub struct LayoutBox<N> {
     /// there and the table formatter retains the authored value here.
     pub(crate) table_authored_min_inline_size: Option<Dimension>,
     pub(crate) inline_formatting_context: bool,
+    /// Used Grid tracks produced by the numeric layout pass.
+    ///
+    /// This is browser-owned canonical geometry rather than a retained Taffy
+    /// object. It is frozen with the rest of the layout tree for CSSOM reads.
+    pub(crate) grid_geometry: Option<LayoutGridGeometry>,
     pub(crate) cache: Cache,
     pub(crate) unrounded_layout: Layout,
     pub(crate) final_layout: Layout,
@@ -1010,6 +1015,7 @@ where
             collapsed_table_border_part: false,
             table_authored_min_inline_size: None,
             inline_formatting_context: false,
+            grid_geometry: None,
             cache: Cache::new(),
             unrounded_layout: Layout::with_order(0),
             final_layout: Layout::with_order(0),
