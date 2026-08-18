@@ -2,6 +2,7 @@ use dom::ElementState as StyloElementState;
 use style::{
     Atom,
     animation::DocumentAnimationSet,
+    computed_value_flags::ComputedValueFlags,
     context::{
         QuirksMode, RegisteredSpeculativePainter, RegisteredSpeculativePainters,
         SharedStyleContext, StyleContext, StyleSystemOptions, ThreadLocalStyleContext,
@@ -655,6 +656,11 @@ fn with_resolved_styles<R>(
                     pseudo_element,
                     None,
                 );
+                publish_root_style_device_state(
+                    &context,
+                    styles.primary(),
+                    RootStylePublication::Resolved,
+                );
                 std::mem::swap(
                     &mut context.thread_local.selector_caches,
                     &mut retained_selector_caches,
@@ -685,13 +691,65 @@ where
     }
 
     for ancestor in ancestors.into_iter().rev() {
-        if ancestor.borrow_data().is_some_and(|data| data.has_styles()) {
+        let retained_primary = ancestor
+            .borrow_data()
+            .and_then(|data| data.styles.get_primary().cloned());
+        if let Some(primary) = retained_primary {
+            publish_root_style_device_state(context, &primary, RootStylePublication::Retained);
             continue;
         }
         let styles = resolve_style(context, ancestor, RuleInclusion::All, None, None);
+        publish_root_style_device_state(context, styles.primary(), RootStylePublication::Resolved);
         unsafe {
             ancestor.ensure_data().styles = styles;
         }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum RootStylePublication {
+    Retained,
+    Resolved,
+}
+
+/// Publish the document root's computed font bases to the Stylo device that
+/// will cascade its descendants.
+///
+/// Stylo's normal traversal performs this transition from `finish_restyle`.
+/// Moli's synchronous style observation instead materializes one exact
+/// ancestor chain with `resolve_style`, so the root-to-child transition has to
+/// publish the same device state before a descendant consumes rem, rlh, or
+/// root-font-metric units. This also seeds a newly rebuilt device from retained
+/// root element data.
+fn publish_root_style_device_state<E>(
+    context: &StyleContext<E>,
+    style: &ServoArc<ComputedValues>,
+    publication: RootStylePublication,
+) where
+    E: TElement,
+{
+    if !style
+        .flags
+        .contains(ComputedValueFlags::IS_ROOT_ELEMENT_STYLE)
+    {
+        return;
+    }
+
+    let device = context.shared.stylist.device();
+    device.set_root_style(style);
+
+    let font = style.get_font();
+    let font_size = font.clone_font_size().computed_size();
+    device.set_root_font_size(style.effective_zoom.unzoom(font_size.px()));
+
+    let line_height = device.calc_line_height(font, style.writing_mode, None).0;
+    device.set_root_line_height(style.effective_zoom.unzoom(line_height.px()));
+
+    // Root font metrics are lazy. A retained root only has to seed the style
+    // pointer of a rebuilt Device; a freshly resolved root must refresh metrics
+    // that an earlier rex/rch/rcap/ric lookup already materialized.
+    if matches!(publication, RootStylePublication::Resolved) && device.used_root_font_metrics() {
+        device.update_root_font_metrics();
     }
 }
 
