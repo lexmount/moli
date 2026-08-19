@@ -12100,6 +12100,54 @@ fn css_rule_mixed_style_serialization_uses_rule_owned_pdb_segment() {
 }
 
 #[test]
+fn css_rule_mixed_style_mutation_snapshots_side_entries_once() {
+    let mut vm = new_storage_test_vm("https://rule-mixed-pdb-snapshot.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  const sheet = new CSSStyleSheet();
+  sheet.insertRule('.subject {}');
+  const rule = sheet.cssRules[0];
+  for (let index = 0; index < 64; index += 1) {
+    rule.style.setProperty(`--token-${index}`, String(index));
+  }
+  rule.style.setProperty('padding', '1px 2px');
+  globalThis.__mixedSnapshotRule = rule;
+})()
+"#,
+    )
+    .expect("mixed CSS rule snapshot fixture should initialize");
+
+    crate::detached_css_style::reset_raw_style_entries_snapshot_count_for_test();
+    vm.eval("globalThis.__mixedSnapshotRule.style.setProperty('margin-left', '3px')")
+        .expect("mixed CSS rule mutation should evaluate");
+    let snapshot_count = crate::detached_css_style::raw_style_entries_snapshot_count_for_test();
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const rule = globalThis.__mixedSnapshotRule;
+  return [
+    rule.style.getPropertyValue('--token-63'),
+    rule.style.getPropertyValue('padding'),
+    rule.style.getPropertyValue('margin-left'),
+    rule.cssText.includes('--token-63: 63;')
+  ].join('|');
+})()
+"#,
+        )
+        .expect("mixed CSS rule mutation should evaluate");
+
+    assert_eq!(result, "63|1px 2px|3px|true");
+    assert!(
+        snapshot_count <= 3,
+        "a mixed CSS rule mutation must reuse one side-entry snapshot per serialization; got {snapshot_count} snapshots"
+    );
+}
+
+#[test]
 fn css_style_declaration_pdb_shorthand_removal_clears_materialized_longhands() {
     let mut vm = new_storage_test_vm("https://style-pdb-shorthand-removal.test/");
 

@@ -46,6 +46,31 @@ thread_local! {
         RefCell::new(HashMap::new());
 }
 
+#[cfg(test)]
+thread_local! {
+    static RAW_STYLE_ENTRIES_SNAPSHOT_COUNT: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_raw_style_entries_snapshot_count_for_test() {
+    RAW_STYLE_ENTRIES_SNAPSHOT_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn raw_style_entries_snapshot_count_for_test() -> usize {
+    RAW_STYLE_ENTRIES_SNAPSHOT_COUNT.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+fn note_raw_style_entries_snapshot() {
+    RAW_STYLE_ENTRIES_SNAPSHOT_COUNT.with(|count| count.set(count.get() + 1));
+}
+
+#[cfg(not(test))]
+fn note_raw_style_entries_snapshot() {}
+
 static NEXT_STYLO_DECLARATION_BLOCK_ID: AtomicU64 = AtomicU64::new(1);
 
 fn next_stylo_declaration_block_id() -> u64 {
@@ -1358,7 +1383,17 @@ fn style_property_value<'s>(
     style: v8::Local<'s, v8::Object>,
     name: &str,
 ) -> String {
-    if let Some(value) = stylo_style_property_value_for_query(scope, style, name) {
+    let stylo_value = stylo_style_property_value_for_query(scope, style, name);
+    style_property_value_with_stylo_value(scope, style, name, stylo_value)
+}
+
+fn style_property_value_with_stylo_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+    name: &str,
+    stylo_value: Option<String>,
+) -> String {
+    if let Some(value) = stylo_value {
         return value;
     }
     if name == "all" {
@@ -1414,34 +1449,42 @@ fn stylo_style_property_value_for_query<'s>(
     if !detached_style_property_query_uses_pdb(scope, style, name) {
         return None;
     }
-    if let Some(block) = stored_stylo_declaration_block(scope, style) {
-        if raw_legacy_entries_block_pdb_property_query(scope, style, name) {
+    let block = stored_stylo_declaration_block(scope, style);
+    let raw_entries = raw_style_entries(scope, style);
+    stylo_style_property_value_for_query_from_snapshot(name, block.as_ref(), &raw_entries)
+}
+
+fn stylo_style_property_value_for_query_from_snapshot(
+    name: &str,
+    block: Option<&moli_css_parse::CssDeclarationBlock>,
+    raw_entries: &[StyleEntry],
+) -> Option<String> {
+    if let Some(block) = block {
+        if raw_legacy_entries_block_pdb_property_query(block, raw_entries, name) {
             return None;
         }
-        if let Some(supplemental) = raw_exact_pdb_supplemental_side_entry(scope, style, name) {
+        if let Some(supplemental) = raw_exact_pdb_supplemental_side_entry(raw_entries, name) {
             return Some(supplemental.value);
         }
         if detached_pdb_supplemental_query_can_return_directly(name)
             && let Some(supplemental) =
-                raw_pdb_supplemental_side_entry_for_property(scope, style, name, None)
+                raw_pdb_supplemental_side_entry_for_property(raw_entries, name, None)
         {
             return Some(supplemental.value);
         }
-        let side_entries = raw_style_entries(scope, style);
         if let Some(value) =
             crate::native_bridge::element::pdb_property_value_for_cssom_query_with_side_entries(
-                &block,
+                block,
                 name,
-                &side_entries,
+                raw_entries,
             )
         {
             return Some(value);
         }
         return None;
     }
-    let entries = raw_style_entries(scope, style);
     let value =
-        crate::native_bridge::element::style_entries_property_value_with_pdb(&entries, name)?;
+        crate::native_bridge::element::style_entries_property_value_with_pdb(raw_entries, name)?;
     (!value.is_empty()).then_some(value)
 }
 
@@ -1453,33 +1496,41 @@ fn stylo_style_property_priority_for_query<'s>(
     if !detached_style_property_query_uses_pdb(scope, style, name) {
         return None;
     }
-    if let Some(block) = stored_stylo_declaration_block(scope, style) {
-        if raw_legacy_entries_block_pdb_property_query(scope, style, name) {
+    let block = stored_stylo_declaration_block(scope, style);
+    let raw_entries = raw_style_entries(scope, style);
+    stylo_style_property_priority_for_query_from_snapshot(name, block.as_ref(), &raw_entries)
+}
+
+fn stylo_style_property_priority_for_query_from_snapshot(
+    name: &str,
+    block: Option<&moli_css_parse::CssDeclarationBlock>,
+    raw_entries: &[StyleEntry],
+) -> Option<bool> {
+    if let Some(block) = block {
+        if raw_legacy_entries_block_pdb_property_query(block, raw_entries, name) {
             return None;
         }
-        if let Some(supplemental) = raw_exact_pdb_supplemental_side_entry(scope, style, name) {
+        if let Some(supplemental) = raw_exact_pdb_supplemental_side_entry(raw_entries, name) {
             return Some(supplemental.priority);
         }
         if detached_pdb_supplemental_query_can_return_directly(name)
             && let Some(supplemental) =
-                raw_pdb_supplemental_side_entry_for_property(scope, style, name, None)
+                raw_pdb_supplemental_side_entry_for_property(raw_entries, name, None)
         {
             return Some(supplemental.priority);
         }
-        let side_entries = raw_style_entries(scope, style);
         if let Some(priority) =
             crate::native_bridge::element::pdb_property_priority_for_cssom_query_with_side_entries(
-                &block,
+                block,
                 name,
-                &side_entries,
+                raw_entries,
             )
         {
             return Some(priority);
         }
         return None;
     }
-    let entries = raw_style_entries(scope, style);
-    crate::native_bridge::element::style_entries_property_priority_with_pdb(&entries, name)
+    crate::native_bridge::element::style_entries_property_priority_with_pdb(raw_entries, name)
 }
 
 fn stylo_style_property_affected_names_for_removal<'s>(
@@ -1493,24 +1544,20 @@ fn stylo_style_property_affected_names_for_removal<'s>(
     crate::native_bridge::element::cssom_style_property_mutation_affected_names_with_pdb(name)
 }
 
-fn raw_legacy_entries_block_pdb_property_query<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    style: v8::Local<'s, v8::Object>,
+fn raw_legacy_entries_block_pdb_property_query(
+    block: &moli_css_parse::CssDeclarationBlock,
+    raw_entries: &[StyleEntry],
     name: &str,
 ) -> bool {
     let affected_names =
         crate::native_bridge::element::cssom_style_property_affected_names_with_pdb(name)
             .unwrap_or_default();
-    let block_entries = stored_stylo_declaration_block(scope, style)
-        .map(|block| {
-            block
-                .entries()
-                .into_iter()
-                .map(StyleEntry::from)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    raw_style_entries(scope, style).iter().any(|entry| {
+    let block_entries = block
+        .entries()
+        .into_iter()
+        .map(StyleEntry::from)
+        .collect::<Vec<_>>();
+    raw_entries.iter().any(|entry| {
         legacy_style_entry_affects_property_query(entry, name, &affected_names)
             && !block_entries.iter().any(|block_entry| {
                 block_entry.name == entry.name
@@ -1523,41 +1570,33 @@ fn raw_legacy_entries_block_pdb_property_query<'s>(
     })
 }
 
-fn raw_pdb_supplemental_side_entry_for_property<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    style: v8::Local<'s, v8::Object>,
+fn raw_pdb_supplemental_side_entry_for_property(
+    raw_entries: &[StyleEntry],
     name: &str,
     priority: Option<bool>,
 ) -> Option<StyleEntry> {
     let affected_names =
         crate::native_bridge::element::cssom_style_property_affected_names_with_pdb(name)
             .unwrap_or_default();
-    raw_style_entries(scope, style)
-        .into_iter()
-        .rev()
-        .find(|entry| {
-            legacy_style_entry_affects_property_query(entry, name, &affected_names)
-                && crate::native_bridge::element::cssom_style_entry_is_pdb_supplemental_side_entry(
-                    entry,
-                )
-                && priority.is_none_or(|priority| entry.priority == priority)
-        })
+    raw_entries.iter().cloned().rev().find(|entry| {
+        legacy_style_entry_affects_property_query(entry, name, &affected_names)
+            && crate::native_bridge::element::cssom_style_entry_is_pdb_supplemental_side_entry(
+                entry,
+            )
+            && priority.is_none_or(|priority| entry.priority == priority)
+    })
 }
 
-fn raw_exact_pdb_supplemental_side_entry<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    style: v8::Local<'s, v8::Object>,
+fn raw_exact_pdb_supplemental_side_entry(
+    raw_entries: &[StyleEntry],
     name: &str,
 ) -> Option<StyleEntry> {
-    raw_style_entries(scope, style)
-        .into_iter()
-        .rev()
-        .find(|entry| {
-            entry.name == name
-                && crate::native_bridge::element::cssom_style_entry_is_pdb_supplemental_side_entry(
-                    entry,
-                )
-        })
+    raw_entries.iter().cloned().rev().find(|entry| {
+        entry.name == name
+            && crate::native_bridge::element::cssom_style_entry_is_pdb_supplemental_side_entry(
+                entry,
+            )
+    })
 }
 
 fn detached_pdb_supplemental_query_can_return_directly(name: &str) -> bool {
@@ -2461,10 +2500,56 @@ fn style_entries<'s>(
         .collect()
 }
 
+fn style_entries_from_stylo_snapshot<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+    block: &moli_css_parse::CssDeclarationBlock,
+    raw_entries: &[StyleEntry],
+) -> Vec<StyleEntry> {
+    style_names(scope, style)
+        .into_iter()
+        .filter_map(|name| {
+            let query_uses_pdb = detached_style_property_query_uses_pdb(scope, style, &name);
+            let stylo_value = query_uses_pdb
+                .then(|| {
+                    stylo_style_property_value_for_query_from_snapshot(
+                        &name,
+                        Some(block),
+                        raw_entries,
+                    )
+                })
+                .flatten();
+            let value = style_property_value_with_stylo_value(scope, style, &name, stylo_value);
+            (!value.is_empty()).then(|| {
+                let stylo_priority = query_uses_pdb
+                    .then(|| {
+                        stylo_style_property_priority_for_query_from_snapshot(
+                            &name,
+                            Some(block),
+                            raw_entries,
+                        )
+                    })
+                    .flatten();
+                StyleEntry {
+                    priority: style_property_priority_for_query_with_stylo_priority(
+                        scope,
+                        style,
+                        &name,
+                        stylo_priority,
+                    ),
+                    name,
+                    value,
+                }
+            })
+        })
+        .collect()
+}
+
 fn raw_style_entries<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     style: v8::Local<'s, v8::Object>,
 ) -> Vec<StyleEntry> {
+    note_raw_style_entries_snapshot();
     style_names(scope, style)
         .into_iter()
         .filter_map(|name| {
@@ -2578,11 +2663,8 @@ fn stylo_declaration_block_css_text_for_getter<'s>(
         if side_entries.is_empty() {
             return Some(block.css_text());
         }
-        return serialize_css_style_entries_with_pdb_block(
-            &style_entries(scope, style),
-            &side_entries,
-            &block,
-        );
+        let entries = style_entries_from_stylo_snapshot(scope, style, &block, &side_entries);
+        return serialize_css_style_entries_with_pdb_block(&entries, &side_entries, &block);
     }
     let entries = raw_style_entries(scope, style);
     if !entries
@@ -2857,7 +2939,17 @@ fn style_property_priority_for_query<'s>(
     style: v8::Local<'s, v8::Object>,
     name: &str,
 ) -> bool {
-    if let Some(priority) = stylo_style_property_priority_for_query(scope, style, name) {
+    let stylo_priority = stylo_style_property_priority_for_query(scope, style, name);
+    style_property_priority_for_query_with_stylo_priority(scope, style, name, stylo_priority)
+}
+
+fn style_property_priority_for_query_with_stylo_priority<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+    name: &str,
+    stylo_priority: Option<bool>,
+) -> bool {
+    if let Some(priority) = stylo_priority {
         return priority;
     }
     if name == "animation" {
