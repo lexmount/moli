@@ -589,7 +589,105 @@ pub(super) struct AsyncSubresourceFetchCompletion {
     pub(super) skip_fetch_security_validation: bool,
     pub(super) response_filter: Option<AsyncSubresourceFetchResponseFilter>,
     pub(super) network_error_text: Option<String>,
-    pub(super) result: std::result::Result<NavigationResponse, String>,
+    pub(super) result: AsyncSubresourceFetchResult,
+}
+
+#[derive(Debug)]
+pub(super) enum AsyncSubresourceFetchResult {
+    Response(NavigationResponse),
+    Image {
+        response: NavigationResponse,
+        encoded: moli_parkable_image::ParkableImage,
+    },
+    Failure(String),
+}
+
+impl AsyncSubresourceFetchResult {
+    pub(super) fn from_image_result(
+        result: std::result::Result<
+            (NavigationResponse, moli_parkable_image::ParkableImage),
+            String,
+        >,
+    ) -> Self {
+        match result {
+            Ok((response, encoded)) => Self::Image { response, encoded },
+            Err(error) => Self::Failure(error),
+        }
+    }
+
+    pub(super) fn from_image_parts(
+        result: std::result::Result<NavigationResponse, String>,
+        encoded: Option<moli_parkable_image::ParkableImage>,
+    ) -> Self {
+        match (result, encoded) {
+            (Ok(response), Some(encoded)) => Self::Image { response, encoded },
+            (Ok(response), None) => Self::Response(response),
+            (Err(error), _) => Self::Failure(error),
+        }
+    }
+
+    pub(super) fn into_result(self) -> std::result::Result<NavigationResponse, String> {
+        match self {
+            Self::Response(response) | Self::Image { response, .. } => Ok(response),
+            Self::Failure(error) => Err(error),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn as_ref(&self) -> std::result::Result<&NavigationResponse, &String> {
+        match self {
+            Self::Response(response) | Self::Image { response, .. } => Ok(response),
+            Self::Failure(error) => Err(error),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn encoded(&self) -> Option<&moli_parkable_image::ParkableImage> {
+        match self {
+            Self::Image { encoded, .. } => Some(encoded),
+            Self::Response(_) | Self::Failure(_) => None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn is_ok(&self) -> bool {
+        !matches!(self, Self::Failure(_))
+    }
+
+    #[cfg(test)]
+    pub(super) fn err(self) -> Option<String> {
+        match self {
+            Self::Failure(error) => Some(error),
+            Self::Response(_) | Self::Image { .. } => None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn expect(self, message: &str) -> NavigationResponse {
+        match self {
+            Self::Response(response) | Self::Image { response, .. } => response,
+            Self::Failure(error) => panic!("{message}: {error:?}"),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn expect_err(self, message: &str) -> String {
+        match self {
+            Self::Failure(error) => error,
+            Self::Response(response) | Self::Image { response, .. } => {
+                panic!("{message}: {response:?}")
+            }
+        }
+    }
+}
+
+impl From<std::result::Result<NavigationResponse, String>> for AsyncSubresourceFetchResult {
+    fn from(result: std::result::Result<NavigationResponse, String>) -> Self {
+        match result {
+            Ok(response) => Self::Response(response),
+            Err(error) => Self::Failure(error),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -524,7 +524,8 @@ fn borrowed_fetch_uses_receiver_realm_and_keeps_reaction_realm_independent() {
             200,
             vec![("content-type".to_owned(), "text/plain".to_owned())],
             "borrowed completion".to_owned(),
-        )),
+        ))
+        .into(),
     })
     .expect("borrowed Fetch completion should enter the receiver Promise realm");
     vm.eval("0")

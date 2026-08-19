@@ -1,7 +1,7 @@
 //! Conservative retained-memory estimates for renderer output admission.
 //!
 //! These estimates intentionally live beside the renderer-neutral payload
-//! definitions, where private capacities and file-backed response state are
+//! definitions, where private capacities and disk-backed response state are
 //! visible. They do not model serialized CDP JSON; protocol projection has not
 //! happened while these values are queued.
 
@@ -128,12 +128,14 @@ impl SubresourceResponseBody {
                 .capacity()
                 .saturating_add(bytes.capacity())
                 .saturating_add(std::mem::size_of::<SubresourceResponseBodyInner>()),
-            SubresourceResponseBodyInner::File {
-                path, text_cache, ..
-            } => path
-                .as_os_str()
-                .len()
-                .saturating_mul(2)
+            SubresourceResponseBodyInner::Disk {
+                storage,
+                text_cache,
+            } => storage
+                .chunks
+                .capacity()
+                .saturating_mul(std::mem::size_of::<DiskData>())
+                .saturating_add(storage.trailing_bytes.len())
                 .saturating_add(
                     text_cache
                         .lock()
@@ -141,6 +143,9 @@ impl SubresourceResponseBody {
                         .map(String::capacity)
                         .unwrap_or(0),
                 )
+                .saturating_add(std::mem::size_of::<SubresourceResponseBodyInner>()),
+            SubresourceResponseBodyInner::ParkableImage(image) => image
+                .retained_memory_bytes()
                 .saturating_add(std::mem::size_of::<SubresourceResponseBodyInner>()),
         }
     }

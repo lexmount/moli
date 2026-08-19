@@ -13,19 +13,12 @@ mod renderer_transport_memory;
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet},
-    fs::{self, File, OpenOptions},
-    io::{self, Read, Seek, Write},
-    path::{Path, PathBuf},
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::{SystemTime, UNIX_EPOCH},
+    io::{self, Write},
+    sync::Arc,
 };
 
-#[cfg(unix)]
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
-
+use moli_disk_pool::{DiskData, DiskPool};
+use moli_parkable_image::ParkableImage;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -41,7 +34,6 @@ use moli_fetch::{
 use moli_web_mime::is_json_module_mime;
 
 const SUBRESOURCE_RESPONSE_BODY_MEMORY_LIMIT: usize = 1024 * 1024;
-static NEXT_SUBRESOURCE_RESPONSE_BODY_SPOOL_ID: AtomicU64 = AtomicU64::new(1);
 
 pub use inspector_identity::{
     DevToolsSessionKey, FrontendCommandId, RendererAgentAttachmentId, RendererCallId,
@@ -353,6 +345,20 @@ impl NavigationResponse {
     /// whose public contract requires an owned full-body buffer.
     pub fn clone_body_bytes(&self) -> Vec<u8> {
         self.body_bytes().to_vec()
+    }
+
+    /// Moves the complete materialized payload out of this response.
+    ///
+    /// The response head remains usable and the response body becomes empty.
+    /// This is intended for handing large payloads to an owning backing store
+    /// without briefly retaining both the response buffer and a clone.
+    pub fn take_body_bytes(&mut self) -> Vec<u8> {
+        std::mem::replace(
+            &mut self.body,
+            ResponseBody::materialized_text(String::new(), Vec::new()),
+        )
+        .try_into_materialized_bytes()
+        .expect("NavigationResponse body should remain materialized")
     }
 
     pub fn materialized_body(&self) -> ResponseBody {
@@ -1465,18 +1471,73 @@ enum SubresourceResponseBodyInner {
         text: String,
         bytes: Vec<u8>,
     },
-    File {
-        path: PathBuf,
-        len: usize,
+    Disk {
+        storage: PooledSubresourceResponseBody,
         text_cache: Mutex<Option<String>>,
     },
+    ParkableImage(ParkableImage),
 }
 
-impl Drop for SubresourceResponseBodyInner {
-    fn drop(&mut self) {
-        if let Self::File { path, .. } = self {
-            let _ = fs::remove_file(path);
+#[derive(Debug)]
+struct PooledSubresourceResponseBody {
+    chunks: Vec<DiskData>,
+    trailing_bytes: Box<[u8]>,
+    len: usize,
+}
+
+impl PooledSubresourceResponseBody {
+    fn read_range(&self, offset: usize, max_len: usize) -> io::Result<Vec<u8>> {
+        if offset >= self.len || max_len == 0 {
+            return Ok(Vec::new());
         }
+        let len = max_len.min(self.len - offset);
+        let mut bytes = vec![0; len];
+        self.read_exact_at(offset, &mut bytes)?;
+        Ok(bytes)
+    }
+
+    fn read_exact_at(&self, mut offset: usize, mut buffer: &mut [u8]) -> io::Result<()> {
+        for chunk in &self.chunks {
+            if buffer.is_empty() {
+                break;
+            }
+            if offset >= chunk.len() {
+                offset -= chunk.len();
+                continue;
+            }
+            let len = buffer.len().min(chunk.len() - offset);
+            chunk.read_exact_at(offset, &mut buffer[..len])?;
+            buffer = &mut buffer[len..];
+            offset = 0;
+        }
+
+        if !buffer.is_empty() {
+            let trailing = self.trailing_bytes.get(offset..).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "pooled resource body ended before its recorded length",
+                )
+            })?;
+            let len = buffer.len().min(trailing.len());
+            buffer[..len].copy_from_slice(&trailing[..len]);
+            buffer = &mut buffer[len..];
+        }
+
+        if buffer.is_empty() {
+            Ok(())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "pooled resource body ended before its recorded length",
+            ))
+        }
+    }
+
+    fn write_to<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+        for chunk in &self.chunks {
+            chunk.write_to(writer)?;
+        }
+        writer.write_all(&self.trailing_bytes)
     }
 }
 
@@ -1496,6 +1557,10 @@ impl PartialEq for SubresourceResponseBody {
                     bytes: right_bytes,
                 },
             ) => left_text == right_text && left_bytes == right_bytes,
+            (
+                SubresourceResponseBodyInner::ParkableImage(left),
+                SubresourceResponseBodyInner::ParkableImage(right),
+            ) => left.shares_storage_with(right),
             _ => false,
         }
     }
@@ -1508,9 +1573,9 @@ pub struct SubresourceResponseBodyWriter {
     memory_limit: usize,
     len: usize,
     memory: Vec<u8>,
-    file: Option<File>,
-    path: Option<PathBuf>,
-    spool_failed: bool,
+    disk_pool: Option<DiskPool>,
+    disk_chunks: Vec<DiskData>,
+    disk_write_failed: bool,
 }
 
 impl Default for SubresourceResponseBodyWriter {
@@ -1521,71 +1586,87 @@ impl Default for SubresourceResponseBodyWriter {
 
 impl SubresourceResponseBodyWriter {
     pub fn new(memory_limit: usize) -> Self {
+        Self::with_memory_limit_and_disk_pool(memory_limit, None)
+    }
+
+    /// Creates a writer using the default in-memory threshold and a shared
+    /// browser resource disk pool when one is available.
+    pub fn with_disk_pool(disk_pool: Option<DiskPool>) -> Self {
+        Self::with_memory_limit_and_disk_pool(SUBRESOURCE_RESPONSE_BODY_MEMORY_LIMIT, disk_pool)
+    }
+
+    pub fn with_memory_limit_and_disk_pool(
+        memory_limit: usize,
+        disk_pool: Option<DiskPool>,
+    ) -> Self {
         Self {
             memory_limit,
             len: 0,
             memory: Vec::new(),
-            file: None,
-            path: None,
-            spool_failed: false,
+            disk_pool,
+            disk_chunks: Vec::new(),
+            disk_write_failed: false,
         }
     }
 
-    pub fn append(&mut self, bytes: &[u8]) {
+    pub fn append(&mut self, mut bytes: &[u8]) {
         if bytes.is_empty() {
             return;
         }
-        if self.file.is_some() {
-            if let Some(file) = self.file.as_mut()
-                && file.write_all(bytes).is_ok()
-            {
-                self.len = self.len.saturating_add(bytes.len());
+        self.len = self.len.saturating_add(bytes.len());
+        if self.disk_write_failed || self.disk_pool.is_none() {
+            self.memory.extend_from_slice(bytes);
+            return;
+        }
+
+        if self.disk_chunks.is_empty()
+            && self.memory.len().saturating_add(bytes.len()) <= self.memory_limit
+        {
+            self.memory.extend_from_slice(bytes);
+            return;
+        }
+
+        let chunk_size = self.memory_limit.max(1);
+        while !bytes.is_empty() {
+            if self.memory.len() == chunk_size && !self.flush_memory_to_disk() {
+                self.disk_write_failed = true;
+                self.memory.extend_from_slice(bytes);
                 return;
             }
-            self.abandon_file_to_memory();
-            self.spool_failed = true;
+            let available = chunk_size - self.memory.len();
+            let consumed = available.min(bytes.len());
+            self.memory.extend_from_slice(&bytes[..consumed]);
+            bytes = &bytes[consumed..];
+            if self.memory.len() == chunk_size && !self.flush_memory_to_disk() {
+                self.disk_write_failed = true;
+                self.memory.extend_from_slice(bytes);
+                return;
+            }
         }
-        if self.spool_failed || self.len.saturating_add(bytes.len()) <= self.memory_limit {
-            self.memory.extend_from_slice(bytes);
-            self.len = self.len.saturating_add(bytes.len());
-            return;
-        }
-        if self.ensure_file().is_ok()
-            && let Some(file) = self.file.as_mut()
-            && file.write_all(bytes).is_ok()
-        {
-            self.len = self.len.saturating_add(bytes.len());
-            return;
-        }
-        // Spooling is an optimization for CDP bookkeeping. If private temp-file
-        // creation fails, keep the protocol-correct body in memory rather than
-        // dropping captured bytes.
-        self.spool_failed = true;
-        self.abandon_file_to_memory();
-        self.memory.extend_from_slice(bytes);
-        self.len = self.len.saturating_add(bytes.len());
     }
 
     pub fn finish(mut self) -> SubresourceResponseBody {
-        if let Some(mut file) = self.file.take() {
-            if file.flush().is_ok() {
-                let path = self
-                    .path
-                    .take()
-                    .expect("subresource body spool path should be set");
-                return SubresourceResponseBody {
-                    inner: Arc::new(SubresourceResponseBodyInner::File {
-                        path,
-                        len: self.len,
-                        text_cache: Mutex::new(None),
-                    }),
-                };
+        if !self.disk_chunks.is_empty() {
+            if !self.memory.is_empty() && !self.disk_write_failed {
+                let _ = self.flush_memory_to_disk();
             }
-            self.file = Some(file);
-            self.abandon_file_to_memory();
-        }
-        if let Some(path) = self.path.take() {
-            let _ = fs::remove_file(path);
+            let stored_len = self
+                .disk_chunks
+                .iter()
+                .map(DiskData::len)
+                .sum::<usize>()
+                .saturating_add(self.memory.len());
+            debug_assert_eq!(stored_len, self.len);
+            return SubresourceResponseBody {
+                inner: Arc::new(SubresourceResponseBodyInner::Disk {
+                    storage: PooledSubresourceResponseBody {
+                        chunks: std::mem::take(&mut self.disk_chunks),
+                        trailing_bytes: std::mem::take(&mut self.memory).into_boxed_slice(),
+                        len: self.len,
+                    },
+                    text_cache: Mutex::new(None),
+                }),
+            };
         }
         SubresourceResponseBody::from_text_and_bytes(
             String::from_utf8_lossy(&self.memory).into_owned(),
@@ -1593,52 +1674,19 @@ impl SubresourceResponseBodyWriter {
         )
     }
 
-    fn ensure_file(&mut self) -> io::Result<()> {
-        if self.file.is_some() {
-            return Ok(());
+    fn flush_memory_to_disk(&mut self) -> bool {
+        if self.memory.is_empty() {
+            return true;
         }
-        let path = unique_subresource_response_body_spool_path()?;
-        let mut options = OpenOptions::new();
-        options.create_new(true).read(true).write(true);
-        configure_secure_subresource_response_body_spool_file_options(&mut options);
-        let mut file = options.open(&path)?;
-        if !self.memory.is_empty() {
-            if let Err(error) = file.write_all(&self.memory) {
-                drop(file);
-                let _ = fs::remove_file(&path);
-                return Err(error);
-            }
-            self.memory.clear();
-        }
-        self.path = Some(path);
-        self.file = Some(file);
-        Ok(())
-    }
-
-    fn abandon_file_to_memory(&mut self) {
-        let _ = self.file.take();
-        if let Some(path) = self.path.take() {
-            if let Ok(mut bytes) = fs::read(&path) {
-                bytes.extend_from_slice(&self.memory);
-                self.memory = bytes;
-            }
-            let _ = fs::remove_file(path);
-        }
-        self.len = self.memory.len();
-    }
-
-    #[cfg(feature = "test-support")]
-    pub fn replace_spool_path_for_test(&mut self, replacement: PathBuf) -> Option<PathBuf> {
-        self.path.replace(replacement)
-    }
-}
-
-impl Drop for SubresourceResponseBodyWriter {
-    fn drop(&mut self) {
-        let _ = self.file.take();
-        if let Some(path) = self.path.take() {
-            let _ = fs::remove_file(path);
-        }
+        let Some(pool) = self.disk_pool.as_ref() else {
+            return false;
+        };
+        let Ok(Some(chunk)) = pool.store(&self.memory) else {
+            return false;
+        };
+        self.disk_chunks.push(chunk);
+        self.memory.clear();
+        true
     }
 }
 
@@ -1659,6 +1707,14 @@ impl SubresourceResponseBody {
             .try_into_lossy_materialized_text()
             .expect("SubresourceResponseBody should be built from a materialized body");
         Self::from_text_and_bytes(text, bytes)
+    }
+
+    /// Builds a response body that shares the encoded image backing retained
+    /// by the renderer image store. Cloning this body does not clone bytes.
+    pub fn from_parkable_image(image: ParkableImage) -> Self {
+        Self {
+            inner: Arc::new(SubresourceResponseBodyInner::ParkableImage(image)),
+        }
     }
 
     /// Builds the neutral subresource body carrier from a materialized fetch
@@ -1689,7 +1745,7 @@ impl SubresourceResponseBody {
     }
 
     /// Fallible variant of `to_navigation_response` for callers that can
-    /// surface file-backed body source errors instead of treating them as an
+    /// surface disk-backed body source errors instead of treating them as an
     /// empty body.
     pub fn try_to_navigation_response(&self, head: ResponseHead) -> io::Result<NavigationResponse> {
         self.try_materialized_body()
@@ -1697,8 +1753,8 @@ impl SubresourceResponseBody {
     }
 
     /// Builds a materialized response body at an explicit compatibility
-    /// boundary. File-backed bodies are read once so callers that need both the
-    /// text view and exact bytes do not duplicate spool I/O.
+    /// boundary. Disk-backed bodies are read once so callers that need both the
+    /// text view and exact bytes do not duplicate disk I/O.
     pub fn materialized_body(&self) -> ResponseBody {
         self.diagnostic_materialized_body()
     }
@@ -1717,12 +1773,17 @@ impl SubresourceResponseBody {
             SubresourceResponseBodyInner::Memory { text, bytes } => {
                 Ok(ResponseBody::materialized_text(text.clone(), bytes.clone()))
             }
-            SubresourceResponseBodyInner::File { text_cache, .. } => {
+            SubresourceResponseBodyInner::Disk { text_cache, .. } => {
                 let bytes = self.materialize_bytes()?;
                 let mut cache = text_cache.lock();
                 let text = cache
                     .get_or_insert_with(|| String::from_utf8_lossy(&bytes).into_owned())
                     .clone();
+                Ok(ResponseBody::materialized_text(text, bytes))
+            }
+            SubresourceResponseBodyInner::ParkableImage(image) => {
+                let bytes = image.snapshot()?.to_vec();
+                let text = String::from_utf8_lossy(&bytes).into_owned();
                 Ok(ResponseBody::materialized_text(text, bytes))
             }
         }
@@ -1743,7 +1804,7 @@ impl SubresourceResponseBody {
     pub fn try_text(&self) -> io::Result<Cow<'_, str>> {
         match self.inner.as_ref() {
             SubresourceResponseBodyInner::Memory { text, .. } => Ok(Cow::Borrowed(text)),
-            SubresourceResponseBodyInner::File { text_cache, .. } => {
+            SubresourceResponseBodyInner::Disk { text_cache, .. } => {
                 let mut cache = text_cache.lock();
                 if cache.is_none() {
                     let bytes = self.materialize_bytes()?;
@@ -1751,6 +1812,9 @@ impl SubresourceResponseBody {
                 }
                 Ok(Cow::Owned(cache.as_deref().unwrap_or_default().to_owned()))
             }
+            SubresourceResponseBodyInner::ParkableImage(image) => Ok(Cow::Owned(
+                String::from_utf8_lossy(&image.snapshot()?).into_owned(),
+            )),
         }
     }
 
@@ -1767,7 +1831,10 @@ impl SubresourceResponseBody {
     pub fn try_bytes(&self) -> io::Result<Cow<'_, [u8]>> {
         match self.inner.as_ref() {
             SubresourceResponseBodyInner::Memory { bytes, .. } => Ok(Cow::Borrowed(bytes)),
-            SubresourceResponseBodyInner::File { .. } => self.materialize_bytes().map(Cow::Owned),
+            SubresourceResponseBodyInner::Disk { .. } => self.materialize_bytes().map(Cow::Owned),
+            SubresourceResponseBodyInner::ParkableImage(image) => image
+                .snapshot()
+                .map(|snapshot| Cow::Owned(snapshot.to_vec())),
         }
     }
 
@@ -1816,15 +1883,11 @@ impl SubresourceResponseBody {
             SubresourceResponseBodyInner::Memory { bytes, .. } => {
                 Ok(bytes.get(offset..).map(<[u8]>::to_vec).unwrap_or_default())
             }
-            SubresourceResponseBodyInner::File { path, len, .. } => {
-                if offset >= *len {
-                    return Ok(Vec::new());
-                }
-                let mut file = File::open(path)?;
-                file.seek(io::SeekFrom::Start(offset as u64))?;
-                let mut bytes = Vec::with_capacity(len.saturating_sub(offset));
-                file.read_to_end(&mut bytes)?;
-                Ok(bytes)
+            SubresourceResponseBodyInner::Disk { storage, .. } => {
+                storage.read_range(offset, storage.len.saturating_sub(offset))
+            }
+            SubresourceResponseBodyInner::ParkableImage(image) => {
+                image.read_range(offset, image.len().saturating_sub(offset))
             }
         }
     }
@@ -1841,34 +1904,19 @@ impl SubresourceResponseBody {
                 let len = remaining.len().min(max_len);
                 Ok(remaining[..len].to_vec())
             }
-            SubresourceResponseBodyInner::File { path, len, .. } => {
-                if offset >= *len {
-                    return Ok(Vec::new());
-                }
-                let mut file = File::open(path)?;
-                file.seek(io::SeekFrom::Start(offset as u64))?;
-                let mut chunk = vec![0; max_len.min(len.saturating_sub(offset))];
-                let read = file.read(&mut chunk)?;
-                chunk.truncate(read);
-                Ok(chunk)
+            SubresourceResponseBodyInner::Disk { storage, .. } => {
+                storage.read_range(offset, max_len)
             }
+            SubresourceResponseBodyInner::ParkableImage(image) => image.read_range(offset, max_len),
         }
     }
 
     pub fn write_bytes_to<W: Write>(&self, writer: &mut W) -> io::Result<()> {
         match self.inner.as_ref() {
             SubresourceResponseBodyInner::Memory { bytes, .. } => writer.write_all(bytes),
-            SubresourceResponseBodyInner::File { path, .. } => {
-                let mut file = File::open(path)?;
-                let mut buffer = [0; 64 * 1024];
-                loop {
-                    let read = file.read(&mut buffer)?;
-                    if read == 0 {
-                        break;
-                    }
-                    writer.write_all(&buffer[..read])?;
-                }
-                Ok(())
+            SubresourceResponseBodyInner::Disk { storage, .. } => storage.write_to(writer),
+            SubresourceResponseBodyInner::ParkableImage(image) => {
+                writer.write_all(&image.snapshot()?)
             }
         }
     }
@@ -1876,7 +1924,8 @@ impl SubresourceResponseBody {
     pub fn len(&self) -> usize {
         match self.inner.as_ref() {
             SubresourceResponseBodyInner::Memory { bytes, .. } => bytes.len(),
-            SubresourceResponseBodyInner::File { len, .. } => *len,
+            SubresourceResponseBodyInner::Disk { storage, .. } => storage.len,
+            SubresourceResponseBodyInner::ParkableImage(image) => image.len(),
         }
     }
 
@@ -1884,42 +1933,6 @@ impl SubresourceResponseBody {
         self.len() == 0
     }
 }
-
-fn unique_subresource_response_body_spool_path() -> io::Result<PathBuf> {
-    let root = std::env::temp_dir().join("moli-subresource-body-spool");
-    create_secure_subresource_response_body_spool_root(&root)?;
-    let id = NEXT_SUBRESOURCE_RESPONSE_BODY_SPOOL_ID.fetch_add(1, Ordering::Relaxed);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default();
-    Ok(root.join(format!(
-        "subresource-body-{}-{id}-{nanos}.bin",
-        std::process::id()
-    )))
-}
-
-#[cfg(unix)]
-fn create_secure_subresource_response_body_spool_root(root: &Path) -> io::Result<()> {
-    let mut builder = fs::DirBuilder::new();
-    builder.recursive(true).mode(0o700);
-    builder.create(root)?;
-    fs::set_permissions(root, fs::Permissions::from_mode(0o700))?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn create_secure_subresource_response_body_spool_root(root: &Path) -> io::Result<()> {
-    fs::create_dir_all(root)
-}
-
-#[cfg(unix)]
-fn configure_secure_subresource_response_body_spool_file_options(options: &mut OpenOptions) {
-    options.mode(0o600);
-}
-
-#[cfg(not(unix))]
-fn configure_secure_subresource_response_body_spool_file_options(_options: &mut OpenOptions) {}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SubresourceResponseWaitCriteria {
@@ -3424,6 +3437,13 @@ mod tests {
         Url::parse(&format!("https://example.test{path}")).expect("test URL should parse")
     }
 
+    fn pooled_body_writer(memory_limit: usize, pool: &DiskPool) -> SubresourceResponseBodyWriter {
+        SubresourceResponseBodyWriter::with_memory_limit_and_disk_pool(
+            memory_limit,
+            Some(pool.clone()),
+        )
+    }
+
     #[test]
     fn script_execution_report_exposes_globals_snapshot_freshness() {
         let mut report = ScriptExecutionReport::default();
@@ -3962,7 +3982,8 @@ mod tests {
 
     #[test]
     fn subresource_response_body_writer_keeps_small_body_in_memory() {
-        let mut writer = SubresourceResponseBodyWriter::new(16);
+        let pool = DiskPool::new(None).unwrap();
+        let mut writer = pooled_body_writer(16, &pool);
         writer.append(b"hello");
         writer.append(b" world");
         let body = writer.finish();
@@ -3970,26 +3991,70 @@ mod tests {
         assert_eq!(body.len(), 11);
         assert_eq!(body.diagnostic_text(), "hello world");
         assert_eq!(body.clone_body_bytes(), b"hello world");
+        assert_eq!(pool.diagnostics().disk_footprint_bytes, 0);
     }
 
     #[test]
-    fn subresource_response_body_writer_spools_large_body_and_materializes_on_demand() {
-        let mut writer = SubresourceResponseBodyWriter::new(4);
+    fn navigation_response_body_can_move_into_an_external_backing_without_cloning() {
+        let mut response = NavigationResponse::from_head_and_body(
+            ResponseHead {
+                final_url: test_url("/image.png"),
+                status: 200,
+                headers: vec![("Content-Type".to_owned(), "image/png".to_owned())],
+                request_cookie_report: None,
+                cookie_set_reports: Vec::new(),
+                redirected: false,
+                redirect_chain: Vec::new(),
+                from_cache: false,
+                negotiated_http_version: None,
+            },
+            String::new(),
+            b"encoded-image".to_vec(),
+        );
+
+        assert_eq!(response.take_body_bytes(), b"encoded-image");
+        assert!(response.body_bytes().is_empty());
+        assert_eq!(response.status, 200);
+        assert_eq!(response.final_url, test_url("/image.png"));
+    }
+
+    #[test]
+    fn subresource_response_body_writer_pools_large_body_and_materializes_on_demand() {
+        let pool = DiskPool::new(None).unwrap();
+        let mut writer = pooled_body_writer(4, &pool);
         writer.append(b"hello");
         writer.append(b" world");
         let body = writer.finish();
 
         assert_eq!(body.len(), 11);
+        assert_eq!(pool.diagnostics().disk_footprint_bytes, 11);
         assert_eq!(body.diagnostic_text(), "hello world");
 
         let mut copied = Vec::new();
         body.write_bytes_to(&mut copied)
-            .expect("spooled body should stream-copy into writer");
+            .expect("pooled body should stream-copy into writer");
         assert_eq!(copied, b"hello world");
     }
 
     #[test]
-    fn subresource_response_body_reads_memory_and_spooled_chunks_by_offset() {
+    fn pooled_response_body_releases_the_empty_staging_allocation() {
+        let memory_limit = 1024 * 1024;
+        let bytes = vec![7; memory_limit + 1];
+        let pool = DiskPool::new(None).unwrap();
+        let mut writer = pooled_body_writer(memory_limit, &pool);
+        writer.append(&bytes);
+        let body = writer.finish();
+
+        assert_eq!(body.len(), bytes.len());
+        assert_eq!(body.materialize_bytes().unwrap(), bytes);
+        assert!(
+            body.renderer_transport_retained_memory_bytes() < memory_limit,
+            "a disk-backed body must not retain its full staging allocation"
+        );
+    }
+
+    #[test]
+    fn subresource_response_body_reads_memory_and_pooled_chunks_by_offset() {
         let memory = SubresourceResponseBody::from_text_and_bytes(
             "hello world".to_owned(),
             b"hello world".to_vec(),
@@ -3998,29 +4063,89 @@ mod tests {
         assert_eq!(memory.materialize_bytes_from(6).unwrap(), b"world");
         assert_eq!(memory.diagnostic_clone_body_bytes_from(6), b"world");
 
-        let mut writer = SubresourceResponseBodyWriter::new(4);
+        let pool = DiskPool::new(None).unwrap();
+        let mut writer = pooled_body_writer(4, &pool);
         writer.append(b"hello");
         writer.append(b" world");
-        let spooled = writer.finish();
-        assert_eq!(spooled.read_chunk(6, 3).unwrap(), b"wor");
-        assert_eq!(spooled.materialize_bytes_from(6).unwrap(), b"world");
-        assert_eq!(spooled.diagnostic_clone_body_bytes_from(6), b"world");
+        let pooled = writer.finish();
+        assert_eq!(pooled.read_chunk(3, 5).unwrap(), b"lo wo");
+        assert_eq!(pooled.read_chunk(6, 3).unwrap(), b"wor");
+        assert_eq!(pooled.materialize_bytes_from(6).unwrap(), b"world");
+        assert_eq!(pooled.diagnostic_clone_body_bytes_from(6), b"world");
     }
 
     #[test]
-    fn subresource_response_body_fallible_materialize_reports_missing_spool_file() {
-        let missing_path = std::env::temp_dir().join(format!(
-            "moli-missing-subresource-body-{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_file(&missing_path);
-        let body = SubresourceResponseBody {
-            inner: Arc::new(SubresourceResponseBodyInner::File {
-                path: missing_path,
-                len: 5,
-                text_cache: Mutex::new(None),
-            }),
-        };
+    fn subresource_response_bodies_share_pool_and_release_extents_on_last_drop() {
+        let pool = DiskPool::new(None).unwrap();
+        let mut first_writer = pooled_body_writer(4, &pool);
+        first_writer.append(b"abcdefgh");
+        let first = first_writer.finish();
+        let mut second_writer = pooled_body_writer(4, &pool);
+        second_writer.append(b"ijklmnop");
+        let second = second_writer.finish();
+
+        assert_eq!(pool.diagnostics().disk_footprint_bytes, 16);
+        assert_eq!(pool.diagnostics().free_bytes, 0);
+        let first_clone = first.clone();
+        drop(first);
+        assert_eq!(
+            pool.diagnostics().free_bytes,
+            0,
+            "the body Arc should own its pooled extents"
+        );
+        drop(first_clone);
+        assert_eq!(pool.diagnostics().free_bytes, 8);
+        drop(second);
+        assert_eq!(pool.diagnostics().free_bytes, 16);
+        assert_eq!(pool.diagnostics().free_chunk_count, 1);
+    }
+
+    #[test]
+    fn parkable_image_body_shares_one_extent_and_unparks_on_demand() {
+        let pool = DiskPool::new(None).unwrap();
+        let manager = moli_parkable_image::ParkableImageManager::new(
+            Some(pool.clone()),
+            moli_parkable_image::ParkableImagePolicy {
+                min_size_to_park: 1,
+                parking_delay: std::time::Duration::ZERO,
+                reader_release_delay: std::time::Duration::ZERO,
+            },
+        );
+        let encoded = manager.from_frozen_bytes(b"encoded image".to_vec());
+        let body = SubresourceResponseBody::from_parkable_image(encoded.clone());
+
+        manager.park_images_now();
+        assert_eq!(manager.diagnostics().parked_count, 1);
+        assert_eq!(pool.diagnostics().disk_footprint_bytes, 13);
+        assert_eq!(body.read_chunk(8, 5).unwrap(), b"image");
+        assert_eq!(body.materialize_bytes().unwrap(), b"encoded image");
+        assert_eq!(pool.diagnostics().disk_footprint_bytes, 13);
+
+        drop(encoded);
+        assert_eq!(pool.diagnostics().free_bytes, 0);
+        drop(body);
+        assert_eq!(pool.diagnostics().free_bytes, 13);
+    }
+
+    #[test]
+    fn subresource_response_body_keeps_order_when_pool_reaches_capacity() {
+        let pool = DiskPool::new(Some(4)).unwrap();
+        let mut writer = pooled_body_writer(4, &pool);
+        writer.append(b"hello world");
+        let body = writer.finish();
+
+        assert_eq!(pool.diagnostics().disk_footprint_bytes, 4);
+        assert_eq!(body.materialize_bytes().unwrap(), b"hello world");
+        assert_eq!(body.read_chunk(3, 6).unwrap(), b"lo wor");
+    }
+
+    #[test]
+    fn subresource_response_body_fallible_materialize_reports_pool_corruption() {
+        let pool = DiskPool::new(None).unwrap();
+        let mut writer = pooled_body_writer(2, &pool);
+        writer.append(b"hello");
+        let body = writer.finish();
+        pool.truncate_file_for_test(0).unwrap();
 
         assert!(body.materialize_bytes().is_err());
         assert!(body.materialize_bytes_from(2).is_err());
@@ -4111,30 +4236,14 @@ mod tests {
 
     #[test]
     fn subresource_response_body_partial_eq_does_not_treat_unreadable_sources_as_empty() {
-        let missing_path_a = std::env::temp_dir().join(format!(
-            "moli-missing-subresource-body-eq-a-{}",
-            std::process::id()
-        ));
-        let missing_path_b = std::env::temp_dir().join(format!(
-            "moli-missing-subresource-body-eq-b-{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_file(&missing_path_a);
-        let _ = fs::remove_file(&missing_path_b);
-        let body_a = SubresourceResponseBody {
-            inner: Arc::new(SubresourceResponseBodyInner::File {
-                path: missing_path_a,
-                len: 5,
-                text_cache: Mutex::new(None),
-            }),
-        };
-        let body_b = SubresourceResponseBody {
-            inner: Arc::new(SubresourceResponseBodyInner::File {
-                path: missing_path_b,
-                len: 5,
-                text_cache: Mutex::new(None),
-            }),
-        };
+        let pool = DiskPool::new(None).unwrap();
+        let mut writer_a = pooled_body_writer(2, &pool);
+        writer_a.append(b"first");
+        let body_a = writer_a.finish();
+        let mut writer_b = pooled_body_writer(2, &pool);
+        writer_b.append(b"other");
+        let body_b = writer_b.finish();
+        pool.truncate_file_for_test(0).unwrap();
 
         assert_eq!(body_a, body_a.clone());
         assert_ne!(body_a, body_b);
@@ -4142,33 +4251,35 @@ mod tests {
     }
 
     #[test]
-    fn subresource_response_body_partial_eq_keeps_file_backed_equality_io_free() {
-        let mut left_writer = SubresourceResponseBodyWriter::new(2);
+    fn subresource_response_body_partial_eq_keeps_disk_backed_equality_io_free() {
+        let pool = DiskPool::new(None).unwrap();
+        let mut left_writer = pooled_body_writer(2, &pool);
         left_writer.append(b"same");
         let left = left_writer.finish();
 
-        let mut right_writer = SubresourceResponseBodyWriter::new(2);
+        let mut right_writer = pooled_body_writer(2, &pool);
         right_writer.append(b"same");
         let right = right_writer.finish();
 
         assert_ne!(
             left, right,
-            "ordinary equality should not read separate file-backed sources"
+            "ordinary equality should not read separate disk-backed sources"
         );
         assert!(
             left.try_byte_eq(&right)
-                .expect("explicit byte equality should read spooled bodies"),
+                .expect("explicit byte equality should read pooled bodies"),
             "callers that need content equality must opt in to source I/O"
         );
     }
 
     #[test]
     fn subresource_network_record_response_body_byte_equality_is_explicit() {
-        let mut left_writer = SubresourceResponseBodyWriter::new(2);
+        let pool = DiskPool::new(None).unwrap();
+        let mut left_writer = pooled_body_writer(2, &pool);
         left_writer.append(b"same");
         let left_body = left_writer.finish();
 
-        let mut right_writer = SubresourceResponseBodyWriter::new(2);
+        let mut right_writer = pooled_body_writer(2, &pool);
         right_writer.append(b"same");
         let right_body = right_writer.finish();
 
@@ -4212,14 +4323,15 @@ mod tests {
         assert!(
             left_record
                 .try_response_body_byte_eq(&right_record)
-                .expect("explicit record body equality should read spooled bodies"),
+                .expect("explicit record body equality should read pooled bodies"),
             "callers that need record body content equality must opt in"
         );
     }
 
     #[test]
-    fn subresource_response_body_to_navigation_response_materializes_spooled_body_once() {
-        let mut writer = SubresourceResponseBodyWriter::new(2);
+    fn subresource_response_body_to_navigation_response_materializes_pooled_body_once() {
+        let pool = DiskPool::new(None).unwrap();
+        let mut writer = pooled_body_writer(2, &pool);
         writer.append(b"hi ");
         writer.append(&[0xff, b'!']);
         let body = writer.finish();

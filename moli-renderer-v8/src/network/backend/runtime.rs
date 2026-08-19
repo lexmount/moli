@@ -5,15 +5,18 @@ use std::{
     rc::{Rc, Weak as RcWeak},
     sync::{
         Arc, Weak as ArcWeak,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 
 use moli_cookie_jar::SharedBrowserCookieStore;
+use moli_disk_pool::DiskPool;
 use moli_fetch::{FetchClient, FetchClientHandle, FetchConfig, FetchRuntimeJoinReport};
+use moli_parkable_image::{ParkableImageManager, ParkableImagePolicy};
 use parking_lot::{Mutex, RwLock};
 
 use super::{
+    BrowserParkableImageDiagnostics, BrowserResourceDiskPoolDiagnostics,
     BrowserResourceRuntimeDiagnostics, SharedMemoryResourceCacheDiagnostics,
     memory_cache::SharedMemoryResourceCache,
 };
@@ -127,6 +130,10 @@ struct BrowserResourceRuntimeInner {
     owner_root_id: AtomicU64,
     client: FetchClientHandle,
     memory_cache: Mutex<SharedMemoryResourceCache>,
+    disk_pool: Option<DiskPool>,
+    parkable_images: ParkableImageManager,
+    parkable_image_schedule_notify: Arc<tokio::sync::Notify>,
+    parkable_image_scheduler_started: AtomicBool,
     detached_keepalive_loads: DetachedKeepaliveLoadRegistry,
 }
 
@@ -142,12 +149,24 @@ impl BrowserResourceRuntimeOwner {
         let runtime_id = NEXT_BROWSER_RESOURCE_RUNTIME_ID
             .fetch_add(1, Ordering::Relaxed)
             .saturating_add(1);
+        let disk_pool = DiskPool::new(None).ok();
+        let parkable_image_schedule_notify = Arc::new(tokio::sync::Notify::new());
+        let schedule_notify = Arc::clone(&parkable_image_schedule_notify);
+        let parkable_images = ParkableImageManager::new_with_schedule_wakeup(
+            disk_pool.clone(),
+            ParkableImagePolicy::default(),
+            move || schedule_notify.notify_one(),
+        );
         let runtime = BrowserResourceRuntime {
             inner: Arc::new(BrowserResourceRuntimeInner {
                 id: runtime_id,
                 owner_root_id: AtomicU64::new(0),
                 client: fetch_owner.handle(),
                 memory_cache: Mutex::new(SharedMemoryResourceCache::default()),
+                parkable_images,
+                disk_pool,
+                parkable_image_schedule_notify,
+                parkable_image_scheduler_started: AtomicBool::new(false),
                 detached_keepalive_loads: DetachedKeepaliveLoadRegistry::default(),
             }),
         };
@@ -203,10 +222,49 @@ impl BrowserResourceRuntime {
         self.inner.memory_cache.lock().diagnostics()
     }
 
+    pub fn disk_pool(&self) -> Option<DiskPool> {
+        self.inner.disk_pool.clone()
+    }
+
+    pub fn disk_pool_diagnostics(&self) -> Option<BrowserResourceDiskPoolDiagnostics> {
+        self.inner
+            .disk_pool
+            .as_ref()
+            .map(|pool| pool.diagnostics().into())
+    }
+
+    pub fn parkable_image_manager(&self) -> ParkableImageManager {
+        self.inner.parkable_images.clone()
+    }
+
+    pub fn parkable_image_diagnostics(&self) -> BrowserParkableImageDiagnostics {
+        self.inner.parkable_images.diagnostics().into()
+    }
+
+    pub(crate) fn ensure_parkable_image_scheduler(
+        &self,
+        runner: &crate::network::RendererResourceTaskRunner,
+    ) {
+        if self
+            .inner
+            .parkable_image_scheduler_started
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+
+        let weak_runtime = Arc::downgrade(&self.inner);
+        let schedule_notify = Arc::clone(&self.inner.parkable_image_schedule_notify);
+        runner.spawn(run_parkable_image_scheduler(weak_runtime, schedule_notify));
+    }
+
     pub fn diagnostics(&self) -> BrowserResourceRuntimeDiagnostics {
         BrowserResourceRuntimeDiagnostics {
             runtime_id: self.runtime_id_for_diagnostics(),
             memory_cache: self.memory_cache_diagnostics(),
+            disk_pool: self.disk_pool_diagnostics(),
+            parkable_images: self.parkable_image_diagnostics(),
             detached_keepalive_loads: self.detached_keepalive_diagnostics(),
         }
     }
@@ -247,6 +305,52 @@ impl BrowserResourceRuntime {
 
     pub(in crate::network) fn memory_cache(&self) -> &Mutex<SharedMemoryResourceCache> {
         &self.inner.memory_cache
+    }
+}
+
+async fn run_parkable_image_scheduler(
+    weak_runtime: ArcWeak<BrowserResourceRuntimeInner>,
+    schedule_notify: Arc<tokio::sync::Notify>,
+) {
+    loop {
+        // Arm the notification before reading the deadline so a concurrent
+        // state transition cannot be lost between inspection and waiting.
+        let notified = schedule_notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+
+        let Some(runtime) = weak_runtime.upgrade() else {
+            return;
+        };
+        let next_deadline = runtime.parkable_images.next_parking_deadline();
+        drop(runtime);
+
+        match next_deadline {
+            Some(deadline) => {
+                let sleep = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline));
+                tokio::pin!(sleep);
+                tokio::select! {
+                    () = notified.as_mut() => continue,
+                    () = sleep.as_mut() => {}
+                }
+            }
+            None => {
+                notified.await;
+                continue;
+            }
+        }
+
+        let Some(runtime) = weak_runtime.upgrade() else {
+            return;
+        };
+        let manager = runtime.parkable_images.clone();
+        drop(runtime);
+        if tokio::task::spawn_blocking(move || manager.park_images_due())
+            .await
+            .is_err()
+        {
+            return;
+        }
     }
 }
 
@@ -542,6 +646,7 @@ impl Drop for BrowserResourceRuntimeOwnerSet {
 
 impl Drop for BrowserResourceRuntimeInner {
     fn drop(&mut self) {
+        self.parkable_image_schedule_notify.notify_one();
         self.client.request_shutdown();
     }
 }
@@ -589,6 +694,32 @@ mod tests {
 
     fn registration() -> BrowserResourceRuntimeOwnerRegistration {
         BrowserResourceRuntimeOwner::new(&FetchConfig::default(), new_shared_browser_cookie_store())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn parkable_image_scheduler_runs_after_the_last_reader_release_grace() -> Result<()> {
+        let (root, binding) = BrowserResourceRuntimeOwnerRoot::new(registration());
+        let runtime = binding.current();
+        let runner = crate::network::RendererResourceTaskRunner::from_current_tokio()?;
+        runtime.ensure_parkable_image_scheduler(&runner);
+        let manager = runtime.parkable_image_manager();
+        let image = manager.from_frozen_bytes(vec![7; 4096]);
+
+        let snapshot = image.snapshot()?;
+        drop(snapshot);
+        timeout(Duration::from_secs(5), async {
+            while manager.diagnostics().parked_count == 0 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the reader-release deadline should wake the image scheduler");
+
+        assert_eq!(manager.diagnostics().resident_count, 0);
+        assert_eq!(manager.diagnostics().parked_count, 1);
+        drop((image, manager, runtime, binding));
+        root.shutdown_and_join();
+        Ok(())
     }
 
     #[test]

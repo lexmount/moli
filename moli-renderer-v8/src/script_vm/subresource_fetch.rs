@@ -20,17 +20,18 @@ use crate::runtime::{
 };
 use crate::types::{
     AsyncSubresourceFetchCompletion, AsyncSubresourceFetchEvent,
-    AsyncSubresourceFetchResponseFilter, ChildBlockingStylesheetLoadCompletion,
-    ChildClassicScriptLoadCompletion, ChildDocumentLoadCompletion,
-    ChildModuleDependencyFetchCompletion, ChildModulepreloadFetchCompletion,
-    ChildParserModuleRootFetchCompletion, DedicatedWorkerId, NetworkBodySourceId,
-    PendingSubresourceAuthInfo, PendingSubresourceAuthState, PendingSubresourceContinuation,
-    PendingSubresourceContinueEvent, PendingSubresourceContinueOutcome,
-    PendingSubresourceFetchInfo, PendingSubresourceFetchState, PendingSubresourceResponseInfo,
-    PendingSubresourceResponseState, PopupClassicScriptLoadCompletion, PopupDocumentLoadCompletion,
-    RunningSubresourceFetchState, StreamingSubresourceFetchState, SubresourceNetworkRecord,
-    SubresourceNetworkRequestHandle, SubresourceRequestInitiatorType, SubresourceResourceType,
-    SubresourceResponseBody, SubresourceResponseBodyWriter,
+    AsyncSubresourceFetchResponseFilter, AsyncSubresourceFetchResult,
+    ChildBlockingStylesheetLoadCompletion, ChildClassicScriptLoadCompletion,
+    ChildDocumentLoadCompletion, ChildModuleDependencyFetchCompletion,
+    ChildModulepreloadFetchCompletion, ChildParserModuleRootFetchCompletion, DedicatedWorkerId,
+    NetworkBodySourceId, PendingSubresourceAuthInfo, PendingSubresourceAuthState,
+    PendingSubresourceContinuation, PendingSubresourceContinueEvent,
+    PendingSubresourceContinueOutcome, PendingSubresourceFetchInfo, PendingSubresourceFetchState,
+    PendingSubresourceResponseInfo, PendingSubresourceResponseState,
+    PopupClassicScriptLoadCompletion, PopupDocumentLoadCompletion, RunningSubresourceFetchState,
+    StreamingSubresourceFetchState, SubresourceNetworkRecord, SubresourceNetworkRequestHandle,
+    SubresourceRequestInitiatorType, SubresourceResourceType, SubresourceResponseBody,
+    SubresourceResponseBodyWriter,
 };
 use crate::util::v8_string;
 
@@ -263,7 +264,10 @@ fn apply_media_subresource_terminal(
 }
 
 enum ImageSubresourceTerminal<'a> {
-    Response(&'a crate::protocol_types::NavigationResponse),
+    Response {
+        response: &'a crate::protocol_types::NavigationResponse,
+        encoded: &'a moli_parkable_image::ParkableImage,
+    },
     Failure,
 }
 
@@ -273,12 +277,13 @@ impl ImageSubresourceTerminal<'_> {
         request_url: &url::Url,
     ) -> crate::context_bootstrap::ResourcePerformanceEntry {
         match self {
-            Self::Response(response) => {
-                crate::context_bootstrap::ResourcePerformanceEntry::from_network_response(
+            Self::Response { response, encoded } => {
+                crate::context_bootstrap::ResourcePerformanceEntry::from_network_response_with_body_size(
                     request_url.as_str(),
                     "img",
                     None,
                     response,
+                    encoded.len(),
                 )
             }
             Self::Failure => {
@@ -302,8 +307,9 @@ fn apply_image_subresource_terminal(
     terminal: ImageSubresourceTerminal<'_>,
 ) {
     let (accepted, followup) = match &terminal {
-        ImageSubresourceTerminal::Response(response) => {
-            let descriptor = crate::network_host::image_response_descriptor(response);
+        ImageSubresourceTerminal::Response { response, encoded } => {
+            let descriptor =
+                crate::network_host::image_response_descriptor_from_parkable(response, encoded);
             let completion = context_host
                 .borrow_mut()
                 .complete_pending_image_load_network_response_if_matches(
@@ -311,7 +317,7 @@ fn apply_image_subresource_terminal(
                     sequence,
                     internal_id,
                     descriptor,
-                    response.body_bytes(),
+                    (*encoded).clone(),
                 );
             (completion.accepted(), completion.followup())
         }
@@ -1571,7 +1577,7 @@ impl ScriptVm {
                 skip_fetch_security_validation: true,
                 response_filter: Default::default(),
                 network_error_text: None,
-                result: Err("service worker csp report fetch dispatch failed".to_owned()),
+                result: Err("service worker csp report fetch dispatch failed".to_owned()).into(),
             });
         Ok(None)
     }
@@ -3470,7 +3476,7 @@ impl ScriptVm {
 
     fn resolve_pending_subresource_fetch_body(
         &mut self,
-        mut pending: PendingSubresourceFetchState,
+        pending: PendingSubresourceFetchState,
         request_url: Url,
         request_method: String,
         request_headers: Vec<(String, String)>,
@@ -3481,6 +3487,41 @@ impl ScriptVm {
         network_error_text: Option<String>,
         result: std::result::Result<crate::protocol_types::NavigationResponse, String>,
     ) -> Result<AsyncSubresourceFetchBodyActivity> {
+        self.resolve_pending_subresource_fetch_completion(
+            pending,
+            request_url,
+            request_method,
+            request_headers,
+            request_body,
+            response_status_text,
+            skip_fetch_security_validation,
+            response_filter,
+            network_error_text,
+            result.into(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn resolve_pending_subresource_fetch_completion(
+        &mut self,
+        mut pending: PendingSubresourceFetchState,
+        request_url: Url,
+        request_method: String,
+        request_headers: Vec<(String, String)>,
+        request_body: Option<String>,
+        response_status_text: Option<String>,
+        skip_fetch_security_validation: bool,
+        response_filter: Option<AsyncSubresourceFetchResponseFilter>,
+        network_error_text: Option<String>,
+        completion_result: AsyncSubresourceFetchResult,
+    ) -> Result<AsyncSubresourceFetchBodyActivity> {
+        let (supplied_parkable_image, result) = match completion_result {
+            AsyncSubresourceFetchResult::Response(response) => (None, Ok(response)),
+            AsyncSubresourceFetchResult::Image { response, encoded } => {
+                (Some(encoded), Ok(response))
+            }
+            AsyncSubresourceFetchResult::Failure(error) => (None, Err(error)),
+        };
         let trace_started = moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
         let trace_fields = async_subresource_trace_fields_for_pending(
             "completion",
@@ -3591,11 +3632,22 @@ impl ScriptVm {
                         | SubresourceResourceType::Video
                         | SubresourceResourceType::Xhr
                 ) {
+                    let supplied_snapshot = supplied_parkable_image
+                        .as_ref()
+                        .map(|image| {
+                            image.snapshot().map_err(|error| {
+                                format!("failed to read image response bytes: {error}")
+                            })
+                        })
+                        .transpose()?;
+                    let response_body = supplied_snapshot
+                        .as_ref()
+                        .map_or_else(|| response.body_bytes(), AsRef::as_ref);
                     let validation = crate::network_host::validate_fetch_response_security_policy_with_body_classified(
                         &pending.info.document_url,
                         &response.final_url,
                         &response.headers,
-                        response.body_bytes(),
+                        response_body,
                         pending.request_mode,
                         pending.credentials_mode,
                         pending.policy_context,
@@ -3620,8 +3672,20 @@ impl ScriptVm {
 
             let request_initiator_type = pending.continuation.request_initiator_type();
             match result {
-                Ok(response) => {
+                Ok(mut response) => {
                     let response_status = response.status;
+                    let parkable_image = (!opaque_response_blocked
+                        && pending.info.resource_type == SubresourceResourceType::Image)
+                        .then(|| {
+                            supplied_parkable_image.clone().unwrap_or_else(|| {
+                                let runner = pending.load.task_runner();
+                                pending
+                                    .load
+                                    .request_client()
+                                    .parkable_image_manager(&runner)
+                                    .from_frozen_bytes(response.take_body_bytes())
+                            })
+                        });
                     let request_cookie_report = response
                         .request_cookie_report
                         .clone()
@@ -3655,7 +3719,12 @@ impl ScriptVm {
                             response.final_url.clone(),
                             response.status,
                             response.headers.clone(),
-                            SubresourceResponseBody::from_navigation_response(&response),
+                            parkable_image.as_ref().map_or_else(
+                                || SubresourceResponseBody::from_navigation_response(&response),
+                                |image| {
+                                    SubresourceResponseBody::from_parkable_image(image.clone())
+                                },
+                            ),
                             response.cookie_set_reports.clone(),
                         )
                         .with_from_cache(response.from_cache)
@@ -3747,15 +3816,23 @@ impl ScriptVm {
                             image_handle,
                             sequence,
                             ..
-                        } => apply_image_subresource_terminal(
-                            scope,
-                            &context_host,
-                            image_handle,
-                            sequence,
-                            pending.info.internal_id,
-                            &pending.info.url,
-                            ImageSubresourceTerminal::Response(&observable_response),
-                        ),
+                        } => {
+                            let encoded = parkable_image
+                                .as_ref()
+                                .expect("an accepted image response must be parkable");
+                            apply_image_subresource_terminal(
+                                scope,
+                                &context_host,
+                                image_handle,
+                                sequence,
+                                pending.info.internal_id,
+                                &pending.info.url,
+                                ImageSubresourceTerminal::Response {
+                                    response: &observable_response,
+                                    encoded,
+                                },
+                            )
+                        }
                         PendingSubresourceContinuation::Media {
                             media_handle,
                             sequence,
@@ -3789,16 +3866,21 @@ impl ScriptVm {
                             css_image,
                         } => {
                             if let Some(identity) = css_image.as_ref() {
-                                let descriptor =
-                                    crate::network_host::image_response_descriptor(
-                                        &observable_response,
-                                    );
+                                let descriptor = crate::network_host::image_response_descriptor_from_parkable(
+                                    &observable_response,
+                                    parkable_image
+                                        .as_ref()
+                                        .expect("a CSS image response must be parkable"),
+                                );
                                 let _ = context_host
                                     .borrow_mut()
                                     .complete_stylesheet_css_image_response(
                                         identity,
                                         descriptor,
-                                        observable_response.body_bytes(),
+                                        parkable_image
+                                            .as_ref()
+                                            .expect("a CSS image response must be parkable")
+                                            .clone(),
                                     );
                             }
                             if binding.child_handle().is_none() {
@@ -4019,7 +4101,7 @@ impl ScriptVm {
                 skip_fetch_security_validation: false,
                 response_filter: None,
                 network_error_text: None,
-                result,
+                result: result.into(),
             });
         });
     }
@@ -4255,7 +4337,7 @@ impl ScriptVm {
                 completion.skip_fetch_security_validation,
                 completion.response_filter,
                 completion.network_error_text,
-                completion.result,
+                completion.result.into_result(),
             );
             trace_async_subresource_stage(
                 "async_subresource_complete_done",
@@ -4287,7 +4369,7 @@ impl ScriptVm {
             trace_fields,
             trace_started,
         );
-        let activity = self.resolve_pending_subresource_fetch_body(
+        let activity = self.resolve_pending_subresource_fetch_completion(
             pending,
             completion.request_url,
             completion.request_method,
@@ -4426,6 +4508,7 @@ impl ScriptVm {
         let accepted_document = pending
             .execution_context
             .window_document_network_only_identity();
+        let disk_pool = pending.load.request_client().disk_pool();
         self._context_host
             .borrow_mut()
             .record_streaming_subresource_fetch(StreamingSubresourceFetchState {
@@ -4437,7 +4520,7 @@ impl ScriptVm {
                 body_source_id: started.body_source_id,
                 head: started.head,
                 network_request_headers: started.network_request_headers,
-                body_writer: SubresourceResponseBodyWriter::default(),
+                body_writer: SubresourceResponseBodyWriter::with_disk_pool(disk_pool),
                 event_source_parser: None,
                 xhr_response: None,
             });
@@ -4808,6 +4891,7 @@ impl ScriptVm {
             if let PendingSubresourceContinuation::Xhr(xhr) = &pending.continuation {
                 let xhr = v8::Local::new(scope, xhr);
                 let pending_owner = pending.execution_context.dispatch_scope();
+                let disk_pool = pending.load.request_client().disk_pool();
                 let xhr_response = crate::types::XhrStreamingResponseState::new(
                     &observable_head.headers,
                 );
@@ -4822,7 +4906,7 @@ impl ScriptVm {
                         body_source_id: started.body_source_id,
                         head: started.head.clone(),
                         network_request_headers: started.network_request_headers.clone(),
-                        body_writer: SubresourceResponseBodyWriter::default(),
+                        body_writer: SubresourceResponseBodyWriter::with_disk_pool(disk_pool),
                         event_source_parser: None,
                         xhr_response: Some(xhr_response),
                     });
@@ -4962,6 +5046,7 @@ impl ScriptVm {
             }
 
             let pending_owner = pending.execution_context.dispatch_scope();
+            let disk_pool = pending.load.request_client().disk_pool();
             self._context_host.borrow_mut().record_streaming_subresource_fetch(
                 StreamingSubresourceFetchState {
                     pending,
@@ -4972,7 +5057,7 @@ impl ScriptVm {
                     body_source_id: started.body_source_id,
                     head: started.head.clone(),
                     network_request_headers: started.network_request_headers.clone(),
-                    body_writer: SubresourceResponseBodyWriter::default(),
+                    body_writer: SubresourceResponseBodyWriter::with_disk_pool(disk_pool),
                     event_source_parser,
                     xhr_response: None,
                 },

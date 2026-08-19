@@ -342,7 +342,7 @@ fn dispatch_service_worker_content_security_policy_report(
                 skip_fetch_security_validation: true,
                 response_filter: Default::default(),
                 network_error_text: None,
-                result: Err("service worker csp report fetch dispatch failed".to_owned()),
+                result: Err("service worker csp report fetch dispatch failed".to_owned()).into(),
             });
     true
 }

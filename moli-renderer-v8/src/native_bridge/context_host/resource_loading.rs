@@ -281,6 +281,29 @@ impl JsContextHost {
             resource_type,
             request_initiator_type,
             result,
+            None,
+        );
+        self.record_subresource_network(record);
+    }
+
+    pub(crate) fn record_get_subresource_network_result_with_body_and_initiator(
+        &mut self,
+        frame_id: Option<String>,
+        document_url: url::Url,
+        request_url: url::Url,
+        resource_type: SubresourceResourceType,
+        request_initiator_type: SubresourceRequestInitiatorType,
+        result: &std::result::Result<crate::protocol_types::NavigationResponse, String>,
+        response_body: SubresourceResponseBody,
+    ) {
+        let record = Self::get_subresource_network_record_with_initiator(
+            frame_id,
+            document_url,
+            request_url,
+            resource_type,
+            request_initiator_type,
+            result,
+            Some(response_body),
         );
         self.record_subresource_network(record);
     }
@@ -303,6 +326,7 @@ impl JsContextHost {
             resource_type,
             request_initiator_type,
             result,
+            None,
         );
         self.push_network_output_item(ScriptNetworkOutputItem::SubresourceNetworkRecord(Box::new(
             record,
@@ -316,6 +340,7 @@ impl JsContextHost {
         resource_type: SubresourceResourceType,
         request_initiator_type: SubresourceRequestInitiatorType,
         result: &std::result::Result<crate::protocol_types::NavigationResponse, String>,
+        response_body: Option<SubresourceResponseBody>,
     ) -> SubresourceNetworkRecord {
         match result {
             Ok(response) => SubresourceNetworkRecord::success_with_body(
@@ -331,7 +356,8 @@ impl JsContextHost {
                 response.final_url.clone(),
                 response.status,
                 response.headers.clone(),
-                SubresourceResponseBody::from_navigation_response(response),
+                response_body
+                    .unwrap_or_else(|| SubresourceResponseBody::from_navigation_response(response)),
                 response.cookie_set_reports.clone(),
             )
             .with_request_initiator_type(request_initiator_type)

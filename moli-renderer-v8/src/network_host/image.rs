@@ -7,8 +7,8 @@ use crate::service_worker_runtime::{
     service_worker_fetch_request_metadata,
 };
 use crate::types::{
-    AsyncSubresourceFetchCompletion, AsyncSubresourceNetworkContext, ImageRequestCorsMode,
-    ImageRequestKey, PendingSubresourceFetchInfo, SubresourceResourceType,
+    AsyncSubresourceFetchCompletion, AsyncSubresourceFetchResult, AsyncSubresourceNetworkContext,
+    ImageRequestCorsMode, ImageRequestKey, PendingSubresourceFetchInfo, SubresourceResourceType,
 };
 use moli_fetch::{
     BrowserRequestMetadata, FetchCancelHandle, FetchPriorityHint, RequestCredentialsMode,
@@ -18,7 +18,8 @@ use moli_fetch::{
 #[derive(Debug)]
 pub(crate) enum ImageElementResourceFetchStart {
     Local {
-        response: Box<crate::protocol_types::NavigationResponse>,
+        descriptor: Option<crate::native_bridge::ImageResponseDescriptor>,
+        encoded: moli_parkable_image::ParkableImage,
     },
     Failed,
     PolicySkipped,
@@ -51,6 +52,10 @@ pub(crate) fn start_scanned_image_preload(
         return ScannedImagePreloadStart::Disabled;
     }
     let document_url = host.document_url().clone();
+    let task_runner = resource_loader.task_runner();
+    let parkable_images = resource_loader
+        .request_client()
+        .parkable_image_manager(&task_runner);
     let client_id = host.service_worker_client_id_for_subresource_owner(OwnerDispatchScope::Top);
     if host
         .service_worker_controller_for_fetch(client_id, &document_url, &request_url)
@@ -91,15 +96,15 @@ pub(crate) fn start_scanned_image_preload(
             .with_fetch_priority_hint(fetch_priority),
         Err(error) => {
             load.finish_network_result(
-                resource_loader.task_runner(),
+                task_runner,
                 std::sync::Arc::new(Err(error.to_string())),
+                None,
                 false,
             );
             return ScannedImagePreloadStart::Admitted;
         }
     };
     let loader = resource_loader.request_client().clone();
-    let task_runner = resource_loader.task_runner();
     let decode_runner = task_runner.clone();
     let cancel_handle = load.cancel_handle();
     task_runner.spawn(async move {
@@ -107,36 +112,32 @@ pub(crate) fn start_scanned_image_preload(
             .fetch_raw_stream_with_cancel_and_network_metadata(request, cancel_handle)
             .await
         {
-            Ok(observed) => {
-                let (response, request_observation) = observed.into_parts();
-                response
-                    .into_materialized_raw_response()
-                    .await
-                    .map(|response| {
-                        let (head, body) = response.into_parts();
-                        let body_bytes = body
-                            .try_into_materialized_bytes()
-                            .expect("materialized raw image response must retain exact bytes");
-                        crate::protocol_types::NavigationResponse::from_head_and_body(
-                            head,
-                            String::new(),
-                            body_bytes,
-                        )
-                        .with_network_request_headers(
-                            request_observation.map(|observation| observation.into_headers()),
-                        )
-                    })
-                    .map_err(|error| format!("scanned image preload body failed: {error:#}"))
-            }
+            Ok(observed) => crate::network_host::collect_image_response_into_parkable(
+                observed,
+                Vec::new(),
+                parkable_images,
+            )
+            .await
+            .map_err(|error| format!("scanned image preload body failed: {error}")),
             Err(error) => Err(format!("scanned image preload failed: {error:#}")),
         };
+        let (result, encoded) = match result {
+            Ok((response, encoded)) => (Ok(response), Some(encoded)),
+            Err(error) => (Err(error), None),
+        };
         let response_is_decode_eligible = result.as_ref().is_ok_and(|response| {
+            let Some(encoded) = encoded.as_ref() else {
+                return false;
+            };
+            let Ok(snapshot) = encoded.snapshot() else {
+                return false;
+            };
             response.redirect_chain.is_empty()
                 && validate_fetch_response_security_policy_with_body(
                     &document_url,
                     &response.final_url,
                     &response.headers,
-                    response.body_bytes(),
+                    &snapshot,
                     RequestMode::NoCors,
                     RequestCredentialsMode::Include,
                     policy_context,
@@ -146,6 +147,7 @@ pub(crate) fn start_scanned_image_preload(
         load.finish_network_result(
             decode_runner,
             std::sync::Arc::new(result),
+            encoded,
             response_is_decode_eligible,
         );
     });
@@ -206,18 +208,29 @@ pub(crate) fn start_image_element_resource_fetch(
     let fetch_priority = FetchPriorityHint::from_attribute(element.attribute("fetchpriority"));
 
     if let Some(response) = local_url_response(&request_url) {
-        let response: crate::protocol_types::NavigationResponse = response.into();
+        let mut response: crate::protocol_types::NavigationResponse = response.into();
+        let manager = resource_loader.as_ref().map_or_else(
+            moli_parkable_image::ParkableImageManager::default,
+            |loader| {
+                let runner = loader.task_runner();
+                loader.request_client().parkable_image_manager(&runner)
+            },
+        );
+        let encoded = manager.from_frozen_bytes(response.take_body_bytes());
+        let descriptor = image_response_descriptor_from_parkable(&response, &encoded);
         let result = Ok(response);
-        host.record_get_subresource_network_result_with_initiator(
+        host.record_get_subresource_network_result_with_body_and_initiator(
             frame_id,
             document_url,
             request_url,
             SubresourceResourceType::Image,
             request_initiator_type,
             &result,
+            crate::types::SubresourceResponseBody::from_parkable_image(encoded.clone()),
         );
-        return result.map(|response| ImageElementResourceFetchStart::Local {
-            response: Box::new(response),
+        return result.map(|_| ImageElementResourceFetchStart::Local {
+            descriptor,
+            encoded,
         });
     }
 
@@ -353,7 +366,9 @@ pub(crate) fn start_image_element_resource_fetch(
                     skip_fetch_security_validation: false,
                     response_filter: None,
                     network_error_text: None,
-                    result: Err("service worker image fetch dispatch failed".to_owned()),
+                    result: AsyncSubresourceFetchResult::Failure(
+                        "service worker image fetch dispatch failed".to_owned(),
+                    ),
                 },
             );
         }
@@ -375,7 +390,10 @@ pub(crate) fn start_image_element_resource_fetch(
                 skip_fetch_security_validation: false,
                 response_filter: None,
                 network_error_text: None,
-                result: outcome.network_result().as_ref().clone(),
+                result: AsyncSubresourceFetchResult::from_image_parts(
+                    outcome.network_result().as_ref().clone(),
+                    outcome.encoded(),
+                ),
             });
         });
         return Ok(ImageElementResourceFetchStart::Pending);
@@ -403,15 +421,24 @@ pub(crate) fn start_image_element_resource_fetch(
     Ok(ImageElementResourceFetchStart::Pending)
 }
 
-pub(crate) fn image_response_descriptor(
+pub(crate) fn image_response_descriptor_from_parkable(
     response: &crate::protocol_types::NavigationResponse,
+    encoded: &moli_parkable_image::ParkableImage,
 ) -> Option<crate::native_bridge::ImageResponseDescriptor> {
-    if !image_response_status_is_successful(response.status) {
+    let snapshot = encoded.snapshot().ok()?;
+    image_response_descriptor_from_bytes(response.status, &response.headers, &snapshot)
+}
+
+fn image_response_descriptor_from_bytes(
+    status: u16,
+    headers: &[(String, String)],
+    body: &[u8],
+) -> Option<crate::native_bridge::ImageResponseDescriptor> {
+    if !image_response_status_is_successful(status) {
         return None;
     }
-    let body = response.body_bytes();
     let computed_mime_type = moli_web_mime::computed_response_mime_type(
-        &response.headers,
+        headers,
         moli_web_mime::MimeSniffingContext::Image,
         body,
     );
