@@ -300,8 +300,8 @@ include Kitesurf, which is only available as a remote endpoint, the chart below
 uses 1,308 comparable tasks. All browsers use the same task selection rules.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/lexbench-five-engine-caliber-b-dark.png">
-  <img alt="Task success rate of five headless browsers over 1,308 comparable tasks: Chrome 99.8%, Moli 81.9%, Kitesurf 62.1%, Lightpanda 53.3%, Obscura 44.9%" src="assets/lexbench-five-engine-caliber-b-light.png" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/lexbench-five-engine-caliber-b-dark.jpg">
+  <img alt="Task success rate of five headless browsers over 1,308 comparable tasks: Chrome 99.8%, Moli 81.9%, Kitesurf 62.1%, Lightpanda 53.3%, Obscura 44.9%" src="assets/lexbench-five-engine-caliber-b-light.jpg" width="100%">
 </picture>
 
 **Moli 0.1.1 passed 1,071 tasks, a success rate of 81.88%**, ahead of Kitesurf
@@ -313,8 +313,8 @@ of local binaries. See the benchmark's
 for the full results.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/lexbench-efficiency-map-dark.png">
-  <img alt="Task success rate plotted against median peak memory per task for the four local engines: Chrome at 99.9% and 697 MiB, Moli at 80.7% and 92 MiB, Lightpanda at 43.8% and 34 MiB, Obscura at 39.5% and 39 MiB" src="assets/lexbench-efficiency-map-light.png" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/lexbench-efficiency-map-dark.jpg">
+  <img alt="Task success rate plotted against median peak memory per task for the four local engines: Chrome at 99.9% and 697 MiB, Moli at 80.7% and 92 MiB, Lightpanda at 43.8% and 34 MiB, Obscura at 39.5% and 39 MiB" src="assets/lexbench-efficiency-map-light.jpg" width="100%">
 </picture>
 
 Kitesurf is a remote service, so its CPU, memory, and process counts cannot be

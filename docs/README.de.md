@@ -243,15 +243,15 @@ In der aktuellen WPT-Auswahl zur Überprüfung von Molis Funktionsumfang als Age
 Der vollständige Aufgabenbestand von [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) umfasst 1.928 Aufgaben zu rohem CDP, 13 fest versionierten Automatisierungswerkzeugen wie Playwright, Puppeteer und Selenium sowie zur Semantik der Web-Plattform. Da Kitesurf nur als entfernter Endpunkt verfügbar ist, verwendet die folgende Grafik 1.308 vergleichbare Aufgaben. Für alle Browser gelten dieselben Regeln zur Aufgabenauswahl.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-five-engine-caliber-b-dark.png">
-  <img alt="Erfolgsquote von fünf Headless-Browsern über 1.308 vergleichbare Aufgaben: Chrome 99,8 %, Moli 81,9 %, Kitesurf 62,1 %, Lightpanda 53,3 %, Obscura 44,9 %" src="../assets/lexbench-five-engine-caliber-b-light.png" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-five-engine-caliber-b-dark.jpg">
+  <img alt="Erfolgsquote von fünf Headless-Browsern über 1.308 vergleichbare Aufgaben: Chrome 99,8 %, Moli 81,9 %, Kitesurf 62,1 %, Lightpanda 53,3 %, Obscura 44,9 %" src="../assets/lexbench-five-engine-caliber-b-light.jpg" width="100%">
 </picture>
 
 **Moli 0.1.1 bestand 1.071 Aufgaben und erreichte 81,88 %**. Kitesurf erreichte 62,08 %, Lightpanda 53,29 % und Obscura 44,88 %; Chrome kam als Referenz-Engine auf 99,85 %. Kitesurf lief mit k=1, nicht abgedeckte Aufgaben zählen als nicht bestanden, und die Reproduktionsbedingungen eines entfernten Dienstes unterscheiden sich von denen lokaler Binärdateien. Die vollständigen Ergebnisse stehen im [Fünf-Engine-Bericht](https://github.com/lexmount/Lexbench-Headless-Browser/blob/kitesurf-eval/docs/reports/five-engine-report-20260813.md) des Benchmarks.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-efficiency-map-dark.png">
-  <img alt="Aufgaben-Erfolgsquote gegen den Median des Spitzenspeichers pro Aufgabe für die vier lokalen Engines: Chrome bei 99,9 % und 697 MiB, Moli bei 80,7 % und 92 MiB, Lightpanda bei 43,8 % und 34 MiB, Obscura bei 39,5 % und 39 MiB" src="../assets/lexbench-efficiency-map-light.png" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-efficiency-map-dark.jpg">
+  <img alt="Aufgaben-Erfolgsquote gegen den Median des Spitzenspeichers pro Aufgabe für die vier lokalen Engines: Chrome bei 99,9 % und 697 MiB, Moli bei 80,7 % und 92 MiB, Lightpanda bei 43,8 % und 34 MiB, Obscura bei 39,5 % und 39 MiB" src="../assets/lexbench-efficiency-map-light.jpg" width="100%">
 </picture>
 
 Kitesurf ist ein entfernter Dienst, dessen CPU, Arbeitsspeicher und Prozessanzahl nicht messbar sind. Der Ressourcenvergleich umfasst daher nur die vier lokalen Engines. Ein separater Lauf mit 557 Aufgaben berücksichtigt nur Arbeiten, die alle vier abgeschlossen haben. Molis Median pro Aufgabe lag bei **100,6 ms CPU-Zeit** und **92 MiB Spitzenspeicher**; Chrome erreichte **687 ms** beziehungsweise **697 MiB**. Damit lag Moli bei rund 15 % der CPU-Zeit und 13 % des Spitzenspeichers von Chrome. Methodik und vollständige Daten stehen in der [Ressourcenübersicht](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md) des Benchmarks.

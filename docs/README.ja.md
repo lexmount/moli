@@ -242,15 +242,15 @@ Moli のエージェント向けブラウザとしての対応範囲を検証す
 [Lexbench-Headless-Browser](https://github.com/lexmount/Lexbench-Headless-Browser) の全タスクセットは 1,928 件で、生 CDP、Playwright・Puppeteer・Selenium などバージョンを固定した 13 種類の自動操作ツール、および Web プラットフォームのセマンティクスを対象とします。リモートエンドポイントとしてのみ提供される Kitesurf を含めるため、下のグラフではこのうち比較可能な 1,308 件を使用しています。すべてのブラウザに同じタスク選定ルールを適用しています。
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-five-engine-caliber-b-dark.png">
-  <img alt="5 種類のヘッドレスブラウザによる 1,308 件の比較可能なタスクの成功率：Chrome 99.8%、Moli 81.9%、Kitesurf 62.1%、Lightpanda 53.3%、Obscura 44.9%" src="../assets/lexbench-five-engine-caliber-b-light.png" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-five-engine-caliber-b-dark.jpg">
+  <img alt="5 種類のヘッドレスブラウザによる 1,308 件の比較可能なタスクの成功率：Chrome 99.8%、Moli 81.9%、Kitesurf 62.1%、Lightpanda 53.3%、Obscura 44.9%" src="../assets/lexbench-five-engine-caliber-b-light.jpg" width="100%">
 </picture>
 
 **Moli 0.1.1 は 1,071 件に合格し、成功率は 81.88% でした**。Kitesurf は 62.08%、Lightpanda は 53.29%、Obscura は 44.88%、参照エンジンの Chrome は 99.85% でした。Kitesurf は k=1 で実行され、未実行のタスクは不合格として数えられます。また、リモートサービスの再現条件はローカルバイナリとは異なります。全結果はベンチマークの[5 エンジンレポート](https://github.com/lexmount/Lexbench-Headless-Browser/blob/kitesurf-eval/docs/reports/five-engine-report-20260813.md)を参照してください。
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-efficiency-map-dark.png">
-  <img alt="4 つのローカルエンジンにおけるタスク成功率とタスクあたりピークメモリ中央値の関係：Chrome 99.9%・697 MiB、Moli 80.7%・92 MiB、Lightpanda 43.8%・34 MiB、Obscura 39.5%・39 MiB" src="../assets/lexbench-efficiency-map-light.png" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-efficiency-map-dark.jpg">
+  <img alt="4 つのローカルエンジンにおけるタスク成功率とタスクあたりピークメモリ中央値の関係：Chrome 99.9%・697 MiB、Moli 80.7%・92 MiB、Lightpanda 43.8%・34 MiB、Obscura 39.5%・39 MiB" src="../assets/lexbench-efficiency-map-light.jpg" width="100%">
 </picture>
 
 Kitesurf はリモートサービスのため、CPU、メモリ、プロセス数を測定できません。リソース比較は 4 つのローカルエンジンのみを対象とします。別に実施した 557 タスクの測定では、4 エンジンすべてが完了した処理だけを集計しています。Moli のタスクあたり中央値は **CPU 100.6 ms**、**ピークメモリ 92 MiB** でした。Chrome はそれぞれ **687 ms**、**697 MiB** でした。Moli の CPU 時間は Chrome の約 15%、ピークメモリは約 13% です。測定方法と全データはベンチマークの[リソースカード](https://github.com/lexmount/Lexbench-Headless-Browser/blob/main/docs/reports/resource-card-20260812.md)を参照してください。
