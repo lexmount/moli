@@ -89,12 +89,12 @@ curl = { git = "https://github.com/ldm0/curl-rust", branch = "lightmount" }
 curl-sys = { git = "https://github.com/ldm0/curl-rust", branch = "lightmount" }
 cookie = { git = "https://github.com/ldm0/cookie-rs", branch = "priority" }
 v8 = { path = "vendor/v8-146.9.0" }
-selectors = { git = "https://github.com/ldm0/stylo", rev = "74cd014af14d84db1fc8faed85086895012fc687" }
-stylo = { git = "https://github.com/ldm0/stylo", rev = "74cd014af14d84db1fc8faed85086895012fc687" }
-stylo_atoms = { git = "https://github.com/ldm0/stylo", rev = "74cd014af14d84db1fc8faed85086895012fc687" }
-stylo_dom = { git = "https://github.com/ldm0/stylo", rev = "74cd014af14d84db1fc8faed85086895012fc687" }
-stylo_static_prefs = { git = "https://github.com/ldm0/stylo", rev = "74cd014af14d84db1fc8faed85086895012fc687" }
-stylo_traits = { git = "https://github.com/ldm0/stylo", rev = "74cd014af14d84db1fc8faed85086895012fc687" }
+selectors = { git = "https://github.com/ldm0/stylo", rev = "344aa5f448602f5f724fdd6acaf69c485cf5ba90" }
+stylo = { git = "https://github.com/ldm0/stylo", rev = "344aa5f448602f5f724fdd6acaf69c485cf5ba90" }
+stylo_atoms = { git = "https://github.com/ldm0/stylo", rev = "344aa5f448602f5f724fdd6acaf69c485cf5ba90" }
+stylo_dom = { git = "https://github.com/ldm0/stylo", rev = "344aa5f448602f5f724fdd6acaf69c485cf5ba90" }
+stylo_static_prefs = { git = "https://github.com/ldm0/stylo", rev = "344aa5f448602f5f724fdd6acaf69c485cf5ba90" }
+stylo_traits = { git = "https://github.com/ldm0/stylo", rev = "344aa5f448602f5f724fdd6acaf69c485cf5ba90" }
 taffy = { git = "https://github.com/ldm0/taffy", rev = "28923cb1d9164245e10566ef8156fa5cfa9633bb" }
 
 [workspace.lints.clippy]
