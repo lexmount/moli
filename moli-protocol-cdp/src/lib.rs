@@ -20,6 +20,6 @@ pub use runtime::remote_object_from_json_value;
 pub use target::{CdpTargetKindWire, CdpTargetType, cdp_target_type_wire_value};
 pub use time::{DEFAULT_LOADER_ID, monotonic_timestamp_seconds};
 pub use wire::{
-    CdpRendererCommandAccess, CdpRendererCommandPolicy, CdpRendererCommandReplacement,
-    CdpRendererCommandReplayDispatch, CdpRequest, ParsedCdpCommand,
+    CdpInspectorTaskMode, CdpRendererCommandAccess, CdpRendererCommandPolicy,
+    CdpRendererCommandReplacement, CdpRendererCommandReplayDispatch, CdpRequest, ParsedCdpCommand,
 };

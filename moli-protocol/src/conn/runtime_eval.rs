@@ -1,6 +1,6 @@
 use std::{collections::hash_map::Entry, future::Future, pin::Pin};
 
-use moli_page_types::{FrontendCommandId, RendererCallId};
+use moli_page_types::{FrontendCommandId, RendererCallId, RendererInspectorResponseDelivery};
 use moli_protocol_cdp::CdpRendererCommandReplayDispatch;
 use moli_shared_worker::SharedWorkerInstanceId;
 use serde_json::{Map, Value, json};
@@ -336,6 +336,7 @@ pub struct PendingRuntimeProtocolMessageDispatch {
     route: RuntimeProtocolMessagePageRoute,
     pending: PendingRuntimeProtocolMessageDispatchKind,
     deferred_response_rx: Option<RuntimeInspectorResponseReceiver>,
+    response_delivery: RendererInspectorResponseDelivery,
 }
 
 enum PendingRuntimeProtocolMessageDispatchKind {
@@ -387,6 +388,7 @@ pub struct CompletedRuntimeProtocolMessageDispatch {
     route: RuntimeProtocolMessagePageRoute,
     completion: moli_core::page::CompletedRuntimeInspectorCommandDispatch,
     deferred_response_rx: Option<RuntimeInspectorResponseReceiver>,
+    response_delivery: RendererInspectorResponseDelivery,
 }
 
 pub struct CompletedSharedWorkerRuntimeProtocolMessageDispatch {
@@ -540,6 +542,7 @@ impl PendingRuntimeProtocolMessageDispatch {
             route: self.route,
             completion,
             deferred_response_rx: self.deferred_response_rx,
+            response_delivery: self.response_delivery,
         })
     }
 }
@@ -580,6 +583,10 @@ impl CompletedRuntimeProtocolMessageDispatch {
         &mut self,
     ) -> Option<RuntimeInspectorResponseReceiver> {
         self.deferred_response_rx.take()
+    }
+
+    pub(crate) const fn response_delivery(&self) -> RendererInspectorResponseDelivery {
+        self.response_delivery
     }
 }
 
@@ -949,10 +956,12 @@ impl CdpConnection {
             String,
             RendererRuntimeInspectorResponseSender,
             RuntimeInspectorResponseReceiver,
+            RendererInspectorResponseDelivery,
         ),
         String,
     > {
         let raw_json = descriptor.frontend_payload().to_owned();
+        let response_delivery = descriptor.response_delivery();
         let prepared = self.try_register_renderer_call_for_session_owner(
             session_id,
             cdp_request_id,
@@ -970,7 +979,13 @@ impl CdpConnection {
         ) {
             Ok(raw_json) => {
                 let (correlation, response_sender, response_receiver) = prepared.into_parts();
-                Ok((correlation, raw_json, response_sender, response_receiver))
+                Ok((
+                    correlation,
+                    raw_json,
+                    response_sender,
+                    response_receiver,
+                    response_delivery,
+                ))
             }
             Err(error) => {
                 let removed = self
@@ -2948,6 +2963,45 @@ impl CdpConnection {
         }
     }
 
+    /// Resolves terminal responses carried by the renderer's concrete
+    /// DevTools session output stream.
+    ///
+    /// Notifications have no renderer call id and remain in place. A response
+    /// without an exact `(session, attachment, renderer call)` registration is
+    /// stale and must not expose the renderer-private id on the wire.
+    pub(crate) fn restore_frontend_command_ids_in_devtools_session_output(
+        &mut self,
+        session_id: Option<&str>,
+        dispatched_attachment_id: RendererAgentAttachmentId,
+        messages: &mut Vec<RendererRuntimeInspectorMessage>,
+    ) {
+        messages.retain_mut(|message| {
+            let RendererRuntimeInspectorMessage::Protocol(message) = message else {
+                return true;
+            };
+            let Some(renderer_call_id) = message.renderer_call_id() else {
+                return true;
+            };
+            let Some(correlation) = self
+                .take_frontend_command_for_renderer_if_attachment_matches_for_session_owner(
+                    session_id,
+                    renderer_call_id,
+                    Some(dispatched_attachment_id),
+                )
+            else {
+                tracing::debug!(
+                    session_id,
+                    renderer_call_id = renderer_call_id.get(),
+                    attachment_id = dispatched_attachment_id.get(),
+                    "dropping DevTools session response without a live renderer correlation"
+                );
+                return false;
+            };
+            message.value_mut()["id"] = json!(correlation.frontend_command_id().get());
+            true
+        });
+    }
+
     fn start_or_enqueue_registered_runtime_inspector_response_ready(
         &self,
         command_id: u64,
@@ -3754,8 +3808,13 @@ impl CdpConnection {
         command_id: u64,
     ) -> Result<PendingSharedWorkerRuntimeProtocolMessageDispatch, String> {
         self.shared_worker_runtime_target_for_session(session_id)?;
-        let (correlation, raw_json, response_sender, response_receiver) =
+        let (correlation, raw_json, response_sender, response_receiver, response_delivery) =
             self.prepare_renderer_call_for_session_owner(session_id, descriptor, command_id, None)?;
+        debug_assert_eq!(
+            response_delivery,
+            RendererInspectorResponseDelivery::CommandReply,
+            "worker responses have not migrated to the page DevTools session output"
+        );
         let result = self.start_shared_worker_runtime_protocol_message_for_session_with_optional_deferred_response(
             session_id,
             raw_json,
@@ -3902,8 +3961,13 @@ impl CdpConnection {
         command_id: u64,
     ) -> Result<PendingServiceWorkerRuntimeProtocolMessageDispatch, String> {
         self.service_worker_runtime_target_for_session(session_id)?;
-        let (correlation, raw_json, response_sender, response_receiver) =
+        let (correlation, raw_json, response_sender, response_receiver, response_delivery) =
             self.prepare_renderer_call_for_session_owner(session_id, descriptor, command_id, None)?;
+        debug_assert_eq!(
+            response_delivery,
+            RendererInspectorResponseDelivery::CommandReply,
+            "worker responses have not migrated to the page DevTools session output"
+        );
         let result = self.start_service_worker_runtime_protocol_message_for_session_with_optional_deferred_response(
             session_id,
             raw_json,
@@ -4300,6 +4364,7 @@ impl CdpConnection {
             route,
             pending,
             deferred_response_rx: None,
+            response_delivery: RendererInspectorResponseDelivery::CommandReply,
         })
     }
 
@@ -4339,13 +4404,13 @@ impl CdpConnection {
         inspector_route: RendererInspectorCommandRoute,
     ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
         let route = self.runtime_protocol_message_page_route_for_session_owner(session_id)?;
-        let (correlation, raw_json, response_sender, response_receiver) = self
+        let (correlation, raw_json, response_sender, response_receiver, response_delivery) = self
             .prepare_renderer_call_for_session_owner(
-                session_id,
-                descriptor,
-                command_id,
-                Some(route.renderer_agent_attachment_id),
-            )?;
+            session_id,
+            descriptor,
+            command_id,
+            Some(route.renderer_agent_attachment_id),
+        )?;
         let inspector_session_id =
             self.target_renderer_runtime_inspector_session_id_for_session(session_id);
         let page_result = match inspector_route {
@@ -4371,6 +4436,7 @@ impl CdpConnection {
             None,
             raw_json,
             response_sender,
+            response_delivery,
         ) {
             Ok(pending) => pending,
             Err(error) => {
@@ -4385,6 +4451,7 @@ impl CdpConnection {
             route,
             pending: PendingRuntimeProtocolMessageDispatchKind::Routable(pending),
             deferred_response_rx: Some(response_receiver),
+            response_delivery,
         })
     }
 
@@ -4412,6 +4479,7 @@ impl CdpConnection {
             route,
             pending: PendingRuntimeProtocolMessageDispatchKind::Page(pending),
             deferred_response_rx: None,
+            response_delivery: RendererInspectorResponseDelivery::CommandReply,
         })
     }
 
@@ -4423,13 +4491,13 @@ impl CdpConnection {
         command_id: u64,
     ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
         let route = self.runtime_protocol_message_page_route_for_session_owner(session_id)?;
-        let (correlation, raw_json, response_sender, response_receiver) = self
+        let (correlation, raw_json, response_sender, response_receiver, response_delivery) = self
             .prepare_renderer_call_for_session_owner(
-                session_id,
-                descriptor,
-                command_id,
-                Some(route.renderer_agent_attachment_id),
-            )?;
+            session_id,
+            descriptor,
+            command_id,
+            Some(route.renderer_agent_attachment_id),
+        )?;
         let inspector_session_id =
             self.target_renderer_runtime_inspector_session_id_for_session(session_id);
         let page = match self.runtime_session_owner_page_mut(session_id) {
@@ -4447,6 +4515,7 @@ impl CdpConnection {
             Some(action.to_owned()),
             raw_json,
             response_sender,
+            response_delivery,
         ) {
             Ok(pending) => pending,
             Err(error) => {
@@ -4461,6 +4530,7 @@ impl CdpConnection {
             route,
             pending: PendingRuntimeProtocolMessageDispatchKind::Routable(pending),
             deferred_response_rx: Some(response_receiver),
+            response_delivery,
         })
     }
 
@@ -4549,7 +4619,7 @@ impl CdpConnection {
             let frontend_session_id = replay.frontend_session_id().map(str::to_owned);
             let renderer_inspector_session_id =
                 replay.renderer_inspector_session_id().map(str::to_owned);
-            let (correlation, dispatch, frontend_payload, response_sender) =
+            let (correlation, dispatch, response_delivery, frontend_payload, response_sender) =
                 replay.into_replay().into_parts();
             let raw_json = match self.rewrite_runtime_inspector_command_for_session_owner(
                 frontend_session_id.as_deref(),
@@ -4561,7 +4631,14 @@ impl CdpConnection {
             ) {
                 Ok(raw_json) => raw_json,
                 Err(error) => {
-                    send_renderer_replay_error(&response_sender, correlation, &error);
+                    self.settle_renderer_replay_error(
+                        &mut events,
+                        frontend_session_id.as_deref(),
+                        response_delivery,
+                        &response_sender,
+                        correlation,
+                        &error,
+                    );
                     continue;
                 }
             };
@@ -4570,12 +4647,22 @@ impl CdpConnection {
             ) {
                 Ok(route) => route,
                 Err(error) => {
-                    send_renderer_replay_error(&response_sender, correlation, &error);
+                    self.settle_renderer_replay_error(
+                        &mut events,
+                        frontend_session_id.as_deref(),
+                        response_delivery,
+                        &response_sender,
+                        correlation,
+                        &error,
+                    );
                     continue;
                 }
             };
             if route.renderer_agent_attachment_id != new_attachment_id {
-                send_renderer_replay_error(
+                self.settle_renderer_replay_error(
+                    &mut events,
+                    frontend_session_id.as_deref(),
+                    response_delivery,
                     &response_sender,
                     correlation,
                     "renderer replay attachment is no longer current",
@@ -4587,34 +4674,67 @@ impl CdpConnection {
                 {
                     Ok(page) => page,
                     Err(error) => {
-                        send_renderer_replay_error(&response_sender, correlation, &error);
+                        self.settle_renderer_replay_error(
+                            &mut events,
+                            frontend_session_id.as_deref(),
+                            response_delivery,
+                            &response_sender,
+                            correlation,
+                            &error,
+                        );
                         continue;
                     }
                 };
                 let dispatch_sender = response_sender.clone();
-                match dispatch {
-                    CdpRendererCommandReplayDispatch::ResolveRuntimeContext => page.start_runtime_protocol_message_for_inspector_session_with_context_resolution_and_deferred_response(
-                        renderer_inspector_session_id,
-                        "addBinding".to_owned(),
-                        raw_json,
-                        dispatch_sender,
-                    ),
-                    CdpRendererCommandReplayDispatch::Direct => page.start_runtime_protocol_message_for_inspector_session_with_deferred_response(
-                        renderer_inspector_session_id,
-                        raw_json,
-                        dispatch_sender,
-                    ),
+                match response_delivery {
+                    RendererInspectorResponseDelivery::CommandReply => match dispatch {
+                        CdpRendererCommandReplayDispatch::ResolveRuntimeContext => page
+                            .start_runtime_protocol_message_for_inspector_session_with_context_resolution_and_deferred_response(
+                                renderer_inspector_session_id,
+                                "addBinding".to_owned(),
+                                raw_json,
+                                dispatch_sender,
+                            )
+                            .map(PendingRuntimeProtocolMessageDispatchKind::Page),
+                        CdpRendererCommandReplayDispatch::Direct => page
+                            .start_runtime_protocol_message_for_inspector_session_with_deferred_response(
+                                renderer_inspector_session_id,
+                                raw_json,
+                                dispatch_sender,
+                            )
+                            .map(PendingRuntimeProtocolMessageDispatchKind::Page),
+                    },
+                    RendererInspectorResponseDelivery::DevToolsSession => {
+                        debug_assert_eq!(
+                            dispatch,
+                            CdpRendererCommandReplayDispatch::Direct,
+                            "the migrated synchronous IO family must replay directly"
+                        );
+                        page.start_routable_runtime_protocol_message_for_inspector_session(
+                            renderer_inspector_session_id,
+                            RendererInspectorCommandRoute::Io,
+                            None,
+                            raw_json,
+                            dispatch_sender,
+                            response_delivery,
+                        )
+                        .map(PendingRuntimeProtocolMessageDispatchKind::Routable)
+                    }
                 }
             };
             let pending = match pending {
                 Ok(pending) => PendingRuntimeProtocolMessageDispatch {
                     session_id: frontend_session_id.clone(),
                     route,
-                    pending: PendingRuntimeProtocolMessageDispatchKind::Page(pending),
+                    pending,
                     deferred_response_rx: None,
+                    response_delivery,
                 },
                 Err(error) => {
-                    send_renderer_replay_error(
+                    self.settle_renderer_replay_error(
+                        &mut events,
+                        frontend_session_id.as_deref(),
+                        response_delivery,
                         &response_sender,
                         correlation,
                         &format!("runtime inspector replay dispatch failed: {error}"),
@@ -4625,7 +4745,14 @@ impl CdpConnection {
             let completed = match pending.wait().await {
                 Ok(completed) => completed,
                 Err(error) => {
-                    send_renderer_replay_error(&response_sender, correlation, &error);
+                    self.settle_renderer_replay_error(
+                        &mut events,
+                        frontend_session_id.as_deref(),
+                        response_delivery,
+                        &response_sender,
+                        correlation,
+                        &error,
+                    );
                     continue;
                 }
             };
@@ -4633,8 +4760,18 @@ impl CdpConnection {
                 moli_core::page::CompletedRuntimeInspectorCommandDispatch::Owner(completion) => {
                     *completion
                 }
-                moli_core::page::CompletedRuntimeInspectorCommandDispatch::Inspector
-                | moli_core::page::CompletedRuntimeInspectorCommandDispatch::Canceled => {
+                moli_core::page::CompletedRuntimeInspectorCommandDispatch::Inspector => {
+                    continue;
+                }
+                moli_core::page::CompletedRuntimeInspectorCommandDispatch::Canceled => {
+                    self.settle_renderer_replay_error(
+                        &mut events,
+                        frontend_session_id.as_deref(),
+                        response_delivery,
+                        &response_sender,
+                        correlation,
+                        "Inspected target navigated or closed",
+                    );
                     continue;
                 }
             };
@@ -4682,6 +4819,43 @@ impl CdpConnection {
                 .await;
         }
         Ok(events)
+    }
+
+    fn settle_renderer_replay_error(
+        &mut self,
+        events: &mut Vec<BackgroundProtocolEvent>,
+        frontend_session_id: Option<&str>,
+        response_delivery: RendererInspectorResponseDelivery,
+        response_sender: &RendererRuntimeInspectorResponseSender,
+        correlation: RendererCommandCorrelation,
+        message: &str,
+    ) {
+        if response_delivery == RendererInspectorResponseDelivery::CommandReply {
+            send_renderer_replay_error(response_sender, correlation, message);
+            return;
+        }
+
+        let Some(resolved) = self
+            .take_frontend_command_for_renderer_if_attachment_matches_for_session_owner(
+                frontend_session_id,
+                correlation.renderer_call_id(),
+                correlation.dispatched_attachment_id(),
+            )
+        else {
+            return;
+        };
+        debug_assert_eq!(resolved, correlation);
+        let mut response = json!({
+            "id": resolved.frontend_command_id().get(),
+            "error": {
+                "code": -32000,
+                "message": message,
+            },
+        });
+        if let Some(session_id) = frontend_session_id {
+            response["sessionId"] = json!(session_id);
+        }
+        events.push(protocol_message_background_event(response));
     }
 
     pub(crate) fn terminate_prepared_renderer_calls_after_navigation(
@@ -5837,6 +6011,73 @@ mod tests {
             .to_string(),
         )
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn devtools_session_output_restores_only_the_exact_registered_frontend_response() {
+        let mut conn = CdpConnection::default();
+        let mut browser_context = BrowserContext::new("BID-session-output".to_owned());
+        browser_context.set_active_target_id("TID-session-output".to_owned());
+        browser_context.attach_active_session("SID-session-output".to_owned());
+        conn.browser_context = Some(browser_context);
+
+        let attachment_id = RendererAgentAttachmentId::allocate();
+        let frontend = ParsedCdpCommand::parse_str(
+            r#"{"id":44,"method":"Debugger.getScriptSource","params":{"scriptId":"7"}}"#,
+        )
+        .expect("frontend command should parse");
+        let prepared = conn
+            .try_register_renderer_call_for_session_owner(
+                Some("SID-session-output"),
+                44,
+                Some(attachment_id),
+                RendererCommandDescriptor::from_frontend_policy(
+                    frontend.json().to_owned(),
+                    frontend.renderer_policy(),
+                ),
+            )
+            .expect("frontend response correlation should register");
+        let (correlation, response_sender, response_receiver) = prepared.into_parts();
+        drop(response_sender);
+        let mut messages = vec![
+            RendererRuntimeInspectorMessage::protocol(json!({
+                "method": "Debugger.scriptParsed",
+                "params": { "scriptId": "7" },
+            })),
+            RendererRuntimeInspectorMessage::protocol(json!({
+                "id": correlation.renderer_call_id().get(),
+                "result": { "scriptSource": "source" },
+            })),
+            RendererRuntimeInspectorMessage::protocol(json!({
+                "id": correlation.renderer_call_id().get() + 1,
+                "result": { "scriptSource": "stale" },
+            })),
+        ];
+
+        conn.restore_frontend_command_ids_in_devtools_session_output(
+            Some("SID-session-output"),
+            attachment_id,
+            &mut messages,
+        );
+
+        assert_eq!(
+            messages.len(),
+            2,
+            "stale renderer responses must be dropped"
+        );
+        let RendererRuntimeInspectorMessage::Protocol(response) = &messages[1] else {
+            panic!("expected a protocol response");
+        };
+        assert_eq!(response.value()["id"], json!(44));
+        assert!(
+            conn.renderer_runtime_command_cause_for_frontend(Some("SID-session-output"), 44,)
+                .is_none(),
+            "publishing the session response must consume its exact correlation"
+        );
+        assert!(
+            response_receiver.await.is_err(),
+            "the legacy reply receiver should close after session output takes ownership"
+        );
     }
 
     fn bidi_channel_listener_residence_for_test(

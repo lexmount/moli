@@ -3,13 +3,16 @@ use crate::devtools::pause::{
     RendererInspectorSessionOutboundRoute,
 };
 use crate::runtime::{
-    PendingRendererOutputRecord, RendererCommandTurnOutputRecorder, RendererProtocolObservation,
+    PendingRendererOutputRecord, RendererCommandTurnOutputRecorder,
+    RendererDevToolsSessionOutputHost, RendererProtocolObservation,
     RendererRuntimeCommandOutputRecorder, RendererRuntimeInspectorMessage,
     RendererRuntimeInspectorMessageBatch, RendererRuntimeInspectorResponseSender,
     RendererTurnOutputJournal,
 };
 use anyhow::Result;
-use moli_page_types::{DevToolsSessionKey, RendererDevToolsAgentToken};
+use moli_page_types::{
+    DevToolsSessionKey, RendererDevToolsAgentToken, RendererInspectorResponseDelivery,
+};
 use serde_json::Value;
 use std::{
     cell::RefCell,
@@ -404,6 +407,38 @@ impl InspectorOutbound {
             previous.is_none(),
             "runtime inspector response callback registered twice for call id {call_id}"
         );
+    }
+
+    /// Registers a real frontend command with its explicit terminal response
+    /// destination. Internal Classic/BiDi adapter calls intentionally keep
+    /// using `register_response_callback`, which always preserves their
+    /// private command reply capability.
+    pub(in crate::script_vm) fn register_frontend_response_callback(
+        &self,
+        callback: RendererRuntimeInspectorResponseSender,
+        delivery: RendererInspectorResponseDelivery,
+    ) {
+        let callback = match delivery {
+            RendererInspectorResponseDelivery::CommandReply => callback,
+            RendererInspectorResponseDelivery::DevToolsSession => {
+                let host = self
+                    .session
+                    .clone()
+                    .zip(self.output_journal.clone())
+                    .zip(callback.renderer_agent_attachment_id())
+                    .map(|((session, output_journal), attachment_id)| {
+                        RendererDevToolsSessionOutputHost::new(
+                            self.agent_token,
+                            session,
+                            attachment_id,
+                            output_journal,
+                        )
+                    })
+                    .expect("frontend session output requires an attachment-scoped Page journal");
+                callback.route_to_devtools_session_output(host)
+            }
+        };
+        self.register_response_callback(callback);
     }
 
     pub(in crate::script_vm) fn cancel_response_callback(&self, call_id: i32) {

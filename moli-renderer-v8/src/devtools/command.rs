@@ -4,24 +4,26 @@ use crate::runtime::{
     RendererInspectorPageCommand, RendererPageCommand, RendererRuntimeInspectorResponseSender,
 };
 use crate::script_execution_control::RendererScriptExecutionControl;
-use moli_page_types::{DevToolsSessionKey, RendererAgentAttachmentId};
+use moli_page_types::{
+    DevToolsSessionKey, RendererAgentAttachmentId, RendererDevToolsCommandId,
+    RendererInspectorResponseDelivery,
+};
 use serde_json::Value;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Chromium routes Page DevTools work through separate main-thread and IO
-/// session ingress paths. Ordering is guaranteed within one session and one
-/// route, while an IO command may overtake main-thread work that has not
-/// reached its first dispatch yet.
+/// session ingress paths. Main preserves its receiver order independently,
+/// while IO commands enter one target-level Inspector task FIFO and may
+/// overtake blocked main-thread work.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum RendererInspectorCommandRoute {
     MainThread,
     Io,
 }
 
-/// The command owns its `(Page, session, route)` lane until its first access to
-/// the frontend V8 Inspector session. Protocol response completion is not part
-/// of this lifetime: V8 may complete a response asynchronously, and holding the
-/// lane for that response could prevent a later resume command from running.
+/// The command owns its receiver dispatch slot until its first access to the
+/// target agent. Protocol response completion is not part of this lifetime:
+/// V8 may complete a response asynchronously, and holding the slot for that
+/// response could prevent a later resume command from running.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RendererInspectorFirstDispatchLifecycle {
     OrderedUntilFirstDispatch,
@@ -62,14 +64,12 @@ enum RendererInspectorMainDispatchBoundary {
     PageOwner,
 }
 
-static NEXT_RENDERER_INSPECTOR_INGRESS_SEQUENCE: AtomicU64 = AtomicU64::new(1);
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RendererInspectorIngressTicket {
     attachment: Option<RendererAgentAttachmentId>,
     session: DevToolsSessionKey,
     route: RendererInspectorCommandRoute,
-    sequence: u64,
+    command_id: RendererDevToolsCommandId,
 }
 
 impl RendererInspectorIngressTicket {
@@ -86,11 +86,7 @@ impl RendererInspectorIngressTicket {
                     .filter(|session_id| !session_id.is_empty()),
             ),
             route,
-            sequence: NEXT_RENDERER_INSPECTOR_INGRESS_SEQUENCE
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |sequence| {
-                    sequence.checked_add(1)
-                })
-                .expect("renderer Inspector ingress sequence overflow"),
+            command_id: RendererDevToolsCommandId::allocate(),
         }
     }
 
@@ -106,8 +102,13 @@ impl RendererInspectorIngressTicket {
         self.route
     }
 
+    pub fn command_id(&self) -> RendererDevToolsCommandId {
+        self.command_id
+    }
+
+    /// Transitional raw identity accessor for existing renderer queues.
     pub fn sequence(&self) -> u64 {
-        self.sequence
+        self.command_id.get()
     }
 
     pub(crate) fn bind_attachment(&mut self, attachment: RendererAgentAttachmentId) {
@@ -139,7 +140,7 @@ pub struct RendererInspectorCommandEnvelope {
 /// Chromium chooses the IO receiver at the `DevToolsSession` boundary, before
 /// it chooses the renderer agent that will execute the command. Keep that
 /// ordering structural here as well: V8 Inspector, Performance, and Emulation
-/// commands share one `(target, session, IO)` first-dispatch lane.
+/// commands share one target-level IO task FIFO.
 #[doc(hidden)]
 pub struct RendererDevToolsIoCommandEnvelope {
     ticket: RendererInspectorIngressTicket,
@@ -356,6 +357,7 @@ enum RendererInspectorCommandPayload {
     Io {
         raw_json: String,
         response: Option<RendererRuntimeInspectorResponseSender>,
+        response_delivery: RendererInspectorResponseDelivery,
     },
 }
 
@@ -423,6 +425,7 @@ impl RendererInspectorCommandEnvelope {
         ticket: RendererInspectorIngressTicket,
         raw_json: String,
         response: Option<RendererRuntimeInspectorResponseSender>,
+        response_delivery: RendererInspectorResponseDelivery,
     ) -> Self {
         assert_eq!(
             ticket.route(),
@@ -435,7 +438,11 @@ impl RendererInspectorCommandEnvelope {
             first_dispatch: RendererInspectorFirstDispatchLifecycle::OrderedUntilFirstDispatch,
             pause_effect: RendererInspectorPauseCommandEffect::from_message(message.as_ref()),
             main_dispatch_boundary: RendererInspectorMainDispatchBoundary::InspectorSession,
-            payload: RendererInspectorCommandPayload::Io { raw_json, response },
+            payload: RendererInspectorCommandPayload::Io {
+                raw_json,
+                response,
+                response_delivery,
+            },
         }
     }
 
@@ -555,6 +562,16 @@ impl RendererInspectorCommandEnvelope {
             panic!("a MainThread Inspector envelope cannot enter IO dispatch");
         };
         response.as_ref()
+    }
+
+    pub(crate) fn io_response_delivery(&self) -> RendererInspectorResponseDelivery {
+        let RendererInspectorCommandPayload::Io {
+            response_delivery, ..
+        } = &self.payload
+        else {
+            panic!("a MainThread Inspector envelope cannot enter IO dispatch");
+        };
+        *response_delivery
     }
 
     pub(crate) fn take_io_response(&mut self) -> Option<RendererRuntimeInspectorResponseSender> {

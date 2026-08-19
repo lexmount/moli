@@ -236,7 +236,7 @@ impl Page {
     }
 
     /// Admits the DevTools IO-agent setting through the target's shared IO
-    /// session lane without entering the renderer owner's Main command queue.
+    /// task FIFO without entering the renderer owner's Main command queue.
     pub fn start_set_script_execution_disabled_from_io(
         &self,
         disabled: bool,

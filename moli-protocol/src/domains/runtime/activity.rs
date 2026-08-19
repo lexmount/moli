@@ -234,7 +234,7 @@ impl RuntimePreparedOutputs {
     }
 
     pub(crate) fn from_renderer_runtime_inspector_message_batches(
-        conn: &CdpConnection,
+        conn: &mut CdpConnection,
         source_session_id: Option<&str>,
         batches: &[RendererRuntimeInspectorMessageBatch],
     ) -> Self {
@@ -248,10 +248,19 @@ impl RuntimePreparedOutputs {
             else {
                 continue;
             };
-            let messages = batch
-                .messages
-                .iter()
-                .cloned()
+            let mut renderer_messages = batch.messages.clone();
+            if let Some(renderer_agent_attachment_id) = batch.renderer_agent_attachment_id() {
+                conn.restore_frontend_command_ids_in_devtools_session_output(
+                    attachment.session_id(),
+                    renderer_agent_attachment_id,
+                    &mut renderer_messages,
+                );
+            }
+            if renderer_messages.is_empty() {
+                continue;
+            }
+            let messages = renderer_messages
+                .into_iter()
                 .map(|message| {
                     RuntimeInspectorMessage::from_renderer_message(
                         message,
@@ -513,7 +522,7 @@ mod tests {
     }
 
     fn renderer_inspector_outputs(
-        conn: &CdpConnection,
+        conn: &mut CdpConnection,
         source_session_id: Option<&str>,
         renderer_inspector_session_id: Option<&str>,
         messages: Vec<Value>,
@@ -536,7 +545,7 @@ mod tests {
 
     #[test]
     fn renderer_inspector_batches_keep_their_command_response_side() {
-        let (conn, _) = runtime_binding_attachment_fixture();
+        let (mut conn, _) = runtime_binding_attachment_fixture();
         let agent_token = RendererDevToolsAgentToken::allocate();
         let session = DevToolsSessionKey::Primary;
         let batches = vec![
@@ -559,7 +568,7 @@ mod tests {
         ];
 
         let outputs = RuntimePreparedOutputs::from_renderer_runtime_inspector_message_batches(
-            &conn,
+            &mut conn,
             Some("SID-1"),
             &batches,
         );
@@ -766,7 +775,7 @@ mod tests {
     async fn runtime_inspector_activity_uses_capture_time_attachment() {
         let (mut conn, _attachment) = runtime_binding_attachment_fixture();
         let outputs = renderer_inspector_outputs(
-            &conn,
+            &mut conn,
             Some("SID-1"),
             None,
             vec![json!({
@@ -802,7 +811,7 @@ mod tests {
     async fn runtime_inspector_activity_discards_replaced_page_output() {
         let (mut conn, _attachment) = runtime_binding_attachment_fixture();
         let outputs = renderer_inspector_outputs(
-            &conn,
+            &mut conn,
             Some("SID-1"),
             None,
             vec![json!({
@@ -825,7 +834,7 @@ mod tests {
     async fn runtime_inspector_activity_discards_detached_attachment() {
         let (mut conn, _attachment) = runtime_binding_attachment_fixture();
         let outputs = renderer_inspector_outputs(
-            &conn,
+            &mut conn,
             Some("SID-1"),
             None,
             vec![json!({
@@ -859,7 +868,7 @@ mod tests {
                 .assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned())
         );
         let outputs = renderer_inspector_outputs(
-            &conn,
+            &mut conn,
             Some("SID-1"),
             Some("SID-aux"),
             vec![json!({
@@ -886,7 +895,7 @@ mod tests {
     async fn runtime_inspector_activity_authorizes_each_page_batch_independently() {
         let (mut conn, _attachment) = runtime_binding_attachment_fixture();
         let mut outputs = renderer_inspector_outputs(
-            &conn,
+            &mut conn,
             Some("SID-1"),
             None,
             vec![json!({
@@ -898,7 +907,7 @@ mod tests {
             .expect("Runtime inspector target")
             .replace_page_attachment_id_for_test();
         outputs.extend(renderer_inspector_outputs(
-            &conn,
+            &mut conn,
             Some("SID-1"),
             None,
             vec![json!({

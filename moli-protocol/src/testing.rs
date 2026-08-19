@@ -23,6 +23,7 @@ use moli_core::{
     RendererOutputStreamIdentity, RendererOutputTransportMessage, runtime::NavigationRuntimeConfig,
 };
 use moli_fetch::FetchConfig;
+use moli_page_types::RendererInspectorResponseDelivery;
 #[cfg(test)]
 use std::net::SocketAddr;
 #[cfg(test)]
@@ -392,8 +393,15 @@ impl TestContext {
             .expect("test message must be a valid serialisable CDP command");
         let command_id = command.request().id();
         let response_start = self.sent.len();
+        let response_uses_renderer_publication = command.renderer_policy().response_delivery()
+            == RendererInspectorResponseDelivery::DevToolsSession;
         Box::pin(self.process_parsed_command_like_scheduler(&command, true)).await;
-        Box::pin(self.wait_for_test_command_response(command_id, response_start)).await;
+        Box::pin(self.wait_for_test_command_response(
+            command_id,
+            response_start,
+            response_uses_renderer_publication,
+        ))
+        .await;
     }
 
     #[cfg(test)]
@@ -1216,7 +1224,12 @@ impl TestContext {
         TestSchedulerTurnOutcome::Processed(input_kind)
     }
 
-    async fn wait_for_test_command_response(&mut self, command_id: u64, response_start: usize) {
+    async fn wait_for_test_command_response(
+        &mut self,
+        command_id: u64,
+        response_start: usize,
+        response_uses_renderer_publication: bool,
+    ) {
         loop {
             if self
                 .sent
@@ -1229,6 +1242,7 @@ impl TestContext {
             }
             assert!(
                 self.background_navigation_scheduler_enabled
+                    || response_uses_renderer_publication
                     || self
                         .pending_runtime_deferred_replies
                         .iter()

@@ -4,8 +4,21 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+/// Destination that owns the terminal response of one renderer Inspector
+/// command.
+///
+/// Frontend DevTools commands may publish directly through their concrete
+/// session capability. Internal protocol adapters retain a private command
+/// reply channel even when they synthesize the same CDP method.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RendererInspectorResponseDelivery {
+    CommandReply,
+    DevToolsSession,
+}
+
 static NEXT_RENDERER_DEVTOOLS_AGENT_TOKEN: AtomicU64 = AtomicU64::new(1);
 static NEXT_RENDERER_AGENT_ATTACHMENT_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_RENDERER_DEVTOOLS_COMMAND_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum DevToolsSessionKey {
@@ -45,6 +58,12 @@ impl RendererDevToolsAgentToken {
     }
 }
 
+/// Identity of one live browser-to-renderer DevTools attachment.
+///
+/// This is a capability identity, not a chronological epoch. A replacement
+/// renderer receives a different identity, but callers must establish
+/// equality before comparing any attachment-local ingress or output position;
+/// the numeric value does not define ordering between attachments.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct RendererAgentAttachmentId(NonZeroU64);
 
@@ -57,6 +76,28 @@ impl RendererAgentAttachmentId {
     }
 
     pub fn get(self) -> u64 {
+        self.0.get()
+    }
+}
+
+/// Process-unique identity of one command admitted to a renderer DevTools
+/// endpoint.
+///
+/// This is deliberately not an ordering primitive. Receiver-local ingress
+/// order and session-local output order use their own types below, so a
+/// process-global allocation gap can never be mistaken for a missing command.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct RendererDevToolsCommandId(NonZeroU64);
+
+impl RendererDevToolsCommandId {
+    pub fn allocate() -> Self {
+        Self(allocate_nonzero_u64(
+            &NEXT_RENDERER_DEVTOOLS_COMMAND_ID,
+            "renderer DevTools command id",
+        ))
+    }
+
+    pub const fn get(self) -> u64 {
         self.0.get()
     }
 }
@@ -163,6 +204,11 @@ mod tests {
         let second_attachment = RendererAgentAttachmentId::allocate();
         assert_ne!(first_attachment, second_attachment);
         assert_ne!(first_attachment.get(), 0);
+
+        let first_command = RendererDevToolsCommandId::allocate();
+        let second_command = RendererDevToolsCommandId::allocate();
+        assert_ne!(first_command, second_command);
+        assert_ne!(first_command.get(), 0);
     }
 
     #[test]
@@ -174,6 +220,10 @@ mod tests {
         assert_eq!(
             size_of::<Option<RendererAgentAttachmentId>>(),
             size_of::<RendererAgentAttachmentId>()
+        );
+        assert_eq!(
+            size_of::<Option<RendererDevToolsCommandId>>(),
+            size_of::<RendererDevToolsCommandId>()
         );
     }
 

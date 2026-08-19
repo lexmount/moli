@@ -1,3 +1,4 @@
+use moli_page_types::RendererInspectorResponseDelivery;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::{error::Error, fmt};
@@ -173,6 +174,32 @@ pub enum CdpRendererCommandAccess {
     Io,
 }
 
+/// V8 execution capability of a command delivered through a renderer
+/// DevTools IO receiver.
+///
+/// This dimension is independent from the browser-side Main/IO transport
+/// route. Chromium sends every Worker command over IO, then uses this catalog
+/// to decide whether the task may interrupt active JavaScript.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CdpInspectorTaskMode {
+    Interrupt,
+    DontInterrupt,
+}
+
+impl CdpInspectorTaskMode {
+    /// Mirrors Blink's `ShouldInterruptForMethod` catalog.
+    pub fn for_method(method: &str) -> Self {
+        match method {
+            "Debugger.evaluateOnCallFrame"
+            | "Runtime.evaluate"
+            | "Runtime.callFunctionOn"
+            | "Runtime.getProperties"
+            | "Runtime.runScript" => Self::DontInterrupt,
+            _ => Self::Interrupt,
+        }
+    }
+}
+
 /// Fate of an in-flight renderer command when navigation replaces its
 /// renderer attachment.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -202,8 +229,10 @@ pub enum CdpRendererCommandReplayDispatch {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CdpRendererCommandPolicy {
     renderer_access: CdpRendererCommandAccess,
+    inspector_task_mode: CdpInspectorTaskMode,
     renderer_replacement: CdpRendererCommandReplacement,
     renderer_replay_dispatch: CdpRendererCommandReplayDispatch,
+    response_delivery: RendererInspectorResponseDelivery,
     executes_page_javascript: bool,
 }
 
@@ -212,12 +241,20 @@ impl CdpRendererCommandPolicy {
         self.renderer_access
     }
 
+    pub const fn inspector_task_mode(self) -> CdpInspectorTaskMode {
+        self.inspector_task_mode
+    }
+
     pub const fn replacement(self) -> CdpRendererCommandReplacement {
         self.renderer_replacement
     }
 
     pub const fn replay_dispatch(self) -> CdpRendererCommandReplayDispatch {
         self.renderer_replay_dispatch
+    }
+
+    pub const fn response_delivery(self) -> RendererInspectorResponseDelivery {
+        self.response_delivery
     }
 
     pub const fn executes_page_javascript(self) -> bool {
@@ -354,6 +391,10 @@ impl ParsedCdpCommand {
 
     pub fn renderer_access(&self) -> CdpRendererCommandAccess {
         self.renderer_policy.access()
+    }
+
+    pub fn inspector_task_mode(&self) -> CdpInspectorTaskMode {
+        self.renderer_policy.inspector_task_mode()
     }
 
     pub fn renderer_replacement(&self) -> CdpRendererCommandReplacement {
@@ -534,8 +575,10 @@ impl CdpRendererCommandPolicy {
         let Some((domain, action)) = method.split_once('.') else {
             return Self {
                 renderer_access: CdpRendererCommandAccess::OwnerIndependent,
+                inspector_task_mode: CdpInspectorTaskMode::for_method(method),
                 renderer_replacement: CdpRendererCommandReplacement::Replay,
                 renderer_replay_dispatch: CdpRendererCommandReplayDispatch::Direct,
+                response_delivery: RendererInspectorResponseDelivery::CommandReply,
                 executes_page_javascript: false,
             };
         };
@@ -591,6 +634,7 @@ impl CdpRendererCommandPolicy {
         };
         Self {
             renderer_access,
+            inspector_task_mode: CdpInspectorTaskMode::for_method(method),
             renderer_replacement: if runtime_action.is_some_and(|action| {
                 matches!(
                     action,
@@ -609,6 +653,21 @@ impl CdpRendererCommandPolicy {
                 CdpRendererCommandReplayDispatch::ResolveRuntimeContext
             } else {
                 CdpRendererCommandReplayDispatch::Direct
+            },
+            response_delivery: if domain == CdpMethodDomain::Debugger
+                && matches!(
+                    action,
+                    "getPossibleBreakpoints"
+                        | "getScriptSource"
+                        | "getStackTrace"
+                        | "removeBreakpoint"
+                        | "setBreakpoint"
+                        | "setBreakpointByUrl"
+                        | "setBreakpointsActive"
+                ) {
+                RendererInspectorResponseDelivery::DevToolsSession
+            } else {
+                RendererInspectorResponseDelivery::CommandReply
             },
             executes_page_javascript: runtime_action
                 .is_some_and(RuntimeWireAction::executes_page_javascript)
@@ -714,6 +773,40 @@ mod tests {
     }
 
     #[test]
+    fn inspector_execution_mode_matches_chromium_worker_catalog() {
+        for method in [
+            "Debugger.evaluateOnCallFrame",
+            "Runtime.evaluate",
+            "Runtime.callFunctionOn",
+            "Runtime.getProperties",
+            "Runtime.runScript",
+        ] {
+            let command = parse(format!(r#"{{"id":12,"method":"{method}"}}"#));
+            assert_eq!(
+                command.inspector_task_mode(),
+                CdpInspectorTaskMode::DontInterrupt,
+                "{method} must wait for the ordinary isolate task runner"
+            );
+        }
+
+        for method in [
+            "Debugger.pause",
+            "Debugger.resume",
+            "Debugger.stepInto",
+            "Runtime.enable",
+            "Runtime.terminateExecution",
+            "Inspector.disable",
+        ] {
+            let command = parse(format!(r#"{{"id":13,"method":"{method}"}}"#));
+            assert_eq!(
+                command.inspector_task_mode(),
+                CdpInspectorTaskMode::Interrupt,
+                "{method} must be allowed to interrupt active JavaScript"
+            );
+        }
+    }
+
+    #[test]
     fn debugger_execution_controls_admit_exact_command_output_barriers() {
         for method in [
             "Debugger.continueToLocation",
@@ -733,6 +826,41 @@ mod tests {
             !parse(r#"{"id":18,"method":"Debugger.pause"}"#)
                 .runtime_command_executes_page_javascript()
         );
+    }
+
+    #[test]
+    fn synchronous_interruptible_frontend_v8_responses_use_session_output_as_one_family() {
+        for method in [
+            "Debugger.getPossibleBreakpoints",
+            "Debugger.getScriptSource",
+            "Debugger.getStackTrace",
+            "Debugger.removeBreakpoint",
+            "Debugger.setBreakpoint",
+            "Debugger.setBreakpointByUrl",
+            "Debugger.setBreakpointsActive",
+        ] {
+            assert_eq!(
+                parse(format!(r#"{{"id":18,"method":"{method}"}}"#))
+                    .renderer_policy()
+                    .response_delivery(),
+                RendererInspectorResponseDelivery::DevToolsSession,
+                "{method} must share the same session output path as adjacent synchronous V8 IO commands"
+            );
+        }
+        for method in [
+            "Debugger.enable",
+            "Debugger.pause",
+            "Debugger.resume",
+            "Runtime.getIsolateId",
+        ] {
+            assert_eq!(
+                parse(format!(r#"{{"id":19,"method":"{method}"}}"#))
+                    .renderer_policy()
+                    .response_delivery(),
+                RendererInspectorResponseDelivery::CommandReply,
+                "{method} still requires the command-reply completion path"
+            );
+        }
     }
 
     #[test]

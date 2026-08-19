@@ -361,9 +361,9 @@ pub use self::page_surface::{
     RendererTouchPoint, RendererWindowDocumentSource, RuntimeConsoleMessageSnapshot,
 };
 pub(crate) use self::page_surface::{
-    RendererCommandTurnOutputRecorder, RendererInspectorPageCommand,
-    RendererRuntimeCommandOutputRecorder, RendererRuntimeInspectorResponsePublication,
-    RendererRuntimeObservableSourceQueue,
+    RendererCommandTurnOutputRecorder, RendererDevToolsSessionOutputHost,
+    RendererInspectorPageCommand, RendererRuntimeCommandOutputRecorder,
+    RendererRuntimeInspectorResponsePublication, RendererRuntimeObservableSourceQueue,
 };
 pub(crate) use self::page_vm::PageVm;
 use self::page_vm::PageVmDropTracker;

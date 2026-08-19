@@ -1233,6 +1233,20 @@ impl RendererRuntimeInspectorMessageBatch {
         self.renderer_agent_attachment_id
     }
 
+    /// Whether this batch contains a concrete Inspector command response.
+    ///
+    /// The response is identified from the protocol message itself; no
+    /// parallel completion marker or inferred scheduler state is involved.
+    pub fn has_renderer_protocol_response(&self) -> bool {
+        self.messages.iter().any(|message| {
+            matches!(
+                message,
+                RendererRuntimeInspectorMessage::Protocol(message)
+                    if message.renderer_call_id().is_some()
+            )
+        })
+    }
+
     pub(crate) fn has_resolved_source_identities(&self) -> bool {
         self.messages
             .iter()
@@ -2678,8 +2692,7 @@ impl RendererRuntimeInspectorAsyncCompletion {
 pub(crate) struct RendererRuntimeInspectorResponsePublication {
     call_id: i32,
     output: RendererRuntimeCommandOutput,
-    lease_id: u64,
-    channel: RendererRuntimeInspectorResponseChannel,
+    destination: RendererRuntimeInspectorResponseDestination,
 }
 
 impl RendererRuntimeInspectorResponsePublication {
@@ -2687,8 +2700,7 @@ impl RendererRuntimeInspectorResponsePublication {
         self,
         renderer_output_predecessor: Option<RendererOutputFence>,
     ) -> Result<(), RendererRuntimeInspectorAsyncCompletion> {
-        self.channel.send(
-            self.lease_id,
+        self.destination.send(
             RendererRuntimeInspectorAsyncCompletion::from_renderer_response_edge(
                 self.call_id,
                 self.output,
@@ -2887,8 +2899,12 @@ impl RendererRuntimeInspectorResponseChannel {
         Some(RendererRuntimeInspectorResponseSender {
             call_id,
             attachment_id,
-            lease_id,
-            channel: self.clone(),
+            destination: RendererRuntimeInspectorResponseDestination::CommandReply(
+                RendererRuntimeInspectorCommandReplyDestination {
+                    lease_id,
+                    channel: self.clone(),
+                },
+            ),
             publication_boundary: RendererRuntimeInspectorResponsePublicationBoundary::Immediate,
         })
     }
@@ -2919,6 +2935,109 @@ impl RendererRuntimeInspectorResponseChannel {
     }
 }
 
+#[derive(Clone, Debug)]
+struct RendererRuntimeInspectorCommandReplyDestination {
+    lease_id: u64,
+    channel: RendererRuntimeInspectorResponseChannel,
+}
+
+impl RendererRuntimeInspectorCommandReplyDestination {
+    fn send(
+        self,
+        completion: RendererRuntimeInspectorAsyncCompletion,
+    ) -> Result<(), RendererRuntimeInspectorAsyncCompletion> {
+        self.channel.send(self.lease_id, completion)
+    }
+}
+
+/// Output capability for one concrete renderer attachment and DevTools
+/// session.
+///
+/// Navigation creates another Page journal and attachment identity; closing
+/// the old journal structurally prevents an old session response from entering
+/// the replacement stream.
+#[derive(Clone, Debug)]
+pub(crate) struct RendererDevToolsSessionOutputHost {
+    agent_token: RendererDevToolsAgentToken,
+    session: DevToolsSessionKey,
+    attachment_id: RendererAgentAttachmentId,
+    output_journal: RendererTurnOutputJournal,
+}
+
+impl RendererDevToolsSessionOutputHost {
+    pub(crate) fn new(
+        agent_token: RendererDevToolsAgentToken,
+        session: DevToolsSessionKey,
+        attachment_id: RendererAgentAttachmentId,
+        output_journal: RendererTurnOutputJournal,
+    ) -> Self {
+        Self {
+            agent_token,
+            session,
+            attachment_id,
+            output_journal,
+        }
+    }
+
+    fn publish(
+        &self,
+        completion: RendererRuntimeInspectorAsyncCompletion,
+    ) -> Result<(), RendererRuntimeInspectorAsyncCompletion> {
+        if completion.renderer_agent_attachment_id() != Some(self.attachment_id) {
+            return Err(completion);
+        }
+        if completion
+            .renderer_output_predecessor()
+            .is_some_and(|predecessor| {
+                predecessor.cursor().stream() != self.output_journal.stream()
+            })
+        {
+            return Err(completion);
+        }
+
+        // Keep the completion intact until the exact stream accepts
+        // ownership. If the capability already closed, protocol attachment
+        // teardown owns terminal completion for the pending frontend call.
+        let (_, v8_state_update, messages) = completion.output.clone().into_parts();
+        let mut batch = RendererRuntimeInspectorMessageBatch::new(
+            self.agent_token,
+            self.session.clone(),
+            messages,
+        );
+        batch.v8_state_update = v8_state_update;
+        batch.bind_renderer_agent_attachment(self.attachment_id);
+        if !batch.has_resolved_source_identities() {
+            return Err(completion);
+        }
+        let record = PendingRendererOutputRecord::observation(
+            None,
+            RendererProtocolObservation::RuntimeInspector(batch),
+        );
+        self.output_journal
+            .try_publish_records([record])
+            .then_some(())
+            .ok_or(completion)
+    }
+}
+
+#[derive(Clone, Debug)]
+enum RendererRuntimeInspectorResponseDestination {
+    CommandReply(RendererRuntimeInspectorCommandReplyDestination),
+    DevToolsSession(RendererDevToolsSessionOutputHost),
+}
+
+impl RendererRuntimeInspectorResponseDestination {
+    fn send(
+        self,
+        completion: RendererRuntimeInspectorAsyncCompletion,
+    ) -> Result<(), RendererRuntimeInspectorAsyncCompletion> {
+        match self {
+            Self::CommandReply(destination) => destination.send(completion),
+            Self::DevToolsSession(host) => host.publish(completion),
+        }
+    }
+}
+
 #[derive(Clone)]
 enum RendererRuntimeInspectorResponsePublicationBoundary {
     Immediate,
@@ -2930,8 +3049,7 @@ enum RendererRuntimeInspectorResponsePublicationBoundary {
 pub struct RendererRuntimeInspectorResponseSender {
     call_id: i32,
     attachment_id: Option<RendererAgentAttachmentId>,
-    lease_id: u64,
-    channel: RendererRuntimeInspectorResponseChannel,
+    destination: RendererRuntimeInspectorResponseDestination,
     publication_boundary: RendererRuntimeInspectorResponsePublicationBoundary,
 }
 
@@ -2955,14 +3073,22 @@ impl RendererRuntimeInspectorResponseSender {
         Self {
             call_id,
             attachment_id: None,
-            lease_id: 1,
-            channel,
+            destination: RendererRuntimeInspectorResponseDestination::CommandReply(
+                RendererRuntimeInspectorCommandReplyDestination {
+                    lease_id: 1,
+                    channel,
+                },
+            ),
             publication_boundary: RendererRuntimeInspectorResponsePublicationBoundary::Immediate,
         }
     }
 
     pub fn call_id(&self) -> i32 {
         self.call_id
+    }
+
+    pub(crate) fn renderer_agent_attachment_id(&self) -> Option<RendererAgentAttachmentId> {
+        self.attachment_id
     }
 
     pub fn with_renderer_agent_attachment(
@@ -2991,6 +3117,26 @@ impl RendererRuntimeInspectorResponseSender {
         self
     }
 
+    /// Selects the frontend session output capability without changing when
+    /// the response is allowed to publish.
+    pub(crate) fn route_to_devtools_session_output(
+        mut self,
+        host: RendererDevToolsSessionOutputHost,
+    ) -> Self {
+        assert_eq!(
+            self.attachment_id,
+            Some(host.attachment_id),
+            "a DevTools session response host must belong to the command attachment"
+        );
+        self.destination = match self.destination {
+            RendererRuntimeInspectorResponseDestination::CommandReply(_)
+            | RendererRuntimeInspectorResponseDestination::DevToolsSession(_) => {
+                RendererRuntimeInspectorResponseDestination::DevToolsSession(host)
+            }
+        };
+        self
+    }
+
     pub fn send(self, message: Value) -> Result<(), RendererRuntimeInspectorAsyncCompletion> {
         self.send_output(RendererRuntimeCommandOutput::from_inspector_message(
             RendererRuntimeInspectorMessage::from_v8_inspector_message(message),
@@ -3004,8 +3150,7 @@ impl RendererRuntimeInspectorResponseSender {
         let Self {
             call_id,
             attachment_id,
-            lease_id,
-            channel,
+            destination,
             publication_boundary,
         } = self;
         if let Some(attachment_id) = attachment_id {
@@ -3014,8 +3159,7 @@ impl RendererRuntimeInspectorResponseSender {
         let publication = RendererRuntimeInspectorResponsePublication {
             call_id,
             output,
-            lease_id,
-            channel,
+            destination,
         };
         match publication_boundary {
             RendererRuntimeInspectorResponsePublicationBoundary::Immediate => {
@@ -3164,8 +3308,7 @@ mod renderer_runtime_inspector_response_channel_tests {
         let RendererRuntimeInspectorResponseSender {
             call_id,
             attachment_id,
-            lease_id,
-            channel,
+            destination,
             publication_boundary: _,
         } = sender;
         let mut output = output(1);
@@ -3176,8 +3319,7 @@ mod renderer_runtime_inspector_response_channel_tests {
         RendererRuntimeInspectorResponsePublication {
             call_id,
             output,
-            lease_id,
-            channel,
+            destination,
         }
         .commit(Some(expected_predecessor.clone()))
         .expect("active response lease should complete");
@@ -3238,6 +3380,88 @@ mod renderer_runtime_inspector_response_channel_tests {
             completion.renderer_output_predecessor() == Some(predecessor),
             "the response must carry the exact output cursor supplied at the Page owner boundary"
         );
+    }
+
+    #[tokio::test]
+    async fn session_output_changes_the_sink_without_bypassing_the_page_owner_boundary() {
+        let page_id = PageId::new_for_testing(1);
+        let token = RendererPageToken::new_for_testing(page_id);
+        let stream = RendererOutputStreamIdentity::new_page_for_protocol_test(page_id);
+        let (transport, mut transport_rx) = crate::runtime::renderer_output_transport_channel();
+        let journal = RendererTurnOutputJournal::new_with_transport(stream, transport);
+        assert!(matches!(
+            transport_rx.try_recv(),
+            Ok(RendererOutputTransportMessage::StreamControl(
+                RendererOutputStreamControl::Opened { stream: opened }
+            )) if opened == stream
+        ));
+
+        let attachment_id = RendererAgentAttachmentId::allocate();
+        let host = RendererDevToolsSessionOutputHost::new(
+            RendererDevToolsAgentToken::allocate(),
+            DevToolsSessionKey::Attached("SID-session-output".to_owned()),
+            attachment_id,
+            journal,
+        );
+        let (owner_wake_tx, mut owner_wake_rx) = tokio::sync::mpsc::unbounded_channel();
+        let owner_wake = RendererOwnerWakeSender::new(owner_wake_tx, token);
+        let (channel, mut response_rx) = RendererRuntimeInspectorResponseChannel::new();
+
+        channel
+            .activate_sender(7, Some(attachment_id))
+            .route_to_devtools_session_output(host)
+            .defer_publication_to_page_owner(owner_wake)
+            .send_output(output(7))
+            .expect("Page owner should accept the terminal session response");
+
+        assert_eq!(response_rx.try_recv(), Err(TryRecvError::Empty));
+        assert!(
+            transport_rx.try_recv().is_err(),
+            "selecting session output must not publish before the Page owner boundary"
+        );
+
+        let publication = match owner_wake_rx
+            .recv()
+            .await
+            .expect("Page owner response wake")
+        {
+            RendererOwnerWake::RuntimeInspectorResponsePublication {
+                token: actual,
+                publication,
+            } => {
+                assert_eq!(actual, token);
+                publication
+            }
+            other => panic!("expected a Runtime response publication, got {other:?}"),
+        };
+        publication
+            .commit(None)
+            .expect("the exact attachment stream should accept the response");
+
+        let RendererOutputTransportMessage::Publication(publication) = transport_rx
+            .recv()
+            .await
+            .expect("session output publication")
+        else {
+            panic!("expected a session output publication");
+        };
+        let [record] = publication.records() else {
+            panic!("session response should publish exactly one record");
+        };
+        let RendererOutputItem::Observation(RendererProtocolObservation::RuntimeInspector(batch)) =
+            record.item()
+        else {
+            panic!("session response should use the Runtime Inspector output stream");
+        };
+        assert_eq!(batch.renderer_agent_attachment_id(), Some(attachment_id));
+        assert_eq!(batch.messages.len(), 1);
+        let RendererRuntimeInspectorMessage::Protocol(message) = &batch.messages[0] else {
+            panic!("session response must remain a protocol message");
+        };
+        assert_eq!(message.value()["id"], json!(7));
+        assert_eq!(response_rx.try_recv(), Err(TryRecvError::Empty));
+
+        channel.cancel();
     }
 }
 

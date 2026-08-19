@@ -45,7 +45,8 @@ static NEXT_SUBRESOURCE_RESPONSE_BODY_SPOOL_ID: AtomicU64 = AtomicU64::new(1);
 
 pub use inspector_identity::{
     DevToolsSessionKey, FrontendCommandId, RendererAgentAttachmentId, RendererCallId,
-    RendererCallIdOutOfRange, RendererDevToolsAgentToken,
+    RendererCallIdOutOfRange, RendererDevToolsAgentToken, RendererDevToolsCommandId,
+    RendererInspectorResponseDelivery,
 };
 pub use layout::LayoutPolicy;
 

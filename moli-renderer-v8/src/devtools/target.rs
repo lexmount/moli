@@ -71,7 +71,7 @@ impl RendererDevToolsTargetHandle {
     /// Executes Chromium's terminal `Page.crash` IO control boundary.
     ///
     /// Unlike ordinary IO-agent commands, a crash must not wait for or occupy
-    /// a per-session first-dispatch lane. Seal both command receivers first,
+    /// the target Inspector task runner. Seal both command receivers first,
     /// then interrupt any active JavaScript so the owner can retire the Page.
     pub(crate) fn crash_from_io(&self) {
         let _ = self.close("Inspector target crashed through Page.crash");

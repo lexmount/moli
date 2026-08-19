@@ -407,12 +407,13 @@ impl RendererInspectorMainIngress {
             RendererInspectorCommandRoute::MainThread,
             "only MainThread DevTools commands may enter RendererInspectorMainIngress"
         );
-        let ticket = envelope.ticket().clone();
         let (claim_tx, claim_rx) = tokio::sync::oneshot::channel();
         let (owner_reply_tx, owner_reply_rx) = tokio::sync::oneshot::channel();
         let mut state = self.shared.state.lock();
+        let lane_key =
+            RendererDevToolsSessionLaneKey::new(agent_token, envelope.ticket().session().clone());
+        let ticket = envelope.ticket().clone();
         let command_id = ticket.sequence();
-        let lane_key = RendererDevToolsSessionLaneKey::new(agent_token, ticket.session().clone());
         let command = RendererInspectorMainCommand {
             command_id,
             page_token,
@@ -943,6 +944,7 @@ mod tests {
                 RendererInspectorIngressTicket::new(None, None, RendererInspectorCommandRoute::Io),
                 r#"{"id":1,"method":"Runtime.terminateExecution"}"#.to_owned(),
                 None,
+                moli_page_types::RendererInspectorResponseDelivery::CommandReply,
             ),
         );
     }

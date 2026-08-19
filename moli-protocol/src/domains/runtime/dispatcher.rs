@@ -20,6 +20,7 @@ use moli_core::page::{
     RendererDomBidiNodeBindingResolution, RendererRuntimeCommandOutput,
     RendererRuntimeInspectorMessage,
 };
+use moli_page_types::RendererInspectorResponseDelivery;
 
 use crate::conn::{
     BackgroundCommandResponsePayload, BackgroundCommandResponsePayloadRef, BackgroundProtocolEvent,
@@ -1871,7 +1872,7 @@ fn start_pending_runtime_io_inspector_dispatch(
 ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
     if let Some(command_id) = cmd.id {
         let descriptor =
-            RendererCommandDescriptor::from_policy(inspector_json, cmd.renderer_policy());
+            RendererCommandDescriptor::from_frontend_policy(inspector_json, cmd.renderer_policy());
         conn.start_runtime_io_protocol_message_for_session_owner_with_deferred_response(
             cmd.session_id,
             descriptor,
@@ -1890,7 +1891,7 @@ fn start_pending_runtime_context_resolved_inspector_dispatch(
 ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
     if let Some(command_id) = cmd.id {
         let descriptor =
-            RendererCommandDescriptor::from_policy(inspector_json, cmd.renderer_policy());
+            RendererCommandDescriptor::from_frontend_policy(inspector_json, cmd.renderer_policy());
         conn.start_runtime_protocol_message_with_context_resolution_for_session_owner_with_deferred_response(
             cmd.session_id,
             action,
@@ -1913,7 +1914,7 @@ fn start_pending_runtime_inspector_dispatch(
 ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
     if let Some(command_id) = cmd.id {
         let descriptor =
-            RendererCommandDescriptor::from_policy(inspector_json, cmd.renderer_policy());
+            RendererCommandDescriptor::from_frontend_policy(inspector_json, cmd.renderer_policy());
         conn.start_runtime_protocol_message_for_session_owner_with_deferred_response(
             cmd.session_id,
             descriptor,
@@ -1931,7 +1932,7 @@ fn start_shared_worker_frontend_inspector_dispatch(
 ) -> Result<PendingSharedWorkerRuntimeProtocolMessageDispatch, String> {
     if let Some(command_id) = cmd.id {
         let descriptor =
-            RendererCommandDescriptor::from_policy(inspector_json, cmd.renderer_policy());
+            RendererCommandDescriptor::from_frontend_policy(inspector_json, cmd.renderer_policy());
         conn.start_shared_worker_runtime_protocol_message_for_session_with_deferred_response(
             cmd.session_id,
             descriptor,
@@ -1952,7 +1953,7 @@ fn start_service_worker_frontend_inspector_dispatch(
 ) -> Result<PendingServiceWorkerRuntimeProtocolMessageDispatch, String> {
     if let Some(command_id) = cmd.id {
         let descriptor =
-            RendererCommandDescriptor::from_policy(inspector_json, cmd.renderer_policy());
+            RendererCommandDescriptor::from_frontend_policy(inspector_json, cmd.renderer_policy());
         conn.start_service_worker_runtime_protocol_message_for_session_with_deferred_response(
             cmd.session_id,
             descriptor,
@@ -7611,8 +7612,10 @@ fn start_pending_runtime_binding_inspector_phase(
     let result = match task.action {
         RuntimeBindingCommand::Add => {
             if let Some(command_id) = completed.command_id {
-                let descriptor =
-                    RendererCommandDescriptor::from_policy(inspector_json, task.renderer_policy);
+                let descriptor = RendererCommandDescriptor::from_frontend_policy(
+                    inspector_json,
+                    task.renderer_policy,
+                );
                 conn.start_runtime_protocol_message_with_context_resolution_for_session_owner_with_deferred_response(
                     completed.session_id(),
                     "addBinding",
@@ -7629,8 +7632,10 @@ fn start_pending_runtime_binding_inspector_phase(
         }
         RuntimeBindingCommand::Remove => {
             if let Some(command_id) = completed.command_id {
-                let descriptor =
-                    RendererCommandDescriptor::from_policy(inspector_json, task.renderer_policy);
+                let descriptor = RendererCommandDescriptor::from_frontend_policy(
+                    inspector_json,
+                    task.renderer_policy,
+                );
                 conn.start_runtime_protocol_message_for_session_owner_with_deferred_response(
                     completed.session_id(),
                     descriptor,
@@ -8137,37 +8142,43 @@ async fn complete_pending_runtime_inspector_command(
     timing_started: Option<std::time::Instant>,
     response_flush: &crate::conn::CommandResponseFlushContext,
 ) -> RuntimeCommandTaskStep {
-    let (messages, mut renderer_response_rx, page_owner_access_allowed) = match completed_inspector
-    {
-        Ok(mut completed_protocol) => {
-            let page_owner_access_allowed = completed_protocol.page_owner_access_allowed();
-            let renderer_response_rx = completed_protocol.take_deferred_response_receiver();
-            match conn
-                .complete_runtime_protocol_message_for_session_owner_async(completed_protocol)
-                .await
-            {
-                Ok(messages) => (messages, renderer_response_rx, page_owner_access_allowed),
-                Err(message) => {
-                    if let Some(command_id) = completed.command_id {
-                        conn.forget_pending_inspector_await(command_id, completed.session_id());
+    let (messages, mut renderer_response_rx, page_owner_access_allowed, response_delivery) =
+        match completed_inspector {
+            Ok(mut completed_protocol) => {
+                let page_owner_access_allowed = completed_protocol.page_owner_access_allowed();
+                let response_delivery = completed_protocol.response_delivery();
+                let renderer_response_rx = completed_protocol.take_deferred_response_receiver();
+                match conn
+                    .complete_runtime_protocol_message_for_session_owner_async(completed_protocol)
+                    .await
+                {
+                    Ok(messages) => (
+                        messages,
+                        renderer_response_rx,
+                        page_owner_access_allowed,
+                        response_delivery,
+                    ),
+                    Err(message) => {
+                        if let Some(command_id) = completed.command_id {
+                            conn.forget_pending_inspector_await(command_id, completed.session_id());
+                        }
+                        return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(
+                            completed.command_id,
+                            message,
+                        ));
                     }
-                    return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(
-                        completed.command_id,
-                        message,
-                    ));
                 }
             }
-        }
-        Err(message) => {
-            if let Some(command_id) = completed.command_id {
-                conn.forget_pending_inspector_await(command_id, completed.session_id());
+            Err(message) => {
+                if let Some(command_id) = completed.command_id {
+                    conn.forget_pending_inspector_await(command_id, completed.session_id());
+                }
+                return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(
+                    completed.command_id,
+                    message,
+                ));
             }
-            return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(
-                completed.command_id,
-                message,
-            ));
-        }
-    };
+        };
     let initial_message_count = messages.as_ref().map_or(0, |messages| {
         messages
             .runtime_inspector_output()
@@ -8220,7 +8231,14 @@ async fn complete_pending_runtime_inspector_command(
         renderer_response_rx.take();
         saw_current_response = true;
     }
-    if !completed.wait_for_deferred_reply
+    if response_delivery == RendererInspectorResponseDelivery::DevToolsSession {
+        // The attachment-scoped renderer session stream owns the terminal
+        // response. The typed Page completion remains internal state only and
+        // must not join or await the legacy per-command receiver.
+        renderer_response_rx.take();
+    }
+    if response_delivery == RendererInspectorResponseDelivery::CommandReply
+        && !completed.wait_for_deferred_reply
         && let Some(renderer_response_rx) = renderer_response_rx.take()
     {
         let saw_deferred_response = route_registered_runtime_response_receiver_into(

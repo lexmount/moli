@@ -298,14 +298,9 @@ impl DevToolsRendererChannel {
             self.buffered_output.clear();
             return Vec::new();
         };
-        self.buffered_output
-            .drain(..)
-            .filter_map(|buffered| {
-                (buffered.attachment_id == current.id()
-                    && buffered.batch.agent_token == current.agent_token())
-                .then_some(buffered.batch)
-            })
-            .collect()
+        let released = self.take_buffered_current_output(current);
+        self.buffered_output.clear();
+        released
     }
 
     pub(crate) fn detach_current(
@@ -369,10 +364,40 @@ impl DevToolsRendererChannel {
             return Err(DevToolsRendererChannelError::MismatchedAgent);
         }
         if self.output_is_suspended() {
+            let releases_current_prefix = batches
+                .iter()
+                .any(RendererRuntimeInspectorMessageBatch::has_renderer_protocol_response);
             self.buffer_output(attachment_id, batches);
+            if releases_current_prefix {
+                // Main ingress remains suspended, but Chromium's existing
+                // renderer session pipe can still return IO responses until
+                // endpoint replacement. Release the whole current-attachment
+                // prefix so the response cannot overtake notifications that
+                // preceded it in the same renderer journal.
+                return Ok(self.take_buffered_current_output(current));
+            }
             return Ok(Vec::new());
         }
         Ok(batches)
+    }
+
+    fn take_buffered_current_output(
+        &mut self,
+        current: RendererAgentAttachment,
+    ) -> Vec<RendererRuntimeInspectorMessageBatch> {
+        let mut released = Vec::new();
+        let mut retained = Vec::new();
+        for buffered in self.buffered_output.drain(..) {
+            if buffered.attachment_id == current.id()
+                && buffered.batch.agent_token == current.agent_token()
+            {
+                released.push(buffered.batch);
+            } else {
+                retained.push(buffered);
+            }
+        }
+        self.buffered_output = retained;
+        released
     }
 
     fn buffer_output(
@@ -469,6 +494,20 @@ mod tests {
             .get("params")
             .and_then(|params| params.get("marker"))
             .and_then(serde_json::Value::as_str)
+    }
+
+    fn response_batch(
+        agent_token: RendererDevToolsAgentToken,
+        call_id: i32,
+    ) -> RendererRuntimeInspectorMessageBatch {
+        RendererRuntimeInspectorMessageBatch::new(
+            agent_token,
+            DevToolsSessionKey::Primary,
+            vec![RendererRuntimeInspectorMessage::protocol(json!({
+                "id": call_id,
+                "result": {},
+            }))],
+        )
     }
 
     #[test]
@@ -792,6 +831,34 @@ mod tests {
         let released = channel.take_released_output();
         assert_eq!(released.len(), 1);
         assert_eq!(batch_marker(&released[0]), Some("retained"));
+    }
+
+    #[test]
+    fn current_session_response_releases_its_buffered_prefix_during_navigation() {
+        let agent = RendererDevToolsAgentToken::allocate();
+        let request = navigation(1);
+        let mut channel = DevToolsRendererChannel::default();
+        channel.attach_current(agent).expect("current attach");
+        let attachment = channel.current().expect("current attachment");
+        channel
+            .navigation_started(request.clone())
+            .expect("navigation start");
+
+        assert!(
+            channel
+                .route_current_output(attachment.id(), vec![batch(agent, "before-response")])
+                .expect("route notification prefix")
+                .is_empty()
+        );
+        let released = channel
+            .route_current_output(attachment.id(), vec![response_batch(agent, 17)])
+            .expect("route session response");
+
+        assert_eq!(released.len(), 2);
+        assert_eq!(batch_marker(&released[0]), Some("before-response"));
+        assert!(released[1].has_renderer_protocol_response());
+        assert!(channel.output_is_suspended());
+        assert!(channel.take_released_output().is_empty());
     }
 
     #[test]

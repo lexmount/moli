@@ -10,6 +10,7 @@ use moli_core::{
 };
 use moli_page_types::{
     DevToolsSessionKey, FrontendCommandId, RendererAgentAttachmentId, RendererCallId,
+    RendererInspectorResponseDelivery,
 };
 use moli_protocol_cdp::{
     CdpRendererCommandPolicy, CdpRendererCommandReplacement, CdpRendererCommandReplayDispatch,
@@ -22,16 +23,21 @@ use serde_json::Value;
 pub(crate) struct RendererCommandDescriptor {
     replacement: CdpRendererCommandReplacement,
     replay_dispatch: CdpRendererCommandReplayDispatch,
+    response_delivery: RendererInspectorResponseDelivery,
     frontend_payload: String,
 }
 
 impl RendererCommandDescriptor {
     /// Builds a replay descriptor from the policy already derived at typed CDP
     /// ingress. Production frontend commands must use this constructor.
-    pub(crate) fn from_policy(frontend_payload: String, policy: CdpRendererCommandPolicy) -> Self {
+    pub(crate) fn from_frontend_policy(
+        frontend_payload: String,
+        policy: CdpRendererCommandPolicy,
+    ) -> Self {
         Self {
             replacement: policy.replacement(),
             replay_dispatch: policy.replay_dispatch(),
+            response_delivery: policy.response_delivery(),
             frontend_payload,
         }
     }
@@ -44,10 +50,16 @@ impl RendererCommandDescriptor {
     pub(crate) fn from_synthesized_payload(frontend_payload: String) -> Result<Self, String> {
         let command = ParsedCdpCommand::parse_str(&frontend_payload)
             .map_err(|error| format!("invalid renderer Inspector command JSON: {error}"))?;
-        Ok(Self::from_policy(
+        let policy = command.renderer_policy();
+        Ok(Self {
+            replacement: policy.replacement(),
+            replay_dispatch: policy.replay_dispatch(),
+            // Internal Classic/BiDi adapters own their reply channel. A
+            // method being eligible for frontend session output must never
+            // redirect a synthesized adapter command implicitly.
+            response_delivery: RendererInspectorResponseDelivery::CommandReply,
             frontend_payload,
-            command.renderer_policy(),
-        ))
+        })
     }
 
     pub(crate) const fn replacement(&self) -> CdpRendererCommandReplacement {
@@ -56,6 +68,10 @@ impl RendererCommandDescriptor {
 
     pub(crate) const fn replay_dispatch(&self) -> CdpRendererCommandReplayDispatch {
         self.replay_dispatch
+    }
+
+    pub(crate) const fn response_delivery(&self) -> RendererInspectorResponseDelivery {
+        self.response_delivery
     }
 
     pub(crate) fn frontend_payload(&self) -> &str {
@@ -178,6 +194,7 @@ impl PreparedRendererCallDispatch {
 pub(crate) struct PreparedRendererCallReplay {
     correlation: RendererCommandCorrelation,
     dispatch: CdpRendererCommandReplayDispatch,
+    response_delivery: RendererInspectorResponseDelivery,
     frontend_payload: String,
     response_sender: RendererRuntimeInspectorResponseSender,
 }
@@ -210,6 +227,11 @@ impl PreparedRendererCallReplay {
     }
 
     #[cfg(test)]
+    pub(crate) const fn response_delivery(&self) -> RendererInspectorResponseDelivery {
+        self.response_delivery
+    }
+
+    #[cfg(test)]
     pub(crate) fn into_response_sender(self) -> RendererRuntimeInspectorResponseSender {
         self.response_sender
     }
@@ -219,12 +241,14 @@ impl PreparedRendererCallReplay {
     ) -> (
         RendererCommandCorrelation,
         CdpRendererCommandReplayDispatch,
+        RendererInspectorResponseDelivery,
         String,
         RendererRuntimeInspectorResponseSender,
     ) {
         (
             self.correlation,
             self.dispatch,
+            self.response_delivery,
             self.frontend_payload,
             self.response_sender,
         )
@@ -375,6 +399,7 @@ impl<T> PendingRendererCommandRegistry<T> {
                     dispatched_attachment_id: Some(new_attachment_id),
                 },
                 dispatch: call.descriptor.replay_dispatch(),
+                response_delivery: call.descriptor.response_delivery(),
                 frontend_payload: call.descriptor.frontend_payload().to_owned(),
                 response_sender,
             });
@@ -813,7 +838,7 @@ mod tests {
         let normalized_payload =
             r#"{"id":91,"method":"Runtime.evaluate","params":{"expression":"1"}}"#.to_owned();
 
-        let descriptor = RendererCommandDescriptor::from_policy(
+        let descriptor = RendererCommandDescriptor::from_frontend_policy(
             normalized_payload.clone(),
             ingress.renderer_policy(),
         );
@@ -826,17 +851,54 @@ mod tests {
         );
     }
 
+    #[test]
+    fn synthesized_adapter_command_keeps_its_explicit_reply_sink() {
+        let frontend = ParsedCdpCommand::parse_str(
+            r#"{"id":33,"method":"Debugger.getScriptSource","params":{"scriptId":"1"}}"#,
+        )
+        .expect("frontend command must parse at ingress");
+        let frontend_descriptor = RendererCommandDescriptor::from_frontend_policy(
+            frontend.json().to_owned(),
+            frontend.renderer_policy(),
+        );
+        let adapter_descriptor =
+            RendererCommandDescriptor::from_synthesized_payload(frontend.json().to_owned())
+                .expect("adapter payload must be valid Inspector JSON");
+
+        assert_eq!(
+            frontend_descriptor.response_delivery(),
+            RendererInspectorResponseDelivery::DevToolsSession
+        );
+        assert_eq!(
+            adapter_descriptor.response_delivery(),
+            RendererInspectorResponseDelivery::CommandReply,
+            "method policy must not redirect an internal adapter reply to a frontend session"
+        );
+    }
+
     #[tokio::test]
     async fn replay_rotates_renderer_id_attachment_and_response_lease() {
         let frontend_id = FrontendCommandId::new(41);
         let old_attachment = RendererAgentAttachmentId::allocate();
         let new_attachment = RendererAgentAttachmentId::allocate();
         let mut registry = PendingRendererCommandRegistry::<()>::default();
+        let frontend = ParsedCdpCommand::parse_str(
+            serde_json::json!({
+                "id": frontend_id.get(),
+                "method": "Debugger.getScriptSource",
+                "params": { "scriptId": "1" },
+            })
+            .to_string(),
+        )
+        .expect("frontend command must parse at ingress");
         let prepared = registry
             .try_register_renderer_call(
                 frontend_id,
                 Some(old_attachment),
-                descriptor(frontend_id.get(), "Profiler.stop"),
+                RendererCommandDescriptor::from_frontend_policy(
+                    frontend.json().to_owned(),
+                    frontend.renderer_policy(),
+                ),
             )
             .unwrap();
         let (old_correlation, old_sender, response_receiver) = prepared.into_parts();
@@ -859,6 +921,11 @@ mod tests {
         );
         let payload: Value = serde_json::from_str(replay.frontend_payload()).unwrap();
         assert_eq!(payload["id"], frontend_id.get());
+        assert_eq!(
+            replay.response_delivery(),
+            RendererInspectorResponseDelivery::DevToolsSession,
+            "attachment replacement must preserve the frontend session output capability"
+        );
 
         assert!(
             old_sender

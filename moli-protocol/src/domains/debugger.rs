@@ -54,7 +54,7 @@ mod tests {
     }
 
     async fn command(ctx: &mut TestContext, message: Value, command_id: u64) -> Value {
-        ctx.process_async(message).await;
+        ctx.process_and_wait_for_response_async(message).await;
         let position = ctx
             .sent
             .iter()

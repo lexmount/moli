@@ -1,4 +1,5 @@
 use std::{
+    collections::{BTreeSet, VecDeque},
     ffi::c_void,
     sync::{
         Arc,
@@ -12,11 +13,7 @@ use serde_json::json;
 
 use crate::{
     devtools::{
-        ingress::lane::{
-            RendererDevToolsIngressCommand, RendererDevToolsLaneEnqueueError,
-            RendererDevToolsSessionLaneKey, RendererDevToolsSessionLanes,
-        },
-        pause::RendererInspectorPauseLoopWake,
+        ingress::lane::RendererDevToolsSessionLaneKey, pause::RendererInspectorPauseLoopWake,
         route::RendererInspectorSessionExecutorRouteId,
     },
     runtime::{
@@ -47,11 +44,22 @@ pub(crate) enum RendererInspectorIoCommandConsumer {
     Pause,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RendererRuntimeInspectorIoCommandClaim {
+    Dispatched,
+    Canceled,
+}
+
+type RendererInspectorIoFirstDispatchSender =
+    tokio::sync::oneshot::Sender<RendererRuntimeInspectorIoCommandClaim>;
+type RendererInspectorIoFirstDispatchReceiver =
+    tokio::sync::oneshot::Receiver<RendererRuntimeInspectorIoCommandClaim>;
+
 pub(crate) struct RendererInspectorIoCommand {
     command_id: u64,
     pub(crate) agent_token: RendererDevToolsAgentToken,
     envelope: RendererDevToolsIoCommandEnvelope,
-    first_dispatch_tx: Option<tokio::sync::oneshot::Sender<RendererRuntimeInspectorIoCommandClaim>>,
+    first_dispatch_tx: Option<RendererInspectorIoFirstDispatchSender>,
     claimed_by: Option<RendererInspectorIoCommandConsumer>,
 }
 
@@ -87,6 +95,13 @@ impl RendererInspectorIoCommand {
             .and_then(RendererInspectorCommandEnvelope::io_response)
     }
 
+    pub(crate) fn response_delivery(&self) -> moli_page_types::RendererInspectorResponseDelivery {
+        self.envelope
+            .inspector_envelope()
+            .expect("only an Inspector IO payload has a response delivery")
+            .io_response_delivery()
+    }
+
     pub(crate) fn pause_effect(&self) -> RendererInspectorPauseCommandEffect {
         self.envelope
             .inspector_envelope()
@@ -111,23 +126,10 @@ impl RendererInspectorIoCommand {
     }
 }
 
-impl RendererDevToolsIngressCommand for RendererInspectorIoCommand {
-    fn ingress_command_id(&self) -> u64 {
-        self.command_id
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RendererRuntimeInspectorIoCommandClaim {
-    Dispatched,
-    Canceled,
-}
-
 pub struct RendererRuntimeInspectorIoCommandRoute {
     command_id: u64,
     ticket: RendererInspectorIngressTicket,
-    first_dispatch_rx:
-        Option<tokio::sync::oneshot::Receiver<RendererRuntimeInspectorIoCommandClaim>>,
+    first_dispatch_rx: Option<RendererInspectorIoFirstDispatchReceiver>,
     ingress: RendererInspectorIoIngress,
 }
 
@@ -191,15 +193,41 @@ impl RendererInspectorIoOwnerWake {
 }
 
 struct RendererInspectorIoState {
-    lanes: RendererDevToolsSessionLanes<RendererInspectorIoCommand>,
+    commands: VecDeque<RendererInspectorIoCommand>,
+    active_command_id: Option<u64>,
+    detached_sessions: BTreeSet<RendererDevToolsSessionLaneKey>,
+    closed: bool,
     owner_wake_tx: Option<tokio::sync::mpsc::UnboundedSender<RendererInspectorIoOwnerWake>>,
+}
+
+impl RendererInspectorIoState {
+    fn has_ready(&self) -> bool {
+        !self.closed && self.active_command_id.is_none() && !self.commands.is_empty()
+    }
+
+    fn drain_commands(
+        &mut self,
+        mut should_drain: impl FnMut(&RendererInspectorIoCommand) -> bool,
+    ) -> Vec<RendererInspectorIoCommand> {
+        let mut retained = VecDeque::with_capacity(self.commands.len());
+        let mut drained = Vec::new();
+        while let Some(command) = self.commands.pop_front() {
+            if should_drain(&command) {
+                drained.push(command);
+            } else {
+                retained.push_back(command);
+            }
+        }
+        self.commands = retained;
+        drained
+    }
 }
 
 pub(crate) struct RendererInspectorIoFirstDispatchGuard {
     ingress: RendererInspectorIoIngress,
-    active: Option<(RendererDevToolsSessionLaneKey, u64)>,
+    active_command_id: Option<u64>,
     consumer: RendererInspectorIoCommandConsumer,
-    first_dispatch_tx: Option<tokio::sync::oneshot::Sender<RendererRuntimeInspectorIoCommandClaim>>,
+    first_dispatch_tx: Option<RendererInspectorIoFirstDispatchSender>,
 }
 
 pub(crate) struct RendererInspectorIoPostDispatchWakeGuard {
@@ -214,25 +242,25 @@ impl Drop for RendererInspectorIoFirstDispatchGuard {
 
 impl RendererInspectorIoFirstDispatchGuard {
     pub(crate) fn release(&mut self) {
-        let has_ready = self.release_lane();
+        let has_ready = self.release_task();
         if has_ready {
             self.ingress.notify_execution_opportunities();
         }
     }
 
-    /// Commits the first-dispatch lifecycle immediately before entering V8,
-    /// but defers scheduling another callback until this dispatch returns. A
-    /// nested pause entered by this dispatch still sees the advanced lane when
-    /// it first polls the IO ingress.
+    /// Releases the receiver slot and publishes first-dispatch immediately
+    /// before entering V8, but keeps the next execution wake behind the return
+    /// from this dispatch. V8 may enter a nested debugger loop before the call
+    /// returns, so the command's ingress lifecycle must already be settled.
     pub(crate) fn release_for_dispatch(&mut self) -> RendererInspectorIoPostDispatchWakeGuard {
-        let has_ready = self.release_lane();
+        let has_ready = self.release_task();
         RendererInspectorIoPostDispatchWakeGuard {
             ingress: has_ready.then(|| self.ingress.clone()),
         }
     }
 
-    fn release_lane(&mut self) -> bool {
-        let Some((lane, command_id)) = self.active.take() else {
+    fn release_task(&mut self) -> bool {
+        let Some(command_id) = self.active_command_id.take() else {
             return false;
         };
         if self.consumer == RendererInspectorIoCommandConsumer::Interrupt {
@@ -241,7 +269,7 @@ impl RendererInspectorIoFirstDispatchGuard {
                 .interrupt_armed
                 .store(false, Ordering::Release);
         }
-        let has_ready = self.ingress.finish_first_dispatch(lane, command_id);
+        let has_ready = self.ingress.finish_first_dispatch(command_id);
         if let Some(first_dispatch_tx) = self.first_dispatch_tx.take() {
             let _ = first_dispatch_tx.send(RendererRuntimeInspectorIoCommandClaim::Dispatched);
         }
@@ -269,7 +297,10 @@ impl RendererInspectorIoIngress {
         Self {
             shared: Arc::new(RendererInspectorIoShared {
                 state: Mutex::new(RendererInspectorIoState {
-                    lanes: RendererDevToolsSessionLanes::default(),
+                    commands: VecDeque::new(),
+                    active_command_id: None,
+                    detached_sessions: BTreeSet::new(),
+                    closed: false,
                     owner_wake_tx: None,
                 }),
                 interrupt_armed: AtomicBool::new(false),
@@ -313,7 +344,7 @@ impl RendererInspectorIoIngress {
         let has_ready = {
             let mut state = self.shared.state.lock();
             state.owner_wake_tx = Some(owner_wake_tx);
-            state.lanes.has_ready()
+            state.has_ready()
         };
         if has_ready {
             self.notify_execution_opportunities();
@@ -330,11 +361,12 @@ impl RendererInspectorIoIngress {
             RendererInspectorCommandRoute::Io,
             "only IO DevTools commands may enter RendererInspectorIoIngress"
         );
-        let ticket = envelope.ticket().clone();
-        let (first_dispatch_tx, first_dispatch_rx) = tokio::sync::oneshot::channel();
+        let lane_key =
+            RendererDevToolsSessionLaneKey::new(agent_token, envelope.ticket().session().clone());
         let mut state = self.shared.state.lock();
+        let (first_dispatch_tx, first_dispatch_rx) = tokio::sync::oneshot::channel();
+        let ticket = envelope.ticket().clone();
         let command_id = ticket.sequence();
-        let lane_key = RendererDevToolsSessionLaneKey::new(agent_token, ticket.session().clone());
         let command = RendererInspectorIoCommand {
             command_id,
             agent_token,
@@ -342,18 +374,18 @@ impl RendererInspectorIoIngress {
             first_dispatch_tx: Some(first_dispatch_tx),
             claimed_by: None,
         };
-        if let Err(rejected) = state.lanes.enqueue(lane_key, command) {
-            drop(state);
-            match rejected {
-                RendererDevToolsLaneEnqueueError::TargetClosed(command) => {
-                    fail_io_command(command, "Inspector IO target is closed");
-                }
-                RendererDevToolsLaneEnqueueError::SessionDetached(command) => {
-                    fail_io_command(command, "Inspector IO session was detached");
-                }
-            }
+        let rejected = if state.closed {
+            Some((command, "Inspector IO target is closed"))
+        } else if state.detached_sessions.contains(&lane_key) {
+            Some((command, "Inspector IO session was detached"))
         } else {
-            drop(state);
+            state.commands.push_back(command);
+            None
+        };
+        drop(state);
+        if let Some((command, message)) = rejected {
+            fail_io_command(command, message);
+        } else {
             self.notify_execution_opportunities();
         }
         RendererRuntimeInspectorIoCommandRoute {
@@ -367,7 +399,7 @@ impl RendererInspectorIoIngress {
     pub(crate) fn claim_for_owner(&self) -> Option<RendererInspectorIoCommand> {
         self.shared.owner_wake_armed.store(false, Ordering::Release);
         let command = self.claim_next(RendererInspectorIoCommandConsumer::Owner);
-        if command.is_none() && self.shared.state.lock().lanes.has_ready() {
+        if command.is_none() && self.shared.state.lock().has_ready() {
             self.notify_execution_opportunities();
         }
         command
@@ -377,7 +409,7 @@ impl RendererInspectorIoIngress {
         let command = self.claim_next(RendererInspectorIoCommandConsumer::Interrupt);
         if command.is_none() {
             self.shared.interrupt_armed.store(false, Ordering::Release);
-            let has_ready = self.shared.state.lock().lanes.has_ready();
+            let has_ready = self.shared.state.lock().has_ready();
             if has_ready {
                 self.request_interrupt();
             }
@@ -402,7 +434,14 @@ impl RendererInspectorIoIngress {
         consumer: RendererInspectorIoCommandConsumer,
     ) -> Option<RendererInspectorIoCommand> {
         let mut state = self.shared.state.lock();
-        let (_, mut command) = state.lanes.claim_next(|_| true)?;
+        if !state.has_ready() {
+            return None;
+        }
+        let mut command = state
+            .commands
+            .pop_front()
+            .expect("a ready Inspector task runner must have a command");
+        state.active_command_id = Some(command.command_id);
         command.claimed_by = Some(consumer);
         Some(command)
     }
@@ -411,24 +450,20 @@ impl RendererInspectorIoIngress {
         &self,
         command: &mut RendererInspectorIoCommand,
     ) -> RendererInspectorIoFirstDispatchGuard {
-        let lane_key = RendererDevToolsSessionLaneKey::new(
-            command.agent_token,
-            command.ticket().session().clone(),
-        );
         let state = self.shared.state.lock();
         assert_eq!(
             command.first_dispatch_lifecycle(),
             crate::runtime::RendererInspectorFirstDispatchLifecycle::OrderedUntilFirstDispatch,
         );
-        state.lanes.assert_active(
-            &lane_key,
-            command.command_id,
-            "a claimed Inspector IO command must own its session lane",
+        assert_eq!(
+            state.active_command_id,
+            Some(command.command_id),
+            "a claimed Inspector IO command must own the target task runner",
         );
         drop(state);
         RendererInspectorIoFirstDispatchGuard {
             ingress: self.clone(),
-            active: Some((lane_key, command.command_id)),
+            active_command_id: Some(command.command_id),
             consumer: command
                 .claimed_by
                 .expect("a first-dispatch guard requires a claimed IO command"),
@@ -436,20 +471,25 @@ impl RendererInspectorIoIngress {
         }
     }
 
-    fn finish_first_dispatch(
-        &self,
-        lane_key: RendererDevToolsSessionLaneKey,
-        command_id: u64,
-    ) -> bool {
-        self.shared.state.lock().lanes.finish_first_dispatch(
-            lane_key,
-            command_id,
-            "only the active Inspector IO command may release its lane",
-        )
+    fn finish_first_dispatch(&self, command_id: u64) -> bool {
+        let mut state = self.shared.state.lock();
+        assert_eq!(
+            state.active_command_id.take(),
+            Some(command_id),
+            "only the active Inspector IO command may release its target task runner"
+        );
+        state.has_ready()
     }
 
     pub(crate) fn cancel_queued_command(&self, command_id: u64, message: &str) {
-        let command = self.shared.state.lock().lanes.cancel_queued(command_id);
+        let command = {
+            let mut state = self.shared.state.lock();
+            state
+                .commands
+                .iter()
+                .position(|command| command.command_id == command_id)
+                .and_then(|position| state.commands.remove(position))
+        };
         if let Some(command) = command {
             fail_io_command(command, message);
         }
@@ -461,14 +501,24 @@ impl RendererInspectorIoIngress {
         session: &DevToolsSessionKey,
     ) {
         let lane_key = RendererDevToolsSessionLaneKey::new(agent_token, session.clone());
-        let commands = self.shared.state.lock().lanes.detach_session(&lane_key);
+        let commands = {
+            let mut state = self.shared.state.lock();
+            state.detached_sessions.insert(lane_key);
+            state.drain_commands(|command| {
+                command.agent_token == agent_token && command.ticket().session() == session
+            })
+        };
         for command in commands {
             fail_io_command(command, "Inspector IO session was detached");
         }
     }
 
     pub(crate) fn close(&self, message: &str) {
-        let commands = { self.shared.state.lock().lanes.close_and_drain() };
+        let commands = {
+            let mut state = self.shared.state.lock();
+            state.closed = true;
+            state.commands.drain(..).collect::<Vec<_>>()
+        };
         self.shared.pause_wake.notify_all();
         for command in commands {
             fail_io_command(command, message);
@@ -476,7 +526,13 @@ impl RendererInspectorIoIngress {
     }
 
     pub(crate) fn cancel_all_queued(&self, message: &str) {
-        let commands = self.shared.state.lock().lanes.drain_queued();
+        let commands = self
+            .shared
+            .state
+            .lock()
+            .commands
+            .drain(..)
+            .collect::<Vec<_>>();
         for command in commands {
             fail_io_command(command, message);
         }
@@ -485,7 +541,10 @@ impl RendererInspectorIoIngress {
     fn notify_execution_opportunities(&self) {
         let owner_wake = {
             let state = self.shared.state.lock();
-            state.owner_wake_tx.clone().zip(self.route_id())
+            state
+                .has_ready()
+                .then(|| state.owner_wake_tx.clone().zip(self.route_id()))
+                .flatten()
         };
         if let Some((owner_wake_tx, route_id)) = owner_wake
             && self
@@ -499,8 +558,10 @@ impl RendererInspectorIoIngress {
         {
             self.shared.owner_wake_armed.store(false, Ordering::Release);
         }
-        self.request_interrupt();
-        self.shared.pause_wake.notify_one();
+        if self.shared.state.lock().has_ready() {
+            self.request_interrupt();
+            self.shared.pause_wake.notify_one();
+        }
     }
 
     fn request_interrupt(&self) {
@@ -540,13 +601,13 @@ impl std::fmt::Debug for RendererInspectorIoIngress {
         formatter
             .debug_struct("RendererInspectorIoIngress")
             .field("route_id", &self.route_id())
-            .field("session_lanes", &state.lanes.session_count())
-            .field("ready_sessions", &state.lanes.ready_count())
+            .field("queued_tasks", &state.commands.len())
+            .field("active_command_id", &state.active_command_id)
             .field(
                 "interrupt_armed",
                 &self.shared.interrupt_armed.load(Ordering::Acquire),
             )
-            .field("closed", &state.lanes.is_closed())
+            .field("closed", &state.closed)
             .finish()
     }
 }
@@ -597,6 +658,7 @@ mod tests {
                 ),
                 raw_json.to_owned(),
                 None,
+                moli_page_types::RendererInspectorResponseDelivery::CommandReply,
             )),
         )
     }
@@ -685,36 +747,79 @@ mod tests {
         }
 
         assert!(
-            ingress.shared.state.lock().lanes.session_count() == 0,
-            "every stressed first-dispatch lane must retire"
+            {
+                let state = ingress.shared.state.lock();
+                state.commands.is_empty() && state.active_command_id.is_none()
+            },
+            "every stressed target task must retire"
         );
     }
 
     #[test]
-    fn one_session_is_fifo_while_another_session_is_independent() {
+    fn page_io_uses_one_target_fifo_across_sessions() {
         let ingress = ingress();
         let agent = RendererDevToolsAgentToken::allocate();
         let _a1 = enqueue(&ingress, agent, Some("session-a"), "a1");
         let _a2 = enqueue(&ingress, agent, Some("session-a"), "a2");
         let _b1 = enqueue(&ingress, agent, Some("session-b"), "b1");
 
-        let mut first = ingress.claim_for_owner().expect("first ready session");
+        let mut first = ingress.claim_for_owner().expect("first target task");
         assert_eq!(first.raw_json(), "a1");
-        let mut second = ingress
-            .claim_for_interrupt()
-            .expect("other session must remain independently ready");
-        assert_eq!(second.raw_json(), "b1");
-        assert!(ingress.claim_for_pause().is_none());
+        assert!(
+            ingress.claim_for_interrupt().is_none(),
+            "only one target task may be active before first dispatch"
+        );
 
         ingress.first_dispatch_guard(&mut first).release();
+        let mut second = ingress
+            .claim_for_interrupt()
+            .expect("the second target task must follow first dispatch");
+        assert_eq!(second.raw_json(), "a2");
+        assert!(ingress.claim_for_pause().is_none());
         ingress.first_dispatch_guard(&mut second).release();
-        let mut third = ingress.claim_for_pause().expect("a2 after a1 dispatch");
-        assert_eq!(third.raw_json(), "a2");
+        let mut third = ingress
+            .claim_for_pause()
+            .expect("the third target task must follow second dispatch");
+        assert_eq!(third.raw_json(), "b1");
         ingress.first_dispatch_guard(&mut third).release();
     }
 
     #[tokio::test]
-    async fn one_io_lane_orders_inspector_performance_and_emulation_first_dispatch() {
+    async fn replacement_io_ingress_does_not_wait_for_an_old_first_dispatch_receiver() {
+        let agent = RendererDevToolsAgentToken::allocate();
+        let first_attachment = ingress();
+        let second_attachment = ingress();
+
+        let first = enqueue(&first_attachment, agent, Some("session-a"), "first");
+        let second = enqueue(&second_attachment, agent, Some("session-a"), "second");
+
+        let mut first_command = first_attachment
+            .claim_for_owner()
+            .expect("first attachment command");
+        first_attachment
+            .first_dispatch_guard(&mut first_command)
+            .release();
+        let mut second_command = second_attachment
+            .claim_for_owner()
+            .expect("replacement attachment command");
+        second_attachment
+            .first_dispatch_guard(&mut second_command)
+            .release();
+
+        assert_eq!(
+            tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                second.wait_for_first_dispatch()
+            )
+            .await
+            .expect("a replacement capability must not wait for the old receiver"),
+            Ok(RendererRuntimeInspectorIoCommandClaim::Dispatched)
+        );
+        drop(first);
+    }
+
+    #[tokio::test]
+    async fn target_fifo_orders_inspector_performance_and_emulation_first_dispatch() {
         let ingress = ingress();
         let agent = RendererDevToolsAgentToken::allocate();
         let inspector = enqueue(&ingress, agent, Some("session-mixed"), "inspector");
@@ -771,6 +876,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dropped_io_waiter_cannot_leave_a_completion_hole() {
+        let ingress = ingress();
+        let agent = RendererDevToolsAgentToken::allocate();
+        let abandoned = enqueue(&ingress, agent, Some("session-order"), "abandoned");
+        let following = enqueue(&ingress, agent, Some("session-order"), "following");
+
+        drop(abandoned);
+        let mut command = ingress
+            .claim_for_owner()
+            .expect("the following command should remain queued");
+        ingress.first_dispatch_guard(&mut command).release();
+
+        assert_eq!(
+            tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                following.wait_for_first_dispatch()
+            )
+            .await
+            .expect("a dropped waiter must release the next publication"),
+            Ok(RendererRuntimeInspectorIoCommandClaim::Dispatched)
+        );
+    }
+
+    #[tokio::test]
     async fn detach_cancels_all_queued_commands_while_active_first_dispatch_retires_safely() {
         let ingress = ingress();
         let agent = RendererDevToolsAgentToken::allocate();
@@ -803,8 +932,11 @@ mod tests {
         assert!(ingress.claim_for_pause().is_none());
 
         assert!(
-            ingress.shared.state.lock().lanes.session_count() == 0,
-            "the detached lane must retire after its active first dispatch releases"
+            {
+                let state = ingress.shared.state.lock();
+                state.commands.is_empty() && state.active_command_id.is_none()
+            },
+            "the detached session's tasks must retire"
         );
     }
 
@@ -840,8 +972,11 @@ mod tests {
         assert!(ingress.claim_for_pause().is_none());
 
         assert!(
-            ingress.shared.state.lock().lanes.session_count() == 0,
-            "the active lane must retire safely after target close"
+            {
+                let state = ingress.shared.state.lock();
+                state.commands.is_empty() && state.active_command_id.is_none()
+            },
+            "the active target task must retire safely after target close"
         );
 
         let late = enqueue(&ingress, agent, Some("session-late"), "late");

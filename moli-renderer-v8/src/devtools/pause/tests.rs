@@ -63,6 +63,7 @@ fn enqueue_command(
                 ),
                 raw_json,
                 Some(response),
+                moli_page_types::RendererInspectorResponseDelivery::CommandReply,
             ),
         ),
     )

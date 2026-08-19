@@ -1,4 +1,5 @@
 use anyhow::{Result, anyhow};
+use moli_page_types::RendererInspectorResponseDelivery;
 use serde_json::{Value, json};
 
 use super::Page;
@@ -516,9 +517,15 @@ impl Page {
         owner_context_resolution_action: Option<String>,
         raw_json: String,
         deferred_response: RendererRuntimeInspectorResponseSender,
+        response_delivery: RendererInspectorResponseDelivery,
     ) -> Result<PendingRuntimeInspectorCommandDispatch> {
         match inspector_route {
             RendererInspectorCommandRoute::MainThread => {
+                debug_assert_eq!(
+                    response_delivery,
+                    RendererInspectorResponseDelivery::CommandReply,
+                    "Main Inspector responses have not migrated to session output"
+                );
                 let route = self.handle.enqueue_runtime_inspector_main_command(
                     RendererInspectorCommandEnvelope::new_main_protocol(
                         RendererInspectorIngressTicket::new(
@@ -548,6 +555,7 @@ impl Page {
                         ),
                         raw_json,
                         Some(deferred_response),
+                        response_delivery,
                     ),
                 );
                 Ok(Self::pending_io_runtime_inspector_command_dispatch(route))
@@ -569,6 +577,7 @@ impl Page {
                 ),
                 raw_json,
                 None,
+                RendererInspectorResponseDelivery::CommandReply,
             ),
         );
         Ok(Self::pending_io_runtime_inspector_command_dispatch(route))
@@ -827,7 +836,7 @@ impl Page {
         self.start_page_command(RendererPageCommand::PerformanceMetricSnapshot)
     }
 
-    /// Admits `Performance.getMetrics` through the same IO session lane used
+    /// Admits `Performance.getMetrics` through the same target IO task FIFO used
     /// by interruptible V8 Inspector commands. The snapshot remains the latest
     /// owner-published value because collecting a fresh JS-derived snapshot is
     /// not re-entrant while the isolate is executing JavaScript.

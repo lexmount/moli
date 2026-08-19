@@ -475,7 +475,7 @@ pub(super) async fn complete_crash_command_dispatch(
     ) = take_pending_fetch_state(conn, session_id);
 
     // Chromium handles Page.crash directly at the renderer IO-agent boundary;
-    // it never enters a V8InspectorSession or an ordinary per-session IO lane.
+    // it never enters a V8InspectorSession or the ordinary target IO task FIFO.
     // Seal both DevTools receivers and interrupt active V8 synchronously so
     // target retirement cannot wait behind earlier JavaScript or IO work.
     if let Ok(page) = conn.loaded_page_mut_for_interruptible_protocol_access(session_id) {

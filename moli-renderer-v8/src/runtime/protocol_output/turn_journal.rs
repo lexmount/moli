@@ -182,6 +182,41 @@ impl RendererTurnOutputJournal {
         Some(cursor)
     }
 
+    /// Atomically appends and publishes one already-resolved producer batch.
+    ///
+    /// A DevTools session response is a terminal renderer observation, not a
+    /// command-side acknowledgement. Admitting it through the same journal as
+    /// that session's notifications keeps their producer order without a
+    /// second completion sequencer. `false` means the exact attachment stream
+    /// was already closed before it could take ownership of the records.
+    pub(crate) fn try_publish_records(
+        &self,
+        records: impl IntoIterator<Item = PendingRendererOutputRecord>,
+    ) -> bool {
+        let records = records.into_iter().collect::<Vec<_>>();
+        assert!(
+            !records.is_empty(),
+            "renderer output publication must contain at least one record"
+        );
+        let mut state = self.state.lock();
+        if state.closed {
+            return false;
+        }
+        state.records.extend(records);
+        let publication = Self::settle_locked(&mut state)
+            .expect("newly appended renderer output records must settle");
+        if let Some(transport) = state.transport.as_ref() {
+            // Admission failure means the protocol owner has retired or its
+            // bounded stream is terminal. The journal has nevertheless taken
+            // ownership at this exact sequence; falling back to another sink
+            // here could duplicate the response.
+            let _ = publication.publish_to(transport);
+        } else {
+            state.deferred_publications.push(publication);
+        }
+        true
+    }
+
     fn settle_locked(
         state: &mut RendererTurnOutputJournalState,
     ) -> Option<RendererOutputPublication> {

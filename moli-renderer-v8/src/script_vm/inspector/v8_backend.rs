@@ -381,8 +381,11 @@ impl RendererInspectorSessionExecutorLocal {
             command.pause_effect(),
             command.response().map(|response| response.call_id()),
         );
+        let response_delivery = command.response_delivery();
         if let Some(response) = command.take_response() {
-            session.outbound.register_response_callback(response);
+            session
+                .outbound
+                .register_frontend_response_callback(response, response_delivery);
         }
         let _post_dispatch_wake = first_dispatch.release_for_dispatch();
         v8_session.dispatch_protocol_message(v8::inspector::StringView::from(
