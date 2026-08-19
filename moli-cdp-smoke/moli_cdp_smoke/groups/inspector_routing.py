@@ -825,6 +825,36 @@ inspectorRoutingHotLoop();"""
             f"{catalog_responses[catalog_ids[2]]}"
         )
 
+    completion_burst_ids = [
+        await client.send(
+            "Debugger.getScriptSource",
+            {"scriptId": script_id},
+            session_id=page.auxiliary_session_id,
+        )
+        for _ in range(32)
+    ]
+    completion_burst_responses, completion_burst_seen = await _recv_responses(
+        client, set(completion_burst_ids), timeout=5
+    )
+    completion_burst_order = [
+        message["id"]
+        for message in completion_burst_seen
+        if message.get("id") in completion_burst_ids
+    ]
+    assert_equal(
+        completion_burst_order,
+        completion_burst_ids,
+        "synchronous same-session IO completion burst order",
+    )
+    for message_id in completion_burst_ids:
+        assert_equal(
+            completion_burst_responses[message_id]
+            .get("result", {})
+            .get("scriptSource"),
+            source,
+            f"completion burst script source for id {message_id}",
+        )
+
     breakpoint_ids: list[str] = []
     for message_id in catalog_ids[3:5]:
         response = catalog_responses[message_id]
@@ -917,9 +947,15 @@ inspectorRoutingHotLoop();"""
         ),
         source="Chromium DevToolsSession::ShouldSendOnIO executable probe",
         commands=[method for method, _params in catalog]
-        + ["Debugger.removeBreakpoint", "Debugger.resume", "Runtime.terminateExecution"],
+        + [
+            "Debugger.getScriptSource x32 (sync completion burst)",
+            "Debugger.removeBreakpoint",
+            "Debugger.resume",
+            "Runtime.terminateExecution",
+        ],
         observed={
             "catalogResponseOrder": catalog_response_order,
+            "completionBurstOrder": completion_burst_order,
             "removeResponseOrder": [
                 message["id"]
                 for message in remove_seen
