@@ -4,17 +4,21 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 
 const FETCH_INFER_FLAGS: &[&str] = &[
     "--dump",
+    "-d",
     "--header",
     "-H",
     "--trace-network",
     "--trace-matched-response-body",
     "--noscript",
+    "-n",
     "--strip-mode",
     "--with-base",
     "--with-frames",
     "--wait-until",
+    "-w",
     "--redirect-wait-ms",
     "--wait-selector",
+    "-s",
     "--wait-script",
     "--wait-script-file",
     "--delay-ms",
@@ -24,21 +28,37 @@ const FETCH_INFER_FLAGS: &[&str] = &[
     "--document-start-script",
     "--document-start-script-file",
     "--image",
+    "-i",
     "--font",
+    "-f",
     "--audio",
+    "-a",
     "--video",
+    "-v",
     "--media",
+    "-m",
     "--text-track",
+    "-T",
     "--resource",
+    "-r",
     "--disable-subframes",
     "--wait-ms",
     "--profile-dir",
+    "-P",
     "--web-bot-auth-key-file",
     "--web-bot-auth-keyid",
     "--web-bot-auth-domain",
     "--web-bot-auth-profile",
 ];
-const SERVE_INFER_FLAGS: &[&str] = &["--host", "--port", "--timeout", "--layout"];
+const SERVE_INFER_FLAGS: &[&str] = &[
+    "--host",
+    "--port",
+    "-p",
+    "--timeout",
+    "-t",
+    "--layout",
+    "-l",
+];
 const EXPLICIT_COMMANDS: &[&str] = &["fetch", "serve"];
 const DUMP_MODES: &[&str] = &[
     "json",
@@ -77,13 +97,13 @@ pub struct FetchArgs {
     /// Select the fetch output format. `screenshot` writes a viewport PNG,
     /// `screenshot_full` writes a full-document PNG, and `pdf` writes a
     /// paginated PDF directly to stdout; all three require layout.
-    #[arg(long, value_enum)]
+    #[arg(short = 'd', long, value_enum)]
     pub dump: Option<DumpFormat>,
 
     #[arg(short = 'H', long = "header", value_name = "HEADER", value_parser = parse_request_header_arg)]
     pub headers: Vec<RequestHeaderArg>,
 
-    #[arg(long)]
+    #[arg(short = 'n', long)]
     pub noscript: bool,
 
     #[arg(long)]
@@ -101,7 +121,7 @@ pub struct FetchArgs {
     #[arg(long, value_enum, value_delimiter = ',')]
     pub strip_mode: Vec<StripModeChoice>,
 
-    #[arg(long, value_enum, default_value = "done")]
+    #[arg(short = 'w', long, value_enum, default_value = "done")]
     pub wait_until: FetchWaitUntil,
 
     /// Milliseconds to wait for a client-side replacement navigation after an
@@ -116,7 +136,7 @@ pub struct FetchArgs {
     )]
     pub redirect_wait_ms: u64,
 
-    #[arg(long)]
+    #[arg(short = 's', long)]
     pub wait_selector: Option<String>,
 
     #[arg(long)]
@@ -141,7 +161,7 @@ pub struct FetchArgs {
     /// replacement navigations, the selected lifecycle stage, response match,
     /// selector, and script waits share one absolute deadline. Network-idle and
     /// DOM-stable return the current page with a warning when it expires.
-    #[arg(long, alias = "wait-ms", default_value_t = 25_000)]
+    #[arg(short = 't', long, alias = "wait-ms", default_value_t = 25_000)]
     pub timeout: u64,
 
     #[command(flatten)]
@@ -232,10 +252,10 @@ pub struct ServeArgs {
     #[arg(long, default_value = "127.0.0.1")]
     pub host: String,
 
-    #[arg(long, default_value_t = 9222)]
+    #[arg(short = 'p', long, default_value_t = 9222)]
     pub port: u16,
 
-    #[arg(long, default_value_t = 10)]
+    #[arg(short = 't', long, default_value_t = 10)]
     pub timeout: u32,
 
     #[arg(long, default_value_t = 16)]
@@ -315,30 +335,31 @@ pub struct CommonArgs {
     #[arg(long)]
     pub http_cache_dir: Option<String>,
 
-    #[arg(long)]
+    #[arg(short = 'P', long)]
     pub profile_dir: Option<String>,
 
-    #[arg(long)]
+    #[arg(short = 'i', long)]
     pub image: bool,
 
-    #[arg(long)]
+    #[arg(short = 'f', long)]
     pub font: bool,
 
-    #[arg(long)]
+    #[arg(short = 'a', long)]
     pub audio: bool,
 
-    #[arg(long)]
+    #[arg(short = 'v', long)]
     pub video: bool,
 
-    #[arg(long)]
+    #[arg(short = 'm', long)]
     pub media: bool,
 
-    #[arg(long)]
+    #[arg(short = 'T', long)]
     pub text_track: bool,
 
     /// Fetch every optional image, font, audio, video, media, and text-track
     /// resource family.
     #[arg(
+        short = 'r',
         long,
         env = "MOLI_RESOURCE",
         value_parser = clap::builder::BoolishValueParser::new()
@@ -353,13 +374,14 @@ pub struct CommonArgs {
     /// Without this flag Moli keeps deterministic compatibility
     /// geometry and does not construct layout or paint output.
     #[arg(
+        short = 'l',
         long,
         env = "MOLI_LAYOUT",
         value_parser = clap::builder::BoolishValueParser::new()
     )]
     pub layout: bool,
 
-    #[arg(long = "cookie-file")]
+    #[arg(short = 'c', long = "cookie-file")]
     pub cookie_file: Vec<String>,
 
     #[arg(long)]
@@ -378,7 +400,7 @@ pub struct CommonArgs {
     #[arg(long)]
     pub block_cidrs: Option<String>,
 
-    #[arg(long, value_enum)]
+    #[arg(short = 'L', long, value_enum)]
     pub log_level: Option<LogLevel>,
 
     #[arg(long, value_enum)]
@@ -387,7 +409,7 @@ pub struct CommonArgs {
     #[arg(long, num_args = 0..=1, default_missing_value = "")]
     pub log_filter_scopes: Option<String>,
 
-    #[arg(long)]
+    #[arg(short = 'A', long)]
     pub user_agent: Option<String>,
 
     #[arg(long)]
@@ -542,7 +564,7 @@ fn infer_command(next: Option<&OsString>) -> Option<&'static str> {
 }
 
 fn normalize_dump_flag(args: &mut Vec<OsString>) {
-    let Some(index) = args.iter().position(|arg| arg == "--dump") else {
+    let Some(index) = args.iter().position(|arg| arg == "--dump" || arg == "-d") else {
         return;
     };
 
@@ -611,6 +633,158 @@ mod tests {
     #[test]
     fn port_equals_infers_serve_command() {
         let args = normalize_args_for_compat(["moli", "--port=0"]);
+        let cli = Cli::parse_from(args);
+
+        match cli.command {
+            Commands::Serve(args) => assert_eq!(args.port, 0),
+            other => panic!("expected serve command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn short_flags_do_not_collide() {
+        // clap panics on a duplicate short within one command. `CommonArgs` is
+        // flattened into both subcommands, so this is the only check that
+        // covers each union rather than each struct in isolation.
+        use clap::CommandFactory;
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn help_is_still_reachable_as_dash_h() {
+        for command in [
+            ["moli", "fetch", "-h"].as_slice(),
+            ["moli", "serve", "-h"].as_slice(),
+        ] {
+            let rendered = Cli::try_parse_from(command.iter().copied())
+                .expect_err("-h must render help rather than parse")
+                .to_string();
+            assert!(rendered.contains("Usage:"), "{command:?} -> {rendered}");
+        }
+    }
+
+    #[test]
+    fn short_flags_match_their_long_spelling() {
+        let long = Cli::parse_from([
+            "moli",
+            "fetch",
+            "--dump",
+            "markdown",
+            "--wait-until",
+            "load",
+            "--wait-selector",
+            "main",
+            "--timeout",
+            "5000",
+            "--noscript",
+            "--layout",
+            "--image",
+            "--font",
+            "--cookie-file",
+            "jar.txt",
+            "--profile-dir",
+            "/tmp/p",
+            "--user-agent",
+            "Bot/1.0",
+            "--log-level",
+            "debug",
+            "https://example.test/",
+        ]);
+        let short = Cli::parse_from([
+            "moli",
+            "fetch",
+            "-d",
+            "markdown",
+            "-w",
+            "load",
+            "-s",
+            "main",
+            "-t",
+            "5000",
+            "-n",
+            "-l",
+            "-i",
+            "-f",
+            "-c",
+            "jar.txt",
+            "-P",
+            "/tmp/p",
+            "-A",
+            "Bot/1.0",
+            "-L",
+            "debug",
+            "https://example.test/",
+        ]);
+
+        assert_eq!(long, short);
+    }
+
+    #[test]
+    fn serve_short_flags_match_their_long_spelling() {
+        let long = Cli::parse_from([
+            "moli",
+            "serve",
+            "--port",
+            "9333",
+            "--timeout",
+            "30",
+            "--layout",
+            "--resource",
+        ]);
+        let short = Cli::parse_from(["moli", "serve", "-p", "9333", "-t", "30", "-l", "-r"]);
+
+        assert_eq!(long, short);
+    }
+
+    #[test]
+    fn boolean_short_flags_can_be_grouped() {
+        // The shape the feature request asked for: `--layout --resource` as `-lr`.
+        let grouped = Cli::parse_from(["moli", "serve", "-lr"]);
+        let separate = Cli::parse_from(["moli", "serve", "--layout", "--resource"]);
+        assert_eq!(grouped, separate);
+
+        match grouped.command {
+            Commands::Serve(args) => {
+                assert!(args.common.layout);
+                assert!(args.common.resource);
+            }
+            other => panic!("expected serve command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn every_optional_resource_family_groups_into_one_cluster() {
+        let grouped = Cli::parse_from(["moli", "fetch", "-ifavmT", "https://example.test/"]);
+
+        match grouped.command {
+            Commands::Fetch(args) => {
+                let common = args.common;
+                assert!(common.image);
+                assert!(common.font);
+                assert!(common.audio);
+                assert!(common.video);
+                assert!(common.media);
+                assert!(common.text_track);
+            }
+            other => panic!("expected fetch command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn short_dump_infers_fetch_command_and_defaults_its_value() {
+        let args = normalize_args_for_compat(["moli", "-d", "https://example.test/"]);
+        let cli = Cli::parse_from(args);
+
+        match cli.command {
+            // A bare `--dump` defaults to html; `-d` must do the same.
+            Commands::Fetch(args) => assert_eq!(args.dump, Some(DumpFormat::Html)),
+            other => panic!("expected fetch command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn short_port_infers_serve_command() {
+        let args = normalize_args_for_compat(["moli", "-p", "0"]);
         let cli = Cli::parse_from(args);
 
         match cli.command {
