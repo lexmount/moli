@@ -158,7 +158,7 @@ mod tests {
         let mut entry = store.take(owner).expect("open parser entry");
         assert_eq!(entry.lifetime(), DocumentParserLifetime::Open);
         entry.request_close();
-        assert!(entry.finishes_when_drained());
+        assert!(entry.finishes_on_empty_input());
         assert!(store.is_complete_for(owner));
     }
 }

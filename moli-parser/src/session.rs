@@ -195,6 +195,17 @@ impl HtmlParserSession {
         self.input_buffer.push_back(input);
     }
 
+    pub(super) fn append_to_current_inserted_input(&mut self, input: StrTendril) -> bool {
+        if input.is_empty() {
+            return true;
+        }
+        if self.suspended_input_buffers.is_empty() {
+            return false;
+        }
+        self.input_buffer.push_back(input);
+        true
+    }
+
     pub(super) fn has_buffered_input(&self) -> bool {
         !self.input_buffer.is_empty()
             || self

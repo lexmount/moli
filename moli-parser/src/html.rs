@@ -611,6 +611,16 @@ impl DocumentStream {
         }
     }
 
+    /// Append input at the end of the currently active parser-inserted frame.
+    ///
+    /// This is used when a parser script has already inserted input and then
+    /// continues writing while that input is blocked on a nested resource.
+    /// The input must remain after the blocked frame's unconsumed tail rather
+    /// than becoming a newer nested insertion.
+    pub fn append_to_current_inserted_input(&mut self, chunk: &str) -> bool {
+        self.inner.append_to_current_inserted_input(chunk)
+    }
+
     pub fn has_pending_input(&self) -> bool {
         self.inner.has_script_input()
             || self.inner.has_buffered_input()

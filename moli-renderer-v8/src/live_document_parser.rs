@@ -48,9 +48,10 @@ fn pump_next_live_document_parser_step(
 }
 
 pub(crate) enum LiveDocumentParserStepOutcome {
-    /// The current parser input was consumed without producing a synchronous
-    /// parser lifecycle handoff.
-    Continue,
+    /// The current parser input boundary was reached without producing a
+    /// synchronous parser lifecycle handoff. Parser-owned parent input may
+    /// already have been restored and still require another step.
+    InputBoundary,
     /// The tree builder needs author-defined custom element construction before
     /// parser insertion can continue in the same document parser.
     CustomElementConstructionHandoff(Box<ParserCustomElementConstructionHandoff>),
@@ -149,7 +150,7 @@ fn live_document_parser_advance_from_outcome(
         blocking_stylesheet_inputs: discovered_blocking_stylesheet_inputs,
     };
     let outcome = match result {
-        ParserPumpStep::InputDrained => LiveDocumentParserStepOutcome::Continue,
+        ParserPumpStep::InputDrained => LiveDocumentParserStepOutcome::InputBoundary,
         ParserPumpStep::Yield(ParserYield::CustomElementConstruction(handoff)) => {
             LiveDocumentParserStepOutcome::CustomElementConstructionHandoff(handoff)
         }
@@ -612,7 +613,7 @@ impl DocumentParserSession {
         }
     }
 
-    pub(crate) fn finishes_when_drained(&self) -> bool {
+    pub(crate) fn finishes_on_empty_input(&self) -> bool {
         matches!(
             self.lifetime,
             DocumentParserLifetime::Finite | DocumentParserLifetime::Closing
@@ -654,6 +655,15 @@ impl DocumentParserSession {
             ExecutableDocumentParserBackend::Xml(stream) => {
                 stream.borrow_mut().append_to_end(source);
             }
+        }
+    }
+
+    pub(crate) fn append_to_current_inserted_input(&mut self, source: &str) -> bool {
+        match self.backend() {
+            ExecutableDocumentParserBackend::Html(stream) => {
+                stream.borrow_mut().append_to_current_inserted_input(source)
+            }
+            ExecutableDocumentParserBackend::Xml(_) => false,
         }
     }
 

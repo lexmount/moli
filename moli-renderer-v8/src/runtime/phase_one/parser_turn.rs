@@ -1456,7 +1456,7 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
             }
 
             match outcome {
-                LiveDocumentParserStepOutcome::Continue => {
+                LiveDocumentParserStepOutcome::InputBoundary => {
                     break ParserStepAdvanceOutcome::Continue;
                 }
                 LiveDocumentParserStepOutcome::CustomElementConstructionHandoff(handoff) => {
@@ -1566,7 +1566,7 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
             }
 
             match outcome {
-                LiveDocumentParserStepOutcome::Continue => {
+                LiveDocumentParserStepOutcome::InputBoundary => {
                     break ParserStepAdvanceOutcome::Continue;
                 }
                 LiveDocumentParserStepOutcome::CustomElementConstructionHandoff(handoff) => {

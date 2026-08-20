@@ -5929,6 +5929,119 @@ fn child_document_write_nested_write_preserves_parser_insertion_point() {
     );
 }
 
+// Ported from Chromium's WPT copy at
+// html/webappapis/dynamic-markup-insertion/document-write/iframe_003.html.
+#[test]
+fn child_document_write_script_restores_character_chunked_tail() {
+    let mut vm = new_storage_test_vm("https://child-write-character-tail.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.createElement("iframe");
+  (document.body || document.documentElement || document).appendChild(frame);
+  const childDocument = frame.contentDocument;
+  const source =
+    "<script>document.write(\"<i id='a'>Filler Text</i>\")<\/script>" +
+    "<b id=b>Filler Text</b>";
+  for (const character of source) {
+    childDocument.write(character);
+  }
+  childDocument.close();
+  return Array.from(childDocument.body.children)
+    .map(element => [element.localName, element.id, element.textContent].join(":"))
+    .join("|");
+})()
+"#,
+        )
+        .expect("a written script must restore the character-chunked child parser tail");
+
+    assert_eq!(result, "i:a:Filler Text|b:b:Filler Text");
+}
+
+// Ported from Chromium's WPT copy at
+// html/webappapis/dynamic-markup-insertion/document-write/iframe_010.html.
+#[test]
+fn child_document_close_inside_written_script_preserves_insertion_stack() {
+    let mut vm = new_storage_test_vm("https://child-write-script-close-stack.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.createElement("iframe");
+  (document.body || document.documentElement || document).appendChild(frame);
+  const childDocument = frame.contentDocument;
+  const source =
+    "<script>document.write('<table><plaintext>Filler '); document.close();<\/script>";
+  for (const character of source) {
+    childDocument.write(character);
+  }
+  const children = childDocument.body.children;
+  return [
+    children.length,
+    children[0]?.localName,
+    children[0]?.textContent,
+    children[1]?.localName,
+  ].join("|");
+})()
+"#,
+        )
+        .expect("document.close() in a written script must preserve its parser insertion stack");
+
+    assert_eq!(result, "2|plaintext|Filler |table");
+}
+
+// Ported from Chromium's WPT copy at
+// html/webappapis/dynamic-markup-insertion/document-write/nested-document-write-2.html.
+#[tokio::test]
+async fn child_nested_external_document_write_preserves_input_order() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    loader.set_network_offline(true);
+    let mut vm =
+        new_storage_test_vm_with_loader("https://child-nested-external-write.test/", &loader);
+
+    vm.eval(
+        r#"
+(() => {
+  const frame = document.createElement("iframe");
+  (document.body || document.documentElement || document).appendChild(frame);
+  const childDocument = frame.contentDocument;
+  childDocument.open();
+
+  const nestedSource =
+    '<script src="data:text/javascript,document.write(%22w%22)%3Bdocument.write(%22o%22)%3B"><\/script>r';
+  const nestedLiteral = JSON.stringify(nestedSource).replace("</script>", "<\\/script>");
+  childDocument.write(
+    "<script>document.write(" + nestedLiteral + "); document.write('k');<\/script>e"
+  );
+  childDocument.write("d");
+  childDocument.close();
+})()
+"#,
+    )
+    .expect("nested external child document.write fixture should evaluate");
+
+    while vm
+        .run_next_child_frame_semantic_turn_for_test()
+        .await
+        .is_some()
+    {
+        // Drain the data-script source load, nested writes, and parser resume.
+    }
+
+    let result = vm
+        .eval(
+            r#"
+document.querySelector("iframe").contentDocument.body.textContent
+"#,
+        )
+        .expect("the nested external writer must restore all parent parser input");
+
+    assert_eq!(result, "worked");
+}
+
 #[test]
 fn child_parser_script_document_close_drains_restored_parent_input() {
     let mut vm = new_storage_test_vm("https://child-parser-close.test/");

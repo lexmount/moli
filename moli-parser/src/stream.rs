@@ -519,6 +519,11 @@ impl HtmlTreeSinkStream {
         self.pump_parser_step_with_source(chunk, true)
     }
 
+    pub fn append_to_current_inserted_input(&mut self, chunk: &str) -> bool {
+        self.parser
+            .append_to_current_inserted_input(StrTendril::from(chunk))
+    }
+
     fn pump_parser_step_with_source(
         &mut self,
         chunk: &str,
@@ -1737,6 +1742,32 @@ mod tests {
             panic!("expected original blocking classic handoff");
         };
         assert_eq!((start_line, start_column), (0, 0));
+    }
+
+    #[test]
+    fn blocked_nested_writes_keep_each_input_at_its_insertion_depth() {
+        let mut stream = DocumentStream::new_parser_stream_for_testing(
+            Url::parse("https://example.test/page.html").expect("test url"),
+        );
+
+        let outer = stream.pump_parser_step("<script>outer()</script>e");
+        assert!(matches!(
+            outer.result,
+            ParserPumpStep::Yield(ParserYield::Script(_))
+        ));
+        let nested = stream.pump_parser_inserted_step("<script src='nested.js'></script>r");
+        assert!(matches!(
+            nested.result,
+            ParserPumpStep::Yield(ParserYield::Script(_))
+        ));
+
+        assert!(stream.append_to_current_inserted_input("k"));
+        stream.append_to_end("d".to_owned());
+        stream
+            .script_input_session()
+            .enqueue_script_input_html("wo".to_owned());
+
+        assert_eq!(stream.snapshot_pending_input(), "worked");
     }
 
     #[test]
