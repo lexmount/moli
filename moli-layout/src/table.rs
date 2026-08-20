@@ -20,7 +20,10 @@ use taffy::{
     TraversePartialTree, TraverseTree, WritingDirection, compute_grid_layout, style_helpers,
 };
 
-use crate::{LayoutBoxId, LayoutBoxKind, LayoutRect, LayoutWorld, style::resolve_stylo_calc_value};
+use crate::{
+    LayoutBoxId, LayoutBoxKind, LayoutInlineAlignment, LayoutRect, LayoutWorld,
+    style::resolve_stylo_calc_value,
+};
 
 mod collapsed_borders;
 mod columns;
@@ -910,7 +913,13 @@ fn collect_rows<N>(
                 let data = table_data(world, cell);
                 let column_span = usize::from(data.column_span.max(1));
                 let row_span = usize::from(data.row_span.max(1));
-                let mut cell_style = world.boxes[cell.index()].style.taffy.clone();
+                let resolved_style = &world.boxes[cell.index()].style;
+                let mut cell_style = resolved_style.taffy.clone();
+                if cell_style.align_content.is_none() {
+                    cell_style.align_content = Some(table_cell_normal_content_alignment(
+                        resolved_style.vertical_align().kind,
+                    ));
+                }
                 cell_style.margin = Rect::ZERO.map(style_helpers::length);
                 cells.push(TableCell {
                     id: cell,
@@ -923,6 +932,27 @@ fn collect_rows<N>(
             }
         }
         _ => {}
+    }
+}
+
+/// Resolve table-cell `align-content: normal` through legacy
+/// `vertical-align`, as required by CSS Box Alignment.
+///
+/// Explicit `align-content` is retained before this function is called.
+/// Baseline-class values remain typed baseline requests rather than being
+/// collapsed to a positional fallback. Positional values reuse block content
+/// alignment so in-flow fragments and out-of-flow static-position candidates
+/// move as one group.
+fn table_cell_normal_content_alignment(
+    vertical_align: LayoutInlineAlignment,
+) -> taffy::AlignContent {
+    match vertical_align {
+        LayoutInlineAlignment::Top => taffy::AlignContent::START,
+        LayoutInlineAlignment::Middle => taffy::AlignContent::SAFE_CENTER,
+        LayoutInlineAlignment::Bottom => taffy::AlignContent::SAFE_END,
+        LayoutInlineAlignment::Baseline
+        | LayoutInlineAlignment::TextTop
+        | LayoutInlineAlignment::TextBottom => taffy::AlignContent::BASELINE,
     }
 }
 
