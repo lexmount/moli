@@ -1420,6 +1420,94 @@ document.body.innerHTML = `<div id=stage>
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn screenshot_matches_chromium_inline_static_position_edges() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/inline-static-position-edges.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0}
+.case{position:relative;width:200px;height:100px;padding:10px;border:5px solid;margin:7px}
+.line{font-size:0;height:30px}
+.prefix{display:inline-block;width:40px;height:20px}
+.owner{padding:0 11px;border:3px solid}
+.abs{position:absolute;width:20px;height:10px}
+.inline{display:inline-block}
+.center{justify-self:center;align-self:center}
+.end{justify-self:end;align-self:end}
+#inline-rtl-center,#block-empty-rtl,#block-after-rtl{direction:rtl}
+#inline-vrl-end,#block-after-vrl{writing-mode:vertical-rl}
+</style>`;
+document.body.innerHTML = `
+<div id=inline-normal class=case><div class=line><span class=prefix></span><span class=owner><span id=inline-normal-abs class="abs inline"></span></span></div></div>
+<div id=inline-center class=case><div class=line><span class=prefix></span><span class=owner><span id=inline-center-abs class="abs inline center"></span></span></div></div>
+<div id=inline-end class=case><div class=line><span class=prefix></span><span class=owner><span id=inline-end-abs class="abs inline end"></span></span></div></div>
+<div id=inline-rtl-center class=case><div class=line><span class=prefix></span><span class=owner><span id=inline-rtl-center-abs class="abs inline center"></span></span></div></div>
+<div id=inline-vrl-end class=case><div class=line><span class=prefix></span><span class=owner><span id=inline-vrl-end-abs class="abs inline end"></span></span></div></div>
+<div id=block-empty-ltr class=case><div class=line><div id=block-empty-ltr-abs class=abs></div></div></div>
+<div id=block-after-ltr class=case><div class=line><span class=prefix></span><div id=block-after-ltr-abs class=abs></div></div></div>
+<div id=block-empty-rtl class=case><div class=line><div id=block-empty-rtl-abs class=abs></div></div></div>
+<div id=block-after-rtl class=case><div class=line><span class=prefix></span><div id=block-after-rtl-abs class=abs></div></div></div>
+<div id=block-after-vrl class=case><div class=line><span class=prefix></span><div id=block-after-vrl-abs class=abs></div></div></div>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(640, 1400, 1.0))?
+            .expect("inline static-position screenshot layout");
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"
+JSON.stringify(Object.fromEntries([
+  'inline-normal', 'inline-center', 'inline-end', 'inline-rtl-center', 'inline-vrl-end',
+  'block-empty-ltr', 'block-after-ltr', 'block-empty-rtl', 'block-after-rtl',
+  'block-after-vrl'
+].map(id => {
+  const container = document.getElementById(id).getBoundingClientRect();
+  const child = document.getElementById(`${id}-abs`).getBoundingClientRect();
+  return [id, [child.x - container.x, child.y - container.y, child.width, child.height]];
+})))
+"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        for (id, expected) in [
+            ("inline-normal", [69.0, 15.0, 20.0, 10.0]),
+            ("inline-center", [59.0, 20.0, 20.0, 10.0]),
+            ("inline-end", [49.0, 25.0, 20.0, 10.0]),
+            ("inline-rtl-center", [151.0, 20.0, 20.0, 10.0]),
+            ("inline-vrl-end", [175.0, 28.0, 20.0, 10.0]),
+            ("block-empty-ltr", [15.0, 15.0, 20.0, 10.0]),
+            ("block-after-ltr", [15.0, 35.0, 20.0, 10.0]),
+            ("block-empty-rtl", [195.0, 15.0, 20.0, 10.0]),
+            ("block-after-rtl", [195.0, 35.0, 20.0, 10.0]),
+            ("block-after-vrl", [155.0, 15.0, 20.0, 10.0]),
+        ] {
+            let actual = geometry[id]
+                .as_array()
+                .unwrap_or_else(|| panic!("missing geometry for {id}: {geometry}"));
+            for (index, expected) in expected.into_iter().enumerate() {
+                let actual = actual[index].as_f64().expect("numeric geometry") as f32;
+                assert!(
+                    (actual - expected).abs() <= 0.05,
+                    "{id}[{index}]: expected {expected}, got {actual}; geometry={geometry}"
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("inline static-position fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn floated_auto_width_inline_formatting_contexts_shrink_to_fit() {
     run_page_vm_async_test(async move {
         let loader =

@@ -2059,6 +2059,15 @@ impl InlineBuildInput {
             1.0,
             quantize,
         );
+        // CSS fixes the paragraph base direction from the IFC owner's
+        // inherited `direction`; first-strong inference is not equivalent for
+        // empty, numeric, neutral, or object-only lines.
+        builder.set_base_direction(
+            match world.boxes[self.root_style.index()].style.direction() {
+                InlineDirection::Ltr => parley::BaseDirection::Ltr,
+                InlineDirection::Rtl => parley::BaseDirection::Rtl,
+            },
+        );
         builder.reserve(styles.len(), resolved_runs.len().max(1));
         let style_indices = styles
             .iter()

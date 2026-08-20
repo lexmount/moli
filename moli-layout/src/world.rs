@@ -187,6 +187,13 @@ pub enum LayoutCapabilityDiagnostic {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct OutOfFlowStaticPosition {
     pub(crate) owner: LayoutBoxId,
+    /// Writing direction of the formatting context that emitted `position`.
+    ///
+    /// Inline layout can emit a candidate from a bidi-isolated inline whose
+    /// direction differs from both the IFC owner and the eventual containing
+    /// block. Retaining that coordinate-space identity lets propagation
+    /// convert through physical space without reinterpreting start/end edges.
+    pub(crate) writing_direction: taffy::WritingDirection,
     pub(crate) position: LogicalStaticPosition,
 }
 

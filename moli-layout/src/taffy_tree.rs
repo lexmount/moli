@@ -3,17 +3,18 @@ use std::{fmt::Debug, hash::Hash};
 use parley::{AlignmentOptions, PositionedLayoutItem, YieldData};
 use style::Atom;
 use taffy::{
-    AlignContent, AutoSizeBehavior, AvailableSpace, BlockContext, BlockFormattingContext,
-    CacheTree, Clear, DetailedGridInfo, Dimension, Display, FloatDirection, FontBaseline,
-    IntrinsicSizeResult, Layout, LayoutBlockContainer, LayoutFlexboxContainer, LayoutGridContainer,
-    LayoutInput, LayoutOutput, LayoutPartialTree, Line, LogicalBoxStrut, LogicalOffset,
-    LogicalSize, LogicalStaticPosition, MaybeMath, MaybeResolve, NodeId, OutOfFlowCandidate,
-    OutOfFlowContainingBlock, Point, ResolveOrZero, RoundTree, RunMode, Size, SizingMode,
-    SizingPurpose, Style, TraversePartialTree, TraverseTree, WritingDirection,
-    compute_block_layout, compute_cached_layout, compute_cached_size,
-    compute_content_alignment_offset, compute_flexbox_layout, compute_grid_layout,
-    compute_hidden_layout, compute_leaf_layout_with_tree, compute_out_of_flow_layout,
-    compute_replaced_layout, compute_root_layout, resolve_content_alignment_fallback, round_layout,
+    AbsoluteAxis, AbstractAxis, AlignContent, AlignItemsKeyword, AlignSelf, AutoSizeBehavior,
+    AvailableSpace, BlockContext, BlockFormattingContext, CacheTree, Clear, DetailedGridInfo,
+    Dimension, Display, FloatDirection, FontBaseline, IntrinsicSizeResult, Layout,
+    LayoutBlockContainer, LayoutFlexboxContainer, LayoutGridContainer, LayoutInput, LayoutOutput,
+    LayoutPartialTree, Line, LogicalBoxStrut, LogicalOffset, LogicalSize, LogicalStaticPosition,
+    MaybeMath, MaybeResolve, NodeId, OutOfFlowCandidate, OutOfFlowContainingBlock, Point,
+    ResolveOrZero, RoundTree, RunMode, Size, SizingMode, SizingPurpose, StaticPositionEdge, Style,
+    TraversePartialTree, TraverseTree, WritingDirection, compute_block_layout,
+    compute_cached_layout, compute_cached_size, compute_content_alignment_offset,
+    compute_flexbox_layout, compute_grid_layout, compute_hidden_layout,
+    compute_leaf_layout_with_tree, compute_out_of_flow_layout, compute_replaced_layout,
+    compute_root_layout, resolve_content_alignment_fallback, round_layout,
 };
 
 use crate::{
@@ -53,6 +54,111 @@ fn logical_static_position_in_owner(
             .converter(owner_size)
             .to_logical_point(point, Size::ZERO),
     )
+}
+
+/// Resolve the edge of an out-of-flow box represented by an inline-layout
+/// static-position anchor.
+///
+/// The returned edge is expressed in the producing inline container's writing
+/// direction. `self-start`/`self-end` are first projected from the positioned
+/// child's axes, while `left`/`right` retain their physical meaning. This is
+/// the same boundary at which Blink's `InlineStaticPositionEdge` and
+/// `BlockStaticPositionEdge` turn alignment keywords into size-independent
+/// static-position metadata.
+#[inline]
+fn inline_layout_static_position_edge(
+    alignment: Option<AlignSelf>,
+    child_writing_direction: WritingDirection,
+    container_writing_direction: WritingDirection,
+    axis: AbsoluteAxis,
+) -> StaticPositionEdge {
+    let keyword = alignment.map_or(AlignItemsKeyword::Normal, AlignSelf::keyword);
+    match keyword {
+        AlignItemsKeyword::Center => StaticPositionEdge::Center,
+        AlignItemsKeyword::End | AlignItemsKeyword::FlexEnd | AlignItemsKeyword::LastBaseline => {
+            StaticPositionEdge::End
+        }
+        AlignItemsKeyword::Normal
+        | AlignItemsKeyword::Start
+        | AlignItemsKeyword::FlexStart
+        | AlignItemsKeyword::Baseline
+        | AlignItemsKeyword::Stretch => StaticPositionEdge::Start,
+        AlignItemsKeyword::SelfStart | AlignItemsKeyword::SelfEnd => {
+            let child_start_is_high = child_writing_direction
+                .mode
+                .is_axis_flow_reversed(axis, child_writing_direction.direction);
+            let container_start_is_high = container_writing_direction
+                .mode
+                .is_axis_flow_reversed(axis, container_writing_direction.direction);
+            let starts_match = child_start_is_high == container_start_is_high;
+            let self_start = keyword == AlignItemsKeyword::SelfStart;
+            if starts_match == self_start {
+                StaticPositionEdge::Start
+            } else {
+                StaticPositionEdge::End
+            }
+        }
+        AlignItemsKeyword::Left | AlignItemsKeyword::Right => {
+            let physical_low = keyword == AlignItemsKeyword::Left;
+            let container_start_is_low = !container_writing_direction
+                .mode
+                .is_axis_flow_reversed(axis, container_writing_direction.direction);
+            if physical_low == container_start_is_low {
+                StaticPositionEdge::Start
+            } else {
+                StaticPositionEdge::End
+            }
+        }
+    }
+}
+
+#[inline]
+fn static_position_anchor(edge: StaticPositionEdge, size: f32) -> f32 {
+    match edge {
+        StaticPositionEdge::Start => 0.0,
+        StaticPositionEdge::Center => size / 2.0,
+        StaticPositionEdge::End => size,
+    }
+}
+
+/// Mark whether each visual item has an in-flow fragment before it in logical
+/// order. Parley has already applied bidi reordering, so RTL logical order is
+/// the reverse of this slice, matching Blink's reverse OOF pass.
+fn logically_preceding_in_flow_fragments(
+    context: &InlineFormattingContext,
+    structural_edge_contributions: &[bool],
+    items: &[PositionedLayoutItem<'_, crate::stylo_to_parley::TextBrush>],
+    direction: InlineDirection,
+) -> Vec<bool> {
+    let item_has_in_flow_fragment =
+        |item: &PositionedLayoutItem<'_, crate::stylo_to_parley::TextBrush>| match item {
+            PositionedLayoutItem::GlyphRun(glyph_run) => glyph_run.style().brush.paint,
+            PositionedLayoutItem::InlineBox(positioned) => context
+                .object(positioned.id)
+                .is_some_and(|object| match object.role {
+                    InlineObjectRole::Atomic => true,
+                    InlineObjectRole::StartEdge | InlineObjectRole::EndEdge => {
+                        usize::try_from(positioned.id)
+                            .ok()
+                            .and_then(|index| structural_edge_contributions.get(index))
+                            .copied()
+                            .unwrap_or(false)
+                    }
+                    InlineObjectRole::Float | InlineObjectRole::OutOfFlow => false,
+                }),
+        };
+
+    let mut preceding = vec![false; items.len()];
+    let mut has_in_flow_fragment = false;
+    let mut visit = |item_index: usize| {
+        preceding[item_index] = has_in_flow_fragment;
+        has_in_flow_fragment |= item_has_in_flow_fragment(&items[item_index]);
+    };
+    match direction {
+        InlineDirection::Ltr => (0..items.len()).for_each(&mut visit),
+        InlineDirection::Rtl => (0..items.len()).rev().for_each(visit),
+    }
+    preceding
 }
 
 pub(crate) fn compute_world_layout<N>(world: &mut LayoutWorld<N>, viewport: PaintViewport)
@@ -1043,6 +1149,7 @@ where
         }
         self.boxes[child.index()].out_of_flow_static_position = Some(OutOfFlowStaticPosition {
             owner: container,
+            writing_direction: self.boxes[container.index()].style.writing_direction(),
             position: static_position,
         });
     }
@@ -1060,8 +1167,6 @@ where
         let child = LayoutBoxId::from_taffy(child_node_id);
         let candidate = self.boxes[child.index()].out_of_flow_static_position?;
         let owner = &self.boxes[candidate.owner.index()];
-        let owner_writing_direction =
-            WritingDirection::new(owner.style.writing_mode(), owner.style.taffy.direction);
         let owner_size = if !self.is_viewport_taffy_node(containing_block_node_id)
             && candidate.owner == LayoutBoxId::from_taffy(containing_block_node_id)
         {
@@ -1074,7 +1179,7 @@ where
         };
         let mut physical = candidate
             .position
-            .to_physical(owner_writing_direction, owner_size);
+            .to_physical(candidate.writing_direction, owner_size);
         let owner_origin = unrounded_global_origin(self, candidate.owner);
         let containing_block_origin = if self.is_viewport_taffy_node(containing_block_node_id) {
             Point::ZERO
@@ -2288,6 +2393,7 @@ where
             alignment_block_size,
             layout,
             atomic,
+            structural_edge_contributions,
             floats,
             percentage_basis,
             line_placements,
@@ -2490,7 +2596,15 @@ where
         for (line_index, line) in measurement.layout.lines().enumerate() {
             let line_placement = measurement.line_placements.get(line_index);
             let line_rect = flow_relative_line_rect(&line, line_placement);
-            for (item_index, item) in line.items().enumerate() {
+            let items = line.items().collect::<Vec<_>>();
+            let has_preceding_in_flow_fragment = logically_preceding_in_flow_fragments(
+                context,
+                &measurement.structural_edge_contributions,
+                &items,
+                container_direction,
+            );
+
+            for (item_index, item) in items.into_iter().enumerate() {
                 let PositionedLayoutItem::InlineBox(positioned) = item else {
                     continue;
                 };
@@ -2503,37 +2617,81 @@ where
                     .map(|placement| placement.item_offset(item_index))
                     .unwrap_or_default();
                 if object.role == InlineObjectRole::OutOfFlow {
-                    let inline_level = self.boxes[object.box_id.index()]
-                        .style
-                        .hypothetical_display_is_inline_level();
+                    let child_style = &self.boxes[object.box_id.index()].style;
+                    let inline_level = child_style.hypothetical_display_is_inline_level();
                     let owner = self.boxes[object.box_id.index()]
                         .inline_context_owner
                         .unwrap_or_else(|| panic!("out-of-flow IFC object lost its owner"));
-                    let relative_point = inline_coordinates.to_physical_line_point(
-                        line_rect,
-                        LineRelativeOffset::new(
-                            if inline_level {
-                                positioned.x - line_rect.inline_offset
+                    let candidate_container = if inline_level {
+                        object
+                            .ancestors
+                            .last()
+                            .copied()
+                            .unwrap_or(context.root_style)
+                    } else {
+                        owner
+                    };
+                    let candidate_writing_direction = self.boxes[candidate_container.index()]
+                        .style
+                        .writing_direction();
+                    let child_writing_direction = child_style.writing_direction();
+                    let inline_edge = inline_layout_static_position_edge(
+                        child_style.taffy.justify_self,
+                        child_writing_direction,
+                        candidate_writing_direction,
+                        candidate_writing_direction.mode.inline_axis(),
+                    );
+                    let block_edge = inline_layout_static_position_edge(
+                        child_style.taffy.align_self,
+                        child_writing_direction,
+                        candidate_writing_direction,
+                        candidate_writing_direction.mode.block_axis(),
+                    );
+                    let relative_point = if inline_level {
+                        inline_coordinates.to_physical_line_point(
+                            line_rect,
+                            LineRelativeOffset::new(
+                                positioned.x - line_rect.inline_offset,
+                                static_position_anchor(block_edge, line_rect.block_size),
+                            ),
+                            Size::ZERO,
+                            content_box_size,
+                        )
+                    } else {
+                        let next_line_offset = line_rect.block_offset
+                            + if has_preceding_in_flow_fragment[item_index] {
+                                line_rect.block_size
                             } else {
                                 0.0
-                            },
-                            positioned.y + vertical_offset - line_rect.block_offset,
-                        ),
-                        Size::ZERO,
-                        content_box_size,
-                    );
+                            }
+                            + static_position_anchor(block_edge, line_rect.block_size);
+                        writing_direction
+                            .converter(content_box_size)
+                            .to_physical_point(
+                                LogicalOffset {
+                                    inline_offset: 0.0,
+                                    block_offset: next_line_offset,
+                                },
+                                Size::ZERO,
+                            )
+                    };
                     let point = Point {
                         x: content_offset.x + relative_point.x,
                         y: content_offset.y + relative_point.y,
                     };
+                    let mut position = logical_static_position_in_owner(
+                        point,
+                        border_box_size,
+                        candidate_writing_direction,
+                    );
+                    position.inline_edge = inline_edge;
+                    position.block_edge = block_edge;
+                    position.align_self_axis = AbstractAxis::Block;
                     self.boxes[object.box_id.index()].out_of_flow_static_position =
                         Some(OutOfFlowStaticPosition {
                             owner,
-                            position: logical_static_position_in_owner(
-                                point,
-                                border_box_size,
-                                writing_direction,
-                            ),
+                            writing_direction: candidate_writing_direction,
+                            position,
                         });
                     continue;
                 }
@@ -2627,11 +2785,13 @@ fn inline_percentage_basis(inputs: LayoutInput, writing_mode: taffy::WritingMode
 #[cfg(test)]
 mod tests {
     use super::{
-        inline_percentage_basis, logical_static_position_in_owner, round_layout_to_css_subpixels,
+        inline_layout_static_position_edge, inline_percentage_basis,
+        logical_static_position_in_owner, round_layout_to_css_subpixels,
     };
     use taffy::{
-        Direction, Layout, LayoutInput, NodeId, Point, RoundTree, Size, SizingPurpose,
-        TraversePartialTree, TraverseTree, WritingDirection, WritingMode,
+        AbsoluteAxis, AlignSelf, Direction, Layout, LayoutInput, NodeId, Point, RoundTree, Size,
+        SizingPurpose, StaticPositionEdge, TraversePartialTree, TraverseTree, WritingDirection,
+        WritingMode,
     };
 
     struct RoundNode {
@@ -2668,6 +2828,49 @@ mod tests {
         fn set_final_layout(&mut self, node_id: NodeId, layout: &Layout) {
             self.0[usize::from(node_id)].final_layout = *layout;
         }
+    }
+
+    #[test]
+    fn inline_static_edges_project_self_and_physical_alignment() {
+        let ltr = WritingDirection::new(WritingMode::HorizontalTb, Direction::Ltr);
+        let rtl = WritingDirection::new(WritingMode::HorizontalTb, Direction::Rtl);
+
+        assert_eq!(
+            inline_layout_static_position_edge(
+                Some(AlignSelf::SELF_START),
+                rtl,
+                ltr,
+                AbsoluteAxis::Horizontal,
+            ),
+            StaticPositionEdge::End,
+        );
+        assert_eq!(
+            inline_layout_static_position_edge(
+                Some(AlignSelf::SELF_END),
+                rtl,
+                ltr,
+                AbsoluteAxis::Horizontal,
+            ),
+            StaticPositionEdge::Start,
+        );
+        assert_eq!(
+            inline_layout_static_position_edge(
+                Some(AlignSelf::LEFT),
+                ltr,
+                rtl,
+                AbsoluteAxis::Horizontal,
+            ),
+            StaticPositionEdge::End,
+        );
+        assert_eq!(
+            inline_layout_static_position_edge(
+                Some(AlignSelf::RIGHT),
+                ltr,
+                rtl,
+                AbsoluteAxis::Horizontal,
+            ),
+            StaticPositionEdge::Start,
+        );
     }
 
     #[test]
@@ -2810,6 +3013,10 @@ struct InlineMeasurement {
     alignment_block_size: f32,
     layout: parley::Layout<crate::stylo_to_parley::TextBrush>,
     atomic: Vec<Option<AtomicMeasurement>>,
+    /// Whether a structural inline edge creates an in-flow fragment. This is
+    /// retained from line-box construction so block-level OOF placeholders can
+    /// distinguish an empty line from one with logically preceding content.
+    structural_edge_contributions: Vec<bool>,
     floats: Vec<InlineFloatPlacement>,
     percentage_basis: Option<f32>,
     line_placements: Vec<InlineLinePlacement>,
