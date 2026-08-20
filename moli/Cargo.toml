@@ -25,6 +25,7 @@ moli-fetch = { path = "../moli-fetch" }
 moli-core = { path = "../moli-core" }
 moli-process-signal = { path = "../moli-process-signal" }
 moli-protocol-server = { path = "../moli-protocol-server" }
+moli-robots = { path = "../moli-robots" }
 parking_lot = "0.12"
 serde_json = "1.0.145"
 tokio = { version = "1.51.0", features = ["macros", "net", "rt-multi-thread", "signal", "sync"] }

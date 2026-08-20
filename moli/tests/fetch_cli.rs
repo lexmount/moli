@@ -2993,3 +2993,256 @@ fn cli_domcontentloaded_exit_stays_stable_with_inflight_background_fetch_tail() 
     runtime.block_on(server.shutdown());
     Ok(())
 }
+
+const ROBOTS_FIXTURE_PAGE: &str =
+    "<!doctype html><html><body><main id=\"ready\">robots fixture page</main></body></html>";
+
+#[derive(Clone)]
+struct RobotsFixtureState {
+    robots_status: StatusCode,
+    robots_body: &'static str,
+    robots_hits: Arc<AtomicUsize>,
+    page_hits: Arc<AtomicUsize>,
+}
+
+struct RobotsFixtureServer {
+    base_url: String,
+    robots_hits: Arc<AtomicUsize>,
+    page_hits: Arc<AtomicUsize>,
+    task: JoinHandle<()>,
+}
+
+impl RobotsFixtureServer {
+    async fn spawn(robots_status: StatusCode, robots_body: &'static str) -> Result<Self> {
+        async fn robots_txt(State(state): State<RobotsFixtureState>) -> impl IntoResponse {
+            state.robots_hits.fetch_add(1, Ordering::SeqCst);
+            (
+                state.robots_status,
+                [("content-type", "text/plain; charset=utf-8")],
+                state.robots_body,
+            )
+        }
+
+        async fn page(State(state): State<RobotsFixtureState>) -> Html<&'static str> {
+            state.page_hits.fetch_add(1, Ordering::SeqCst);
+            Html(ROBOTS_FIXTURE_PAGE)
+        }
+
+        let robots_hits = Arc::new(AtomicUsize::new(0));
+        let page_hits = Arc::new(AtomicUsize::new(0));
+        let state = RobotsFixtureState {
+            robots_status,
+            robots_body,
+            robots_hits: Arc::clone(&robots_hits),
+            page_hits: Arc::clone(&page_hits),
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let app = Router::new()
+            .route("/robots.txt", get(robots_txt))
+            .route("/allowed", get(page))
+            .route("/private/secret", get(page))
+            .with_state(state);
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("robots fixture server should serve");
+        });
+
+        Ok(Self {
+            base_url: format!("http://{addr}"),
+            robots_hits,
+            page_hits,
+            task,
+        })
+    }
+
+    fn url(&self, path: &str) -> String {
+        format!("{}{path}", self.base_url)
+    }
+
+    fn robots_hits(&self) -> usize {
+        self.robots_hits.load(Ordering::SeqCst)
+    }
+
+    fn page_hits(&self) -> usize {
+        self.page_hits.load(Ordering::SeqCst)
+    }
+
+    async fn shutdown(self) {
+        self.task.abort();
+        let _ = self.task.await;
+    }
+}
+
+const ROBOTS_DISALLOWING_PRIVATE: &str = "User-agent: *\nDisallow: /private\n";
+
+#[test]
+fn cli_obey_robots_refuses_a_disallowed_url_without_requesting_it() -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let server = runtime.block_on(RobotsFixtureServer::spawn(
+        StatusCode::OK,
+        ROBOTS_DISALLOWING_PRIVATE,
+    ))?;
+    let url = server.url("/private/secret");
+
+    let output = run_fetch_cli_with_args(&url, &["--obey-robots"])?;
+
+    assert!(
+        !output.status.success(),
+        "moli fetch should have been refused: stdout={}",
+        clean_output(&output.stdout)
+    );
+    let stderr = clean_output(&output.stderr);
+    assert!(stderr.contains("is disallowed by"), "stderr={stderr}");
+    assert!(stderr.contains("/robots.txt"), "stderr={stderr}");
+    assert_eq!(server.robots_hits(), 1, "robots.txt should be read once");
+    assert_eq!(
+        server.page_hits(),
+        0,
+        "a disallowed URL must never be requested"
+    );
+
+    runtime.block_on(server.shutdown());
+    Ok(())
+}
+
+#[test]
+fn cli_obey_robots_allows_a_permitted_url() -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let server = runtime.block_on(RobotsFixtureServer::spawn(
+        StatusCode::OK,
+        ROBOTS_DISALLOWING_PRIVATE,
+    ))?;
+    let url = server.url("/allowed");
+
+    let output = run_fetch_cli_with_args(&url, &["--obey-robots"])?;
+
+    assert!(
+        output.status.success(),
+        "moli fetch failed: stdout={}\nstderr={}",
+        clean_output(&output.stdout),
+        clean_output(&output.stderr)
+    );
+    assert!(
+        clean_output(&output.stdout).contains("robots fixture page"),
+        "stdout={}",
+        clean_output(&output.stdout)
+    );
+    assert_eq!(server.robots_hits(), 1);
+    assert_eq!(server.page_hits(), 1);
+
+    runtime.block_on(server.shutdown());
+    Ok(())
+}
+
+#[test]
+fn cli_without_obey_robots_never_reads_robots_txt() -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let server = runtime.block_on(RobotsFixtureServer::spawn(
+        StatusCode::OK,
+        ROBOTS_DISALLOWING_PRIVATE,
+    ))?;
+    let url = server.url("/private/secret");
+
+    let output = run_fetch_cli_with_args(&url, &[])?;
+
+    assert!(
+        output.status.success(),
+        "moli fetch failed: stdout={}\nstderr={}",
+        clean_output(&output.stdout),
+        clean_output(&output.stderr)
+    );
+    assert_eq!(
+        server.robots_hits(),
+        0,
+        "the default fetch must not pay for a robots.txt request"
+    );
+    assert_eq!(server.page_hits(), 1);
+
+    runtime.block_on(server.shutdown());
+    Ok(())
+}
+
+#[test]
+fn cli_obey_robots_allows_everything_when_robots_txt_is_absent() -> Result<()> {
+    // RFC 9309 §2.3.1.3: a 4xx means the origin published no rules.
+    let runtime = tokio::runtime::Runtime::new()?;
+    let server = runtime.block_on(RobotsFixtureServer::spawn(StatusCode::NOT_FOUND, ""))?;
+    let url = server.url("/private/secret");
+
+    let output = run_fetch_cli_with_args(&url, &["--obey-robots"])?;
+
+    assert!(
+        output.status.success(),
+        "moli fetch failed: stdout={}\nstderr={}",
+        clean_output(&output.stdout),
+        clean_output(&output.stderr)
+    );
+    assert_eq!(server.page_hits(), 1);
+
+    runtime.block_on(server.shutdown());
+    Ok(())
+}
+
+#[test]
+fn cli_obey_robots_refuses_everything_when_robots_txt_is_unreachable() -> Result<()> {
+    // RFC 9309 §2.3.1.4: a 5xx hides rules that may exist, so nothing is safe.
+    let runtime = tokio::runtime::Runtime::new()?;
+    let server = runtime.block_on(RobotsFixtureServer::spawn(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "",
+    ))?;
+    let url = server.url("/allowed");
+
+    let output = run_fetch_cli_with_args(&url, &["--obey-robots"])?;
+
+    assert!(
+        !output.status.success(),
+        "moli fetch should have been refused: stdout={}",
+        clean_output(&output.stdout)
+    );
+    let stderr = clean_output(&output.stderr);
+    assert!(stderr.contains("could not be read"), "stderr={stderr}");
+    assert_eq!(server.page_hits(), 0);
+
+    runtime.block_on(server.shutdown());
+    Ok(())
+}
+
+const ROBOTS_NAMING_ONE_AGENT: &str =
+    "User-agent: MoliTestBot\nDisallow: /private\n\nUser-agent: *\nAllow: /\n";
+
+#[test]
+fn cli_obey_robots_applies_the_group_naming_the_configured_user_agent() -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let server = runtime.block_on(RobotsFixtureServer::spawn(
+        StatusCode::OK,
+        ROBOTS_NAMING_ONE_AGENT,
+    ))?;
+    let url = server.url("/private/secret");
+
+    let named =
+        run_fetch_cli_with_args(&url, &["--obey-robots", "--user-agent", "MoliTestBot/1.0"])?;
+    assert!(
+        !named.status.success(),
+        "the named group must refuse: stdout={}",
+        clean_output(&named.stdout)
+    );
+    assert_eq!(server.page_hits(), 0);
+
+    // The same URL is fine for a user agent the file does not name, which is
+    // what proves the group was selected rather than merged.
+    let unnamed = run_fetch_cli_with_args(&url, &["--obey-robots"])?;
+    assert!(
+        unnamed.status.success(),
+        "the wildcard group must allow: stdout={}\nstderr={}",
+        clean_output(&unnamed.stdout),
+        clean_output(&unnamed.stderr)
+    );
+    assert_eq!(server.page_hits(), 1);
+
+    runtime.block_on(server.shutdown());
+    Ok(())
+}

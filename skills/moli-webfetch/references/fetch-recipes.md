@@ -130,7 +130,11 @@ evidence.
 
 For a crawl rather than a single lookup:
 
-- enable `--obey-robots`;
+- enable `--obey-robots`; it checks the requested URL against the origin's
+  `/robots.txt` before navigating and exits non-zero when the URL is
+  disallowed, so treat that failure as "skip this URL", not "retry later".
+  An origin whose `robots.txt` answers 5xx or refuses the connection is
+  treated as entirely disallowed, per RFC 9309;
 - stay within the agreed host and path scope;
 - fetch sequentially unless explicit concurrency is justified;
 - avoid calendars, faceted-search explosions, session URLs, logout actions,

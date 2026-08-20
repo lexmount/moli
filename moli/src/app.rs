@@ -8,7 +8,7 @@ use std::{io::Write, sync::Arc};
 use crate::{
     cli::{Cli, Commands, normalize_args_for_compat},
     config::AppConfig,
-    cookie_cache, fetch_dump,
+    cookie_cache, fetch_dump, robots,
 };
 use anyhow::Result;
 use anyhow::{Context, anyhow};
@@ -41,10 +41,17 @@ pub async fn run_cli_with_config<W: Write>(
 ) -> Result<()> {
     match cli.command {
         Commands::Fetch(args) => {
+            let request = build_fetch_request(&args.url, &config)?;
+            if config.browser.fetch().obey_robots() {
+                // Checked before the browser starts so a refused fetch costs
+                // nothing but the robots.txt request itself.
+                robots::ensure_fetch_allowed(config.browser.fetch(), &request.url)
+                    .await
+                    .map_err(|error| with_fetch_context(error, &args.url))?;
+            }
             let browser = Browser::new(config.browser.clone())
                 .context("failed to initialize browser runtime")?;
             load_cookie_state(&browser, &config)?;
-            let request = build_fetch_request(&args.url, &config)?;
             let readiness =
                 ReadinessPlan::from_fetch_args(&args, config.fetch.response_wait.clone())?;
             let fetch_result = readiness.fetch_document(&browser, request).await;
@@ -143,6 +150,15 @@ pub async fn run_cli_with_config<W: Write>(
             finalize_fetch_browser(browser);
         }
         Commands::Serve(_) => {
+            if config.browser.fetch().obey_robots() {
+                // Protocol clients drive navigation themselves, so the CLI
+                // cannot refuse a page on their behalf. Say so rather than let
+                // the flag look enforced.
+                tracing::warn!(
+                    "--obey-robots is enforced for `moli fetch` only; \
+                     protocol-server navigations are not checked against robots.txt"
+                );
+            }
             let storage_partition =
                 Arc::new(StoragePartitionState::open(config.browser.profile_dir())?);
             storage_partition.import_cookies(load_cookie_state_cookies(&config)?)?;

@@ -9,6 +9,7 @@ pub mod config;
 pub mod cookie_cache;
 pub mod fetch_dump;
 mod network_trace;
+mod robots;
 pub mod telemetry;
 
 /// Compatibility namespace for callers that used the embedded server through

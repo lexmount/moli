@@ -37,6 +37,7 @@ members = [
     "moli-page-types",
     "moli-process-signal",
     "moli-renderer-v8",
+    "moli-robots",
     "moli-protocol-server",
     "moli-script",
     "moli-selector",

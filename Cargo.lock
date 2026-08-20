@@ -1966,6 +1966,7 @@ dependencies = [
  "moli-process-signal",
  "moli-protocol",
  "moli-protocol-server",
+ "moli-robots",
  "moli-test-support",
  "parking_lot",
  "serde_json",
@@ -2605,6 +2606,13 @@ dependencies = [
  "wuff",
  "xml5ever",
  "xmlparser",
+]
+
+[[package]]
+name = "moli-robots"
+version = "0.1.0"
+dependencies = [
+ "url",
 ]
 
 [[package]]

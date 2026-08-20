@@ -253,6 +253,10 @@ pub struct CommonArgs {
     #[arg(long)]
     pub insecure_disable_tls_host_verification: bool,
 
+    /// Refuse a `fetch` whose URL the origin's `/robots.txt` disallows for the
+    /// configured user agent. An unreachable `robots.txt` (5xx or a transport
+    /// failure) disallows the whole origin, per RFC 9309. Subresources and
+    /// `serve` navigations are not checked.
     #[arg(long)]
     pub obey_robots: bool,
 
