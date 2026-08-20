@@ -1,14 +1,15 @@
 use std::{collections::HashMap, sync::Arc};
 
 use moli_layout::{
-    DocumentLayoutServices, LayoutDisplay, LayoutElementCategory, LayoutElementMetadata,
-    LayoutElementSemantics, LayoutError, LayoutFormControlData, LayoutFormControlKind,
-    LayoutImageResource, LayoutInputControlKind, LayoutListData, LayoutListMarkerPosition,
-    LayoutListMarkerType, LayoutListRole, LayoutNamespace, LayoutPosition, LayoutPseudo,
-    LayoutReplacedKind, LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutTableData,
-    LayoutTableRole, LayoutTextSelection, PaintBrush, PaintColor, PaintFragment, PaintRect,
-    PaintShape, PaintSnapshot, PaintTransform2D, PaintViewport, ReplacedMetrics,
-    ResolvedLayoutStyle, ScreenshotLayoutRequest, build_screenshot_snapshot,
+    DocumentLayoutServices, LayoutDisplay, LayoutElementCategory, LayoutElementContent,
+    LayoutElementMetadata, LayoutElementSemantics, LayoutError, LayoutFormControlData,
+    LayoutFormControlKind, LayoutImageResource, LayoutInputControlKind, LayoutListData,
+    LayoutListMarkerPosition, LayoutListMarkerType, LayoutListRole, LayoutNamespace,
+    LayoutPosition, LayoutPseudo, LayoutReplacedKind, LayoutSource, LayoutSourceKind,
+    LayoutStyleResolver, LayoutTableData, LayoutTableRole, LayoutTextSelection, PaintBrush,
+    PaintColor, PaintFragment, PaintRect, PaintShape, PaintSnapshot, PaintTransform2D,
+    PaintViewport, ReplacedMetrics, ReplacedObjectSize, ResolvedLayoutStyle,
+    ScreenshotLayoutRequest, build_screenshot_snapshot,
 };
 use style::Atom;
 use taffy::{
@@ -47,7 +48,7 @@ impl Node {
                 LayoutNamespace::Html,
                 local_name,
                 category,
-                replaced,
+                replaced.map_or(LayoutElementContent::Normal, LayoutElementContent::Replaced),
             )),
             text: None,
             children,
@@ -317,6 +318,276 @@ fn table_caption_tracks_rows_cells_and_common_spans_share_one_wrapper_geometry()
 }
 
 #[test]
+fn table_caption_minimum_inline_contribution_constrains_an_empty_table() {
+    use LayoutElementCategory::Table;
+    use LayoutTableRole::{Caption, Table as Root};
+
+    let source = Source(vec![
+        Node::element("root", "div", LayoutElementCategory::Generic, None, vec![1]),
+        Node::element("table", "table", Table(Root), None, vec![2]),
+        Node::element("caption", "caption", Table(Caption), None, vec![3, 4]),
+        Node::element(
+            "first-block",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            Vec::new(),
+        ),
+        Node::element(
+            "second-block",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            Vec::new(),
+        ),
+    ]);
+    let mut styles = Styles::default();
+    styles.primary.insert(
+        0,
+        style(LayoutDisplay::Block, PaintColor::TRANSPARENT)
+            .tap_taffy(|taffy| taffy.size.width = Dimension::length(400.0)),
+    );
+    styles
+        .primary
+        .insert(1, style(LayoutDisplay::Table, PaintColor::TRANSPARENT));
+    styles.primary.insert(
+        2,
+        style(LayoutDisplay::TableCaption, GREEN)
+            .tap_taffy(|taffy| taffy.size.width = Dimension::length(100.0)),
+    );
+    for child in [3, 4] {
+        styles.primary.insert(
+            child,
+            style(LayoutDisplay::Block, PaintColor::TRANSPARENT).tap_taffy(|taffy| {
+                taffy.size.height = Dimension::length(35.0);
+                taffy.margin.top = taffy::LengthPercentageAuto::length(10.0);
+                taffy.margin.bottom = taffy::LengthPercentageAuto::length(10.0);
+            }),
+        );
+    }
+
+    let snapshot = render(&source, &mut styles, 400, 200);
+    let caption = rect(&snapshot, GREEN);
+    assert_close(caption.width, 100.0);
+    assert_close(caption.height, 100.0);
+}
+
+#[test]
+fn table_caption_resolves_inline_auto_margins_without_a_block_percentage_basis() {
+    use LayoutElementCategory::Table;
+    use LayoutTableRole::{Caption, Table as Root};
+
+    let source = Source(vec![
+        Node::element("root", "div", LayoutElementCategory::Generic, None, vec![1]),
+        Node::element("table", "table", Table(Root), None, vec![2]),
+        Node::element("caption", "caption", Table(Caption), None, vec![3]),
+        Node::element(
+            "caption-child",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            Vec::new(),
+        ),
+    ]);
+    let mut styles = Styles::default();
+    styles.primary.insert(
+        0,
+        style(LayoutDisplay::Block, PaintColor::TRANSPARENT)
+            .tap_taffy(|taffy| taffy.size.width = Dimension::length(400.0)),
+    );
+    styles.primary.insert(
+        1,
+        sized(LayoutDisplay::Table, 200.0, 100.0, PaintColor::TRANSPARENT),
+    );
+    styles.primary.insert(
+        2,
+        style(LayoutDisplay::TableCaption, GREEN).tap_taffy(|taffy| {
+            taffy.size.width = Dimension::percent(0.5);
+            taffy.size.height = Dimension::percent(0.8);
+            taffy.margin.left = taffy::LengthPercentageAuto::auto();
+            taffy.margin.right = taffy::LengthPercentageAuto::auto();
+        }),
+    );
+    styles.primary.insert(
+        3,
+        sized(LayoutDisplay::Block, 10.0, 30.0, PaintColor::TRANSPARENT),
+    );
+
+    let snapshot = render(&source, &mut styles, 400, 200);
+    let caption = rect(&snapshot, GREEN);
+    assert_close(caption.x, 50.0);
+    assert_close(caption.width, 100.0);
+    assert_close(caption.height, 30.0);
+}
+
+#[test]
+fn anonymous_table_cells_preserve_internal_block_margin_collapsing() {
+    use LayoutElementCategory::Table;
+    use LayoutTableRole::{Row, Table as Root};
+
+    let source = Source(vec![
+        Node::element("root", "div", LayoutElementCategory::Generic, None, vec![1]),
+        Node::element("table", "table", Table(Root), None, vec![2, 6, 8]),
+        Node::element("first-row", "tr", Table(Row), None, vec![3, 5]),
+        Node::element(
+            "nested-margin-block",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            vec![4],
+        ),
+        Node::element(
+            "nested-empty-block",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            Vec::new(),
+        ),
+        Node::element(
+            "first-row-empty-block",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            Vec::new(),
+        ),
+        Node::element("second-row", "tr", Table(Row), None, vec![7]),
+        Node::element(
+            "second-row-empty-block",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            Vec::new(),
+        ),
+        Node::element("empty-row", "tr", Table(Row), None, Vec::new()),
+    ]);
+    let first_row = PaintColor::new(0.11, 0.61, 0.21, 1.0);
+    let second_row = PaintColor::new(0.12, 0.62, 0.22, 1.0);
+    let mut styles = Styles::default();
+    styles.primary.insert(
+        0,
+        style(LayoutDisplay::Block, PaintColor::TRANSPARENT)
+            .tap_taffy(|taffy| taffy.size.width = Dimension::length(200.0)),
+    );
+    styles.primary.insert(
+        1,
+        style(LayoutDisplay::Table, RED).tap_taffy(|taffy| {
+            taffy.size.height = Dimension::length(100.0);
+        }),
+    );
+    styles
+        .primary
+        .insert(2, style(LayoutDisplay::TableRow, first_row));
+    styles
+        .primary
+        .insert(6, style(LayoutDisplay::TableRow, second_row));
+    styles
+        .primary
+        .insert(8, style(LayoutDisplay::TableRow, PaintColor::TRANSPARENT));
+    styles.primary.insert(
+        3,
+        style(LayoutDisplay::Block, PaintColor::TRANSPARENT).tap_taffy(|taffy| {
+            taffy.size.width = Dimension::length(100.0);
+            taffy.margin.top = taffy::LengthPercentageAuto::length(50.0);
+            taffy.margin.bottom = taffy::LengthPercentageAuto::length(50.0);
+        }),
+    );
+    for block in [4, 5, 7] {
+        styles.primary.insert(
+            block,
+            style(LayoutDisplay::Block, PaintColor::TRANSPARENT).tap_taffy(|taffy| {
+                taffy.margin.top = taffy::LengthPercentageAuto::length(50.0);
+                taffy.margin.bottom = taffy::LengthPercentageAuto::length(50.0);
+            }),
+        );
+    }
+
+    let snapshot = render(&source, &mut styles, 200, 300);
+    let table = rect(&snapshot, RED);
+    let first = rect(&snapshot, first_row);
+    let second = rect(&snapshot, second_row);
+    assert_close(table.width, 100.0);
+    assert_close(table.height, 100.0);
+    assert_close(first.height, 50.0);
+    assert_close(second.y, 50.0);
+    assert_close(second.height, 50.0);
+}
+
+#[test]
+fn separated_table_parts_ignore_authored_border_padding_and_margin() {
+    use LayoutElementCategory::Table;
+    use LayoutTableRole::{BodyGroup, Cell, Row, Table as Root};
+
+    let source = Source(vec![
+        Node::element("root", "div", LayoutElementCategory::Generic, None, vec![1]),
+        Node::element("table", "table", Table(Root), None, vec![2]),
+        Node::element("body", "tbody", Table(BodyGroup), None, vec![3]),
+        Node::element("row", "tr", Table(Row), None, vec![4]),
+        Node::element("cell", "td", Table(Cell), None, Vec::new()).with_metadata(
+            LayoutElementMetadata {
+                table: Some(LayoutTableData::default()),
+                ..LayoutElementMetadata::default()
+            },
+        ),
+    ]);
+    let table = PaintColor::new(0.11, 0.12, 0.13, 1.0);
+    let group = PaintColor::new(0.21, 0.22, 0.23, 1.0);
+    let row = PaintColor::new(0.31, 0.32, 0.33, 1.0);
+    let cell = PaintColor::new(0.41, 0.42, 0.43, 1.0);
+    let structural_style = |display, color| {
+        style(display, color).tap_taffy(|taffy| {
+            taffy.border = Rect {
+                left: taffy::LengthPercentage::length(20.0),
+                right: taffy::LengthPercentage::length(20.0),
+                top: taffy::LengthPercentage::length(20.0),
+                bottom: taffy::LengthPercentage::length(20.0),
+            };
+            taffy.padding = Rect {
+                left: taffy::LengthPercentage::length(12.0),
+                right: taffy::LengthPercentage::length(12.0),
+                top: taffy::LengthPercentage::length(12.0),
+                bottom: taffy::LengthPercentage::length(12.0),
+            };
+            taffy.margin = Rect {
+                left: taffy::LengthPercentageAuto::length(9.0),
+                right: taffy::LengthPercentageAuto::length(9.0),
+                top: taffy::LengthPercentageAuto::length(9.0),
+                bottom: taffy::LengthPercentageAuto::length(9.0),
+            };
+        })
+    };
+    let mut styles = Styles::default();
+    styles.primary.insert(
+        0,
+        sized(LayoutDisplay::Block, 200.0, 100.0, PaintColor::TRANSPARENT),
+    );
+    styles
+        .primary
+        .insert(1, sized(LayoutDisplay::Table, 50.0, 20.0, table));
+    styles
+        .primary
+        .insert(2, structural_style(LayoutDisplay::TableRowGroup, group));
+    styles
+        .primary
+        .insert(3, structural_style(LayoutDisplay::TableRow, row));
+    styles
+        .primary
+        .insert(4, sized(LayoutDisplay::TableCell, 50.0, 20.0, cell));
+
+    let snapshot = render(&source, &mut styles, 200, 100);
+    for color in [table, group, row, cell] {
+        assert_eq!(rect(&snapshot, color), PaintRect::new(0.0, 0.0, 50.0, 20.0));
+    }
+    assert!(
+        snapshot
+            .fragments
+            .iter()
+            .all(|fragment| !matches!(fragment, PaintFragment::Border { .. })),
+        "table structural borders must not reach generic paint: {:?}",
+        snapshot.fragments
+    );
+}
+
+#[test]
 fn table_sections_use_visual_header_body_footer_order() {
     use LayoutElementCategory::Table;
     use LayoutTableRole::{BodyGroup, Cell, FooterGroup, HeaderGroup, Row, Table as Root};
@@ -361,7 +632,7 @@ fn table_sections_use_visual_header_body_footer_order() {
     );
     styles.primary.insert(
         1,
-        sized(LayoutDisplay::Table, 100.0, 30.0, PaintColor::TRANSPARENT),
+        sized(LayoutDisplay::Table, 100.0, 30.0, PaintColor::TRANSPARENT).with_fixed_table_layout(),
     );
     styles.primary.insert(
         2,
@@ -821,6 +1092,68 @@ fn html_list_metadata_and_marker_style_produce_inside_and_outside_glyph_geometry
 }
 
 #[test]
+fn outside_list_marker_uses_logical_axes_in_vertical_flow() {
+    let source = Source(vec![
+        Node::element(
+            "list",
+            "ol",
+            LayoutElementCategory::List(LayoutListRole::Container),
+            None,
+            vec![1],
+        ),
+        Node::element(
+            "item",
+            "li",
+            LayoutElementCategory::List(LayoutListRole::Item),
+            None,
+            vec![2],
+        ),
+        Node::text("item-text", "A"),
+    ]);
+    let mut styles = Styles::default();
+    styles.primary.insert(
+        0,
+        sized(LayoutDisplay::Block, 100.0, 120.0, PaintColor::TRANSPARENT)
+            .with_writing_mode(taffy::WritingMode::VerticalRl),
+    );
+    styles.primary.insert(
+        1,
+        sized(LayoutDisplay::BlockListItem, 40.0, 100.0, RED)
+            .with_list_marker(
+                LayoutListMarkerType::None,
+                LayoutListMarkerPosition::Outside,
+            )
+            .with_writing_mode(taffy::WritingMode::VerticalRl),
+    );
+    styles.pseudo.insert(
+        (1, LayoutPseudo::Marker),
+        style(LayoutDisplay::Inline, PaintColor::TRANSPARENT)
+            .with_generated_text("X ")
+            .with_writing_mode(taffy::WritingMode::VerticalRl),
+    );
+
+    let snapshot = render(&source, &mut styles, 100, 120);
+    let item = rect(&snapshot, RED);
+    let glyphs = snapshot
+        .fragments
+        .iter()
+        .filter_map(|fragment| match fragment {
+            PaintFragment::GlyphRun(run) => Some(run.glyphs_in_surface()),
+            _ => None,
+        })
+        .flatten()
+        .collect::<Vec<_>>();
+    assert!(
+        glyphs.iter().any(|glyph| glyph.y < item.y),
+        "vertical outside marker must precede the item's logical inline-start: {glyphs:?}"
+    );
+    assert!(
+        glyphs.iter().any(|glyph| glyph.y >= item.y),
+        "list content must remain inside the item: {glyphs:?}"
+    );
+}
+
+#[test]
 fn degenerate_css_ratio_falls_back_to_the_replaced_intrinsic_ratio() {
     let source = Source(vec![
         Node::element("root", "div", LayoutElementCategory::Generic, None, vec![1]),
@@ -834,8 +1167,7 @@ fn degenerate_css_ratio_falls_back_to_the_replaced_intrinsic_ratio() {
         .with_metrics(ReplacedMetrics {
             intrinsic_width: Some(80.0),
             intrinsic_height: Some(40.0),
-            attribute_width: None,
-            attribute_height: None,
+            default_object_size: None,
             intrinsic_ratio: Some(2.0),
         }),
     ]);
@@ -943,8 +1275,198 @@ fn fractional_replaced_images_project_contiguous_pre_transform_destinations() {
     }
 }
 
+/// Regression for
+/// <https://wpt.live/css/css-sizing/aspect-ratio/replaced-element-034.html>.
 #[test]
-fn replaced_attributes_canvas_defaults_and_image_button_share_resource_free_sizing() {
+fn intrinsic_replaced_axis_uses_natural_width_before_default_object_height() {
+    let source = Source(vec![
+        Node::element("root", "div", LayoutElementCategory::Generic, None, vec![1]),
+        Node::element(
+            "image",
+            "img",
+            LayoutElementCategory::Generic,
+            Some(LayoutReplacedKind::Image),
+            Vec::new(),
+        )
+        .with_metrics(ReplacedMetrics {
+            intrinsic_width: Some(50.0),
+            intrinsic_height: None,
+            default_object_size: Some(ReplacedObjectSize::new(300.0, 150.0)),
+            intrinsic_ratio: None,
+        }),
+    ]);
+    let mut styles = Styles::default();
+    styles.primary.insert(
+        0,
+        sized(LayoutDisplay::Block, 300.0, 200.0, PaintColor::TRANSPARENT),
+    );
+    styles.primary.insert(
+        1,
+        ResolvedLayoutStyle::synthetic(
+            LayoutDisplay::Block,
+            Style {
+                box_sizing: BoxSizing::BorderBox,
+                size: Size {
+                    width: Dimension::auto(),
+                    height: Dimension::min_content(),
+                },
+                padding: Rect {
+                    left: taffy::LengthPercentage::length(50.0),
+                    ..Rect::zero()
+                },
+                aspect_ratio: Some(1.0),
+                ..Style::default()
+            },
+            GREEN,
+        ),
+    );
+
+    let snapshot = render(&source, &mut styles, 300, 200);
+    assert_eq!(
+        rect(&snapshot, GREEN),
+        PaintRect::new(0.0, 0.0, 100.0, 100.0)
+    );
+}
+
+/// Regression for
+/// <https://wpt.live/css/css-sizing/replaced-aspect-ratio-stretch-fit-003.html>.
+#[test]
+fn replaced_intrinsic_minimum_floors_a_smaller_authored_maximum() {
+    let source = Source(vec![
+        Node::element("root", "div", LayoutElementCategory::Generic, None, vec![1]),
+        Node::element(
+            "svg",
+            "svg",
+            LayoutElementCategory::Generic,
+            Some(LayoutReplacedKind::Svg),
+            Vec::new(),
+        )
+        .with_metrics(ReplacedMetrics {
+            intrinsic_ratio: Some(1.0),
+            default_object_size: Some(ReplacedObjectSize::new(300.0, 150.0)),
+            ..ReplacedMetrics::default()
+        }),
+    ]);
+    let mut styles = Styles::default();
+    styles.primary.insert(
+        0,
+        sized(LayoutDisplay::Block, 100.0, 100.0, PaintColor::TRANSPARENT),
+    );
+    styles.primary.insert(
+        1,
+        ResolvedLayoutStyle::synthetic(
+            LayoutDisplay::Inline,
+            Style {
+                size: Size {
+                    width: Dimension::auto(),
+                    height: Dimension::percent(1.0),
+                },
+                min_size: Size {
+                    width: Dimension::max_content(),
+                    height: Dimension::auto(),
+                },
+                max_size: Size {
+                    width: Dimension::length(50.0),
+                    height: Dimension::auto(),
+                },
+                ..Style::default()
+            },
+            GREEN,
+        ),
+    );
+
+    let snapshot = render(&source, &mut styles, 200, 200);
+    let replaced = rect(&snapshot, GREEN);
+    assert_eq!((replaced.width, replaced.height), (100.0, 100.0));
+}
+
+/// Regression for
+/// <https://wpt.live/css/css-sizing/intrinsic-ratio-replaced-box-sizing.html>.
+#[test]
+fn ratio_only_atomic_images_receive_margin_excluded_available_space() {
+    let svg = Arc::new(
+        moli_image::decode_svg_image(
+            br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><rect width="1" height="1" fill="lime"/></svg>"##,
+        )
+        .expect("fixture SVG should parse"),
+    );
+    let image = LayoutImageResource {
+        intrinsic_width: 100.0,
+        intrinsic_height: 100.0,
+        pixels: None,
+        svg: Some(svg),
+    };
+    let replaced = |label, local_name, kind| {
+        Node::element(
+            label,
+            local_name,
+            LayoutElementCategory::Generic,
+            Some(kind),
+            Vec::new(),
+        )
+        .with_metrics(ReplacedMetrics {
+            intrinsic_ratio: Some(1.0),
+            default_object_size: Some(ReplacedObjectSize::new(300.0, 150.0)),
+            ..ReplacedMetrics::default()
+        })
+        .with_image(image.clone())
+    };
+    let source = Source(vec![
+        Node::element(
+            "root",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            vec![1, 2, 3, 4],
+        ),
+        replaced("image-content-box", "img", LayoutReplacedKind::Image),
+        replaced("image-border-box", "img", LayoutReplacedKind::Image),
+        replaced("svg-content-box", "svg", LayoutReplacedKind::Svg),
+        replaced("svg-border-box", "svg", LayoutReplacedKind::Svg),
+    ]);
+    let mut styles = Styles::default();
+    styles.primary.insert(
+        0,
+        sized(LayoutDisplay::Block, 100.0, 400.0, PaintColor::TRANSPARENT),
+    );
+    for (node, box_sizing) in [
+        (1, BoxSizing::ContentBox),
+        (2, BoxSizing::BorderBox),
+        (3, BoxSizing::ContentBox),
+        (4, BoxSizing::BorderBox),
+    ] {
+        styles.primary.insert(
+            node,
+            ResolvedLayoutStyle::synthetic(
+                LayoutDisplay::Inline,
+                Style {
+                    box_sizing,
+                    margin: Rect::length(5.0),
+                    border: Rect::length(10.0),
+                    ..Style::default()
+                },
+                PaintColor::TRANSPARENT,
+            ),
+        );
+    }
+
+    let snapshot = render(&source, &mut styles, 100, 400);
+    let destinations = snapshot
+        .fragments
+        .iter()
+        .filter_map(|fragment| match fragment {
+            PaintFragment::SvgImage(image) => Some(image.destination),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(destinations.len(), 4);
+    for destination in destinations {
+        assert_eq!((destination.width, destination.height), (70.0, 70.0));
+    }
+}
+
+#[test]
+fn computed_size_hints_and_canvas_intrinsics_share_resource_free_sizing() {
     let source = Source(vec![
         Node::element(
             "root",
@@ -959,12 +1481,7 @@ fn replaced_attributes_canvas_defaults_and_image_button_share_resource_free_sizi
             LayoutElementCategory::Generic,
             Some(LayoutReplacedKind::Image),
             Vec::new(),
-        )
-        .with_metrics(ReplacedMetrics {
-            attribute_width: Some(80.0),
-            attribute_height: Some(40.0),
-            ..ReplacedMetrics::default()
-        }),
+        ),
         Node::element(
             "canvas",
             "canvas",
@@ -973,8 +1490,10 @@ fn replaced_attributes_canvas_defaults_and_image_button_share_resource_free_sizi
             Vec::new(),
         )
         .with_metrics(ReplacedMetrics {
-            attribute_width: Some(600.0),
-            ..ReplacedMetrics::default()
+            intrinsic_width: Some(600.0),
+            intrinsic_height: Some(150.0),
+            default_object_size: Some(ReplacedObjectSize::new(600.0, 150.0)),
+            intrinsic_ratio: Some(4.0),
         }),
         Node::element(
             "image-button",
@@ -984,12 +1503,7 @@ fn replaced_attributes_canvas_defaults_and_image_button_share_resource_free_sizi
             )),
             Some(LayoutReplacedKind::FormControl),
             Vec::new(),
-        )
-        .with_metrics(ReplacedMetrics {
-            attribute_width: Some(90.0),
-            attribute_height: Some(45.0),
-            ..ReplacedMetrics::default()
-        }),
+        ),
     ]);
     let mut styles = Styles::default();
     styles.primary.insert(
@@ -1005,13 +1519,31 @@ fn replaced_attributes_canvas_defaults_and_image_button_share_resource_free_sizi
                     width: Dimension::length(120.0),
                     height: Dimension::auto(),
                 },
+                // Synthetic layout tests receive the already-cascaded result:
+                // the HTML 80x40 hint contributes `auto 2 / 1`, while the
+                // author width overrides only its mapped width declaration.
+                aspect_ratio: Some(2.0),
                 ..Style::default()
             },
             RED,
         ),
     );
     styles.primary.insert(2, style(LayoutDisplay::Block, GREEN));
-    styles.primary.insert(3, style(LayoutDisplay::Block, BLUE));
+    styles.primary.insert(
+        3,
+        ResolvedLayoutStyle::synthetic(
+            LayoutDisplay::Block,
+            Style {
+                size: Size {
+                    width: Dimension::length(90.0),
+                    height: Dimension::length(45.0),
+                },
+                aspect_ratio: Some(2.0),
+                ..Style::default()
+            },
+            BLUE,
+        ),
+    );
 
     let snapshot = render(&source, &mut styles, 700, 400);
     assert_eq!(rect(&snapshot, RED), PaintRect::new(0.0, 0.0, 120.0, 60.0));
@@ -1065,12 +1597,7 @@ fn unavailable_images_use_zero_default_size_and_a_content_box_outline() {
             LayoutElementCategory::Generic,
             Some(LayoutReplacedKind::Image),
             Vec::new(),
-        )
-        .with_metrics(ReplacedMetrics {
-            attribute_width: Some(80.0),
-            attribute_height: Some(40.0),
-            ..ReplacedMetrics::default()
-        }),
+        ),
         Node::element(
             "unsized-image",
             "img",
@@ -1095,9 +1622,21 @@ fn unavailable_images_use_zero_default_size_and_a_content_box_outline() {
     styles
         .primary
         .insert(1, style(LayoutDisplay::Block, PaintColor::TRANSPARENT));
-    styles
-        .primary
-        .insert(2, style(LayoutDisplay::Block, PaintColor::TRANSPARENT));
+    styles.primary.insert(
+        2,
+        ResolvedLayoutStyle::synthetic(
+            LayoutDisplay::Block,
+            Style {
+                size: Size {
+                    width: Dimension::length(80.0),
+                    height: Dimension::length(40.0),
+                },
+                aspect_ratio: Some(2.0),
+                ..Style::default()
+            },
+            PaintColor::TRANSPARENT,
+        ),
+    );
     styles
         .primary
         .insert(3, style(LayoutDisplay::Block, PaintColor::TRANSPARENT));

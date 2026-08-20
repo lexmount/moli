@@ -152,45 +152,68 @@ impl StyleMutationEffect {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum StyleAttributeImpact {
-    None,
-    LayoutMetric,
-    ComputedStyle,
-    StylesheetLinkage,
-    LayoutMetricAndStylesheetLinkage,
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct StyleAttributeImpact {
+    layout_metric: bool,
+    computed_style: bool,
+    descendant_computed_style: bool,
+    stylesheet_linkage: bool,
 }
 
 impl StyleAttributeImpact {
+    const fn new(
+        layout_metric: bool,
+        computed_style: bool,
+        descendant_computed_style: bool,
+        stylesheet_linkage: bool,
+    ) -> Self {
+        Self {
+            layout_metric,
+            computed_style,
+            descendant_computed_style,
+            stylesheet_linkage,
+        }
+    }
+
     pub(crate) fn for_attribute_name(name: &str) -> Self {
         match name.to_ascii_lowercase().as_str() {
-            "style" | "class" | "id" => Self::ComputedStyle,
-            "hidden" | "width" | "height" | "cols" | "rows" | "size" | "value" | "border"
-            | "slot" | "align" => Self::LayoutMetric,
-            "href" | "rel" | "media" | "blocking" | "disabled" => Self::StylesheetLinkage,
-            "type" => Self::LayoutMetricAndStylesheetLinkage,
-            _ => Self::None,
+            "style" | "class" | "id" => Self::new(false, true, false, false),
+            "width" | "height" => Self::new(true, true, false, false),
+            "hidden" | "cols" | "rows" | "size" | "value" | "border" | "slot" | "align" => {
+                Self::new(true, false, false, false)
+            }
+            "cellpadding" => Self::new(false, false, true, false),
+            "href" | "rel" | "media" | "blocking" | "disabled" => {
+                Self::new(false, false, false, true)
+            }
+            // Input type selects both runtime behavior and whether width / height
+            // participate in the presentation-hint cascade.
+            "type" => Self::new(true, true, false, true),
+            _ => Self::default(),
         }
     }
 
     pub(crate) fn affects_layout_metric(self) -> bool {
-        matches!(
-            self,
-            Self::LayoutMetric | Self::ComputedStyle | Self::LayoutMetricAndStylesheetLinkage
-        )
+        self.layout_metric || self.computed_style || self.descendant_computed_style
+    }
+
+    pub(crate) fn has_non_css_runtime_side_effect(self) -> bool {
+        self.layout_metric || self.descendant_computed_style || self.stylesheet_linkage
     }
 
     #[cfg(test)]
     pub(crate) fn changes_computed_style(self) -> bool {
-        matches!(self, Self::ComputedStyle)
+        self.computed_style || self.descendant_computed_style
     }
 
     #[cfg(test)]
     pub(crate) fn changes_stylesheet_linkage(self) -> bool {
-        matches!(
-            self,
-            Self::StylesheetLinkage | Self::LayoutMetricAndStylesheetLinkage
-        )
+        self.stylesheet_linkage
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_none(self) -> bool {
+        self == Self::default()
     }
 }
 

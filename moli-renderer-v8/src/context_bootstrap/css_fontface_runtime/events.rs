@@ -1,6 +1,6 @@
 use super::storage::{
-    font_face_set_owner_snapshot, is_font_face_value, replace_font_face_set_ready_promise,
-    set_font_face_set_status,
+    font_face_set_has_document_load_cycle, font_face_set_owner_snapshot, is_font_face_value,
+    replace_font_face_set_ready_promise, set_font_face_set_status,
 };
 use super::*;
 use crate::context_bootstrap::events::initialize_event_object;
@@ -307,8 +307,11 @@ pub(super) fn notify_font_face_set_owners_of_load<'s>(
         "loadingdone"
     };
     for owner in owners {
+        if font_face_set_has_document_load_cycle(scope, owner) {
+            continue;
+        }
         set_font_face_set_status(scope, owner, "loading");
-        replace_font_face_set_ready_promise(scope, owner);
+        let _ = replace_font_face_set_ready_promise(scope, owner);
         let _ = dispatch_font_face_set_event(scope, owner, "loading", None);
         set_font_face_set_status(scope, owner, "loaded");
         let _ =

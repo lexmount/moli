@@ -7,7 +7,8 @@ use crate::LayoutError;
 use super::{
     hit_test::{LayoutCaretPosition, LayoutHit},
     model::{
-        LayoutBoxModel, LayoutFragmentId, LayoutOutputBoxId, LayoutPoint, LayoutQuad, LayoutSize,
+        LayoutBoxModel, LayoutFragmentId, LayoutGridGeometry, LayoutOutputBoxId,
+        LayoutPhysicalBoxStrut, LayoutPoint, LayoutQuad, LayoutScrollExtent, LayoutSize,
         LayoutViewport,
     },
     pass_result::{LayoutFlushReason, LayoutPassMetrics},
@@ -33,14 +34,29 @@ pub struct LayoutDocumentMetrics {
     pub content_size: LayoutSize,
 }
 
+/// Document-level viewport scrolling state and its CSSOM element projection.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LayoutDocumentScrollMetrics<N> {
+    /// The element whose scroll APIs proxy the layout viewport. This can be
+    /// `None` for a quirks document whose body owns a physical scroll box.
+    pub scrolling_element: Option<N>,
+    pub viewport_extent: LayoutScrollExtent,
+}
+
 /// CSSOM View and observer metrics for one source element.
 ///
-/// Transformed quads use viewport CSS pixels. Offset and size fields retain
-/// the untransformed layout values required by offset/client/scroll APIs.
+/// Transformed quads use viewport CSS pixels and therefore include CSS
+/// `zoom`. Offset, size, and scroll fields are untransformed and have the
+/// queried box's absolute zoom removed, as required by CSSOM View. A root or
+/// quirks-body client size that proxies the layout viewport is already in the
+/// viewport's coordinate space and is not adjusted a second time.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutElementMetrics<N> {
     pub offset_parent: Option<N>,
     pub offset_position: LayoutPoint,
+    /// Border-box origin in viewport CSS pixels after layout placement and
+    /// scrolling, but before authored CSS transforms.
+    pub border_origin_in_viewport_ignoring_css_transforms: LayoutPoint,
     pub offset_size: LayoutSize,
     pub content_size: LayoutSize,
     pub client_size: LayoutSize,
@@ -60,9 +76,17 @@ pub struct LayoutElementMetrics<N> {
 }
 
 /// One scroll container on a target's layout ancestor chain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayoutScrollContainerKind {
+    Element,
+    Viewport,
+}
+
+/// One scroll container on a target's layout ancestor chain.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutScrollContainerMetrics<N> {
     pub source: N,
+    pub kind: LayoutScrollContainerKind,
     pub metrics: LayoutElementMetrics<N>,
 }
 
@@ -91,6 +115,7 @@ pub struct LayoutIntersectionGeometry {
 #[derive(Clone, Debug, PartialEq)]
 pub enum LayoutQuery<N> {
     DocumentMetrics,
+    DocumentScrollMetrics,
     BoxModel {
         source: N,
     },
@@ -105,6 +130,18 @@ pub enum LayoutQuery<N> {
         utf16_range: Range<usize>,
     },
     ElementMetrics {
+        source: N,
+    },
+    /// CSSOM resolved `width`/`height` for a principal CSS box.
+    UsedBoxSize {
+        source: N,
+    },
+    /// CSSOM resolved physical margins for a principal CSS box.
+    UsedMargin {
+        source: N,
+    },
+    /// Used Grid row and column tracks for a principal Grid container.
+    UsedGridTracks {
         source: N,
     },
     ScrollIntoViewGeometry {
@@ -151,11 +188,15 @@ impl<N> LayoutQueryBatch<N> {
 #[derive(Clone, Debug, PartialEq)]
 pub enum LayoutQueryAnswer<N> {
     DocumentMetrics(LayoutDocumentMetrics),
+    DocumentScrollMetrics(LayoutDocumentScrollMetrics<N>),
     BoxModel(Option<LayoutBoxModel>),
     ClientRects(Vec<LayoutQuad>),
     ContentQuads(Vec<LayoutQuad>),
     TextRangeRects(Vec<LayoutQuad>),
     ElementMetrics(Option<LayoutElementMetrics<N>>),
+    UsedBoxSize(Option<LayoutSize>),
+    UsedMargin(Option<LayoutPhysicalBoxStrut>),
+    UsedGridTracks(Option<LayoutGridGeometry>),
     ScrollIntoViewGeometry(Option<LayoutScrollIntoViewGeometry<N>>),
     IntersectionGeometry(Option<LayoutIntersectionGeometry>),
     HitTest(Option<LayoutHit<N>>),
@@ -208,6 +249,12 @@ where
                         content_size: self.content_size,
                     })
                 }
+                LayoutQuery::DocumentScrollMetrics => {
+                    LayoutQueryAnswer::DocumentScrollMetrics(LayoutDocumentScrollMetrics {
+                        scrolling_element: self.document_scrolling_element,
+                        viewport_extent: self.viewport_scroll_extent.clone(),
+                    })
+                }
                 LayoutQuery::BoxModel { source } => {
                     LayoutQueryAnswer::BoxModel(self.box_model_for_source(*source))
                 }
@@ -225,6 +272,15 @@ where
                 ),
                 LayoutQuery::ElementMetrics { source } => {
                     LayoutQueryAnswer::ElementMetrics(self.element_metrics_for_source(*source))
+                }
+                LayoutQuery::UsedBoxSize { source } => {
+                    LayoutQueryAnswer::UsedBoxSize(self.used_box_size_for_source(*source))
+                }
+                LayoutQuery::UsedMargin { source } => {
+                    LayoutQueryAnswer::UsedMargin(self.used_margin_for_source(*source))
+                }
+                LayoutQuery::UsedGridTracks { source } => {
+                    LayoutQueryAnswer::UsedGridTracks(self.used_grid_tracks_for_source(*source))
                 }
                 LayoutQuery::ScrollIntoViewGeometry { source } => {
                     LayoutQueryAnswer::ScrollIntoViewGeometry(

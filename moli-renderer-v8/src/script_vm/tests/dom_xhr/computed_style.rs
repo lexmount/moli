@@ -100,7 +100,7 @@ body { font: 16px/1.5 sans-serif; }
 
     assert_eq!(
         result,
-        "24px|700|19.92px|19.92px|32px|700|21.44px|21.44px|24px|700|19.92px|19.92px|16px|16px|700|underline|pointer|13.3281px"
+        "24px|700|19.92px|19.92px|32px|700|21.44px|21.44px|24px|700|19.92px|19.92px|16px|16px|700|underline|pointer|13.3333px"
     );
 }
 
@@ -3334,22 +3334,24 @@ fn computed_width_resolves_percent_against_parent_and_child_frame_viewport() {
         .eval(
             r#"
 (() => {
+  const html = document.documentElement || document.appendChild(document.createElement('html'));
+  const head = document.head || html.appendChild(document.createElement('head'));
+  const body = document.body || html.appendChild(document.createElement('body'));
   const style = document.createElement('style');
   style.textContent = `
     #outside { width: 200px; }
     #inside { width: 50%; }`;
-  (document.documentElement || document.body || document).appendChild(style);
+  head.appendChild(style);
   const outside = document.createElement('div');
   outside.id = 'outside';
   const inside = document.createElement('div');
   inside.id = 'inside';
   outside.appendChild(inside);
-  const appendTarget = document.body || document.documentElement || document;
-  appendTarget.appendChild(outside);
+  body.appendChild(outside);
 
   const frame = document.createElement('iframe');
   frame.setAttribute('width', '100');
-  appendTarget.appendChild(frame);
+  body.appendChild(frame);
   const childDocument = frame.contentWindow.document;
   childDocument.open();
   childDocument.write('<body style="margin:0"><div style="width:100%"></div>');
@@ -3365,6 +3367,115 @@ fn computed_width_resolves_percent_against_parent_and_child_frame_viewport() {
         .expect("computed width should resolve percent values");
 
     assert_eq!(result, "100px|100px");
+}
+
+#[test]
+fn layout_resolves_root_font_relative_units_from_the_document_root_style() {
+    let mut vm = new_parsed_test_vm(
+        "https://layout-root-font-relative.test/",
+        r#"<html style="font-size:30px;line-height:1.5"><head></head><body style="width:520px;margin:0"><div id="target" style="width:calc(5% + 4rem);height:1rlh"></div></body></html>"#,
+    );
+
+    refresh_layout_for_test(&mut vm);
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const target = document.getElementById('target');
+  const rect = target.getBoundingClientRect();
+  return [getComputedStyle(document.documentElement).fontSize,
+          getComputedStyle(target).width,
+          getComputedStyle(target).height,
+          rect.width,
+          rect.height].join('|');
+})()
+"#,
+        )
+        .expect("root font-relative layout probe should evaluate");
+
+    assert_eq!(result, "30px|146px|45px|146|45");
+
+    let stale_result = vm
+        .eval(
+            r#"
+(() => {
+  document.documentElement.style.fontSize = '16.1px';
+  const target = document.getElementById('target');
+  target.style.width = '10rem';
+  return [document.documentElement.style.fontSize,
+          getComputedStyle(document.documentElement).fontSize,
+          getComputedStyle(target).width].join('|');
+})()
+"#,
+        )
+        .expect("updated root font-relative computed-style probe should evaluate");
+
+    assert_eq!(
+        stale_result, "16.1px|16.1px|146px",
+        "a synchronous style read must keep using the published layout epoch"
+    );
+
+    refresh_layout_for_test(&mut vm);
+    assert_eq!(
+        vm.eval("getComputedStyle(document.getElementById('target')).width")
+            .expect("refreshed root font-relative computed style should evaluate"),
+        "161px"
+    );
+}
+
+#[test]
+fn root_non_font_properties_use_the_computed_root_font_bases() {
+    let mut vm = new_parsed_test_vm(
+        "https://root-font-relative-style.test/",
+        r#"<html style="font-size:50px;line-height:73px;margin-left:2rem;padding-left:2rlh"><head></head><body></body></html>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const style = getComputedStyle(document.documentElement);
+  return [style.marginLeft, style.paddingLeft, style.fontSize, style.lineHeight].join('|');
+})()
+"#,
+        )
+        .expect("root font-relative computed-style probe should evaluate");
+
+    assert_eq!(result, "100px|146px|50px|73px");
+}
+
+#[test]
+fn root_font_metric_units_refresh_after_root_style_changes() {
+    let mut vm = new_parsed_test_vm(
+        "https://root-font-metrics.test/",
+        r#"<html style="font-family:Ahem;font-size:20px"><head></head><body><div id="target" style="width:1rch"></div></body></html>"#,
+    );
+
+    let stale_result = vm
+        .eval(
+            r#"
+(() => {
+  const target = document.getElementById('target');
+  const before = getComputedStyle(target).width;
+  document.documentElement.style.fontSize = '30px';
+  const after = getComputedStyle(target).width;
+  return [before, after].join('|');
+})()
+"#,
+        )
+        .expect("root font-metric unit restyle probe should evaluate");
+
+    assert_eq!(
+        stale_result, "20px|20px",
+        "a style mutation must not replace the previously published layout epoch"
+    );
+
+    refresh_layout_for_test(&mut vm);
+    assert_eq!(
+        vm.eval("getComputedStyle(document.getElementById('target')).width")
+            .expect("refreshed root font-metric unit style should evaluate"),
+        "30px"
+    );
 }
 
 #[test]
@@ -3459,7 +3570,7 @@ fn computed_horizontal_margin_reads_preserve_retained_style_viewport_context() {
     assert_eq!(
         vm.retained_style_system_rebuild_count_for_document_for_test(document),
         1,
-        "nested width resolution must not replace the 800x600 viewport with a width-only key",
+        "a layout-backed margin read must not replace the complete viewport cache key",
     );
 }
 
@@ -3521,7 +3632,7 @@ fn child_computed_horizontal_margin_reads_preserve_retained_style_viewport_conte
     assert_eq!(
         vm.retained_style_system_rebuild_count_for_document_for_test(child_document),
         1,
-        "nested child width resolution must preserve the iframe viewport height and screen",
+        "a child layout-backed margin read must preserve the iframe viewport cache key",
     );
 }
 
@@ -3828,6 +3939,163 @@ fn child_parser_quirks_mode_does_not_mutate_the_top_document() {
         .expect("top and child document compatMode should evaluate");
 
     assert_eq!(result, "CSS1Compat|BackCompat");
+}
+
+#[test]
+fn quirks_body_layout_and_client_metrics_use_the_viewport_fill_model() {
+    let mut quirks = new_parsed_test_vm(
+        "https://quirks-body-viewport-fill.test/",
+        r#"<style>body { width: 100px; aspect-ratio: 1 / 1; }</style><body></body>"#,
+    );
+    let quirks_result = quirks
+        .eval(
+            r#"[
+  document.compatMode,
+  document.documentElement.clientHeight,
+  document.documentElement.getBoundingClientRect().top,
+  document.documentElement.getBoundingClientRect().height,
+  document.body.clientHeight,
+  document.body.offsetHeight,
+  document.body.getBoundingClientRect().height
+].join('|')"#,
+        )
+        .expect("quirks body viewport-fill geometry should evaluate");
+    assert_eq!(quirks_result, "BackCompat|1080|0|1080|1080|1064|1064");
+
+    let mut standards = new_parsed_test_vm(
+        "https://standards-body-ratio-size.test/",
+        r#"<!doctype html><style>body { width: 100px; aspect-ratio: 1 / 1; }</style><body></body>"#,
+    );
+    let standards_result = standards
+        .eval(
+            r#"[
+  document.compatMode,
+  document.documentElement.clientHeight,
+  document.documentElement.getBoundingClientRect().top,
+  document.documentElement.getBoundingClientRect().height,
+  document.body.clientHeight,
+  document.body.offsetHeight,
+  document.body.getBoundingClientRect().height
+].join('|')"#,
+        )
+        .expect("standards body ratio geometry should evaluate");
+    assert_eq!(standards_result, "CSS1Compat|1080|0|116|100|100|100");
+}
+
+#[test]
+fn quirks_body_client_and_scroll_metrics_follow_distinct_cssom_view_rules() {
+    let mut vm = new_parsed_test_vm(
+        "https://quirks-body-client-scroll.test/",
+        r#"<style>
+html { height: 200px; overflow: hidden; }
+body { width: 100px; height: 120px; overflow: hidden; }
+</style><body></body>"#,
+    );
+    let result = vm
+        .eval(
+            r#"[
+  document.compatMode,
+  document.documentElement.clientHeight,
+  document.body.clientHeight,
+  document.body.scrollHeight,
+  document.body.offsetHeight
+].join('|')"#,
+        )
+        .expect("quirks body client and scroll geometry should evaluate");
+    assert_eq!(result, "BackCompat|200|1080|120|120");
+}
+
+#[test]
+fn quirks_scrolling_element_follows_viewport_overflow_propagation() {
+    let mut physical_body_scroller = new_parsed_test_vm(
+        "https://quirks-physical-body-scroller.test/",
+        r#"<style>
+html { overflow: clip; }
+body { width: 100px; aspect-ratio: 1 / 1; overflow: scroll; }
+</style><body></body>"#,
+    );
+    let physical_result = physical_body_scroller
+        .eval(
+            r#"[
+  document.scrollingElement?.localName ?? 'null',
+  document.body.clientHeight,
+  document.body.scrollHeight,
+  document.body.offsetHeight
+].join('|')"#,
+        )
+        .expect("physical quirks body scroller should evaluate");
+    assert_eq!(physical_result, "null|1080|100|100");
+
+    let mut viewport_body_scroller = new_parsed_test_vm(
+        "https://quirks-viewport-body-scroller.test/",
+        r#"<style>
+body { width: 100px; aspect-ratio: 1 / 1; overflow: clip; }
+</style><body></body>"#,
+    );
+    let viewport_result = viewport_body_scroller
+        .eval(
+            r#"[
+  document.scrollingElement?.localName ?? 'null',
+  document.body.clientHeight,
+  document.body.scrollHeight,
+  document.body.offsetHeight
+].join('|')"#,
+        )
+        .expect("viewport-projected quirks body scroller should evaluate");
+    assert_eq!(viewport_result, "body|1080|1080|1064");
+}
+
+#[test]
+fn quirks_scrolling_element_reuses_geometry_until_a_fresh_screenshot() {
+    let mut vm = new_parsed_test_vm(
+        "https://quirks-scrolling-snapshot.test/",
+        r#"<style>
+body { width: 100px; aspect-ratio: 1 / 1; }
+</style><body></body>"#,
+    );
+    assert_eq!(
+        vm.eval("document.scrollingElement.localName")
+            .expect("cold scrolling-element selection should evaluate"),
+        "body"
+    );
+
+    assert_eq!(
+        vm.eval(
+            r#"document.documentElement.style.overflow = 'clip';
+document.body.style.overflow = 'scroll';
+document.scrollingElement?.localName ?? 'null'"#,
+        )
+        .expect("warm scrolling-element selection should evaluate"),
+        "body",
+        "synchronous geometry reads retain the latest published tree"
+    );
+    vm.screenshot_layout_snapshot(moli_layout::PaintViewport::new(320, 200, 1.0))
+        .expect("fresh physical-body screenshot layout should succeed")
+        .expect("quirks fixture should retain a layout root");
+    assert_eq!(
+        vm.eval("document.scrollingElement?.localName ?? 'null'")
+            .expect("refreshed physical-body selection should evaluate"),
+        "null"
+    );
+
+    vm.eval(
+        r#"document.documentElement.style.overflow = 'visible';
+document.body.style.overflow = 'clip'"#,
+    )
+    .expect("viewport overflow propagation should mutate");
+    assert_eq!(
+        vm.eval("document.scrollingElement?.localName ?? 'null'")
+            .expect("stale physical-body selection should evaluate"),
+        "null"
+    );
+    vm.screenshot_layout_snapshot(moli_layout::PaintViewport::new(320, 200, 1.0))
+        .expect("fresh viewport-body screenshot layout should succeed")
+        .expect("quirks fixture should retain a layout root");
+    assert_eq!(
+        vm.eval("document.scrollingElement.localName")
+            .expect("refreshed viewport-body selection should evaluate"),
+        "body"
+    );
 }
 
 #[test]
@@ -4764,12 +5032,13 @@ fn computed_display_treats_hidden_attribute_as_none() {
 fn detached_nested_iframe_window_get_computed_style_uses_iframe_width() {
     let mut vm = new_storage_test_vm("https://nested-computed-width.test/");
 
-    let result = vm
+    let before = vm
         .eval(
             r#"
 (() => {
   const appendTarget = document.body || document.documentElement || document;
   const outer = document.createElement('iframe');
+  outer.id = 'nested-computed-outer';
   outer.setAttribute('width', '100');
   appendTarget.appendChild(outer);
   const outerDocument = outer.contentWindow.document;
@@ -4794,18 +5063,33 @@ fn detached_nested_iframe_window_get_computed_style_uses_iframe_width() {
     /\[native code\]/.test(String(value))
   ].join(':');
   const before = innerWindow.getComputedStyle(target).width;
-  outer.setAttribute('width', '200');
-  const after = innerWindow.getComputedStyle(target).width;
-  return `${before}|${after}|${shape}`;
+  return `${before}|${shape}`;
 })()
 "#,
         )
         .expect("nested detached iframe window should expose getComputedStyle");
 
     assert_eq!(
-        result,
-        "100px|200px|function:getComputedStyle:1:true:true:true:true"
+        before,
+        "100px|function:getComputedStyle:1:true:true:true:true"
     );
+
+    vm.eval("document.getElementById('nested-computed-outer').setAttribute('width', '200')")
+        .expect("outer iframe width mutation should evaluate");
+    refresh_layout_for_test(&mut vm);
+
+    let after = vm
+        .eval(
+            r#"
+(() => {
+  const outerDocument = document.getElementById('nested-computed-outer').contentWindow.document;
+  const innerWindow = outerDocument.getElementById('inner').contentWindow;
+  return innerWindow.getComputedStyle(innerWindow.document.querySelector('div')).width;
+})()
+"#,
+        )
+        .expect("nested iframe computed width should observe the published resize");
+    assert_eq!(after, "200px");
 }
 #[test]
 fn detached_iframe_computed_style_keeps_pseudo_and_target_identity() {
@@ -5225,7 +5509,7 @@ fn computed_line_height_resolves_numbers_and_percentages() {
     assert_eq!(result, "normal|16px|10px|1.6px");
 }
 #[test]
-fn computed_horizontal_auto_margins_resolve_to_pixels() {
+fn computed_auto_margins_remain_computed_without_a_layout_box() {
     let mut vm = new_storage_test_vm("https://computed-auto-margin.test/");
 
     let result = vm
@@ -5253,9 +5537,9 @@ fn computed_horizontal_auto_margins_resolve_to_pixels() {
 })()
 "#,
         )
-        .expect("computed auto margins should resolve against containing block width");
+        .expect("computed auto margins should retain their computed value without layout");
 
-    assert_eq!(result, "10px|10px|0px|0px");
+    assert_eq!(result, "auto|auto|0px|0px");
 }
 #[test]
 fn computed_insets_absolutize_font_relative_lengths() {
@@ -6297,6 +6581,8 @@ fn popup_css_register_property_uses_popup_document_world() {
 
   const popup = open('about:blank');
   globalThis.__styleRegisterPopup = popup;
+  popup.document.documentElement.style.cssText = 'width: 100%; height: 100%;';
+  popup.document.body.style.cssText = 'margin: 0; width: 100%; height: 100%;';
   const popupBody = popup.document.body || popup.document.documentElement || popup.document;
   const target = popup.document.createElement('div');
   target.id = 'popup-register-target';
@@ -9695,11 +9981,13 @@ fn computed_style_resolves_valid_typed_css_math_and_rejects_invalid_unit_algebra
     'calc((20% + 1em) * 0.5)',
     'calc(100px / 1 / 1)'
   ];
-  const values = validWidthValues.map((value) => {
-    target.style.width = 'initial';
-    target.style.width = value;
-    return getComputedStyle(target).width;
+  const widthTargets = validWidthValues.map((value) => {
+    const widthTarget = document.createElement('div');
+    widthTarget.style.width = value;
+    document.body.appendChild(widthTarget);
+    return widthTarget;
   });
+  const values = widthTargets.map((widthTarget) => getComputedStyle(widthTarget).width);
 
   letter.style.letterSpacing = 'calc(1em / 4)';
   values.push(getComputedStyle(letter).letterSpacing);

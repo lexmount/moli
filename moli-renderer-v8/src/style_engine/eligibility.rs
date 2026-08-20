@@ -10,10 +10,5 @@ pub(super) fn attribute_effect_can_use_retained_stylo_invalidator(name: &str) ->
 }
 
 pub(super) fn attribute_has_non_css_runtime_side_effect(name: &str) -> bool {
-    matches!(
-        StyleAttributeImpact::for_attribute_name(name),
-        StyleAttributeImpact::LayoutMetric
-            | StyleAttributeImpact::StylesheetLinkage
-            | StyleAttributeImpact::LayoutMetricAndStylesheetLinkage
-    )
+    StyleAttributeImpact::for_attribute_name(name).has_non_css_runtime_side_effect()
 }

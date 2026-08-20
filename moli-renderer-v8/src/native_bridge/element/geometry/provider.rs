@@ -2,9 +2,11 @@ use std::{collections::HashSet, time::Duration};
 
 use moli_layout::{
     LayoutAnswers, LayoutBoxModel, LayoutCaretPosition, LayoutDocumentMetrics,
-    LayoutElementMetrics, LayoutError, LayoutFlushReason, LayoutHit, LayoutIntersectionGeometry,
-    LayoutPassMetrics, LayoutPoint, LayoutQuad, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch,
-    LayoutScrollContainerMetrics, LayoutScrollIntoViewGeometry, LayoutSize,
+    LayoutDocumentScrollMetrics, LayoutElementMetrics, LayoutError, LayoutFlushReason,
+    LayoutGridGeometry, LayoutHit, LayoutIntersectionGeometry, LayoutPassMetrics,
+    LayoutPhysicalBoxStrut, LayoutPoint, LayoutQuad, LayoutQuery, LayoutQueryAnswer,
+    LayoutQueryBatch, LayoutScrollContainerKind, LayoutScrollContainerMetrics,
+    LayoutScrollIntoViewGeometry, LayoutSize,
 };
 
 use super::layout::{
@@ -215,6 +217,92 @@ pub(crate) fn observable_element_metrics(
     }
 }
 
+pub(crate) fn observable_used_box_size(
+    runtime: &JsContextHost,
+    source: DomHandle,
+    reason: LayoutFlushReason,
+) -> Result<Option<LayoutSize>, LayoutError> {
+    if !runtime.dom_host().is_connected(source) {
+        return Ok(None);
+    }
+    let Some(document) = runtime.layout_document_for_source(source) else {
+        return Ok(None);
+    };
+    let answers = observable_geometry_batch(
+        runtime,
+        document,
+        reason,
+        &LayoutQueryBatch::new(vec![LayoutQuery::UsedBoxSize { source }]),
+    )?;
+    match answers.answers.into_iter().next() {
+        Some(LayoutQueryAnswer::UsedBoxSize(size)) => Ok(size),
+        _ => Err(provider_contract_error("used box size")),
+    }
+}
+
+pub(crate) fn observable_used_margin(
+    runtime: &JsContextHost,
+    source: DomHandle,
+    reason: LayoutFlushReason,
+) -> Result<Option<LayoutPhysicalBoxStrut>, LayoutError> {
+    if !runtime.dom_host().is_connected(source) {
+        return Ok(None);
+    }
+    let Some(document) = runtime.layout_document_for_source(source) else {
+        return Ok(None);
+    };
+    let answers = observable_geometry_batch(
+        runtime,
+        document,
+        reason,
+        &LayoutQueryBatch::new(vec![LayoutQuery::UsedMargin { source }]),
+    )?;
+    match answers.answers.into_iter().next() {
+        Some(LayoutQueryAnswer::UsedMargin(margin)) => Ok(margin),
+        _ => Err(provider_contract_error("used margin")),
+    }
+}
+
+pub(crate) fn observable_used_grid_tracks(
+    runtime: &JsContextHost,
+    source: DomHandle,
+    reason: LayoutFlushReason,
+) -> Result<Option<LayoutGridGeometry>, LayoutError> {
+    if !runtime.dom_host().is_connected(source) {
+        return Ok(None);
+    }
+    let Some(document) = runtime.layout_document_for_source(source) else {
+        return Ok(None);
+    };
+    let answers = observable_geometry_batch(
+        runtime,
+        document,
+        reason,
+        &LayoutQueryBatch::new(vec![LayoutQuery::UsedGridTracks { source }]),
+    )?;
+    match answers.answers.into_iter().next() {
+        Some(LayoutQueryAnswer::UsedGridTracks(tracks)) => Ok(tracks),
+        _ => Err(provider_contract_error("used Grid tracks")),
+    }
+}
+
+pub(crate) fn observable_document_scroll_metrics(
+    runtime: &JsContextHost,
+    document: DomHandle,
+    reason: LayoutFlushReason,
+) -> Result<LayoutDocumentScrollMetrics<DomHandle>, LayoutError> {
+    let answers = observable_geometry_batch(
+        runtime,
+        document,
+        reason,
+        &LayoutQueryBatch::new(vec![LayoutQuery::DocumentScrollMetrics]),
+    )?;
+    match answers.answers.into_iter().next() {
+        Some(LayoutQueryAnswer::DocumentScrollMetrics(metrics)) => Ok(metrics),
+        _ => Err(provider_contract_error("document scroll metrics")),
+    }
+}
+
 pub(crate) fn observable_scroll_into_view_geometry(
     runtime: &JsContextHost,
     source: DomHandle,
@@ -238,24 +326,34 @@ pub(crate) fn observable_scroll_into_view_geometry(
     }
 }
 
-fn observable_hit_test(
+/// Resolves the foremost painted hit and the viewport sampled by the same
+/// frozen layout pass. CSSOM's single-point surface consumes this query;
+/// penetrating list queries use `observable_hit_test_all` instead.
+pub(crate) fn observable_hit_test(
     runtime: &JsContextHost,
     document: DomHandle,
     point: LayoutPoint,
     ignore_pointer_events_none: bool,
     reason: LayoutFlushReason,
-) -> Result<Option<LayoutHit<DomHandle>>, LayoutError> {
+) -> Result<(LayoutDocumentMetrics, Option<LayoutHit<DomHandle>>), LayoutError> {
     let answers = observable_geometry_batch(
         runtime,
         document,
         reason,
-        &LayoutQueryBatch::new(vec![LayoutQuery::HitTest {
-            point,
-            ignore_pointer_events_none,
-        }]),
+        &LayoutQueryBatch::new(vec![
+            LayoutQuery::DocumentMetrics,
+            LayoutQuery::HitTest {
+                point,
+                ignore_pointer_events_none,
+            },
+        ]),
     )?;
-    match answers.answers.into_iter().next() {
-        Some(LayoutQueryAnswer::HitTest(hit)) => Ok(hit),
+    let mut answers = answers.answers.into_iter();
+    match (answers.next(), answers.next()) {
+        (
+            Some(LayoutQueryAnswer::DocumentMetrics(metrics)),
+            Some(LayoutQueryAnswer::HitTest(hit)),
+        ) => Ok((metrics, hit)),
         _ => Err(provider_contract_error("hit test")),
     }
 }
@@ -315,7 +413,7 @@ fn observable_deep_hit_test_inner(
     ignore_pointer_events_none: bool,
     depth: usize,
 ) -> Result<Option<DomHandle>, LayoutError> {
-    let first_hit = observable_hit_test(
+    let (_, first_hit) = observable_hit_test(
         runtime,
         document,
         point,
@@ -489,6 +587,50 @@ fn answer_mock_queries(
                     ),
                 })
             }
+            LayoutQuery::DocumentScrollMetrics => {
+                let root = runtime
+                    .dom_host()
+                    .dom()
+                    .document_element_handle_for_document(document);
+                let scrolling_element =
+                    if runtime.dom_host().document_quirks_mode_for_handle(document)
+                        == Some(selectors::matching::QuirksMode::Quirks)
+                    {
+                        runtime
+                            .dom_host()
+                            .document_body_handle_for_document(document)
+                    } else {
+                        root
+                    };
+                let viewport_scroll = root
+                    .and_then(|root| runtime.dom_host().node(root))
+                    .and_then(Node::as_element)
+                    .map(|element| {
+                        LayoutPoint::new(element.scroll_left() as f32, element.scroll_top() as f32)
+                    })
+                    .unwrap_or(LayoutPoint::ZERO);
+                let scrollport = moli_layout::LayoutRect::new(
+                    0.0,
+                    0.0,
+                    viewport.css_width as f32,
+                    viewport.css_height as f32,
+                );
+                LayoutQueryAnswer::DocumentScrollMetrics(LayoutDocumentScrollMetrics {
+                    scrolling_element,
+                    viewport_extent: moli_layout::LayoutScrollExtent {
+                        scrollport,
+                        scrollable_overflow: scrollport,
+                        scroll_size: LayoutSize::new(scrollport.width, scrollport.height),
+                        applied_offset: viewport_scroll,
+                        minimum_offset: LayoutPoint::ZERO,
+                        maximum_offset: LayoutPoint::ZERO,
+                        is_scroll_container: true,
+                        allows_user_scroll_x: true,
+                        allows_user_scroll_y: true,
+                        clips_overflow: true,
+                    },
+                })
+            }
             LayoutQuery::BoxModel { source } => {
                 LayoutQueryAnswer::BoxModel(mock_box_model(runtime, *source))
             }
@@ -513,6 +655,9 @@ fn answer_mock_queries(
             LayoutQuery::ElementMetrics { source } => {
                 LayoutQueryAnswer::ElementMetrics(mock_element_metrics(runtime, *source))
             }
+            LayoutQuery::UsedBoxSize { .. } => LayoutQueryAnswer::UsedBoxSize(None),
+            LayoutQuery::UsedMargin { .. } => LayoutQueryAnswer::UsedMargin(None),
+            LayoutQuery::UsedGridTracks { .. } => LayoutQueryAnswer::UsedGridTracks(None),
             LayoutQuery::ScrollIntoViewGeometry { source } => {
                 LayoutQueryAnswer::ScrollIntoViewGeometry(mock_scroll_into_view_geometry(
                     runtime, document, *source,
@@ -617,6 +762,10 @@ fn mock_element_metrics(
     Some(LayoutElementMetrics {
         offset_parent: compute_mock_offset_parent(runtime, source),
         offset_position: LayoutPoint::new(rect.left as f32, rect.top as f32),
+        border_origin_in_viewport_ignoring_css_transforms: LayoutPoint::new(
+            rect.left as f32,
+            rect.top as f32,
+        ),
         offset_size: size,
         content_size: size,
         client_size: size,
@@ -651,6 +800,7 @@ fn mock_scroll_into_view_geometry(
         .and_then(|root| {
             mock_element_metrics(runtime, root).map(|metrics| LayoutScrollContainerMetrics {
                 source: root,
+                kind: LayoutScrollContainerKind::Viewport,
                 metrics,
             })
         })

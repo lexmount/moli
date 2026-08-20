@@ -558,6 +558,56 @@ nestedDocument.body.appendChild(nestedViewportSized);
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn screenshot_composites_transparent_iframe_canvas_over_its_owner_background() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/transparent-iframe-canvas.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.documentElement.style.cssText = 'margin:0;padding:0;background:white';
+document.body.style.cssText = 'margin:0;padding:0';
+document.body.innerHTML = `
+<iframe id=transparent style="position:absolute;left:0;top:0;display:block;width:100px;aspect-ratio:1/1;border:0;background:green"></iframe>
+<iframe id=colored style="position:absolute;left:110px;top:0;display:block;width:100px;aspect-ratio:1/1;border:0;background:green"></iframe>`;
+const colored = document.getElementById('colored').contentDocument;
+colored.documentElement.style.cssText = 'margin:0;padding:0;background:blue';
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+
+        let snapshot = page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(210, 100, 1.0))?
+            .expect("iframe canvas fixture must retain a root");
+        let image = moli_paint::raster_snapshot(&snapshot)?;
+        let pixel = |x: u32, y: u32| {
+            let index = ((y * image.width + x) * 4) as usize;
+            &image.rgba[index..index + 4]
+        };
+
+        assert_eq!(
+            pixel(50, 50),
+            [0, 128, 0, 255],
+            "a transparent child canvas must expose the iframe owner's background"
+        );
+        assert_eq!(
+            pixel(160, 50),
+            [0, 0, 255, 255],
+            "a child document's own canvas background must still cover the owner"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("transparent iframe canvas fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_and_screencast_paint_fresh_canvas_2d_backing_stores() {
     run_page_vm_async_test(async move {
         let loader =
@@ -953,6 +1003,100 @@ offsets['shadow-action']=shadow.getElementById('shadow-action').offsetParent?.id
     })
     .await
     .expect("containment fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn filter_effects_establish_positioned_containing_blocks_except_on_the_root() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/filter-containing-blocks.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html{filter:opacity(99%);will-change:backdrop-filter}
+html,body{margin:0;padding:0}
+.case{width:160px;height:50px;margin:10px 0 0 100px}
+.absolute{position:absolute;left:11px;top:12px;width:10px;height:10px}
+.fixed{position:fixed;left:13px;top:14px;width:10px;height:10px}
+#filter{filter:opacity(80%)}
+#backdrop{backdrop-filter:blur(0px)}
+#will-filter{will-change:filter}
+#will-backdrop{will-change:backdrop-filter}
+#inline-filter{filter:opacity(80%)}
+#block-inline-filter{margin-left:100px;will-change:filter}
+.fixed-origin{position:fixed;left:0;top:0;width:10px;height:10px}
+#root-fixed{position:fixed;left:7px;top:8px;width:10px;height:10px}
+</style>`;
+document.body.innerHTML = `
+<div id=filter class=case><span id=filter-absolute class=absolute></span><span id=filter-fixed class=fixed></span></div>
+<div id=backdrop class=case><span id=backdrop-absolute class=absolute></span><span id=backdrop-fixed class=fixed></span></div>
+<div id=will-filter class=case><span id=will-filter-absolute class=absolute></span><span id=will-filter-fixed class=fixed></span></div>
+<div id=will-backdrop class=case><span id=will-backdrop-absolute class=absolute></span><span id=will-backdrop-fixed class=fixed></span></div>
+<div class=case>prefix <span id=inline-filter>inline<span id=inline-filter-fixed class=fixed></span></span></div>
+<span id=block-inline-filter>FAIL<div id=block-inline-filter-fixed class=fixed-origin></div></span>
+<span id=root-fixed></span>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+
+        // Geometry reads intentionally consume the most recently rendered
+        // layout. Produce that render explicitly before querying offsetParent.
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0))?
+            .expect("filter fixture must retain a layout root");
+
+        let offsets = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries([
+'filter-absolute','filter-fixed','backdrop-absolute','backdrop-fixed',
+'will-filter-absolute','will-filter-fixed','will-backdrop-absolute','will-backdrop-fixed',
+'inline-filter-fixed','block-inline-filter-fixed','root-fixed'
+].map(id=>[id,document.getElementById(id).offsetParent?.id??null])))"#,
+        )?;
+        let offsets: serde_json::Value = serde_json::from_str(&offsets)?;
+        for (id, expected) in [
+            ("filter-absolute", Some("filter")),
+            ("filter-fixed", Some("filter")),
+            ("backdrop-absolute", Some("backdrop")),
+            ("backdrop-fixed", Some("backdrop")),
+            ("will-filter-absolute", Some("will-filter")),
+            ("will-filter-fixed", Some("will-filter")),
+            ("will-backdrop-absolute", Some("will-backdrop")),
+            ("will-backdrop-fixed", Some("will-backdrop")),
+            ("inline-filter-fixed", Some("inline-filter")),
+            ("block-inline-filter-fixed", Some("block-inline-filter")),
+            ("root-fixed", None),
+        ] {
+            assert_eq!(
+                offsets[id].as_str(),
+                expected,
+                "unexpected offsetParent for {id}: {offsets}"
+            );
+        }
+        let inline_geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify((()=>{const rect=id=>document.getElementById(id).getBoundingClientRect();const inline=rect('inline-filter');const inlineFixed=rect('inline-filter-fixed');const blockInline=rect('block-inline-filter');const blockInlineFixed=rect('block-inline-filter-fixed');return [inline.x,inline.y,inlineFixed.x,inlineFixed.y,blockInline.x,blockInline.y,blockInlineFixed.x,blockInlineFixed.y]})())"#,
+        )?;
+        let inline_geometry: [f32; 8] = serde_json::from_str(&inline_geometry)?;
+        assert!(
+            (inline_geometry[2] - inline_geometry[0] - 13.0).abs() <= 0.05
+                && (inline_geometry[3] - inline_geometry[1] - 14.0).abs() <= 0.05,
+            "inline filter did not resolve fixed insets from its fragment: {inline_geometry:?}"
+        );
+        assert!(
+            (inline_geometry[6] - inline_geometry[4]).abs() <= 0.05
+                && (inline_geometry[7] - inline_geometry[5]).abs() <= 0.05,
+            "block-in-inline filter did not position its fixed child: {inline_geometry:?}"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("filter containing-block fixture should run");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1410,7 +1554,7 @@ document.body.innerHTML = `<div id=stage>
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn intrinsic_width_keywords_match_chromium_across_formatting_contexts() {
+async fn intrinsic_width_sizing_covers_browser_formatting_contexts() {
     run_page_vm_async_test(async move {
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
@@ -1484,8 +1628,8 @@ document.body.innerHTML = `
                 "min-content": true,
                 "max-content": true,
                 "fit-content": true,
-                "fit-content(120px)": false,
-                "fit-content(50%)": false,
+                "fit-content(120px)": true,
+                "fit-content(50%)": true,
                 "stretch": true,
                 "-webkit-fill-available": true,
                 "grid-fit-content(120px)": true,
@@ -1575,13 +1719,206 @@ document.body.innerHTML = `
             .vm_mut()
             .screenshot_layout_snapshot(moli_layout::PaintViewport::new(1200, 1420, 1.0))?
             .expect("intrinsic width fixture must retain a root");
-        assert!(snapshot.diagnostics.iter().all(|diagnostic| {
-            diagnostic.code != "intrinsic-sizing-keyword-deferred"
-        }));
+        assert!(snapshot
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "anchor-sizing-deferred"));
         Ok::<_, anyhow::Error>(())
     })
     .await
     .expect("intrinsic width fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_applies_the_ratio_automatic_minimum_to_intrinsic_inline_sizes() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/intrinsic-ratio-automatic-minimum.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0}
+.context{position:absolute;width:300px;height:50px}
+#block-context{left:0;top:0}
+#flex-context{left:0;top:50px;display:flex}
+#grid-context{left:0;top:100px;display:grid}
+.target{display:block;width:min-content;height:25px;min-width:auto;aspect-ratio:1/1;flex-shrink:0}
+.content{width:100px;height:0}
+#zero-minimum{position:absolute;left:150px;top:0;min-width:0}
+</style>`;
+document.body.innerHTML = `
+<div id=block-context class=context><div id=block class=target><div class=content></div></div></div>
+<div id=flex-context class=context><div id=flex class=target><div class=content></div></div></div>
+<div id=grid-context class=context><div id=grid class=target><div class=content></div></div></div>
+<div id=zero-minimum class=target><div class=content></div></div>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(300, 150, 1.0))?
+            .expect("intrinsic ratio fixture must retain a root");
+
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                r#"['block','flex','grid','zero-minimum']
+  .map(id => {
+    const rect = document.getElementById(id).getBoundingClientRect();
+    return `${rect.width},${rect.height}`;
+  })
+  .join('|')"#,
+            )?,
+            "100,25|100,25|100,25|25,25",
+            "an intrinsic ratio size must retain ratio provenance so min-width:auto can apply the real min-content floor",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("intrinsic ratio automatic-minimum fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn replaced_sizing_transfers_constraints_through_flex_and_grid() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/replaced-sizing.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = '<style>\
+html,body{margin:0;padding:0}\
+.case{position:absolute}\
+#flex{left:0;top:0;display:flex}\
+#grid{left:200px;top:0;display:grid;grid-template-columns:auto 1fr}\
+.ratio{display:block;width:auto;height:10px}\
+#flex-ratio{min-height:30px}\
+#grid-ratio{min-height:50px}\
+#percent-min-case{left:0;top:100px;display:grid}\
+#percent-max-case{left:200px;top:100px;display:flex}\
+.natural{display:block;min-width:0}\
+#percent-min{min-height:100%}\
+#percent-max{max-height:100%}\
+</style>';
+document.body.innerHTML = '\
+<div id="flex" class="case"><div><svg id="flex-ratio" class="ratio" viewBox="0 0 2 1"></svg></div></div>\
+<div id="grid" class="case"><div><svg id="grid-ratio" class="ratio" viewBox="0 0 3 1"></svg></div><div></div></div>\
+<div id="percent-min-case" class="case"><div style="display:grid"><svg id="percent-min" class="natural" width="60" height="60"></svg></div></div>\
+<div id="percent-max-case" class="case"><div><svg id="percent-max" class="natural" width="60" height="60"></svg></div></div>';
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+
+        let ids = ["flex-ratio", "grid-ratio", "percent-min", "percent-max"];
+        let geometry = page_vm.vm_mut().eval(&format!(
+            "JSON.stringify(Object.fromEntries({ids:?}.map(id=>{{const r=document.getElementById(id).getBoundingClientRect();return [id,[r.width,r.height]]}})))"
+        ))?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        for (id, expected) in [
+            ("flex-ratio", [60.0, 30.0]),
+            ("grid-ratio", [150.0, 50.0]),
+            ("percent-min", [60.0, 60.0]),
+            ("percent-max", [60.0, 60.0]),
+        ] {
+            let actual = geometry[id]
+                .as_array()
+                .unwrap_or_else(|| panic!("missing geometry for {id}: {geometry}"));
+            for (index, expected) in expected.into_iter().enumerate() {
+                let actual = actual[index].as_f64().expect("numeric geometry") as f32;
+                assert!(
+                    (actual - expected).abs() <= 0.05,
+                    "{id}[{index}]: expected {expected}, got {actual}; geometry={geometry}"
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("replaced sizing fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn stretch_sizing_uses_each_formatting_contexts_available_area() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/stretch-sizing.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0}.case{position:absolute;width:100px}.target{display:block;width:20px}
+#block{left:0;top:0;height:100px;display:flow-root}#block-target{height:stretch;margin:10px}
+#ratio{left:200px;top:0;height:100px}#ratio-target{width:auto;height:stretch;aspect-ratio:2}
+#flex{left:0;top:150px;height:50px;display:flex;flex-flow:row wrap}
+#flex-target{box-sizing:content-box;height:55px;max-height:stretch;margin-block:2px 3px;padding:2px;border:3px solid}
+#flex-sibling{width:20px;height:60px}
+#grid-fixed{left:200px;top:150px;height:100px;display:grid;grid-template-rows:100px}
+#grid-auto{left:400px;top:150px;height:100px;display:grid}
+.grid-target{height:120px;max-height:stretch}
+#absolute{left:600px;top:150px;height:50px;padding-block:5px;box-sizing:content-box;position:absolute}
+#absolute-target{position:absolute;inset-block-start:10px;box-sizing:content-box;height:55px;max-height:stretch;margin-block:2px 3px;padding:2px;border:3px solid}
+</style>`;
+document.body.innerHTML = `
+<div id=block class=case><div id=block-target class=target></div></div>
+<div id=ratio class=case><div id=ratio-target></div></div>
+<div id=flex class=case><div id=flex-target class=target></div><div id=flex-sibling></div></div>
+<div id=grid-fixed class=case><div id=grid-fixed-target class="target grid-target"></div></div>
+<div id=grid-auto class=case><div id=grid-auto-target class="target grid-target"></div></div>
+<div id=absolute class=case><div id=absolute-target class=target></div></div>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+
+        let ids = [
+            "block-target",
+            "ratio-target",
+            "flex-target",
+            "grid-fixed-target",
+            "grid-auto-target",
+            "absolute-target",
+        ];
+        let geometry = page_vm.vm_mut().eval(&format!(
+            "JSON.stringify(Object.fromEntries({ids:?}.map(id=>{{const r=document.getElementById(id).getBoundingClientRect();return [id,[r.width,r.height]]}})))"
+        ))?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        for (id, expected) in [
+            ("block-target", [20.0, 80.0]),
+            ("ratio-target", [200.0, 100.0]),
+            ("flex-target", [30.0, 55.0]),
+            ("grid-fixed-target", [20.0, 100.0]),
+            ("grid-auto-target", [20.0, 120.0]),
+            ("absolute-target", [30.0, 45.0]),
+        ] {
+            let actual = geometry[id]
+                .as_array()
+                .unwrap_or_else(|| panic!("missing geometry for {id}: {geometry}"));
+            for (index, expected) in expected.into_iter().enumerate() {
+                let actual = actual[index].as_f64().expect("numeric geometry") as f32;
+                assert!(
+                    (actual - expected).abs() <= 0.05,
+                    "{id}[{index}]: expected {expected}, got {actual}; geometry={geometry}"
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("stretch sizing fixture should run");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -2089,6 +2426,327 @@ html,body{{margin:0;padding:0;background:white}}
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn screenshot_recascades_nearest_table_cell_presentation_style() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/table-cell-presentation-style.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0}
+table{border-spacing:0}
+td{font-size:0;border:0}
+.content{width:10px;height:10px}
+#author-cell{padding:7px}
+</style>`;
+document.body.innerHTML = `
+<table><tr><td id=default-cell><div class=content></div></td></tr></table>
+<table id=legacy-table cellpadding=4><tr><td id=legacy-cell><div class=content></div></td></tr></table>
+<table cellpadding=3><tr><td><table cellpadding=5><tr><td id=nested-cell><div class=content></div></td></tr></table></td></tr></table>
+<table id=author-table cellpadding=4><tr><td id=author-cell><div class=content></div></td></tr></table>`;
+const orphan = document.createElement('td');
+orphan.id = 'orphan-cell';
+orphan.innerHTML = '<div class=content></div>';
+document.body.append(orphan);
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+
+        let viewport = moli_layout::PaintViewport::new(200, 200, 1.0);
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(viewport)?
+            .expect("table-cell fixture must retain a layout root");
+        let read_cells = r#"(() => {
+const read = (id, includeGeometry = true) => {
+  const cell = document.getElementById(id);
+  const style = getComputedStyle(cell);
+  const values = [style.paddingTop,style.paddingRight,style.paddingBottom,style.paddingLeft];
+  if (includeGeometry) values.push(cell.offsetWidth,cell.offsetHeight);
+  return values.join(',');
+};
+return [
+  read('default-cell'),
+  read('legacy-cell'),
+  read('nested-cell'),
+  read('author-cell'),
+  read('orphan-cell', false),
+].join('|');
+})()
+"#;
+        assert_eq!(
+            page_vm.vm_mut().eval(read_cells)?,
+            "1px,1px,1px,1px,12,12|4px,4px,4px,4px,18,18|5px,5px,5px,5px,20,20|7px,7px,7px,7px,24,24|1px,1px,1px,1px",
+            "table cells must use the nearest table's legacy padding while author CSS and the orphan-cell UA fallback remain authoritative",
+        );
+
+        page_vm
+            .vm_mut()
+            .eval("document.getElementById('legacy-table').setAttribute('cellpadding','8')")?;
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(viewport)?
+            .expect("mutated table-cell fixture must retain a layout root");
+        assert_eq!(
+            page_vm.vm_mut().eval(read_cells)?,
+            "1px,1px,1px,1px,12,12|8px,8px,8px,8px,26,26|5px,5px,5px,5px,20,20|7px,7px,7px,7px,24,24|1px,1px,1px,1px",
+            "cellpadding mutation must recascade descendant cells without crossing a nested table boundary",
+        );
+
+        page_vm
+            .vm_mut()
+            .eval("document.getElementById('legacy-table').setAttribute('cellpadding','0')")?;
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(viewport)?
+            .expect("zero-cellpadding fixture must retain a layout root");
+        assert_eq!(
+            page_vm.vm_mut().eval(read_cells)?,
+            "1px,1px,1px,1px,12,12|0px,0px,0px,0px,10,10|5px,5px,5px,5px,20,20|7px,7px,7px,7px,24,24|1px,1px,1px,1px",
+            "cellpadding=0 must remove the shared presentational declaration",
+        );
+
+        page_vm
+            .vm_mut()
+            .eval("document.getElementById('legacy-table').removeAttribute('cellpadding')")?;
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(viewport)?
+            .expect("default-cellpadding fixture must retain a layout root");
+        assert_eq!(
+            page_vm.vm_mut().eval(read_cells)?,
+            "1px,1px,1px,1px,12,12|1px,1px,1px,1px,12,12|5px,5px,5px,5px,20,20|7px,7px,7px,7px,24,24|1px,1px,1px,1px",
+            "removing cellpadding must restore the historical 1px default",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("table-cell presentational-style fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_cascades_html_dimensions_before_border_box_ratio_transfer() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/border-box-ratio-floor.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0}
+.item{box-sizing:border-box;border:20px solid blue;display:block;margin:0 0 10px;padding:0}
+.horizontal{aspect-ratio:2/1}.vertical{aspect-ratio:1/2}
+canvas,input{display:block;margin:0;border:0;padding:0}
+</style>`;
+document.body.innerHTML = `
+<img id=r1 class="item horizontal" style="width:50px;height:auto" width=20 height=50>
+<img id=r2 class="item horizontal" style="width:auto;height:20px" width=20 height=50>
+<img id=r3 class="item horizontal" style="max-width:50px;height:auto" width=20 height=50>
+<img id=r4 class="item horizontal" style="width:auto;max-height:20px" width=20 height=50>
+<img id=r5 class="item vertical" style="height:50px;width:auto" width=20 height=50>
+<img id=r6 class="item vertical" style="height:auto;width:20px" width=20 height=50>
+<img id=r7 class="item vertical" style="max-height:50px;width:auto" width=20 height=50>
+<img id=r8 class="item vertical" style="height:auto;max-width:20px" width=20 height=50>
+<div id=n1 class="item horizontal" style="width:50px;height:auto"></div>
+<div id=n2 class="item horizontal" style="width:auto;height:20px"></div>
+<div id=n3 class="item horizontal" style="max-width:50px;height:auto"></div>
+<div id=n4 class="item horizontal" style="width:auto;max-height:20px"></div>
+<div id=n5 class="item vertical" style="height:50px;width:auto"></div>
+<div id=n6 class="item vertical" style="height:auto;width:20px"></div>
+<div id=n7 class="item vertical" style="max-height:50px;width:auto"></div>
+<div id=n8 class="item vertical" style="height:auto;max-width:20px"></div>
+<canvas id=canvas width="600.5" height="-1"></canvas>
+<input id=hidden-input type=hidden width=90 height=45>
+<input id=dynamic-input type=text width=90 height=45>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+
+        let viewport = moli_layout::PaintViewport::new(800, 1200, 1.0);
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(viewport)?
+            .expect("ratio fixture must retain a layout root");
+        let read_geometry = r#"[
+  'r1','r2','r3','r4','r5','r6','r7','r8',
+  'n1','n2','n3','n4','n5','n6','n7','n8'
+].map(id => {
+  const element = document.getElementById(id);
+  return `${element.offsetWidth},${element.offsetHeight}`;
+}).join('|')"#;
+        assert_eq!(
+            page_vm.vm_mut().eval(read_geometry)?,
+            "50,40|80,40|40,40|80,40|40,50|40,80|40,50|40,80|50,40|80,40|50,40|80,40|40,50|40,80|40,50|40,80",
+            "padding and border must floor the ratio source before transfer for replaced and non-replaced boxes",
+        );
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                r#"(() => {
+const r3 = getComputedStyle(document.getElementById('r3'));
+const r4 = getComputedStyle(document.getElementById('r4'));
+const hidden = getComputedStyle(document.getElementById('hidden-input'));
+const canvas = document.getElementById('canvas');
+return [r3.width,r3.height,r4.width,r4.height,hidden.width,hidden.height,canvas.offsetWidth,canvas.offsetHeight].join('|');
+})()"#,
+            )?,
+            "40px|40px|80px|40px|90px|45px|600|150",
+            "resolved width and height must expose the used border boxes while hidden HTML dimensions remain computed presentation hints",
+        );
+
+        page_vm
+            .vm_mut()
+            .eval("document.getElementById('r3').setAttribute('width','60')")?;
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(viewport)?
+            .expect("mutated ratio fixture must retain a layout root");
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                "(() => { const e=document.getElementById('r3'),s=getComputedStyle(e); return `${s.width}|${e.offsetWidth},${e.offsetHeight}`; })()",
+            )?,
+            "50px|50,40",
+            "width mutation must recascade the presentation hint before exposing the max-width-clamped used border box",
+        );
+
+        page_vm
+            .vm_mut()
+            .eval("document.getElementById('dynamic-input').setAttribute('type','image')")?;
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(viewport)?
+            .expect("input-type mutation fixture must retain a layout root");
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                "(() => { const e=document.getElementById('dynamic-input'),s=getComputedStyle(e); return `${s.width},${s.height}|${e.offsetWidth},${e.offsetHeight}`; })()",
+            )?,
+            "90px,45px|90,45",
+            "input type mutation must recascade the dimension presentation hints",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("HTML dimension and border-box ratio fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_sizes_empty_tables_without_phantom_border_spacing() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/empty-table-sizing.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0}
+table{border-spacing:10px}
+</style>`;
+document.body.innerHTML = `
+<table id=empty></table>
+<table id=empty-body><tbody></tbody></table>
+<table id=empty-row><tbody><tr></tr></tbody></table>
+<table id=border style="border:10px solid transparent"></table>
+<table id=padding style="padding:10px"></table>
+<table id=definite style="width:100px;height:40px"></table>
+<table id=caption><caption><div style="width:30px;height:10px"></div></caption></table>
+<table id=column><col style="width:30px"></table>
+<table id=column-row><col style="width:30px"><tbody><tr></tr></tbody></table>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(200, 200, 1.0))?
+            .expect("empty-table fixture must retain a layout root");
+
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                r#"['empty','empty-body','empty-row','border','padding','definite','caption','column','column-row']
+  .map(id => { const table = document.getElementById(id); return `${table.offsetWidth},${table.offsetHeight}`; })
+  .join('|')"#,
+            )?,
+            "0,0|0,0|0,0|20,20|20,20|100,40|30,10|50,0|50,20",
+            "an empty table should use real box decorations and authored sizes, not a phantom grid track or border spacing",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("empty-table sizing fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_transfers_replaced_intrinsic_block_constraints_into_inline_contributions() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/replaced-intrinsic-constraints.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0}
+.test{width:max-content;border:5px solid;margin:5px}
+.flex-row{display:flex;flex-direction:row}
+.flex-column{display:flex;flex-direction:column}
+.grid{display:grid}
+canvas{display:block;width:max-content;height:0}
+</style>`;
+document.body.innerHTML = `
+<div id=block-min class=test><canvas width=50 height=50 style="min-height:max-content"></canvas></div>
+<div id=block-max class=test><canvas width=50 height=50 style="height:100px;max-height:max-content"></canvas></div>
+<div id=flex-row-min class="test flex-row"><canvas width=50 height=50 style="min-height:max-content"></canvas></div>
+<div id=flex-row-max class="test flex-row"><canvas width=50 height=50 style="height:100px;max-height:max-content"></canvas></div>
+<div id=flex-column-min class="test flex-column"><canvas width=50 height=50 style="min-height:max-content"></canvas></div>
+<div id=flex-column-max class="test flex-column"><canvas width=50 height=50 style="height:100px;max-height:max-content"></canvas></div>
+<div id=grid-min class="test grid"><canvas width=50 height=50 style="min-height:max-content"></canvas></div>
+<div id=grid-max class="test grid"><canvas width=50 height=50 style="height:100px;max-height:max-content"></canvas></div>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(300, 600, 1.0))?
+            .expect("replaced intrinsic-constraint fixture must retain a layout root");
+
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                r#"['block-min','block-max','flex-row-min','flex-row-max','flex-column-min','flex-column-max','grid-min','grid-max']
+  .map(id => {
+    const wrapper = document.getElementById(id);
+    const canvas = wrapper.firstElementChild;
+    return `${wrapper.offsetWidth},${wrapper.offsetHeight},${canvas.offsetWidth},${canvas.offsetHeight}`;
+  })
+  .join('|')"#,
+            )?,
+            "60,60,50,50|60,60,50,50|60,60,50,50|60,60,50,50|60,60,50,50|60,60,50,50|60,60,50,50|60,60,50,50",
+            "intrinsic block constraints must clamp replaced content before its ratio determines inline contributions",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("replaced intrinsic-constraint fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_paints_fresh_inline_svg_resources_with_computed_current_color() {
     run_page_vm_async_test(async move {
         let loader =
@@ -2104,7 +2762,8 @@ document.head.innerHTML = `<style>
 html,body{margin:0;padding:0;background:white}
 #icon{position:absolute;left:0;top:0;color:red}
 #icon.blue{color:blue}
-#ratio{position:absolute;left:0;top:30px;color:green}
+#ratio-host{position:absolute;left:0;top:30px;width:220px;height:160px}
+#ratio{position:absolute;left:0;top:0;color:green}
 #feishu-time{position:absolute;left:60px;top:0;color:#646a73;font-size:16px}
 #feishu-time.css-width{width:24px}
 </style>`;
@@ -2115,9 +2774,9 @@ document.body.innerHTML = `
 <svg id="feishu-time" width="1em" height="1em" viewBox="0 0 24 24" data-icon="TimeOutlined">
   <rect width="24" height="24" fill="currentColor"></rect>
 </svg>
-<svg id="ratio" viewBox="0 0 1 1">
+<div id="ratio-host"><svg id="ratio" viewBox="0 0 1 1">
   <rect width="1" height="1" fill="currentColor"></rect>
-</svg>`;
+</svg></div>`;
 'installed'
 "#,
         )?;
@@ -2128,6 +2787,13 @@ document.body.innerHTML = `
             )?,
             "16px|16px",
             "SVG presentation attributes must resolve 1em through the element's computed font size like Chromium",
+        );
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                "const r=document.getElementById('ratio').getBoundingClientRect();[r.width,r.height].join('|')",
+            )?,
+            "220|220",
+            "a ratio-only absolute SVG must stretch to the definite available inline size like Chromium",
         );
 
         let first = page_vm
@@ -2173,25 +2839,53 @@ document.body.innerHTML = `
         assert_eq!(first_pixel(65, 5), [100, 106, 115, 255]);
         assert_eq!(first_pixel(80, 5), [255, 255, 255, 255]);
         assert_eq!(first_pixel(140, 40), [0, 128, 0, 255]);
-        // A viewBox-only square uses its 1:1 ratio inside the CSS 300x150
-        // default object size, yielding a 150x150 replaced box rather than
-        // losing the ratio and stretching to 300x150.
-        assert_eq!(first_pixel(170, 40), [255, 255, 255, 255]);
+        // A viewBox-only square has a preferred ratio but no natural size.
+        // Blink stretch-fits its automatic inline size to the definite 220px
+        // available space, then transfers the 1:1 ratio to its block size.
+        assert_eq!(first_pixel(170, 40), [0, 128, 0, 255]);
 
         page_vm.vm_mut().eval(
             "document.getElementById('icon').classList.add('blue');document.getElementById('shape').setAttribute('x','2');document.getElementById('feishu-time').setAttribute('width','2em');'mutated'",
         )?;
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(220, 190, 1.0))?
+            .expect("the presentation-attribute mutation must publish a layout tree");
         assert_eq!(
             page_vm.vm_mut().eval(
-                "const icon=document.getElementById('feishu-time');const fromAttribute=getComputedStyle(icon).width;icon.classList.add('css-width');const fromCss=getComputedStyle(icon).width;icon.classList.remove('css-width');[fromAttribute,fromCss,getComputedStyle(icon).width].join('|')",
+                "getComputedStyle(document.getElementById('feishu-time')).width",
             )?,
-            "32px|24px|32px",
-            "mutated presentation attributes must recascade and author CSS must override them",
+            "32px",
+            "the published presentation-attribute mutation must update resolved geometry",
         );
+        page_vm
+            .vm_mut()
+            .eval("document.getElementById('feishu-time').classList.add('css-width')")?;
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(220, 190, 1.0))?
+            .expect("the author CSS override must publish a layout tree");
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                "getComputedStyle(document.getElementById('feishu-time')).width",
+            )?,
+            "24px",
+            "author CSS must override the presentation attribute after layout publication",
+        );
+        page_vm
+            .vm_mut()
+            .eval("document.getElementById('feishu-time').classList.remove('css-width')")?;
         let second = page_vm
             .vm_mut()
             .screenshot_layout_snapshot(moli_layout::PaintViewport::new(220, 190, 1.0))?
             .expect("mutated inline SVG fixture must retain a layout root");
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                "getComputedStyle(document.getElementById('feishu-time')).width",
+            )?,
+            "32px",
+            "removing author CSS must reveal the presentation attribute in the next layout",
+        );
         assert_eq!(second.svg_images.len(), 3);
         assert!(second.fragments.iter().any(|fragment| {
             matches!(
@@ -2569,6 +3263,461 @@ document.body.innerHTML = `<div class=row><div class=item id=ask><i class=icon><
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn br_client_rects_use_forced_break_fragments_in_all_writing_modes() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        loader.set_optional_resource_fetch_mask(
+            crate::protocol_types::OptionalResourceFetchMask::FONT,
+        );
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/br-client-rects.html")?,
+        );
+        let encoded_font = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../moli-layout/tests/fixtures/moli-ahem.woff2"
+        ));
+        let encoded = base64::engine::general_purpose::STANDARD.encode(encoded_font);
+        page_vm.vm_mut().eval(&format!(
+            r#"
+document.head.innerHTML = `<style>
+@font-face {{ font-family:MoliAhem; src:url(data:font/woff2;base64,{encoded}) format('woff2') }}
+@font-face {{ font-family:"Times New Roman"; src:url(data:font/woff2;base64,{encoded}) format('woff2') }}
+html,body {{ margin:0 }}
+.case {{ position:absolute; left:0; width:200px; height:100px; font:20px MoliAhem }}
+.strut-case {{ position:absolute; left:300px; width:200px; font:20px MoliAhem }}
+</style>`;
+document.body.innerHTML = `
+<div id=htb-ltr class=case style="top:0;writing-mode:horizontal-tb;direction:ltr"><br></div>
+<div id=htb-rtl class=case style="top:100px;writing-mode:horizontal-tb;direction:rtl"><br></div>
+<div id=vlr-ltr class=case style="top:200px;writing-mode:vertical-lr;direction:ltr"><br></div>
+<div id=vlr-rtl class=case style="top:300px;writing-mode:vertical-lr;direction:rtl"><br></div>
+<div id=vrl-ltr class=case style="top:400px;writing-mode:vertical-rl;direction:ltr"><br></div>
+<div id=vrl-rtl class=case style="top:500px;writing-mode:vertical-rl;direction:rtl"><br></div>
+<div id=htb-default class=case style="top:600px;font:16px serif"><br></div>
+<div id=br-after-large-text class=strut-case style="top:0"><span style="font-size:40px">A</span><br style="font-size:10px"></div>
+<div id=br-with-own-style class=strut-case style="top:100px"><br style="font-size:10px"></div>
+<div id=br-in-large-inline class=strut-case style="top:200px"><span style="font-size:40px"><br style="font-size:10px"></span></div>`;
+'installed'
+"#
+        ))?;
+        page_vm
+            .vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries([...document.querySelectorAll('.case,.strut-case')].map(parent=>{const outer=parent.getBoundingClientRect();const rects=parent.querySelector('br').getClientRects();return [parent.id,{count:rects.length,rect:[rects[0].x-outer.x,rects[0].y-outer.y,rects[0].width,rects[0].height]}]})))"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        for (id, expected) in [
+            ("htb-ltr", [0.0, 0.0, 0.0, 20.0]),
+            ("htb-rtl", [200.0, 0.0, 0.0, 20.0]),
+            ("vlr-ltr", [0.0, 0.0, 20.0, 0.0]),
+            ("vlr-rtl", [0.0, 100.0, 20.0, 0.0]),
+            ("vrl-ltr", [180.0, 0.0, 20.0, 0.0]),
+            ("vrl-rtl", [180.0, 100.0, 20.0, 0.0]),
+            ("htb-default", [0.0, 0.0, 0.0, 16.0]),
+            ("br-after-large-text", [24.0, 16.0, 0.0, 20.0]),
+            ("br-with-own-style", [0.0, 0.0, 0.0, 20.0]),
+            ("br-in-large-inline", [0.0, 0.0, 0.0, 40.0]),
+        ] {
+            assert_eq!(
+                geometry[id]["count"].as_u64(),
+                Some(1),
+                "Chromium exposes exactly one forced-break fragment for {id}: {geometry}"
+            );
+            let actual = geometry[id]["rect"]
+                .as_array()
+                .unwrap_or_else(|| panic!("missing geometry for {id}: {geometry}"));
+            for (index, expected) in expected.into_iter().enumerate() {
+                let actual = actual[index].as_f64().expect("numeric geometry") as f32;
+                assert!(
+                    (actual - expected).abs() <= 0.05,
+                    "{id}[{index}]: expected Chromium geometry {expected}, got {actual}; geometry={geometry}"
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("BR client-rect fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn inline_offset_metrics_union_fragments_before_empty_trailing_space() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        loader.set_optional_resource_fetch_mask(
+            crate::protocol_types::OptionalResourceFetchMask::FONT,
+        );
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/inline-offset-fragments.html")?,
+        );
+        let encoded_font = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../moli-layout/tests/fixtures/moli-ahem.woff2"
+        ));
+        let encoded = base64::engine::general_purpose::STANDARD.encode(encoded_font);
+        page_vm.vm_mut().eval(&format!(
+            r#"
+document.head.innerHTML = `<style>
+@font-face {{ font-family:MoliAhem; src:url(data:font/woff2;base64,{encoded}) format('woff2') }}
+html,body {{ margin:0 }}
+.container {{ position:relative; width:80px; height:70px; padding:10px; font:10px/10px MoliAhem }}
+</style>`;
+document.body.innerHTML = `
+<div class=container style="writing-mode:horizontal-tb"><br><span>ref</span><span class=target> </span></div>
+<div class=container style="writing-mode:vertical-lr"><br><span>ref</span><span class=target> </span></div>
+<div class=container style="writing-mode:vertical-rl"><br><span>ref</span><span class=target> </span></div>`;
+'installed'
+"#
+        ))?;
+        page_vm
+            .vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify([...document.querySelectorAll('.target')].map((target,index)=>{const reference=target.previousSibling;return {index,reference:[reference.offsetLeft,reference.offsetTop,reference.offsetWidth,reference.offsetHeight],target:[target.offsetLeft,target.offsetTop]}}))"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        let cases = geometry
+            .as_array()
+            .unwrap_or_else(|| panic!("missing inline offset cases: {geometry}"));
+        assert_eq!(cases.len(), 3, "all writing modes must be measured");
+        for case in cases {
+            let index = case["index"].as_u64().expect("case index") as usize;
+            let reference = case["reference"]
+                .as_array()
+                .unwrap_or_else(|| panic!("missing reference metrics: {geometry}"));
+            let target = case["target"]
+                .as_array()
+                .unwrap_or_else(|| panic!("missing target metrics: {geometry}"));
+            let number = |values: &[serde_json::Value], axis: usize| {
+                values[axis].as_f64().expect("numeric offset geometry")
+            };
+            if index == 0 {
+                assert!(number(reference, 2) > 0.0, "horizontal inline width: {geometry}");
+                assert_eq!(
+                    number(target, 0),
+                    number(reference, 0) + number(reference, 2),
+                    "the empty horizontal inline starts after the reference fragment: {geometry}"
+                );
+                assert_eq!(number(target, 1), number(reference, 1));
+            } else {
+                assert!(number(reference, 3) > 0.0, "vertical inline height: {geometry}");
+                assert_eq!(number(target, 0), number(reference, 0));
+                assert_eq!(
+                    number(target, 1),
+                    number(reference, 1) + number(reference, 3),
+                    "the empty vertical inline starts after the reference fragment: {geometry}"
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("inline offset fragment fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn block_in_inline_retains_structural_offset_and_containing_ancestors() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/block-in-inline-ancestry.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;font-size:0}
+#parent{position:relative}
+.probe{display:inline-block;width:100px;height:1px}
+#block{height:20px}
+#absolute{position:absolute;width:100%;height:10px}
+</style>`;
+document.body.innerHTML = `<span id=parent><span class=probe></span><div id=block><div id=absolute></div></div><span class=probe></span></span>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(200, 100, 1.0))?
+            .expect("block-in-inline fixture must retain a layout root");
+
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                r#"[
+document.getElementById('block').offsetParent === document.getElementById('parent'),
+document.getElementById('absolute').offsetParent === document.getElementById('parent'),
+document.getElementById('absolute').offsetWidth,
+document.querySelector('.probe').offsetWidth
+].join('|')"#,
+            )?,
+            "true|true|100|100",
+            "formatting promotion must preserve LayoutObject ancestry for CSSOM and abspos sizing",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("block-in-inline structural ancestry fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn elements_from_point_filters_html_text_hits_from_the_penetrating_list() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/elements-from-point-negative-margin.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = '<style>html,body{margin:0}</style>';
+document.body.innerHTML = `<div id=outer style="background:yellow">
+  <div id=inner style="width:100px;height:100px;margin-bottom:-100px;background:lime"></div>
+  Hello
+</div>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(200, 120, 1.0))?
+            .expect("negative-margin hit-test fixture must retain a layout root");
+
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                r#"const rect = document.getElementById('outer').getBoundingClientRect();
+const x = rect.left + 1;
+const y = rect.top + 1;
+[
+  document.elementFromPoint(x, y)?.id,
+  document.elementsFromPoint(x, y).map(element => element.id || element.localName).join(',')
+].join('|')"#,
+            )?,
+            "outer|inner,outer,body,html",
+            "single and penetrating hit tests must apply their distinct text-node policies",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("negative-margin elementsFromPoint fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn collapsed_ranges_skip_forced_break_fragments_but_keep_soft_wrap_affinity() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        loader.set_optional_resource_fetch_mask(
+            crate::protocol_types::OptionalResourceFetchMask::FONT,
+        );
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/collapsed-range-line-break.html")?,
+        );
+        let encoded_font = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../moli-layout/tests/fixtures/moli-ahem.woff2"
+        ));
+        let encoded = base64::engine::general_purpose::STANDARD.encode(encoded_font);
+        page_vm.vm_mut().eval(&format!(
+            r#"
+document.head.innerHTML = `<style>
+@font-face {{ font-family:MoliAhem; src:url(data:font/woff2;base64,{encoded}) format('woff2') }}
+html,body {{ margin:0 }}
+.line {{ font:10px/10px MoliAhem }}
+#soft {{ width:18px; word-break:break-all }}
+</style>`;
+document.body.innerHTML = `
+<div id=ltr class=line style="white-space:pre;width:100px">123456
+789012</div>
+<div id=rtl class=line style="white-space:pre;width:100px;direction:rtl">123456
+789012</div>
+<div id=vrl class=line style="white-space:pre;width:100px;height:100px;writing-mode:vertical-rl">123456
+789012</div>
+<div id=soft class=line>ABCDEF</div>`;
+'installed'
+"#
+        ))?;
+        page_vm
+            .vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify((()=>{const caret=(id,offset)=>{const element=document.getElementById(id);const text=element.firstChild;const range=document.createRange();range.setStart(text,offset);range.setEnd(text,offset);const rect=range.getBoundingClientRect();const parent=element.getBoundingClientRect();return [rect.x-parent.x,rect.y-parent.y,rect.width,rect.height,range.getClientRects().length]};const soft=document.getElementById('soft');const range=document.createRange();range.setStart(soft.firstChild,3);range.setEnd(soft.firstChild,3);const parent=soft.getBoundingClientRect();return {ltr:[caret('ltr',0),caret('ltr',6),caret('ltr',7)],rtl:[caret('rtl',6),caret('rtl',7)],vrl:[caret('vrl',6),caret('vrl',7)],soft:[...range.getClientRects()].map(rect=>[rect.x-parent.x,rect.y-parent.y,rect.width,rect.height])}})())"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        for (case, expected) in [
+            (
+                "ltr",
+                vec![
+                    [0.0, 0.0, 0.0, 10.0],
+                    [36.0, 0.0, 0.0, 10.0],
+                    [0.0, 10.0, 0.0, 10.0],
+                ],
+            ),
+            (
+                "rtl",
+                vec![[100.0, 0.0, 0.0, 10.0], [64.0, 10.0, 0.0, 10.0]],
+            ),
+            (
+                "vrl",
+                vec![[90.0, 36.0, 10.0, 0.0], [80.0, 0.0, 10.0, 0.0]],
+            ),
+        ] {
+            let actual = geometry[case]
+                .as_array()
+                .unwrap_or_else(|| panic!("missing {case} geometry: {geometry}"));
+            assert_eq!(actual.len(), expected.len(), "{case}: {geometry}");
+            for (offset, expected) in actual.iter().zip(expected) {
+                assert_eq!(
+                    offset[4].as_u64(),
+                    Some(1),
+                    "forced-break boundary must expose one caret quad: {case}: {geometry}"
+                );
+                for (axis, expected) in expected.into_iter().enumerate() {
+                    let actual = offset[axis].as_f64().expect("numeric caret geometry") as f32;
+                    assert!(
+                        (actual - expected).abs() <= 0.05,
+                        "{case}[{axis}]: expected Chromium geometry {expected}, got {actual}; geometry={geometry}"
+                    );
+                }
+            }
+        }
+        let soft = geometry["soft"]
+            .as_array()
+            .unwrap_or_else(|| panic!("missing soft-wrap geometry: {geometry}"));
+        assert_eq!(
+            soft.len(),
+            2,
+            "an ordinary soft-wrap boundary retains upstream and downstream caret affinity: {geometry}"
+        );
+        for (rect, expected) in soft.iter().zip([[18.0, 0.0, 0.0, 10.0], [0.0, 10.0, 0.0, 10.0]]) {
+            for (axis, expected) in expected.into_iter().enumerate() {
+                let actual = rect[axis].as_f64().expect("numeric soft-wrap geometry") as f32;
+                assert!(
+                    (actual - expected).abs() <= 0.05,
+                    "soft[{axis}]: expected Chromium geometry {expected}, got {actual}; geometry={geometry}"
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("collapsed Range line-break fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn range_client_rects_snap_surrogate_interior_offsets_to_shaped_source_spans() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        loader.set_optional_resource_fetch_mask(
+            crate::protocol_types::OptionalResourceFetchMask::FONT,
+        );
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/range-surrogate-indexing.html")?,
+        );
+        let encoded_font = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../moli-layout/tests/fixtures/moli-hebrew-emoji.ttf"
+        ));
+        let encoded = base64::engine::general_purpose::STANDARD.encode(encoded_font);
+        page_vm.vm_mut().eval(&format!(
+            r#"
+document.head.innerHTML = `<style>
+@font-face {{ font-family:MoliEmoji; src:url(data:font/ttf;base64,{encoded}) format('truetype') }}
+html,body {{ margin:0 }}
+body {{ font:20px/20px MoliEmoji }}
+</style>`;
+document.body.innerHTML = `<div id=one>🌠a🌠</div><span id=left>🌠a</span><span id=right>🌠</span>`;
+'installed'
+"#
+        ))?;
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(240, 100, 1.0))?
+            .ok_or_else(|| anyhow::anyhow!("surrogate fixture lost its layout root"))?;
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify((()=>{const widths=(startNode,start,endNode,end)=>{const range=document.createRange();range.setStart(startNode,start);range.setEnd(endNode,end);return [...range.getClientRects()].map(rect=>rect.width)};const one=document.getElementById('one').firstChild;const left=document.getElementById('left').firstChild;const right=document.getElementById('right').firstChild;return {one:[[0,5],[1,5],[0,4],[1,4],[0,2],[1,2],[1,1],[2,2],[3,3],[3,5],[3,4],[4,4]].map(([start,end])=>widths(one,start,one,end)),cross:[[0,2],[1,2],[0,1],[1,1]].map(([start,end])=>widths(left,start,right,end))}})())"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        let one = geometry["one"]
+            .as_array()
+            .unwrap_or_else(|| panic!("missing single-node Range geometry: {geometry}"));
+        let width = |case: usize| {
+            one[case][0]
+                .as_f64()
+                .unwrap_or_else(|| panic!("missing width for single-node case {case}: {geometry}"))
+        };
+        for case in 1..=3 {
+            assert!(
+                (width(case) - width(0)).abs() <= 0.001,
+                "an interior surrogate endpoint must retain the complete Range width: case={case}; geometry={geometry}"
+            );
+        }
+        for case in [5, 6] {
+            assert!(
+                (width(case) - width(4)).abs() <= 0.001,
+                "the first supplementary scalar remains one shaped source span: case={case}; geometry={geometry}"
+            );
+        }
+        for case in [10, 11] {
+            assert!(
+                (width(case) - width(9)).abs() <= 0.001,
+                "the second supplementary scalar remains one shaped source span: case={case}; geometry={geometry}"
+            );
+        }
+        assert!(
+            width(7).abs() <= 0.001 && width(8).abs() <= 0.001,
+            "valid scalar boundaries remain collapsed carets: {geometry}"
+        );
+
+        let cross = geometry["cross"]
+            .as_array()
+            .unwrap_or_else(|| panic!("missing cross-node Range geometry: {geometry}"));
+        let cross_width = |case: usize, rect: usize| {
+            cross[case][rect].as_f64().unwrap_or_else(|| {
+                panic!("missing width for cross-node case {case}/{rect}: {geometry}")
+            })
+        };
+        for (case, widths) in cross.iter().enumerate().skip(1) {
+            assert_eq!(
+                widths.as_array().map(Vec::len),
+                Some(2),
+                "each text container keeps its own CSSOM rect: case={case}; geometry={geometry}"
+            );
+            for rect in 0..2 {
+                assert!(
+                    (cross_width(case, rect) - cross_width(0, rect)).abs() <= 0.001,
+                    "cross-node surrogate endpoints must preserve both shaped spans: case={case}/{rect}; geometry={geometry}"
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("surrogate Range fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn stylesheet_lifecycle_registers_only_the_current_documents_data_web_fonts() {
     run_page_vm_async_test(async move {
         let loader =
@@ -2698,6 +3847,190 @@ document.close();
     })
     .await
     .expect("document-owned data web-font layout test should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn font_face_set_ready_waits_for_the_exact_font_cycle_and_its_layout() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        loader.set_optional_resource_fetch_mask(
+            crate::protocol_types::OptionalResourceFetchMask::FONT,
+        );
+        let document_url = Url::parse("https://example.com/font-ready-layout.html")?;
+        let (mut page_vm, _resource_source, _owner_wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        let encoded_font = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../moli-layout/tests/fixtures/moli-ahem.woff2"
+        ));
+        let encoded = base64::engine::general_purpose::STANDARD.encode(encoded_font);
+
+        let initial = page_vm.vm_mut().eval(&format!(
+            r#"
+globalThis.__fontReadyBefore = document.fonts.ready;
+document.head.innerHTML = `<style>
+@font-face {{ font-family:MoliReadyAhem; src:url(data:font/woff2;base64,{encoded}) format('woff2') }}
+div {{ font:10px/1 MoliReadyAhem }}
+.inline-block {{ display:inline-block; height:100px }}
+</style>`;
+document.body.innerHTML = `<div><span id=empty></span><span class=inline-block></span></div>`;
+globalThis.__fontReadyDuring = document.fonts.ready;
+globalThis.__fontReadySettled = false;
+globalThis.__fontReadyDuring.then(value => {{
+  globalThis.__fontReadySettled = value === document.fonts;
+}});
+JSON.stringify({{
+  changed: __fontReadyBefore !== __fontReadyDuring,
+  stable: __fontReadyDuring === document.fonts.ready,
+  status: document.fonts.status,
+  settled: __fontReadySettled
+}})
+"#,
+        ))?;
+        assert_eq!(
+            initial,
+            r#"{"changed":true,"stable":true,"status":"loading","settled":false}"#,
+            "the ready getter must reserve the loading cycle before task-boundary admission"
+        );
+
+        page_vm
+            .vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+        assert_eq!(
+            page_vm.vm_mut().eval("String(__fontReadySettled)")?,
+            "false",
+            "a data-font terminal alone must not resolve ready before layout"
+        );
+        assert_eq!(
+            page_vm.vm_mut().document_web_font_counts_for_test(),
+            (1, 1, 1)
+        );
+
+        page_vm.vm_mut().eval(&format!(
+            r#"
+const lateStyle = document.createElement('style');
+lateStyle.textContent = `@font-face {{
+  font-family:MoliLateAhem;
+  src:url(data:font/woff2;base64,{encoded}) format('woff2');
+}}`;
+document.head.append(lateStyle);
+'late-face-installed'
+"#,
+        ))?;
+
+        let claimed = page_vm
+            .claim_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::RenderingUpdate)
+            .expect("font completion should publish one exact rendering update");
+        let (_, selected_kind) = claimed
+            .rendering_update_owner_and_kind()
+            .expect("font readiness must remain on the rendering task source");
+        assert_eq!(
+            selected_kind,
+            RendererPageRenderingUpdateTaskKind::FontFaceSetReady
+        );
+        page_vm
+            .run_claimed_selected_page_task_for_test(claimed, &loader)
+            .await?;
+        assert_eq!(
+            page_vm.vm_mut().document_web_font_counts_for_test(),
+            (2, 2, 2),
+            "the ready task must reconcile a font face added after the task was queued"
+        );
+
+        let settled = page_vm.vm_mut().eval(
+            r#"
+const rect = empty.getBoundingClientRect();
+const containing = empty.parentElement.getBoundingClientRect();
+JSON.stringify({
+  settled: __fontReadySettled,
+  stable: __fontReadyDuring === document.fonts.ready,
+  status: document.fonts.status,
+  y: rect.y - containing.y,
+  height: rect.height
+})
+"#,
+        )?;
+        assert_eq!(
+            settled,
+            r#"{"settled":true,"stable":true,"status":"loaded","y":92,"height":10}"#,
+            "ready must resolve only after layout publishes the loaded font's geometry"
+        );
+        assert_eq!(
+            page_vm
+                .vm()
+                .layout_pass_observability_for_test()
+                .3
+                .expect("font-ready layout metrics")
+                .reason,
+            moli_layout::LayoutFlushReason::FontLoading
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("FontFaceSet ready layout-barrier test should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_layout_completes_an_unobserved_font_cycle() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        loader.set_optional_resource_fetch_mask(
+            crate::protocol_types::OptionalResourceFetchMask::FONT,
+        );
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/font-screenshot-layout.html")?,
+        );
+        let encoded_font = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../moli-layout/tests/fixtures/moli-ahem.woff2"
+        ));
+        let encoded = base64::engine::general_purpose::STANDARD.encode(encoded_font);
+
+        page_vm.vm_mut().eval(&format!(
+            r#"
+void document.fonts;
+document.head.innerHTML = `<style>
+@font-face {{ font-family:MoliScreenshotAhem; src:url(data:font/woff2;base64,{encoded}) format('woff2') }}
+div {{ font:10px/1 MoliScreenshotAhem }}
+.inline-block {{ display:inline-block; height:100px }}
+</style>`;
+document.body.innerHTML = `<div><span id=empty></span><span class=inline-block></span></div>`;
+'installed'
+"#,
+        ))?;
+        page_vm
+            .vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+        assert_eq!(
+            page_vm.vm_mut().eval("document.fonts.status")?,
+            "loading",
+            "font completion alone must leave the cycle pending until a layout consumes it"
+        );
+
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(320, 200, 1.0))?
+            .expect("the explicit screenshot should publish loaded-font geometry");
+        let settled = page_vm.vm_mut().eval(
+            r#"
+const rect = empty.getBoundingClientRect();
+const containing = empty.parentElement.getBoundingClientRect();
+JSON.stringify({ status: document.fonts.status, y: rect.y - containing.y, height: rect.height })
+"#,
+        )?;
+        assert_eq!(
+            settled,
+            r#"{"status":"loaded","y":92,"height":10}"#,
+            "a normal explicit fresh-layout consumer should settle an unobserved font cycle"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("screenshot font-cycle layout test should run");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -3219,6 +4552,72 @@ html,body{{margin:0;padding:0}}
     })
     .await
     .expect("button UA/layout fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn native_button_auto_inline_size_uses_the_parent_formatting_context() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        loader.set_optional_resource_fetch_mask(
+            crate::protocol_types::OptionalResourceFetchMask::FONT,
+        );
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/button-auto-inline-size.html")?,
+        );
+        let font = base64::engine::general_purpose::STANDARD.encode(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../moli-layout/tests/fixtures/moli-ahem.ttf"
+        )));
+        let css = format!(
+            r#"
+@font-face{{font-family:MoliAhem;src:url(data:font/ttf;base64,{font}) format('truetype')}}
+html,body{{margin:0;padding:0}}
+.control{{margin:0;padding:0;border:0;font-family:MoliAhem;font-size:20px;line-height:20px;font-weight:400}}
+.wide{{width:300px}}
+.column{{display:flex;flex-direction:column;width:100px}}
+"#
+        );
+        page_vm.vm_mut().eval(&format!(
+            "document.head.innerHTML='<style id=fixture></style>';document.getElementById('fixture').textContent={};document.body.innerHTML={};'installed'",
+            serde_json::to_string(&css)?,
+            serde_json::to_string(
+                "<button id=inline class=control>BBBB</button><div class=wide><button id=block class=control style='display:block'>BBBB</button></div><div class=column><button id=flex class=control>BBBB</button></div>"
+            )?,
+        ))?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(360, 100, 1.0))?
+            .ok_or_else(|| anyhow::anyhow!("button auto-inline fixture lost its layout root"))?;
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries(['inline','block','flex'].map(id=>{const e=document.getElementById(id),r=e.getBoundingClientRect();return [id,{width:r.width,height:r.height,display:getComputedStyle(e).display}]})))"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        let width = |id: &str| {
+            geometry[id]["width"]
+                .as_f64()
+                .unwrap_or_else(|| panic!("missing numeric width for {id}: {geometry}"))
+                as f32
+        };
+        assert_eq!(geometry["inline"]["display"], "inline-block");
+        assert_eq!(geometry["block"]["display"], "block");
+        assert_eq!(geometry["flex"]["display"], "block");
+        assert!(
+            (width("block") - width("inline")).abs() <= 0.05 && width("block") < 300.0,
+            "a block-context button must keep its native intrinsic inline size: {geometry}"
+        );
+        assert!(
+            (width("flex") - 100.0).abs() <= 0.05,
+            "the block-parent exception must not disable flex cross-axis stretch: {geometry}"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("button auto-inline fixture should run");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -4414,4 +5813,264 @@ scrollTo(0, 15);
     })
     .await
     .expect("rendering-update post-checkpoint child synchronization test should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_clamps_a_content_sized_flex_container_before_percentage_minimums() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/flex-percentage-minimum.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0}
+#container{display:flex;flex-direction:column;max-height:0;overflow:hidden;line-height:13px}
+#percentage-minimum{min-height:100%}
+#inflexible{flex:none}
+</style>`;
+document.body.innerHTML = `
+<div id=container>
+  <div id=percentage-minimum>This is a flex item.</div>
+  <div id=inflexible>Inflexible</div>
+</div>`;
+"installed"
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(200, 100, 1.0))?
+            .expect("flex percentage-minimum fixture should retain a root");
+
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                r#"["container", "percentage-minimum", "inflexible"]
+  .map(id => document.getElementById(id).getBoundingClientRect().height)
+  .join("|")"#,
+            )?,
+            "0|0|13",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("flex percentage-minimum fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_distinguishes_zero_length_and_percentage_flex_bases() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/flex-zero-basis.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0}
+.flexbox{display:flex;flex-direction:column}
+.item{font:14px/1 sans-serif;min-width:0;min-height:0}
+.vertical{writing-mode:vertical-rl}
+</style>`;
+document.body.innerHTML = `
+<div id=h-half-percent class=flexbox><div class=item style="flex:0.5 1 0%">item</div></div>
+<div id=h-half-length class=flexbox><div class=item style="flex:0.5 1 0px">item</div></div>
+<div id=h-one-percent class=flexbox><div class=item style="flex:1 1 0%">item</div></div>
+<div id=h-one-length class=flexbox><div class=item style="flex:1 1 0px">item</div></div>
+<div id=v-half-percent class="flexbox vertical"><div class=item style="flex:0.5 1 0%">item</div></div>
+<div id=v-half-length class="flexbox vertical"><div class=item style="flex:0.5 1 0px">item</div></div>
+<div id=v-one-percent class="flexbox vertical"><div class=item style="flex:1 1 0%">item</div></div>
+<div id=v-one-length class="flexbox vertical"><div class=item style="flex:1 1 0px">item</div></div>`;
+"installed"
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0))?
+            .expect("zero flex-basis fixture should retain a root");
+
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                r#"[
+  ["h-half-percent", "height"],
+  ["h-half-length", "height"],
+  ["h-one-percent", "height"],
+  ["h-one-length", "height"],
+  ["v-half-percent", "width"],
+  ["v-half-length", "width"],
+  ["v-one-percent", "width"],
+  ["v-one-length", "width"],
+].flatMap(([id, axis]) => {
+  const container = document.getElementById(id);
+  return [container, container.firstElementChild]
+    .map(element => element.getBoundingClientRect()[axis]);
+}).join("|")"#,
+            )?,
+            "14|14|0|0|14|14|0|0|14|14|0|0|14|14|0|0",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("zero flex-basis fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_uses_wrapped_column_intrinsic_block_size_for_flex_auto_minimum() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/flex-wrapped-column-auto-minimum.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0}
+#outer{display:flex;flex-direction:column}
+#wrapped{display:flex;flex-direction:column;flex-wrap:wrap;flex:1 0 0px;height:500px}
+.item{flex:1 0 0px;width:100px;background:green}
+.content{height:50px}
+</style>`;
+document.body.innerHTML = `
+<div id=outer>
+  <div id=wrapped>
+    <div id=first class=item><div class=content></div></div>
+    <div id=second class=item><div class=content></div></div>
+  </div>
+</div>`;
+"installed"
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0))?
+            .expect("wrapped column fixture should retain a root");
+
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                r#"["outer", "wrapped", "first", "second"]
+  .flatMap(id => {
+    const rect = document.getElementById(id).getBoundingClientRect();
+    return [rect.x, rect.y, rect.width, rect.height];
+  }).join("|")"#,
+            )?,
+            "0|0|800|100|0|0|800|100|0|0|100|50|0|50|100|50",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("wrapped column auto-minimum fixture should run");
+}
+
+/// Regression for WPT css/css-flexbox/flexbox-min-height-auto-002a.html.
+///
+/// A replaced item's definite inline size controls its intrinsic contribution
+/// to a shrink-to-fit column flex container. Its larger authored block size
+/// must not transfer back through the intrinsic ratio and widen the container.
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_uses_replaced_width_for_a_column_flex_intrinsic_contribution() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/flex-replaced-inline-contribution.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0}
+#container{display:flex;flex-direction:column;float:left;height:1px}
+#item{box-sizing:content-box;width:30px;height:100px;border:2px solid purple}
+</style>`;
+document.body.innerHTML = `<div id=container><canvas id=item width=16 height=16></canvas></div>`;
+"installed"
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(200, 100, 1.0))?
+            .expect("replaced intrinsic-contribution fixture should retain a root");
+
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                r#"["container", "item"].flatMap(id => {
+  const rect = document.getElementById(id).getBoundingClientRect();
+  return [rect.x, rect.y, rect.width, rect.height];
+}).join("|")"#,
+            )?,
+            "0|0|34|1|0|0|34|34",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("replaced intrinsic-contribution fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_preserves_intrinsic_flex_basis_sizing_functions() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/flex-basis-intrinsics.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0}
+.inline-block{float:left;width:50px;height:50px}
+.flexbox{display:flex;width:75px;height:75px;margin-bottom:50px}
+.column{flex-flow:column}
+.item{flex-shrink:0;min-width:0;min-height:0}
+.orthogonal{writing-mode:vertical-rl}
+</style>`;
+document.body.innerHTML = `
+<div class=flexbox><div id=row-min class=item style="flex-basis:min-content"><i class=inline-block></i><i class=inline-block></i></div></div>
+<div class=flexbox><div id=row-max class=item style="flex-basis:max-content;width:300px"><i class=inline-block></i><i class=inline-block></i></div></div>
+<div class=flexbox><div id=row-fit class=item style="flex-basis:fit-content"><i class=inline-block></i><i class=inline-block></i></div></div>
+<div class=flexbox><div id=orthogonal-row-max class="item orthogonal" style="flex-basis:max-content;width:300px"><i class=inline-block></i><i class=inline-block></i></div></div>
+<div class="flexbox column"><div id=orthogonal-column-min class="item orthogonal" style="flex-basis:min-content"><i class=inline-block></i><i class=inline-block></i></div></div>
+<div class="flexbox column"><div id=orthogonal-column-fit class="item orthogonal" style="flex-basis:fit-content"><i class=inline-block></i><i class=inline-block></i></div></div>`;
+"installed"
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 800, 1.0))?
+            .expect("intrinsic flex-basis fixture should retain a root");
+
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                r#"[
+  document.getElementById("row-min").getBoundingClientRect().width,
+  document.getElementById("row-max").getBoundingClientRect().width,
+  document.getElementById("row-fit").getBoundingClientRect().width,
+  document.getElementById("orthogonal-row-max").getBoundingClientRect().width,
+  document.getElementById("orthogonal-column-min").getBoundingClientRect().height,
+  document.getElementById("orthogonal-column-fit").getBoundingClientRect().height,
+].join("|")"#,
+            )?,
+            "50|100|75|100|50|75",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("intrinsic flex-basis fixture should run");
 }

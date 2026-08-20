@@ -51,6 +51,8 @@ mod styles;
 mod toggle_event;
 mod trusted_types;
 
+pub(crate) use canvas::parse_html_non_negative_integer;
+
 pub(crate) use script_execution::{
     inline_script_source_for_execution, prepare_inline_classic_frame_script_job_for_execution,
 };
@@ -387,8 +389,9 @@ pub(crate) fn install_html_select_element_prototype_bindings(
 pub use geometry::ClientRect;
 pub(crate) use geometry::{
     apply_scroll_observable_effects, observable_bounding_client_rect, observable_caret_position,
-    observable_deep_hit_test, observable_event_offset, observable_geometry_batch,
-    observable_hit_test_all, observable_input_hit_test, observable_scroll_adjusted_client_rect,
+    observable_deep_hit_test, observable_document_scroll_metrics, observable_event_offset,
+    observable_geometry_batch, observable_hit_test, observable_hit_test_all,
+    observable_input_hit_test, observable_scroll_adjusted_client_rect,
     observable_sources_with_fragments, perform_wheel_scroll_default_action,
     queue_scroll_observable_effects, scroll_node_into_view_at_start,
 };
@@ -497,18 +500,21 @@ use html_elements::{
     marquee_scroll_delay_getter_function, marquee_scroll_delay_setter_function,
 };
 pub(crate) use images::{
-    apply_authorized_image_load_event_in_context, apply_image_attribute_mutation_plan,
-    image_intrinsic_dimensions, image_selected_request_key, image_selected_source,
-    plan_image_attribute_mutation, queue_image_load_event_after_document_adoption,
-    queue_image_load_event_for_loading_change, queue_image_load_event_if_needed,
-    queue_image_load_event_if_needed_with_initiator, queue_image_load_network_terminal_followup,
-    queue_revealed_lazy_image_loads, reset_image_load_dispatch,
+    ImageResourceElementKind, apply_authorized_image_load_event_in_context,
+    apply_image_attribute_mutation_plan, embedded_element_uses_image_layout,
+    image_intrinsic_dimensions, image_resource_element_kind, image_selected_request_key,
+    image_selected_source, plan_image_attribute_mutation,
+    queue_image_load_event_after_document_adoption, queue_image_load_event_for_loading_change,
+    queue_image_load_event_if_needed, queue_image_load_event_if_needed_with_initiator,
+    queue_image_load_network_terminal_followup, queue_revealed_lazy_image_loads,
+    reset_image_load_dispatch,
 };
 pub(in crate::native_bridge) use images::{
     image_complete_getter_function, image_current_src_getter_function, image_decode_callback,
     image_height_getter_function, image_height_setter_function, image_is_map_getter_function,
     image_is_map_setter_function, image_natural_height_getter_function,
     image_natural_width_getter_function, image_width_getter_function, image_width_setter_function,
+    image_x_getter_function, image_y_getter_function,
 };
 pub(in crate::native_bridge) use media::queue_text_track_load_if_source;
 pub(crate) use media::{
@@ -3588,6 +3594,10 @@ struct HtmlImageElementUrlPrototypeDeclaration {
     natural_width: (),
     #[webapi(accessor_property = "naturalHeight", getter = image_natural_height_getter_function)]
     natural_height: (),
+    #[webapi(accessor_property, getter = image_x_getter_function)]
+    x: (),
+    #[webapi(accessor_property, getter = image_y_getter_function)]
+    y: (),
     #[webapi(
         accessor_property = "isMap",
         getter = image_is_map_getter_function,

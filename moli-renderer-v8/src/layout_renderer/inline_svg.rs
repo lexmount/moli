@@ -29,8 +29,10 @@ pub(super) fn replaced_metrics(element: &Element) -> ReplacedMetrics {
     ReplacedMetrics {
         intrinsic_width: metadata.intrinsic_width,
         intrinsic_height: metadata.intrinsic_height,
-        attribute_width: None,
-        attribute_height: None,
+        // The SVG category supplies the CSS 300x150 default natural size.
+        // `metadata.concrete_*` has already fitted that box to the intrinsic
+        // ratio and belongs to resource decoding/paint, not layout fallback.
+        default_object_size: None,
         intrinsic_ratio: metadata.intrinsic_ratio,
     }
 }

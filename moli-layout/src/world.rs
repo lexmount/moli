@@ -1,11 +1,11 @@
 use std::{collections::HashMap, fmt::Debug, hash::Hash, sync::Arc};
 
 use style::Atom;
-use taffy::{Cache, Layout, Point, Style};
+use taffy::{Cache, Dimension, Layout, LayoutEnvironment, LogicalStaticPosition, Size, Style};
 
 use crate::{
-    LayoutElementSemantics, LayoutError, LayoutPoint, LayoutPseudo, ReplacedMetrics,
-    ResolvedLayoutStyle, inline::InlineFormattingContext,
+    LayoutElementSemantics, LayoutError, LayoutGridGeometry, LayoutPoint, LayoutPseudo,
+    ResolvedLayoutStyle, inline::InlineFormattingContext, replaced::ReplacedContext,
 };
 
 /// Dense identifier scoped to exactly one [`LayoutWorld`].
@@ -56,6 +56,9 @@ pub enum LayoutBoxKind {
     FormControl,
     LineBreak,
     Replaced,
+    /// Content-bearing fallback layout object for a terminally unavailable
+    /// image that HTML asks the user agent to treat as a sized atomic object.
+    ImageFallback,
     AnonymousBlock,
     AnonymousFlexItem,
     AnonymousGridItem,
@@ -73,6 +76,27 @@ pub enum LayoutBoxKind {
 impl LayoutBoxKind {
     pub(crate) const fn is_text(self) -> bool {
         matches!(self, Self::Text)
+    }
+
+    /// Whether this box is one of CSS Display's internal table boxes.
+    ///
+    /// Table wrappers and captions are deliberately excluded: they are
+    /// ordinary sizing boxes for `aspect-ratio`, while row groups, rows,
+    /// columns, and cells are not in the property's applicability set.
+    pub(crate) const fn is_internal_table_box(self) -> bool {
+        matches!(
+            self,
+            Self::TableRowGroup
+                | Self::TableHeaderGroup
+                | Self::TableFooterGroup
+                | Self::TableColumnGroup
+                | Self::TableColumn
+                | Self::TableRow
+                | Self::TableCell
+                | Self::AnonymousTableRowGroup
+                | Self::AnonymousTableRow
+                | Self::AnonymousTableCell
+        )
     }
 
     pub(crate) const fn debug_name(self) -> &'static str {
@@ -100,6 +124,7 @@ impl LayoutBoxKind {
             Self::FormControl => "form-control",
             Self::LineBreak => "line-break",
             Self::Replaced => "replaced",
+            Self::ImageFallback => "image-fallback",
             Self::AnonymousBlock => "anonymous-block",
             Self::AnonymousFlexItem => "anonymous-flex-item",
             Self::AnonymousGridItem => "anonymous-grid-item",
@@ -152,21 +177,25 @@ pub enum LayoutCapabilityDiagnostic {
     ListMarkerStyleFallback,
     TextProjectionDeferred,
     PositionedStaticPositionDeferred,
-    IntrinsicSizingKeywordDeferred,
+    AnchorSizingDeferred,
     GridTemplateModeDeferred,
     GeneratedContentUnsupported,
 }
 
-/// Hypothetical position contributed by an out-of-flow placeholder in one IFC.
-///
-/// Coordinates are relative to the formatting-context owner's border box.
-/// The record exists only for the current layout pass and is consumed before
-/// Taffy's rounding traversal.
+/// Static-position candidate retained between its original formatting context
+/// and the numeric ancestor that supplies the actual containing block.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct InlineStaticPosition {
+pub(crate) struct OutOfFlowStaticPosition {
     pub(crate) owner: LayoutBoxId,
-    pub(crate) point: Point<f32>,
-    pub(crate) inline_level: bool,
+    pub(crate) position: LogicalStaticPosition,
+}
+
+/// Real positioned child exposed to its original formatting context while its
+/// numeric layout parent remains the actual containing block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct OutOfFlowCandidateChild {
+    pub(crate) child: LayoutBoxId,
+    pub(crate) insertion_index: usize,
 }
 
 impl LayoutCapabilityDiagnostic {
@@ -175,7 +204,7 @@ impl LayoutCapabilityDiagnostic {
             Self::ListMarkerStyleFallback => "list-marker-style-fallback",
             Self::TextProjectionDeferred => "text-projection-deferred",
             Self::PositionedStaticPositionDeferred => "positioned-static-position-deferred",
-            Self::IntrinsicSizingKeywordDeferred => "intrinsic-sizing-keyword-deferred",
+            Self::AnchorSizingDeferred => "anchor-sizing-deferred",
             Self::GridTemplateModeDeferred => "grid-template-mode-deferred",
             Self::GeneratedContentUnsupported => "generated-content-unsupported",
         }
@@ -194,6 +223,16 @@ pub struct LayoutBox<N> {
     pub(crate) anonymous_reason: Option<LayoutAnonymousReason>,
     pub(crate) capability_diagnostics: Vec<LayoutCapabilityDiagnostic>,
     pub(crate) kind: LayoutBoxKind,
+    /// Parent in the source-backed LayoutObject hierarchy, before anonymous
+    /// box normalization and block-in-inline promotion.
+    ///
+    /// Chromium keeps this ancestry on its LayoutObject tree while fragment
+    /// construction handles block-in-inline placement. Moli's normalized
+    /// `parent` tree is intentionally different, so containing-block and
+    /// CSSOM ancestry retain their own first-class relation here.
+    pub(crate) structural_parent: Option<LayoutBoxId>,
+    /// Parent in the normalized formatting tree, including anonymous wrappers
+    /// and block-in-inline promotion.
     pub(crate) parent: Option<LayoutBoxId>,
     pub(crate) children: Vec<LayoutBoxId>,
     /// Parent used by the numeric layout algorithm.
@@ -208,8 +247,11 @@ pub struct LayoutBox<N> {
     /// is contained by a flattened inline box. `layout_parent` remains a real
     /// numeric-tree node; this field retains the semantic containing block.
     pub(crate) positioned_containing_block: Option<LayoutBoxId>,
-    /// Static position emitted by the shared IFC's out-of-flow placeholder.
-    pub(crate) inline_static_position: Option<InlineStaticPosition>,
+    /// Static position emitted by the original formatting context.
+    pub(crate) out_of_flow_static_position: Option<OutOfFlowStaticPosition>,
+    /// Positioned children whose static position this formatting context owns
+    /// even though their numeric parent is an ancestor containing block.
+    pub(crate) out_of_flow_candidates: Vec<OutOfFlowCandidateChild>,
     pub(crate) style: ResolvedLayoutStyle,
     pub(crate) text: Option<Arc<str>>,
     pub(crate) text_selection: Option<crate::LayoutTextSelection>,
@@ -225,7 +267,17 @@ pub struct LayoutBox<N> {
     pub(crate) outside_list_marker: bool,
     /// Current source-owned scroll offset sampled at construction time.
     pub(crate) scroll_offset: LayoutPoint,
-    pub(crate) replaced_metrics: Option<ReplacedMetrics>,
+    /// Pass-local natural sizing retained once at box construction.
+    pub(crate) replaced_context: Option<ReplacedContext>,
+    /// Browser-supplied default intrinsic content-box size for a non-replaced
+    /// native layout object.
+    ///
+    /// Blink exposes the same seam through LayoutBox's
+    /// DefaultIntrinsicContentInlineSize/BlockSize hooks. It lets controls
+    /// retain real inner layout while intrinsic queries account for platform
+    /// content that is not represented by visible descendants (for example,
+    /// the widest option of a closed menu-list select).
+    pub(crate) default_intrinsic_content_size: Size<Option<f32>>,
     pub(crate) replaced_image: Option<crate::LayoutImageResource>,
     pub(crate) css_images: crate::source::LayoutCssImageResources,
     /// Winning collapsed-table edges owned by the table wrapper for this pass.
@@ -238,7 +290,24 @@ pub struct LayoutBox<N> {
     /// collapsed table. Their authored borders have already entered the table
     /// owner's conflict-resolution grid.
     pub(crate) collapsed_table_border_part: bool,
+    /// Used fragment state that suppresses this box independently of its
+    /// computed `visibility` (for example, a row or a cell wholly contained in
+    /// collapsed table tracks).
+    pub(crate) hidden_for_paint: bool,
+    /// Authored logical `min-inline-size` saved while the parent-facing Taffy
+    /// style projects the table's GRID_MIN as `min-content`.
+    ///
+    /// Blink treats a table's intrinsic grid minimum as an additional lower
+    /// bound after authored min/max constraints. Taffy's generic block model
+    /// has only one `min-size` slot, so the outer tree exposes `min-content`
+    /// there and the table formatter retains the authored value here.
+    pub(crate) table_authored_min_inline_size: Option<Dimension>,
     pub(crate) inline_formatting_context: bool,
+    /// Used Grid tracks produced by the numeric layout pass.
+    ///
+    /// This is browser-owned canonical geometry rather than a retained Taffy
+    /// object. It is frozen with the rest of the layout tree for CSSOM reads.
+    pub(crate) grid_geometry: Option<LayoutGridGeometry>,
     pub(crate) cache: Cache,
     pub(crate) unrounded_layout: Layout,
     pub(crate) final_layout: Layout,
@@ -253,6 +322,7 @@ pub struct LayoutBox<N> {
 pub(crate) struct ViewportLayoutState {
     pub(crate) children: Vec<LayoutBoxId>,
     pub(crate) style: Style<Atom>,
+    pub(crate) writing_mode: taffy::WritingMode,
     pub(crate) cache: Cache,
     pub(crate) unrounded_layout: Layout,
     pub(crate) final_layout: Layout,
@@ -263,6 +333,7 @@ impl Default for ViewportLayoutState {
         Self {
             children: Vec::new(),
             style: Style::default(),
+            writing_mode: taffy::WritingMode::HorizontalTb,
             cache: Cache::new(),
             unrounded_layout: Layout::with_order(0),
             final_layout: Layout::with_order(0),
@@ -313,6 +384,11 @@ impl<N> LayoutBox<N> {
         &self.children
     }
 
+    /// Returns the parent in the source-backed LayoutObject hierarchy.
+    pub fn structural_parent(&self) -> Option<LayoutBoxId> {
+        self.structural_parent
+    }
+
     pub fn style(&self) -> &ResolvedLayoutStyle {
         &self.style
     }
@@ -334,6 +410,30 @@ impl<N> LayoutBox<N> {
             .as_ref()
             .is_some_and(LayoutElementSemantics::is_replaced)
     }
+
+    pub(crate) const fn is_visible_for_paint(&self) -> bool {
+        self.style.is_visible() && !self.hidden_for_paint
+    }
+
+    /// Resolve the used ratio at the layout-node boundary, after both authored
+    /// style and natural replaced-element sizing are available.
+    pub(crate) fn resolved_aspect_ratio(&self) -> taffy::ResolvedAspectRatio {
+        // Blink drops a replaced element's natural ratio when any applicable
+        // size containment is active. An explicit authored ratio still wins,
+        // and `auto <ratio>` can still use its authored fallback.
+        let natural_ratio = (!self.applies_any_size_containment())
+            .then(|| {
+                self.replaced_context
+                    .and_then(|context| context.inherent_ratio())
+            })
+            .flatten();
+        let resolved = self.style.resolved_aspect_ratio(natural_ratio);
+        if self.kind.is_internal_table_box() {
+            resolved.disabled()
+        } else {
+            resolved
+        }
+    }
 }
 
 /// Entire short-lived sidecar used for one construction/layout demand.
@@ -346,21 +446,184 @@ where
     pub(crate) source_mapping: HashMap<N, LayoutBoxId>,
     pub(crate) display_contents_mapping: HashMap<N, Vec<LayoutBoxId>>,
     pub(crate) root: LayoutBoxId,
+    pub(crate) document_element: N,
+    pub(crate) root_is_document_element: bool,
+    pub(crate) document_body: Option<N>,
+    pub(crate) document_mode: crate::LayoutDocumentMode,
+    pub(crate) viewport_scroll_offset: crate::LayoutPoint,
     pub(crate) viewport_layout: ViewportLayoutState,
+    /// Document/view state shared by the active layout pass.
+    pub(crate) layout_environment: LayoutEnvironment,
 }
 
 impl<N> LayoutWorld<N>
 where
     N: Copy + Debug + Eq + Hash,
 {
-    pub(crate) fn new(root: LayoutBox<N>) -> Self {
+    pub(crate) fn new(
+        root: LayoutBox<N>,
+        document_element: N,
+        root_is_document_element: bool,
+        document_body: Option<N>,
+        document_mode: crate::LayoutDocumentMode,
+        viewport_scroll_offset: crate::LayoutPoint,
+    ) -> Self {
         Self {
             boxes: vec![root],
             source_mapping: HashMap::new(),
             display_contents_mapping: HashMap::new(),
             root: LayoutBoxId::from_index(0),
+            document_element,
+            root_is_document_element,
+            document_body,
+            document_mode,
+            viewport_scroll_offset,
             viewport_layout: ViewportLayoutState::default(),
+            layout_environment: LayoutEnvironment::NONE,
         }
+    }
+
+    pub(crate) fn is_document_element(&self, id: LayoutBoxId) -> bool {
+        id == self.root
+    }
+
+    pub(crate) fn is_document_body(&self, id: LayoutBoxId) -> bool {
+        self.document_body
+            .is_some_and(|body| self.boxes[id.index()].source == Some(body))
+    }
+
+    /// Resolve the writing direction propagated to the layout viewport.
+    ///
+    /// Blink's `StyleResolver::PropagateStyleToViewport()` selects the body
+    /// style when both the document element and body permit propagation, and
+    /// otherwise retains the document-element style. The viewport remains a
+    /// separate layout object; only its logical coordinate system is copied.
+    pub(crate) fn propagate_viewport_writing_direction(&mut self) -> taffy::WritingDirection {
+        let root_has_layout_object =
+            self.source_mapping.get(&self.document_element) == Some(&self.root);
+        if !self.root_is_document_element || !root_has_layout_object {
+            return taffy::WritingDirection::default();
+        }
+        let body = self
+            .document_body
+            .and_then(|source| self.source_mapping.get(&source))
+            .copied();
+        let uses_body = body.is_some_and(|body| {
+            !self.boxes[self.root.index()].applies_any_containment()
+                && !self.boxes[body.index()].applies_any_containment()
+        });
+        let style_source = body.filter(|_| uses_body).unwrap_or(self.root);
+        let writing_direction = self.boxes[style_source.index()].style.writing_direction();
+        if uses_body {
+            // Blink's HTMLHtmlElement::LayoutStyleForElement() gives the root
+            // LayoutObject a body-derived used writing direction without
+            // changing the root element's CSSOM computed style. LayoutWorld
+            // styles are pass-local, so this is the corresponding ownership
+            // boundary in Moli.
+            self.boxes[self.root.index()]
+                .style
+                .use_layout_writing_direction(writing_direction);
+            for layout_box in &mut self.boxes {
+                let is_direct_root_text =
+                    layout_box.kind.is_text() && layout_box.structural_parent == Some(self.root);
+                let is_root_owned_anonymous = layout_box.source.is_none()
+                    && layout_box.owner == Some(self.document_element)
+                    && layout_box.pseudo.is_none();
+                if is_direct_root_text || is_root_owned_anonymous {
+                    // Direct text consumes the root LayoutObject's used style;
+                    // element children and pseudo-elements continue to inherit
+                    // the root element's unmodified computed style.
+                    layout_box
+                        .style
+                        .use_layout_writing_direction(writing_direction);
+                }
+            }
+        }
+        writing_direction
+    }
+
+    /// Whether this box's overflow is propagated to the layout viewport.
+    ///
+    /// The root always propagates. In an HTML document the body also
+    /// propagates while the root's computed overflow remains visible. This is
+    /// the LayoutObject-level distinction Blink exposes through
+    /// `IsScrollContainer()`: computed overflow remains authored, but the box
+    /// no longer owns a local scrolling mechanism.
+    pub(crate) fn overflow_propagates_to_viewport(&self, id: LayoutBoxId) -> bool {
+        self.is_document_element(id)
+            || (self.is_document_body(id) && !self.boxes[self.root.index()].style.clips_overflow())
+    }
+
+    pub(crate) fn clips_overflow(&self, id: LayoutBoxId) -> bool {
+        !self.overflow_propagates_to_viewport(id) && self.boxes[id.index()].style.clips_overflow()
+    }
+
+    pub(crate) fn establishes_scroll_container(&self, id: LayoutBoxId) -> bool {
+        !self.overflow_propagates_to_viewport(id)
+            && self.boxes[id.index()].style.establishes_scroll_container()
+    }
+
+    /// The box whose overflow policy controls the layout viewport. This is a
+    /// first-class viewport relation rather than a local scroll-container
+    /// special case, matching Blink's `ViewportDefiningElement` split.
+    fn viewport_defining_box(&self) -> LayoutBoxId {
+        if !self.boxes[self.root.index()].style.clips_overflow()
+            && let Some(body) = self.document_body
+            && let Some(body) = self.source_mapping.get(&body).copied()
+            && self.overflow_propagates_to_viewport(body)
+        {
+            return body;
+        }
+        self.root
+    }
+
+    pub(crate) fn viewport_allows_user_scroll_x(&self) -> bool {
+        self.boxes[self.viewport_defining_box().index()]
+            .style
+            .allows_viewport_user_scroll_x()
+    }
+
+    pub(crate) fn viewport_allows_user_scroll_y(&self) -> bool {
+        self.boxes[self.viewport_defining_box().index()]
+            .style
+            .allows_viewport_user_scroll_y()
+    }
+
+    pub(crate) fn clips_descendant_paint(&self, id: LayoutBoxId) -> bool {
+        let layout_box = &self.boxes[id.index()];
+        self.clips_overflow(id)
+            || (layout_box.is_eligible_for_paint_or_layout_containment()
+                && layout_box.style.applies_paint_containment())
+    }
+
+    pub(crate) fn document_scrolling_element(&self) -> Option<N> {
+        if self.document_mode != crate::LayoutDocumentMode::Quirks {
+            return Some(self.document_element);
+        }
+        let body = self.document_body?;
+        let body_is_scroll_container = self
+            .source_mapping
+            .get(&body)
+            .is_some_and(|id| self.establishes_scroll_container(*id));
+        (!body_is_scroll_container).then_some(body)
+    }
+
+    /// Whether this box participates in the HTML body-fills-viewport quirk.
+    ///
+    /// The available size remains constraint-space state. This predicate only
+    /// identifies the two eligible layout objects, matching Blink's
+    /// `BlockNode::IsQuirkyAndFillsViewport` exclusions.
+    pub(crate) fn is_quirky_viewport_filler(&self, id: LayoutBoxId) -> bool {
+        let layout_box = &self.boxes[id.index()];
+        if self.document_mode != crate::LayoutDocumentMode::Quirks
+            || layout_box.style.is_absolute_positioned()
+            || layout_box.style.is_fixed_positioned()
+            || layout_box.style.is_floated()
+            || layout_box.style.display().is_inline_level()
+        {
+            return false;
+        }
+        self.is_document_element(id) || self.is_document_body(id)
     }
 
     pub fn root(&self) -> LayoutBoxId {
@@ -442,7 +705,55 @@ where
                     index: child.index(),
                 });
             };
+            // Raw source ownership is recorded before normalization. Boxes
+            // synthesized by normalization have no earlier owner, so their
+            // first formatting attachment is also their structural parent.
+            child_box.structural_parent.get_or_insert(parent);
             child_box.parent = Some(parent);
+        }
+        Ok(())
+    }
+
+    /// Attaches one newly synthesized box through the same ownership seam as
+    /// construction-time children.
+    pub(crate) fn append_synthesized_child(
+        &mut self,
+        parent: LayoutBoxId,
+        child: LayoutBoxId,
+    ) -> Result<(), LayoutError> {
+        let Some(parent_box) = self.box_by_id(parent) else {
+            return Err(LayoutError::InvalidBoxReference {
+                index: parent.index(),
+            });
+        };
+        let mut children = parent_box.children.clone();
+        children.push(child);
+        self.replace_children(parent, children)
+    }
+
+    /// Records source/LayoutObject ownership before formatting normalization
+    /// is allowed to wrap or promote any child.
+    ///
+    /// The first owner deliberately wins. A split inline returns its promoted
+    /// block in an ancestor's child stream later, but that reattachment must
+    /// not erase the inline LayoutObject that originally owned the block.
+    pub(crate) fn record_structural_children(
+        &mut self,
+        parent: LayoutBoxId,
+        children: &[LayoutBoxId],
+    ) -> Result<(), LayoutError> {
+        if self.box_by_id(parent).is_none() {
+            return Err(LayoutError::InvalidBoxReference {
+                index: parent.index(),
+            });
+        }
+        for child in children {
+            let Some(child_box) = self.box_by_id_mut(*child) else {
+                return Err(LayoutError::InvalidBoxReference {
+                    index: child.index(),
+                });
+            };
+            child_box.structural_parent.get_or_insert(parent);
         }
         Ok(())
     }
@@ -471,6 +782,9 @@ where
             if !reachable[index] {
                 continue;
             }
+            layout_box.structural_parent = layout_box
+                .structural_parent
+                .and_then(|parent| remap[parent.index()]);
             layout_box.parent = layout_box.parent.and_then(|parent| remap[parent.index()]);
             layout_box.children = layout_box
                 .children
@@ -537,6 +851,20 @@ where
         id: LayoutBoxId,
         layout_box: &LayoutBox<N>,
     ) -> Result<(), LayoutError> {
+        if id == self.root {
+            if layout_box.structural_parent.is_some() {
+                return Err(LayoutError::InvalidBoxReference { index: id.index() });
+            }
+        } else if layout_box.structural_parent.is_none() {
+            return Err(LayoutError::InvalidBoxReference { index: id.index() });
+        }
+        if let Some(parent) = layout_box.structural_parent
+            && (parent == id || self.box_by_id(parent).is_none())
+        {
+            return Err(LayoutError::InvalidBoxReference {
+                index: parent.index(),
+            });
+        }
         if let Some(source) = layout_box.source {
             if layout_box.owner.is_some()
                 || layout_box.pseudo.is_some()
@@ -658,7 +986,6 @@ where
         kind: LayoutBoxKind,
         style: ResolvedLayoutStyle,
         text: Option<Arc<str>>,
-        replaced_metrics: Option<ReplacedMetrics>,
     ) -> LayoutBox<N> {
         let capability_diagnostics =
             default_capability_diagnostics(kind, element_semantics.as_ref(), &style);
@@ -672,12 +999,14 @@ where
             anonymous_reason,
             capability_diagnostics,
             kind,
+            structural_parent: None,
             parent: None,
             children: Vec::new(),
             layout_parent: None,
             layout_children: Vec::new(),
             positioned_containing_block: None,
-            inline_static_position: None,
+            out_of_flow_static_position: None,
+            out_of_flow_candidates: Vec::new(),
             style,
             text,
             text_selection: None,
@@ -686,12 +1015,16 @@ where
             inline_flattened: false,
             outside_list_marker: false,
             scroll_offset: LayoutPoint::ZERO,
-            replaced_metrics,
+            replaced_context: None,
+            default_intrinsic_content_size: Size::NONE,
             replaced_image: None,
             css_images: crate::source::LayoutCssImageResources::default(),
             collapsed_table_borders: None,
             collapsed_table_border_part: false,
+            hidden_for_paint: false,
+            table_authored_min_inline_size: None,
             inline_formatting_context: false,
+            grid_geometry: None,
             cache: Cache::new(),
             unrounded_layout: Layout::with_order(0),
             final_layout: Layout::with_order(0),
@@ -786,6 +1119,7 @@ fn default_capability_diagnostics(
         | Kind::FormControl => None,
         Kind::LineBreak => None,
         Kind::Replaced => None,
+        Kind::ImageFallback => None,
         Kind::PrincipalBlock
         | Kind::PrincipalFlowRoot
         | Kind::PrincipalFlex
@@ -811,10 +1145,10 @@ fn default_capability_diagnostics(
             LayoutCapabilityDiagnostic::TextProjectionDeferred,
         );
     }
-    if style.has_deferred_intrinsic_sizing() {
+    if style.has_deferred_anchor_sizing() {
         push_diagnostic(
             &mut diagnostics,
-            LayoutCapabilityDiagnostic::IntrinsicSizingKeywordDeferred,
+            LayoutCapabilityDiagnostic::AnchorSizingDeferred,
         );
     }
     if style.has_deferred_grid_template_mode() {

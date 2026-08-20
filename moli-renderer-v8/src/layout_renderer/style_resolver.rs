@@ -1,6 +1,8 @@
+use std::collections::HashMap;
+
 use moli_layout::{
-    LayoutDisplay, LayoutError, LayoutPseudo, LayoutStyleResolver, LayoutViewport,
-    ResolvedLayoutStyle,
+    LayoutDisplay, LayoutError, LayoutLastRememberedSizePolicy, LayoutPseudo, LayoutStyleResolver,
+    LayoutViewport, ResolvedLayoutStyle,
 };
 
 use crate::{
@@ -9,10 +11,24 @@ use crate::{
     style_engine::{StyleViewport, StyloAnonymousBoxKind},
 };
 
+use super::{
+    display_lock::{AutoDisplayLockState, DisplayLockStyleRequests},
+    remembered_size::IntrinsicSizeObserverState,
+};
+
 pub(super) struct NativeLayoutStyleResolver<'a> {
     runtime: &'a JsContextHost,
     reads: ComputedStyleReadScope<'a>,
     scripting_enabled: bool,
+    display_locks: &'a AutoDisplayLockState,
+    remembered_sizes: IntrinsicSizeObserverState,
+    remembered_size_policies: HashMap<DomHandle, LayoutLastRememberedSizePolicy>,
+    display_lock_requests: DisplayLockStyleRequests,
+}
+
+pub(super) struct NativeLayoutPassPolicies {
+    pub(super) remembered_sizes: HashMap<DomHandle, LayoutLastRememberedSizePolicy>,
+    pub(super) display_locks: DisplayLockStyleRequests,
 }
 
 impl<'a> NativeLayoutStyleResolver<'a> {
@@ -20,11 +36,24 @@ impl<'a> NativeLayoutStyleResolver<'a> {
         runtime: &'a JsContextHost,
         document: DomHandle,
         viewport: LayoutViewport,
+        display_locks: &'a AutoDisplayLockState,
+        remembered_sizes: &IntrinsicSizeObserverState,
     ) -> Self {
         Self {
             runtime,
             reads: layout_style_read_scope(runtime, document, viewport),
             scripting_enabled: runtime.document_scripting_enabled(document),
+            display_locks,
+            remembered_sizes: remembered_sizes.clone(),
+            remembered_size_policies: HashMap::new(),
+            display_lock_requests: DisplayLockStyleRequests::default(),
+        }
+    }
+
+    pub(super) fn into_pass_policies(self) -> NativeLayoutPassPolicies {
+        NativeLayoutPassPolicies {
+            remembered_sizes: self.remembered_size_policies,
+            display_locks: self.display_lock_requests,
         }
     }
 }
@@ -40,6 +69,37 @@ pub(super) fn prepare_layout_style_inputs(
 ) {
     let mut reads = layout_style_read_scope(runtime, document, viewport);
     let _ = reads.read(root).computed_values();
+}
+
+/// Applies computed-style changes to state that can outlive a principal
+/// layout box. This separate walk is required for remembered elements below a
+/// `display:none` ancestor: box construction will not ask for their style, but
+/// losing an `auto` component still clears that logical axis.
+pub(super) fn reconcile_remembered_size_policies(
+    runtime: &JsContextHost,
+    document: DomHandle,
+    viewport: LayoutViewport,
+    remembered_sizes: &mut IntrinsicSizeObserverState,
+) {
+    let handles = remembered_sizes
+        .handles()
+        .filter(|element| runtime.dom_host().owner_document_handle(*element) == Some(document))
+        .collect::<Vec<_>>();
+    if handles.is_empty() {
+        return;
+    }
+
+    let mut reads = layout_style_read_scope(runtime, document, viewport);
+    for element in handles {
+        let read = reads.read(element);
+        let Some(computed) = read.computed_values() else {
+            // Blink deliberately preserves remembered values when there is no
+            // computed style. The element is unobserved until style returns.
+            continue;
+        };
+        let resolved = ResolvedLayoutStyle::from_stylo(computed);
+        remembered_sizes.reconcile_policy(element, resolved.last_remembered_size_policy());
+    }
 }
 
 fn layout_style_read_scope<'a>(
@@ -78,6 +138,16 @@ impl LayoutStyleResolver<DomHandle> for NativeLayoutStyleResolver<'_> {
             return Ok(None);
         };
         let mut resolved = ResolvedLayoutStyle::from_stylo(computed);
+        let requests_auto = resolved.content_visibility_is_auto();
+        if requests_auto || self.display_locks.contains(node) {
+            self.display_lock_requests.record(node, requests_auto);
+        }
+        resolved.resolve_content_visibility_state(
+            requests_auto && self.display_locks.is_locked_for_layout(node),
+            self.remembered_sizes.get(node),
+        );
+        self.remembered_size_policies
+            .insert(node, resolved.last_remembered_size_policy());
         if self
             .runtime
             .dom_host()

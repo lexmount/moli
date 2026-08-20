@@ -76,7 +76,7 @@ where
         let layout_box = &self.boxes[id.index()];
         let formatting_context = if layout_box.inline_formatting_context {
             Some(NormalizedFormattingContext::Inline)
-        } else if layout_box.style.display().is_flex_container() {
+        } else if layout_box.style.uses_flex_formatting_context() {
             Some(NormalizedFormattingContext::Flex)
         } else if layout_box.style.display().is_grid_container() {
             Some(NormalizedFormattingContext::Grid)
@@ -104,6 +104,7 @@ where
                 LayoutBoxKind::PrincipalBlock
                 | LayoutBoxKind::PrincipalFlowRoot
                 | LayoutBoxKind::PrincipalInlineBlock
+                | LayoutBoxKind::ImageFallback
                 | LayoutBoxKind::ListItem
                 | LayoutBoxKind::InlineListItem
                 | LayoutBoxKind::TableCaption
@@ -188,8 +189,14 @@ fn write_normalized_node(
             element.local_name,
             element.category.debug_name()
         )?;
-        if let Some(replaced) = element.replaced {
+        if let Some(replaced) = element.replaced_kind() {
             write!(formatter, " replaced={}", replaced.debug_name())?;
+        } else if let Some(fallback) = element.image_fallback() {
+            write!(
+                formatter,
+                " content=image-fallback alternative={:?}",
+                fallback.alternative_text()
+            )?;
         }
     }
     if let Some(reason) = node.anonymous_reason {

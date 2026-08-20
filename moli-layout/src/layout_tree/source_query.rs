@@ -7,11 +7,19 @@ use crate::LayoutPosition;
 use super::{
     model::{
         LayoutBoxModel, LayoutCoordinateSpaceId, LayoutFragmentBoxModel, LayoutFragmentKind,
-        LayoutOutputBoxId, LayoutPoint, LayoutQuad, LayoutRect, LayoutSize, LayoutTransform2D,
+        LayoutGridGeometry, LayoutOutputBoxId, LayoutPhysicalAxis, LayoutPhysicalBoxStrut,
+        LayoutPoint, LayoutQuad, LayoutRect, LayoutSize, LayoutTransform2D,
     },
     query::{LayoutElementMetrics, LayoutNodeOutput},
     tree::FrozenLayoutTree,
 };
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct InlineOffsetGeometry {
+    layout_origin_in_document: LayoutPoint,
+    border_origin_in_viewport_ignoring_css_transforms: LayoutPoint,
+    size: LayoutSize,
+}
 
 impl<N> FrozenLayoutTree<N>
 where
@@ -53,6 +61,31 @@ where
         self.element_metrics_for_source_with_offset_parent_filter(source, |_| true)
     }
 
+    pub(super) fn viewport_scroll_metrics_for_source(
+        &self,
+        source: N,
+    ) -> Option<LayoutElementMetrics<N>> {
+        let mut metrics = self.element_metrics_for_source(source)?;
+        let extent = &self.viewport_scroll_extent;
+        metrics.client_size = LayoutSize::new(
+            self.viewport.css_width as f32,
+            self.viewport.css_height as f32,
+        );
+        metrics.scroll_size = extent.scroll_size;
+        metrics.scroll_offset = extent.applied_offset;
+        metrics.minimum_scroll_offset = extent.minimum_offset;
+        metrics.maximum_scroll_offset = extent.maximum_offset;
+        metrics.scrollport = LayoutTransform2D::IDENTITY.map_rect(extent.scrollport);
+        metrics.scrollable_overflow =
+            LayoutTransform2D::translation(-self.viewport_scroll.x, -self.viewport_scroll.y)
+                .map_rect(extent.scrollable_overflow);
+        metrics.is_scroll_container = true;
+        metrics.allows_user_scroll_x = extent.allows_user_scroll_x;
+        metrics.allows_user_scroll_y = extent.allows_user_scroll_y;
+        metrics.clips_overflow = true;
+        Some(metrics)
+    }
+
     /// Resolves CSSOM View element metrics while allowing the renderer to hide
     /// flat-tree ancestors that do not belong to the queried element's
     /// ancestor tree scopes.
@@ -70,9 +103,13 @@ where
         let output = self.source_output(source)?;
         let box_id = output.principal_box?;
         let geometry = self.box_geometry(box_id)?;
-        let extent = self.scroll_extent(box_id)?;
+        let uses_viewport_scroll = self.document_scrolling_element == Some(source);
+        let extent = if uses_viewport_scroll {
+            &self.viewport_scroll_extent
+        } else {
+            self.scroll_extent(box_id)?
+        };
         let coordinate_space = self.coordinate_space(geometry.coordinate_space)?;
-        let is_root = box_id == self.root_box;
         let offset_parent_id = self.offset_parent_box(box_id, &mut offset_parent_is_exposed);
         let offset_parent = offset_parent_id.and_then(|id| {
             self.boxes
@@ -96,69 +133,77 @@ where
                 }
             })
             .unwrap_or(LayoutPoint::ZERO);
-        let layout_origin = output
-            .fragments
-            .iter()
-            .find_map(|id| {
-                let fragment = self.fragment(*id)?;
-                let LayoutFragmentKind::InlineBox {
-                    box_id: fragment_box,
-                    ..
-                } = fragment.kind
-                else {
-                    return None;
-                };
-                if fragment_box != box_id {
-                    return None;
-                }
-                let border = fragment.box_model?.border;
-                let owner = self.coordinate_space(fragment.coordinate_space)?.owner?;
-                let owner_origin = self.box_geometry(owner)?.layout_origin_in_document;
-                Some(LayoutPoint::new(
-                    owner_origin.x + border.x,
-                    owner_origin.y + border.y,
-                ))
-            })
+        let inline_offset_geometry = self.inline_offset_geometry(&output, box_id);
+        let layout_origin = inline_offset_geometry
+            .map(|geometry| geometry.layout_origin_in_document)
             .unwrap_or(geometry.layout_origin_in_document);
-        let client_size = if is_root {
+        let offset_size = inline_offset_geometry
+            .map(|geometry| geometry.size)
+            .unwrap_or_else(|| {
+                LayoutSize::new(geometry.border_box.width, geometry.border_box.height)
+            });
+        let border_origin_in_viewport_ignoring_css_transforms = inline_offset_geometry
+            .map(|geometry| geometry.border_origin_in_viewport_ignoring_css_transforms)
+            .unwrap_or_else(|| {
+                coordinate_space
+                    .local_to_viewport_ignoring_css_transforms
+                    .map_point(LayoutPoint::new(
+                        geometry.border_box.x,
+                        geometry.border_box.y,
+                    ))
+            });
+        let unzoom = CssomAbsoluteZoom::new(geometry.effective_zoom);
+        let client_size = if geometry.uses_viewport_client_metrics {
             LayoutSize::new(
                 self.viewport.css_width as f32,
                 self.viewport.css_height as f32,
             )
         } else {
-            LayoutSize::new(geometry.padding_box.width, geometry.padding_box.height)
+            unzoom.size(LayoutSize::new(
+                geometry.padding_box.width,
+                geometry.padding_box.height,
+            ))
         };
-        let scroll_size = if is_root {
-            LayoutSize::new(
-                extent.scroll_size.width.max(self.content_size.width),
-                extent.scroll_size.height.max(self.content_size.height),
+        let (scrollport, scrollable_overflow) = if uses_viewport_scroll {
+            let content_to_viewport =
+                LayoutTransform2D::translation(-self.viewport_scroll.x, -self.viewport_scroll.y);
+            (
+                LayoutTransform2D::IDENTITY.map_rect(extent.scrollport),
+                content_to_viewport.map_rect(extent.scrollable_overflow),
             )
         } else {
-            extent.scroll_size
+            (
+                coordinate_space
+                    .local_to_viewport
+                    .map_rect(extent.scrollport),
+                coordinate_space
+                    .local_to_viewport
+                    .map_rect(extent.scrollable_overflow),
+            )
         };
         Some(LayoutElementMetrics {
             offset_parent,
-            offset_position: LayoutPoint::new(
+            offset_position: unzoom.point(LayoutPoint::new(
                 layout_origin.x - offset_parent_origin.x,
                 layout_origin.y - offset_parent_origin.y,
-            ),
-            offset_size: LayoutSize::new(geometry.border_box.width, geometry.border_box.height),
-            content_size: LayoutSize::new(geometry.content_box.width, geometry.content_box.height),
+            )),
+            border_origin_in_viewport_ignoring_css_transforms,
+            offset_size: unzoom.size(offset_size),
+            content_size: unzoom.size(LayoutSize::new(
+                geometry.content_box.width,
+                geometry.content_box.height,
+            )),
             client_size,
-            client_border: LayoutPoint::new(
+            client_border: unzoom.point(LayoutPoint::new(
                 geometry.padding_box.x - geometry.border_box.x,
                 geometry.padding_box.y - geometry.border_box.y,
-            ),
-            scroll_size,
-            scroll_offset: extent.applied_offset,
-            minimum_scroll_offset: extent.minimum_offset,
-            maximum_scroll_offset: extent.maximum_offset,
-            scrollport: coordinate_space
-                .local_to_viewport
-                .map_rect(extent.scrollport),
-            scrollable_overflow: coordinate_space
-                .local_to_viewport
-                .map_rect(extent.scrollable_overflow),
+            )),
+            scroll_size: unzoom.size(extent.scroll_size),
+            scroll_offset: unzoom.point(extent.applied_offset),
+            minimum_scroll_offset: unzoom.point(extent.minimum_offset),
+            maximum_scroll_offset: unzoom.point(extent.maximum_offset),
+            scrollport,
+            scrollable_overflow,
             is_scroll_container: extent.is_scroll_container,
             allows_user_scroll_x: extent.allows_user_scroll_x,
             allows_user_scroll_y: extent.allows_user_scroll_y,
@@ -166,6 +211,44 @@ where
             visible: geometry.visible,
             pointer_events: geometry.pointer_events,
         })
+    }
+
+    /// Returns the layout-dependent CSSOM resolved size for one principal
+    /// CSS box. Both box applicability and `box-sizing` were captured by the
+    /// same frozen layout epoch; this projection only removes its retained
+    /// effective zoom.
+    pub fn used_box_size_for_source(&self, source: N) -> Option<LayoutSize> {
+        let output = self.source_output(source)?;
+        let geometry = self.box_geometry(output.principal_box?)?;
+        let size = geometry.used_values?.size;
+        Some(CssomAbsoluteZoom::new(geometry.effective_zoom).size(size))
+    }
+
+    /// Returns layout-dependent physical margins for one principal CSS box,
+    /// normalized out of the box's effective CSS zoom.
+    pub fn used_margin_for_source(&self, source: N) -> Option<LayoutPhysicalBoxStrut> {
+        let output = self.source_output(source)?;
+        let geometry = self.box_geometry(output.principal_box?)?;
+        let margin = geometry.used_values?.margin;
+        Some(CssomAbsoluteZoom::new(geometry.effective_zoom).strut(margin))
+    }
+
+    /// Returns used Grid tracks from the same frozen epoch as other CSSOM
+    /// geometry, normalized out of the container's effective CSS zoom.
+    pub fn used_grid_tracks_for_source(&self, source: N) -> Option<LayoutGridGeometry> {
+        let output = self.source_output(source)?;
+        let layout_box = self.boxes.get(output.principal_box?.index())?;
+        let mut grid = layout_box.grid_geometry.clone()?;
+        let zoom = CssomAbsoluteZoom::new(layout_box.geometry.effective_zoom);
+        for tracks in [&mut grid.rows, &mut grid.columns] {
+            for size in &mut tracks.sizes {
+                *size = zoom.scalar(*size);
+            }
+            for gutter in &mut tracks.gutters {
+                *gutter = zoom.scalar(*gutter);
+            }
+        }
+        Some(grid)
     }
 
     /// Resolves a viewport point into the coordinate system Blink uses for
@@ -247,7 +330,9 @@ where
             .filter(|fragment| {
                 matches!(
                     fragment.kind,
-                    LayoutFragmentKind::Box { .. } | LayoutFragmentKind::InlineBox { .. }
+                    LayoutFragmentKind::Box { .. }
+                        | LayoutFragmentKind::InlineBox { .. }
+                        | LayoutFragmentKind::LineBreak { .. }
                 )
             })
             .filter_map(|fragment| {
@@ -270,6 +355,7 @@ where
                     fragment.kind,
                     LayoutFragmentKind::Box { .. }
                         | LayoutFragmentKind::InlineBox { .. }
+                        | LayoutFragmentKind::LineBreak { .. }
                         | LayoutFragmentKind::Text { .. }
                 )
             })
@@ -293,6 +379,7 @@ where
             box_id: LayoutOutputBoxId,
             line_index: usize,
             rtl: bool,
+            inline_axis: LayoutPhysicalAxis,
             coordinate_space: LayoutCoordinateSpaceId,
             rect: LayoutRect,
         }
@@ -305,62 +392,57 @@ where
                 let LayoutFragmentKind::Text {
                     box_id,
                     line_index,
-                    source_utf16_range,
+                    source_span,
+                    is_forced_line_break,
+                    inline_axis,
                     rtl,
                     ..
                 } = &fragment.kind
                 else {
                     return None;
                 };
-                let source_len = source_utf16_range
-                    .end
-                    .saturating_sub(source_utf16_range.start);
-                let (selected_start, selected_end) = if utf16_range.is_empty() {
-                    if utf16_range.start < source_utf16_range.start
-                        || utf16_range.start > source_utf16_range.end
-                    {
-                        return None;
-                    }
-                    let point = utf16_range
-                        .start
-                        .saturating_sub(source_utf16_range.start)
-                        .min(source_len);
-                    (point, point)
-                } else {
-                    let start = source_utf16_range.start.max(utf16_range.start);
-                    let end = source_utf16_range.end.min(utf16_range.end);
-                    if start >= end {
-                        return None;
-                    }
-                    (
-                        start.saturating_sub(source_utf16_range.start),
-                        end.saturating_sub(source_utf16_range.start),
-                    )
+                // Blink skips a forced-break FragmentItem for collapsed
+                // ranges. Adjacent text then supplies the upstream or
+                // downstream caret quad instead of exposing both lines.
+                if utf16_range.is_empty() && *is_forced_line_break {
+                    return None;
+                }
+                let (selected_start, selected_end) = source_span.selected_edges(&utf16_range)?;
+                let start_fraction = selected_start.visual_fraction(*rtl);
+                let end_fraction = selected_end.visual_fraction(*rtl);
+                let visual_start_fraction = start_fraction.min(end_fraction);
+                let selected_fraction = (end_fraction - start_fraction).abs();
+                let rect = match inline_axis {
+                    LayoutPhysicalAxis::Horizontal => LayoutRect::new(
+                        fragment.rect.x + fragment.rect.width * visual_start_fraction,
+                        fragment.rect.y,
+                        fragment.rect.width * selected_fraction,
+                        fragment.rect.height,
+                    ),
+                    LayoutPhysicalAxis::Vertical => LayoutRect::new(
+                        fragment.rect.x,
+                        fragment.rect.y + fragment.rect.height * visual_start_fraction,
+                        fragment.rect.width,
+                        fragment.rect.height * selected_fraction,
+                    ),
                 };
-                let denominator = source_len.max(1) as f32;
-                let start_ratio = selected_start as f32 / denominator;
-                let end_ratio = selected_end as f32 / denominator;
-                let visual_start_ratio = if *rtl { 1.0 - end_ratio } else { start_ratio };
-                let rect = LayoutRect::new(
-                    fragment.rect.x + fragment.rect.width * visual_start_ratio,
-                    fragment.rect.y,
-                    fragment.rect.width * (end_ratio - start_ratio),
-                    fragment.rect.height,
-                );
                 Some(SelectedTextRect {
                     box_id: *box_id,
                     line_index: *line_index,
                     rtl: *rtl,
+                    inline_axis: *inline_axis,
                     coordinate_space: fragment.coordinate_space,
                     rect,
                 })
             })
             .collect::<Vec<_>>();
 
-        // Parley exposes cluster-level source fragments, while CSSOM View
-        // exposes one Range rect per contiguous directional run on a line.
-        // Keep opposite bidi runs separate, but merge adjacent clusters from
-        // the same source box before mapping through transforms.
+        // Parley exposes cluster-level source fragments, including separate
+        // font-fallback clusters, while Blink exposes one FragmentItem rect
+        // per contiguous directional text fragment on a line. Group in
+        // physical inline order and union the cross-axis font bounds. Requiring
+        // equal ascent/descent here would leak fallback-run boundaries as
+        // extra DOMRects and make a Range over one Text node non-contiguous.
         selected.sort_by(|left, right| {
             left.coordinate_space
                 .index()
@@ -368,27 +450,45 @@ where
                 .then_with(|| left.box_id.index().cmp(&right.box_id.index()))
                 .then_with(|| left.line_index.cmp(&right.line_index))
                 .then_with(|| left.rtl.cmp(&right.rtl))
-                .then_with(|| left.rect.y.total_cmp(&right.rect.y))
-                .then_with(|| left.rect.x.total_cmp(&right.rect.x))
+                .then_with(|| match left.inline_axis {
+                    LayoutPhysicalAxis::Horizontal => left
+                        .rect
+                        .x
+                        .total_cmp(&right.rect.x)
+                        .then_with(|| left.rect.y.total_cmp(&right.rect.y)),
+                    LayoutPhysicalAxis::Vertical => left
+                        .rect
+                        .y
+                        .total_cmp(&right.rect.y)
+                        .then_with(|| left.rect.x.total_cmp(&right.rect.x)),
+                })
         });
         let mut merged: Vec<SelectedTextRect> = Vec::with_capacity(selected.len());
         for fragment in selected {
             let can_merge = merged.last().is_some_and(|previous| {
-                let tolerance = previous
-                    .rect
-                    .width
+                let (previous_inline_size, fragment_inline_size) = match fragment.inline_axis {
+                    LayoutPhysicalAxis::Horizontal => (previous.rect.width, fragment.rect.width),
+                    LayoutPhysicalAxis::Vertical => (previous.rect.height, fragment.rect.height),
+                };
+                let tolerance = previous_inline_size
                     .abs()
-                    .max(fragment.rect.width.abs())
+                    .max(fragment_inline_size.abs())
                     .max(1.0)
                     * f32::EPSILON
                     * 16.0;
                 previous.box_id == fragment.box_id
                     && previous.line_index == fragment.line_index
                     && previous.rtl == fragment.rtl
+                    && previous.inline_axis == fragment.inline_axis
                     && previous.coordinate_space == fragment.coordinate_space
-                    && (previous.rect.y - fragment.rect.y).abs() <= tolerance
-                    && (previous.rect.height - fragment.rect.height).abs() <= tolerance
-                    && fragment.rect.x <= previous.rect.right() + tolerance
+                    && (match fragment.inline_axis {
+                        LayoutPhysicalAxis::Horizontal => {
+                            fragment.rect.x <= previous.rect.right() + tolerance
+                        }
+                        LayoutPhysicalAxis::Vertical => {
+                            fragment.rect.y <= previous.rect.bottom() + tolerance
+                        }
+                    })
             });
             if can_merge {
                 let previous = merged.last_mut().expect("checked above");
@@ -416,10 +516,110 @@ where
     }
 }
 
+/// Converts effective-zoomed layout scalars to the coordinate space exposed
+/// by CSSOM integer box and scroll metrics. Viewport quads intentionally stay
+/// zoomed: their normalized bases map points back into these unzoomed sizes.
+#[derive(Clone, Copy)]
+struct CssomAbsoluteZoom(f32);
+
+impl CssomAbsoluteZoom {
+    fn new(effective_zoom: f32) -> Self {
+        debug_assert!(effective_zoom.is_finite() && effective_zoom > 0.0);
+        Self(if effective_zoom.is_finite() && effective_zoom > 0.0 {
+            effective_zoom
+        } else {
+            1.0
+        })
+    }
+
+    fn point(self, point: LayoutPoint) -> LayoutPoint {
+        LayoutPoint::new(point.x / self.0, point.y / self.0)
+    }
+
+    fn scalar(self, value: f32) -> f32 {
+        value / self.0
+    }
+
+    fn size(self, size: LayoutSize) -> LayoutSize {
+        LayoutSize::new(size.width / self.0, size.height / self.0)
+    }
+
+    fn strut(self, strut: LayoutPhysicalBoxStrut) -> LayoutPhysicalBoxStrut {
+        LayoutPhysicalBoxStrut::new(
+            self.scalar(strut.top),
+            self.scalar(strut.right),
+            self.scalar(strut.bottom),
+            self.scalar(strut.left),
+        )
+    }
+}
+
 impl<N> FrozenLayoutTree<N>
 where
     N: Copy + Debug + Eq + Hash,
 {
+    /// Returns the untransformed CSSOM offset geometry for a flattened inline.
+    ///
+    /// CSSOM View defines `offsetLeft`/`offsetTop` from the first fragment and
+    /// `offsetWidth`/`offsetHeight` from the bounding box of all non-empty
+    /// border-box fragments. Mapping each fragment through its IFC owner's
+    /// document-layout origin keeps that geometry in one physical coordinate
+    /// system while intentionally excluding transforms and scrolling.
+    fn inline_offset_geometry(
+        &self,
+        output: &LayoutNodeOutput,
+        box_id: LayoutOutputBoxId,
+    ) -> Option<InlineOffsetGeometry> {
+        let mut first_origins = None;
+        let mut bounds = None::<LayoutRect>;
+
+        for id in &output.fragments {
+            let fragment = self.fragment(*id)?;
+            let LayoutFragmentKind::InlineBox {
+                box_id: fragment_box,
+                ..
+            } = fragment.kind
+            else {
+                continue;
+            };
+            if fragment_box != box_id {
+                continue;
+            }
+            let mut border = fragment.box_model?.border;
+            let coordinate_space = self.coordinate_space(fragment.coordinate_space)?;
+            let local_border_origin = LayoutPoint::new(border.x, border.y);
+            let owner = coordinate_space.owner?;
+            let owner_origin = self.box_geometry(owner)?.layout_origin_in_document;
+            border.x += owner_origin.x;
+            border.y += owner_origin.y;
+            first_origins.get_or_insert((
+                LayoutPoint::new(border.x, border.y),
+                coordinate_space
+                    .local_to_viewport_ignoring_css_transforms
+                    .map_point(local_border_origin),
+            ));
+
+            // Blink's BoundingBoxRelativeToFirstFragment uses UniteIfNonZero:
+            // an empty fragment supplies the offset anchor but cannot stretch
+            // the size union across lines by its zero-area position alone.
+            if border.width <= 0.0 || border.height <= 0.0 {
+                continue;
+            }
+            bounds = Some(bounds.map_or(border, |current| current.union(border)));
+        }
+
+        let (layout_origin_in_document, border_origin_in_viewport_ignoring_css_transforms) =
+            first_origins?;
+        let size = bounds.map_or(LayoutSize::ZERO, |rect| {
+            LayoutSize::new(rect.width, rect.height)
+        });
+        Some(InlineOffsetGeometry {
+            layout_origin_in_document,
+            border_origin_in_viewport_ignoring_css_transforms,
+            size,
+        })
+    }
+
     fn project_fragment_box_models(
         &self,
         models: &[(LayoutCoordinateSpaceId, LayoutFragmentBoxModel)],
@@ -460,8 +660,9 @@ where
             return None;
         }
         let base_is_positioned = geometry.position != LayoutPosition::Static;
+        let base_effective_zoom = geometry.effective_zoom;
         let mut in_fixed_position_chain = geometry.position == LayoutPosition::Fixed;
-        let mut candidate = geometry.parent;
+        let mut candidate = geometry.structural_parent;
         while let Some(id) = candidate {
             let parent = self.box_geometry(id)?;
             let source = self
@@ -469,7 +670,7 @@ where
                 .get(id.index())
                 .and_then(|layout_box| layout_box.geometry_source);
             let Some(source) = source else {
-                candidate = parent.parent;
+                candidate = parent.structural_parent;
                 continue;
             };
 
@@ -479,7 +680,7 @@ where
                 } else if parent.position == LayoutPosition::Fixed {
                     in_fixed_position_chain = true;
                 }
-                candidate = parent.parent;
+                candidate = parent.structural_parent;
                 continue;
             }
 
@@ -493,8 +694,16 @@ where
             {
                 return Some(id);
             }
+            // CSSOM View preserves WebKit/Blink's long-standing extension:
+            // offsetParent stops at the first exposed layout ancestor whose
+            // absolute zoom differs from the target. Resolve ordinary
+            // containing-block candidates first, exactly as Blink does, then
+            // admit this geometry-coordinate boundary.
+            if base_effective_zoom != parent.effective_zoom {
+                return Some(id);
+            }
             in_fixed_position_chain |= parent.position == LayoutPosition::Fixed;
-            candidate = parent.parent;
+            candidate = parent.structural_parent;
         }
         None
     }

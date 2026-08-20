@@ -1,16 +1,17 @@
 use std::collections::{HashMap, HashSet};
 
 use moli_layout::{
-    LayoutElementCategory, LayoutElementMetadata, LayoutElementSemantics, LayoutFormControlData,
-    LayoutFormControlKind, LayoutImageResource, LayoutInputControlKind, LayoutListData,
+    LayoutDocumentMode, LayoutElementCategory, LayoutElementContent, LayoutElementMetadata,
+    LayoutElementSemantics, LayoutFormControlData, LayoutFormControlKind,
+    LayoutImageFallbackContent, LayoutImageResource, LayoutInputControlKind, LayoutListData,
     LayoutListRole, LayoutNamespace, LayoutReplacedKind, LayoutSource, LayoutSourceKind,
-    LayoutTableData, LayoutTableRole, LayoutTextSelection, ReplacedMetrics,
+    LayoutTableData, LayoutTableRole, LayoutTextSelection, ReplacedMetrics, ReplacedObjectSize,
 };
 
 use crate::{
     document_runtime::DomHandle,
     dom::native::{DomHost, Node},
-    native_bridge::JsContextHost,
+    native_bridge::{ImageNaturalSizing, ImageResourceStatus, JsContextHost},
 };
 
 pub(super) struct NativeLayoutSourceView<'a> {
@@ -43,6 +44,65 @@ impl<'a> NativeLayoutSourceView<'a> {
     fn host(&self) -> &DomHost {
         self.runtime.dom_host()
     }
+
+    fn resolved_element_semantics(
+        &self,
+        node: DomHandle,
+        element: &crate::dom::native::Element,
+    ) -> LayoutElementSemantics {
+        let mut semantics = layout_element_semantics_for_source(self.host(), node, element);
+        if element.is_html_element("img") && self.image_uses_fallback_content(node) {
+            let alt = element.attribute("alt");
+            let alternative_text = alt.or_else(|| element.attribute("title")).unwrap_or("");
+            let quirks_mode = self
+                .document
+                .and_then(|document| self.host().document_quirks_mode_for_handle(document))
+                == Some(selectors::matching::QuirksMode::Quirks);
+            semantics.content =
+                LayoutElementContent::ImageFallback(LayoutImageFallbackContent::new(
+                    alternative_text,
+                    alt.is_some_and(|value| !value.is_empty()),
+                    quirks_mode,
+                ));
+        } else if crate::native_bridge::element::embedded_element_uses_image_layout(
+            self.runtime,
+            node,
+        ) {
+            semantics.content = LayoutElementContent::Replaced(LayoutReplacedKind::Image);
+        }
+        semantics
+    }
+
+    fn image_uses_fallback_content(&self, node: DomHandle) -> bool {
+        image_layout_uses_fallback(
+            crate::native_bridge::element::image_selected_source(self.runtime, node).is_some(),
+            self.runtime.image_resource_status(node),
+        )
+    }
+}
+
+fn image_layout_uses_fallback(
+    has_selected_source: bool,
+    status: Option<ImageResourceStatus>,
+) -> bool {
+    !has_selected_source || status == Some(ImageResourceStatus::Failed)
+}
+
+const READY_IMAGE_DEFAULT_OBJECT_SIZE: ReplacedObjectSize = ReplacedObjectSize::new(300.0, 150.0);
+
+fn image_replaced_metrics(natural: Option<ImageNaturalSizing>) -> ReplacedMetrics {
+    let Some(natural) = natural else {
+        return ReplacedMetrics::default();
+    };
+    ReplacedMetrics {
+        intrinsic_width: natural.width,
+        intrinsic_height: natural.height,
+        // A ready image uses the CSS default natural size when its resource
+        // has no natural axes. The decoded concrete surface may already have
+        // fitted its ratio into that box and is not a CSS natural dimension.
+        default_object_size: Some(READY_IMAGE_DEFAULT_OBJECT_SIZE),
+        intrinsic_ratio: natural.ratio,
+    }
 }
 
 impl LayoutSource for NativeLayoutSourceView<'_> {
@@ -54,6 +114,50 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
 
     fn root(&self) -> Self::NodeId {
         self.root
+    }
+
+    fn root_is_document_element(&self) -> bool {
+        self.document.and_then(|document| {
+            self.host()
+                .dom()
+                .document_element_handle_for_document(document)
+        }) == Some(self.root)
+    }
+
+    fn document_mode(&self) -> LayoutDocumentMode {
+        match self
+            .document
+            .and_then(|document| self.host().document_quirks_mode_for_handle(document))
+        {
+            Some(selectors::matching::QuirksMode::Quirks) => LayoutDocumentMode::Quirks,
+            Some(selectors::matching::QuirksMode::LimitedQuirks) => {
+                LayoutDocumentMode::LimitedQuirks
+            }
+            Some(selectors::matching::QuirksMode::NoQuirks) | None => LayoutDocumentMode::NoQuirks,
+        }
+    }
+
+    fn document_body(&self) -> Option<Self::NodeId> {
+        self.document
+            .and_then(|document| self.host().document_body_handle_for_document(document))
+    }
+
+    fn viewport_scroll_offset(&self) -> moli_layout::LayoutPoint {
+        self.document
+            .and_then(|document| {
+                self.host()
+                    .dom()
+                    .document_element_handle_for_document(document)
+            })
+            .and_then(|root| self.host().node(root))
+            .and_then(Node::as_element)
+            .map(|element| {
+                moli_layout::LayoutPoint::new(
+                    element.scroll_left() as f32,
+                    element.scroll_top() as f32,
+                )
+            })
+            .unwrap_or(moli_layout::LayoutPoint::ZERO)
     }
 
     fn flat_parent(&self, node: Self::NodeId) -> Option<Self::NodeId> {
@@ -84,7 +188,7 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
         self.host()
             .node(node)
             .and_then(Node::as_element)
-            .map(|element| layout_element_semantics_for_source(self.host(), node, element))
+            .map(|element| self.resolved_element_semantics(node, element))
     }
 
     fn text(&self, node: Self::NodeId) -> Option<&str> {
@@ -110,6 +214,14 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
     }
 
     fn scroll_offset(&self, node: Self::NodeId) -> moli_layout::LayoutPoint {
+        if self.document.is_some_and(|document| {
+            self.host()
+                .dom()
+                .document_element_handle_for_document(document)
+                == Some(node)
+        }) {
+            return moli_layout::LayoutPoint::ZERO;
+        }
         self.host().node(node).and_then(Node::as_element).map_or(
             moli_layout::LayoutPoint::ZERO,
             |element| {
@@ -124,24 +236,30 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
     fn replaced_metrics(&self, node: Self::NodeId) -> Option<ReplacedMetrics> {
         let native_node = self.host().node(node)?;
         let element = native_node.as_element()?;
-        let semantics = layout_element_semantics_for_source(self.host(), node, element);
+        let semantics = self.resolved_element_semantics(node, element);
         if !semantics.is_replaced() {
             return None;
         }
-        if semantics.replaced == Some(LayoutReplacedKind::Svg) {
+        if semantics.replaced_kind() == Some(LayoutReplacedKind::Svg) {
             return Some(super::inline_svg::replaced_metrics(element));
         }
-        let attribute_width = numeric_dimension_attribute(self.host(), node, "width");
-        let attribute_height = numeric_dimension_attribute(self.host(), node, "height");
-        let intrinsic = self.runtime.image_resource_intrinsic_size(node);
-        Some(ReplacedMetrics {
-            intrinsic_width: intrinsic.map(|(width, _)| width),
-            intrinsic_height: intrinsic.map(|(_, height)| height),
-            attribute_width,
-            attribute_height,
-            intrinsic_ratio: intrinsic
-                .and_then(|(width, height)| (height > 0.0).then_some(width / height)),
-        })
+        if semantics.replaced_kind() == Some(LayoutReplacedKind::Canvas) {
+            let intrinsic_width = canvas_dimension_attribute(self.host(), node, "width", 300);
+            let intrinsic_height = canvas_dimension_attribute(self.host(), node, "height", 150);
+            return Some(ReplacedMetrics {
+                intrinsic_width: Some(intrinsic_width),
+                intrinsic_height: Some(intrinsic_height),
+                default_object_size: Some(ReplacedObjectSize::new(
+                    intrinsic_width,
+                    intrinsic_height,
+                )),
+                intrinsic_ratio: (intrinsic_height > 0.0)
+                    .then_some(intrinsic_width / intrinsic_height),
+            });
+        }
+        Some(image_replaced_metrics(
+            self.runtime.image_resource_natural_sizing(node),
+        ))
     }
 
     fn replaced_image(
@@ -156,8 +274,8 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
             .host()
             .node(node)
             .and_then(Node::as_element)
-            .map(|element| layout_element_semantics_for_source(self.host(), node, element))?;
-        match semantics.replaced {
+            .map(|element| self.resolved_element_semantics(node, element))?;
+        match semantics.replaced_kind() {
             Some(LayoutReplacedKind::Image) => {
                 let ready = self.runtime.ready_image_for_layout(node)?;
                 Some(LayoutImageResource {
@@ -365,7 +483,11 @@ fn native_flat_children(host: &DomHost, root: DomHandle, node: DomHandle) -> Vec
         .collect()
 }
 
-fn native_flat_parent(host: &DomHost, root: DomHandle, node: DomHandle) -> Option<DomHandle> {
+pub(super) fn native_flat_parent(
+    host: &DomHost,
+    root: DomHandle,
+    node: DomHandle,
+) -> Option<DomHandle> {
     if node == root {
         return None;
     }
@@ -397,13 +519,13 @@ fn native_node_is_slotable(host: &DomHost, node: DomHandle) -> bool {
 fn layout_element_semantics(element: &crate::dom::native::Element) -> LayoutElementSemantics {
     let namespace = LayoutNamespace::from_uri(element.namespace());
     let local_name = element.local_name();
-    let (category, replaced) = if namespace == LayoutNamespace::Html {
+    let (category, content) = if namespace == LayoutNamespace::Html {
         if local_name == "input" {
             (
                 LayoutElementCategory::FormControl(LayoutFormControlKind::Input(
                     html_input_control_kind(element.attribute("type")),
                 )),
-                Some(LayoutReplacedKind::FormControl),
+                LayoutElementContent::Replaced(LayoutReplacedKind::FormControl),
             )
         } else {
             html_element_semantics(local_name)
@@ -411,13 +533,26 @@ fn layout_element_semantics(element: &crate::dom::native::Element) -> LayoutElem
     } else if namespace == LayoutNamespace::Svg && local_name == "svg" {
         (
             LayoutElementCategory::Generic,
-            Some(LayoutReplacedKind::Svg),
+            LayoutElementContent::Replaced(LayoutReplacedKind::Svg),
         )
     } else {
-        (LayoutElementCategory::Generic, None)
+        (LayoutElementCategory::Generic, LayoutElementContent::Normal)
     };
     let metadata = layout_element_metadata(element, category, None, 0);
-    LayoutElementSemantics::new(namespace, local_name, category, replaced).with_metadata(metadata)
+    LayoutElementSemantics::new(namespace, local_name, category, content).with_metadata(metadata)
+}
+
+/// Shares the DOM-side element exception used by layout containment with
+/// rendered-state APIs that do not construct a layout world.
+pub(crate) fn native_element_bypasses_display_lock_display_type_check(
+    runtime: &JsContextHost,
+    node: DomHandle,
+) -> bool {
+    let Some(element) = runtime.dom_host().node(node).and_then(Node::as_element) else {
+        return false;
+    };
+    layout_element_semantics(element).bypasses_display_lock_display_type_check()
+        || crate::native_bridge::element::embedded_element_uses_image_layout(runtime, node)
 }
 
 fn layout_element_semantics_for_source(
@@ -553,8 +688,9 @@ fn signed_i32_attribute(element: &crate::dom::native::Element, name: &str) -> Op
     element.attribute(name)?.trim().parse::<i32>().ok()
 }
 
-fn html_element_semantics(local_name: &str) -> (LayoutElementCategory, Option<LayoutReplacedKind>) {
+fn html_element_semantics(local_name: &str) -> (LayoutElementCategory, LayoutElementContent) {
     use LayoutElementCategory::{FormControl, Generic, LineBreak, List, Table};
+    use LayoutElementContent::{Normal, Replaced};
     use LayoutFormControlKind::{
         Button, FieldSet, Input, Legend, Meter, Option as FormOption, OptionGroup, Output,
         Progress, Select, TextArea,
@@ -566,40 +702,53 @@ fn html_element_semantics(local_name: &str) -> (LayoutElementCategory, Option<La
     };
 
     match local_name {
-        "br" => (LineBreak, None),
-        "table" => (Table(TableRoot), None),
-        "caption" => (Table(Caption), None),
-        "colgroup" => (Table(ColumnGroup), None),
-        "col" => (Table(Column), None),
-        "thead" => (Table(HeaderGroup), None),
-        "tbody" => (Table(BodyGroup), None),
-        "tfoot" => (Table(FooterGroup), None),
-        "tr" => (Table(Row), None),
-        "td" | "th" => (Table(Cell), None),
-        "ol" | "ul" | "menu" => (List(Container), None),
-        "li" => (List(Item), None),
-        "button" => (FormControl(Button), None),
+        "br" => (LineBreak, Normal),
+        "table" => (Table(TableRoot), Normal),
+        "caption" => (Table(Caption), Normal),
+        "colgroup" => (Table(ColumnGroup), Normal),
+        "col" => (Table(Column), Normal),
+        "thead" => (Table(HeaderGroup), Normal),
+        "tbody" => (Table(BodyGroup), Normal),
+        "tfoot" => (Table(FooterGroup), Normal),
+        "tr" => (Table(Row), Normal),
+        "td" | "th" => (Table(Cell), Normal),
+        "ol" | "ul" | "menu" => (List(Container), Normal),
+        "li" => (List(Item), Normal),
+        "button" => (FormControl(Button), Normal),
         "input" => (
             FormControl(Input(LayoutInputControlKind::Text)),
-            Some(LayoutReplacedKind::FormControl),
+            Replaced(LayoutReplacedKind::FormControl),
         ),
-        "textarea" => (FormControl(TextArea), Some(LayoutReplacedKind::FormControl)),
-        "select" => (FormControl(Select), Some(LayoutReplacedKind::FormControl)),
-        "option" => (FormControl(FormOption), None),
-        "optgroup" => (FormControl(OptionGroup), None),
-        "fieldset" => (FormControl(FieldSet), None),
-        "legend" => (FormControl(Legend), None),
-        "output" => (FormControl(Output), None),
-        "progress" => (FormControl(Progress), Some(LayoutReplacedKind::FormControl)),
-        "meter" => (FormControl(Meter), Some(LayoutReplacedKind::FormControl)),
-        "img" => (Generic, Some(LayoutReplacedKind::Image)),
-        "canvas" => (Generic, Some(LayoutReplacedKind::Canvas)),
+        "textarea" => (
+            FormControl(TextArea),
+            Replaced(LayoutReplacedKind::FormControl),
+        ),
+        // Selects use non-replaced layout objects: menu lists own
+        // browser-generated inner content while listboxes retain option
+        // descendants. The distinction is observable through CSS Sizing's
+        // aspect-ratio automatic minimum.
+        "select" => (FormControl(Select), Normal),
+        "option" => (FormControl(FormOption), Normal),
+        "optgroup" => (FormControl(OptionGroup), Normal),
+        "fieldset" => (FormControl(FieldSet), Normal),
+        "legend" => (FormControl(Legend), Normal),
+        "output" => (FormControl(Output), Normal),
+        "progress" => (
+            FormControl(Progress),
+            Replaced(LayoutReplacedKind::FormControl),
+        ),
+        "meter" => (
+            FormControl(Meter),
+            Replaced(LayoutReplacedKind::FormControl),
+        ),
+        "img" => (Generic, Replaced(LayoutReplacedKind::Image)),
+        "canvas" => (Generic, Replaced(LayoutReplacedKind::Canvas)),
         // `<object>` is intentionally not unconditional replaced content: when its resource is
         // unavailable the fallback DOM children must still construct boxes.
-        "embed" => (Generic, Some(LayoutReplacedKind::Embedded)),
-        "frame" | "iframe" => (Generic, Some(LayoutReplacedKind::Frame)),
-        "audio" | "video" => (Generic, Some(LayoutReplacedKind::Media)),
-        _ => (Generic, None),
+        "embed" => (Generic, Replaced(LayoutReplacedKind::Embedded)),
+        "frame" | "iframe" => (Generic, Replaced(LayoutReplacedKind::Frame)),
+        "audio" | "video" => (Generic, Replaced(LayoutReplacedKind::Media)),
+        _ => (Generic, Normal),
     }
 }
 
@@ -636,22 +785,26 @@ fn html_input_control_kind(value: Option<&str>) -> LayoutInputControlKind {
     }
 }
 
-fn numeric_dimension_attribute(host: &DomHost, node: DomHandle, name: &str) -> Option<f32> {
-    let value = host.get_attribute(node, name)?;
-    let value = value.trim().parse::<f32>().ok()?;
-    value.is_finite().then_some(value.max(0.0))
+fn canvas_dimension_attribute(host: &DomHost, node: DomHandle, name: &str, default: u32) -> f32 {
+    host.get_attribute(node, name)
+        .and_then(|value| crate::native_bridge::element::parse_html_non_negative_integer(&value))
+        .filter(|value| *value <= i32::MAX as u32)
+        .unwrap_or(default) as f32
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        html_element_semantics, html_input_control_kind, layout_element_semantics,
-        layout_element_semantics_for_source, native_flat_children, native_flat_parent,
+        html_element_semantics, html_input_control_kind, image_layout_uses_fallback,
+        image_replaced_metrics, layout_element_semantics, layout_element_semantics_for_source,
+        native_flat_children, native_flat_parent,
     };
     use crate::dom::native::{DomHost, NativeDom};
+    use crate::native_bridge::{ImageNaturalSizing, ImageResourceStatus};
     use moli_layout::{
-        LayoutElementCategory, LayoutFormControlKind, LayoutInputControlKind, LayoutListRole,
-        LayoutNamespace, LayoutReplacedKind, LayoutTableRole,
+        LayoutElementCategory, LayoutElementContent, LayoutFormControlKind, LayoutInputControlKind,
+        LayoutListRole, LayoutNamespace, LayoutReplacedKind, LayoutTableRole, ReplacedMetrics,
+        ReplacedObjectSize,
     };
 
     fn test_host() -> DomHost {
@@ -663,6 +816,7 @@ mod tests {
     #[test]
     fn html_semantic_matrix_covers_future_box_construction_inputs() {
         use LayoutElementCategory::{FormControl, Generic, LineBreak, List, Table};
+        use LayoutElementContent::{Normal, Replaced};
         use LayoutFormControlKind::{
             Button, FieldSet, Input, Legend, Meter, Option as FormOption, OptionGroup, Output,
             Progress, Select, TextArea,
@@ -674,59 +828,65 @@ mod tests {
         };
 
         let cases = [
-            ("br", (LineBreak, None)),
-            ("table", (Table(TableRoot), None)),
-            ("caption", (Table(Caption), None)),
-            ("colgroup", (Table(ColumnGroup), None)),
-            ("col", (Table(Column), None)),
-            ("thead", (Table(HeaderGroup), None)),
-            ("tbody", (Table(BodyGroup), None)),
-            ("tfoot", (Table(FooterGroup), None)),
-            ("tr", (Table(Row), None)),
-            ("td", (Table(Cell), None)),
-            ("th", (Table(Cell), None)),
-            ("ol", (List(Container), None)),
-            ("ul", (List(Container), None)),
-            ("menu", (List(Container), None)),
-            ("li", (List(Item), None)),
-            ("button", (FormControl(Button), None)),
+            ("br", (LineBreak, Normal)),
+            ("table", (Table(TableRoot), Normal)),
+            ("caption", (Table(Caption), Normal)),
+            ("colgroup", (Table(ColumnGroup), Normal)),
+            ("col", (Table(Column), Normal)),
+            ("thead", (Table(HeaderGroup), Normal)),
+            ("tbody", (Table(BodyGroup), Normal)),
+            ("tfoot", (Table(FooterGroup), Normal)),
+            ("tr", (Table(Row), Normal)),
+            ("td", (Table(Cell), Normal)),
+            ("th", (Table(Cell), Normal)),
+            ("ol", (List(Container), Normal)),
+            ("ul", (List(Container), Normal)),
+            ("menu", (List(Container), Normal)),
+            ("li", (List(Item), Normal)),
+            ("button", (FormControl(Button), Normal)),
             (
                 "input",
                 (
                     FormControl(Input(LayoutInputControlKind::Text)),
-                    Some(LayoutReplacedKind::FormControl),
+                    Replaced(LayoutReplacedKind::FormControl),
                 ),
             ),
             (
                 "textarea",
-                (FormControl(TextArea), Some(LayoutReplacedKind::FormControl)),
+                (
+                    FormControl(TextArea),
+                    Replaced(LayoutReplacedKind::FormControl),
+                ),
             ),
-            (
-                "select",
-                (FormControl(Select), Some(LayoutReplacedKind::FormControl)),
-            ),
-            ("option", (FormControl(FormOption), None)),
-            ("optgroup", (FormControl(OptionGroup), None)),
-            ("fieldset", (FormControl(FieldSet), None)),
-            ("legend", (FormControl(Legend), None)),
-            ("output", (FormControl(Output), None)),
+            ("select", (FormControl(Select), Normal)),
+            ("option", (FormControl(FormOption), Normal)),
+            ("optgroup", (FormControl(OptionGroup), Normal)),
+            ("fieldset", (FormControl(FieldSet), Normal)),
+            ("legend", (FormControl(Legend), Normal)),
+            ("output", (FormControl(Output), Normal)),
             (
                 "progress",
-                (FormControl(Progress), Some(LayoutReplacedKind::FormControl)),
+                (
+                    FormControl(Progress),
+                    Replaced(LayoutReplacedKind::FormControl),
+                ),
             ),
             (
                 "meter",
-                (FormControl(Meter), Some(LayoutReplacedKind::FormControl)),
+                (
+                    FormControl(Meter),
+                    Replaced(LayoutReplacedKind::FormControl),
+                ),
             ),
-            ("img", (Generic, Some(LayoutReplacedKind::Image))),
-            ("canvas", (Generic, Some(LayoutReplacedKind::Canvas))),
-            ("object", (Generic, None)),
-            ("embed", (Generic, Some(LayoutReplacedKind::Embedded))),
-            ("frame", (Generic, Some(LayoutReplacedKind::Frame))),
-            ("iframe", (Generic, Some(LayoutReplacedKind::Frame))),
-            ("audio", (Generic, Some(LayoutReplacedKind::Media))),
-            ("video", (Generic, Some(LayoutReplacedKind::Media))),
-            ("article", (Generic, None)),
+            ("img", (Generic, Replaced(LayoutReplacedKind::Image))),
+            ("canvas", (Generic, Replaced(LayoutReplacedKind::Canvas))),
+            ("object", (Generic, Normal)),
+            ("embed", (Generic, Replaced(LayoutReplacedKind::Embedded))),
+            ("frame", (Generic, Replaced(LayoutReplacedKind::Frame))),
+            ("iframe", (Generic, Replaced(LayoutReplacedKind::Frame))),
+            ("audio", (Generic, Replaced(LayoutReplacedKind::Media))),
+            ("video", (Generic, Replaced(LayoutReplacedKind::Media))),
+            ("article", (Generic, Normal)),
         ];
 
         for (local_name, expected) in cases {
@@ -736,6 +896,43 @@ mod tests {
                 "local name={local_name}"
             );
         }
+    }
+
+    #[test]
+    fn image_layout_disposition_tracks_selected_source_and_terminal_state() {
+        assert!(image_layout_uses_fallback(false, None));
+        assert!(image_layout_uses_fallback(
+            true,
+            Some(ImageResourceStatus::Failed)
+        ));
+        assert!(!image_layout_uses_fallback(
+            true,
+            Some(ImageResourceStatus::Pending)
+        ));
+        assert!(!image_layout_uses_fallback(
+            true,
+            Some(ImageResourceStatus::Ready)
+        ));
+        assert!(!image_layout_uses_fallback(true, None));
+    }
+
+    #[test]
+    fn ready_image_metrics_preserve_natural_axis_provenance() {
+        let metrics = image_replaced_metrics(Some(ImageNaturalSizing {
+            width: None,
+            height: None,
+            ratio: Some(1.0),
+        }));
+        assert_eq!(
+            metrics,
+            ReplacedMetrics {
+                intrinsic_width: None,
+                intrinsic_height: None,
+                default_object_size: Some(ReplacedObjectSize::new(300.0, 150.0)),
+                intrinsic_ratio: Some(1.0),
+            }
+        );
+        assert_eq!(image_replaced_metrics(None), ReplacedMetrics::default());
     }
 
     #[test]
@@ -796,7 +993,7 @@ mod tests {
         assert_eq!(svg.namespace, LayoutNamespace::Svg);
         assert_eq!(&*svg.local_name, "svg");
         assert_eq!(svg.category, LayoutElementCategory::Generic);
-        assert_eq!(svg.replaced, Some(LayoutReplacedKind::Svg));
+        assert_eq!(svg.replaced_kind(), Some(LayoutReplacedKind::Svg));
 
         let math = layout_element_semantics(host.node(math).unwrap().as_element().unwrap());
         assert_eq!(math.namespace, LayoutNamespace::MathMl);
@@ -813,7 +1010,8 @@ mod tests {
     #[test]
     fn phase_four_metadata_is_normalized_from_live_dom_state() {
         use moli_layout::{
-            LayoutElementMetadata, LayoutFormControlData, LayoutListData, LayoutTableData,
+            LayoutElementMetadata, LayoutFormControlData, LayoutListData, LayoutSelectPresentation,
+            LayoutTableData,
         };
 
         let mut host = test_host();
@@ -911,6 +1109,34 @@ mod tests {
             .expect("select metadata");
         assert_eq!(select_data.value.as_ref(), "selected text");
         assert_eq!(select_data.maximum_option_characters, 13);
+        assert_eq!(
+            select_data.select_presentation(),
+            LayoutSelectPresentation::MenuList
+        );
+
+        for (multiple, size, expected) in [
+            (true, None, LayoutSelectPresentation::ListBox),
+            (true, Some("1"), LayoutSelectPresentation::MenuList),
+            (false, Some("4"), LayoutSelectPresentation::ListBox),
+        ] {
+            let select = host.create_element("select");
+            if multiple {
+                assert!(host.set_attribute(select, "multiple", ""));
+            }
+            if let Some(size) = size {
+                assert!(host.set_attribute(select, "size", size));
+            }
+            let semantics = layout_element_semantics_for_source(
+                &host,
+                select,
+                host.node(select).unwrap().as_element().unwrap(),
+            );
+            let data = semantics
+                .metadata
+                .form_control
+                .expect("select form-control metadata");
+            assert_eq!(data.select_presentation(), expected);
+        }
     }
 
     #[test]

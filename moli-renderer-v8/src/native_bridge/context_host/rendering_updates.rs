@@ -13,6 +13,9 @@ pub(super) enum PendingRenderingUpdatePayload {
     /// Flush the main Document's autofocus candidates after DOMContentLoaded.
     /// The candidate is intentionally resolved at execution time.
     PostParseAutofocus,
+    /// Run the post-font-load layout barrier for one exact loading cycle, then
+    /// settle that cycle's `FontFaceSet.ready` projection.
+    FontFaceSetReady(crate::script_vm::web_fonts::DocumentWebFontLoadCycleId),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -34,6 +37,24 @@ pub(super) type RenderingUpdateState = ExactWindowDocumentTaskLedger<
 >;
 
 impl JsContextHost {
+    pub(crate) fn queue_document_web_font_ready_rendering_update_if_needed(&mut self) -> bool {
+        let Some(cycle) = self.document_web_font_ready_layout_task_needed() else {
+            return false;
+        };
+        let Some(owner) = self.current_main_document_task_owner() else {
+            return false;
+        };
+        let target = WindowDocumentTaskTarget::new(
+            WindowDocumentOwner::Frame(owner),
+            OwnerDispatchScope::Top,
+        );
+        self.queue_rendering_update(
+            target,
+            RendererPageRenderingUpdateTaskKind::FontFaceSetReady,
+            PendingRenderingUpdatePayload::FontFaceSetReady(cycle),
+        )
+    }
+
     /// Publish post-parse autofocus as a rendering update for the exact main
     /// Document that just completed DOMContentLoaded.
     ///
@@ -190,7 +211,52 @@ impl JsContextHost {
             PendingRenderingUpdatePayload::PostParseAutofocus => {
                 self.dispatch_authorized_post_parse_autofocus(scope, host_ptr, target)
             }
+            PendingRenderingUpdatePayload::FontFaceSetReady(cycle) => {
+                self.dispatch_authorized_font_face_set_ready(scope, target, cycle)
+            }
         })
+    }
+
+    fn dispatch_authorized_font_face_set_ready(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        target: WindowDocumentTaskTarget,
+        cycle: crate::script_vm::web_fonts::DocumentWebFontLoadCycleId,
+    ) -> bool {
+        let Some(resolved) = self.resolve_authorized_window_document_task_context(scope, target)
+        else {
+            return false;
+        };
+        if resolved.document_handle != self.document_handle()
+            || self.document_web_font_ready_layout_task_needed() != Some(cycle)
+        {
+            return false;
+        }
+        let viewport = self.layout_viewport_for_document(resolved.document_handle);
+        let layout = self.with_fresh_layout_pass_for_document(
+            resolved.document_handle,
+            moli_layout::LayoutPassRequest::new(
+                viewport,
+                moli_layout::LayoutFlushReason::FontLoading,
+            ),
+            |_| Ok(()),
+        );
+        if !matches!(layout, Ok(Some(())))
+            || !self.complete_document_web_font_cycle_after_layout(cycle)
+        {
+            return false;
+        }
+
+        let scope = &mut v8::ContextScope::new(scope, resolved.context);
+        let dispatch_scope = target.dispatch_scope();
+        let previous_scope = dispatch_scope.enter(scope);
+        crate::native_bridge::document::settle_document_font_face_set_load_cycle_for_document(
+            scope,
+            resolved.document_handle,
+            cycle,
+        );
+        dispatch_scope.restore(scope, previous_scope);
+        true
     }
 
     pub(crate) fn discard_pending_rendering_update_task(

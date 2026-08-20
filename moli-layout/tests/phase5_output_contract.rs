@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 
 use moli_layout::{
-    DocumentLayoutServices, LayoutDisplay, LayoutElementCategory, LayoutElementSemantics,
-    LayoutError, LayoutFlushReason, LayoutFragmentKind, LayoutNamespace, LayoutPassRequest,
-    LayoutPassResult, LayoutPoint, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutRect,
-    LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutTransform2D, LayoutViewport,
-    PaintColor, ResolvedLayoutStyle, build_layout_pass,
+    DocumentLayoutServices, LayoutDisplay, LayoutElementCategory, LayoutElementContent,
+    LayoutElementSemantics, LayoutError, LayoutFlushReason, LayoutFragmentKind, LayoutNamespace,
+    LayoutPassRequest, LayoutPassResult, LayoutPhysicalAxis, LayoutPoint, LayoutPosition,
+    LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutRect, LayoutSource, LayoutSourceKind,
+    LayoutStyleResolver, LayoutTransform2D, LayoutViewport, PaintColor, ResolvedLayoutStyle,
+    build_layout_pass,
 };
 use style::Atom;
 use taffy::{
@@ -74,7 +75,7 @@ impl LayoutSource for Source {
                 LayoutNamespace::Html,
                 "div",
                 LayoutElementCategory::Generic,
-                None,
+                LayoutElementContent::Normal,
             )
         })
     }
@@ -258,6 +259,47 @@ fn pass_result_owns_complete_box_models_and_answers_a_batch_from_one_pass() {
 }
 
 #[test]
+fn own_border_is_visual_geometry_not_scrollable_content() {
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("bordered-child", Vec::new()),
+    ]);
+    let mut styles = Styles::default();
+    styles
+        .0
+        .insert(0, fixed_size(LayoutDisplay::Block, 320.0, 240.0));
+    styles.0.insert(
+        1,
+        resolved(
+            LayoutDisplay::Block,
+            Style {
+                box_sizing: BoxSizing::ContentBox,
+                size: Size {
+                    width: length(100.0),
+                    height: length(60.0),
+                },
+                border: Rect {
+                    left: length(7.0),
+                    right: length(11.0),
+                    top: length(5.0),
+                    bottom: length(13.0),
+                },
+                ..Style::default()
+            },
+        ),
+    );
+
+    let output = build(&source, &mut styles);
+    let metrics = output.element_metrics_for_source(1).unwrap();
+    assert_eq!(
+        metrics.client_size,
+        moli_layout::LayoutSize::new(100.0, 60.0)
+    );
+    assert_eq!(metrics.scroll_size, metrics.client_size);
+    assert_eq!(metrics.client_border, LayoutPoint::new(7.0, 5.0));
+}
+
+#[test]
 fn pass_output_freezes_into_the_sole_queryable_retained_tree() {
     let source = Source(vec![
         Node::element("root", vec![1]),
@@ -416,9 +458,7 @@ fn inline_output_preserves_line_text_and_utf16_source_fragments() {
         .iter()
         .filter_map(|id| output.fragment(*id))
         .filter_map(|fragment| match &fragment.kind {
-            LayoutFragmentKind::Text {
-                source_utf16_range, ..
-            } => Some(source_utf16_range.clone()),
+            LayoutFragmentKind::Text { source_span, .. } => Some(source_span.utf16_range().clone()),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -436,6 +476,30 @@ fn inline_output_preserves_line_text_and_utf16_source_fragments() {
             .iter()
             .all(|quad| quad.bounding_rect().width > 0.0)
     );
+    let emoji_rect = range_rects[0].bounding_rect();
+    for range in [2..3, 3..4, 3..3] {
+        let rects = output.text_range_rects(2, range.clone());
+        assert_eq!(
+            rects.len(),
+            1,
+            "a UTF-16 offset inside a surrogate pair stays attached to its shaped source span: {range:?}"
+        );
+        assert_rect(rects[0].bounding_rect(), emoji_rect);
+    }
+    for range in [2..2, 4..4] {
+        let rects = output.text_range_rects(2, range.clone());
+        assert_eq!(rects.len(), 1, "valid scalar boundary: {range:?}");
+        let rect = rects[0].bounding_rect();
+        assert_close(rect.width, 0.0);
+        assert_close(
+            rect.x,
+            if range.start == 2 {
+                emoji_rect.x
+            } else {
+                emoji_rect.right()
+            },
+        );
+    }
     assert_eq!(
         output.text_range_rects(2, 0..6).len(),
         1,
@@ -446,6 +510,121 @@ fn inline_output_preserves_line_text_and_utf16_source_fragments() {
         .expect("rendered text fragments should provide scroll target geometry");
     assert!(!scroll_geometry.target_rects.is_empty());
     assert_eq!(scroll_geometry.scroll_containers.len(), 1);
+}
+
+#[test]
+fn inline_offset_metrics_use_fragment_bounds_and_keep_empty_sibling_anchors() {
+    for writing_mode in [
+        taffy::WritingMode::HorizontalTb,
+        taffy::WritingMode::VerticalLr,
+        taffy::WritingMode::VerticalRl,
+        taffy::WritingMode::SidewaysLr,
+        taffy::WritingMode::SidewaysRl,
+    ] {
+        let source = Source(vec![
+            Node::element("root", vec![1, 3]),
+            Node::element("reference", vec![2]),
+            Node::text("reference-text", "ref"),
+            Node::element("empty-target", vec![4]),
+            Node::text("collapsed-trailing-space", " "),
+        ]);
+        let mut styles = Styles::default();
+        styles.0.insert(
+            0,
+            fixed_size(LayoutDisplay::Block, 80.0, 80.0)
+                .with_text_metrics(10.0, 10.0)
+                .with_writing_mode(writing_mode),
+        );
+        for node in 1..=4 {
+            styles.0.insert(
+                node,
+                resolved(LayoutDisplay::Inline, Style::default())
+                    .with_text_metrics(10.0, 10.0)
+                    .with_writing_mode(writing_mode),
+            );
+        }
+
+        let output = build(&source, &mut styles);
+        let reference = output
+            .element_metrics_for_source(1)
+            .expect("reference inline metrics");
+        let target = output
+            .element_metrics_for_source(3)
+            .expect("empty target inline metrics");
+
+        match writing_mode {
+            taffy::WritingMode::HorizontalTb => {
+                assert!(reference.offset_size.width > 0.0);
+                assert_close(
+                    target.offset_position.x,
+                    reference.offset_position.x + reference.offset_size.width,
+                );
+                assert_close(target.offset_position.y, reference.offset_position.y);
+            }
+            taffy::WritingMode::VerticalLr
+            | taffy::WritingMode::VerticalRl
+            | taffy::WritingMode::SidewaysRl => {
+                assert!(reference.offset_size.height > 0.0);
+                assert_close(target.offset_position.x, reference.offset_position.x);
+                assert_close(
+                    target.offset_position.y,
+                    reference.offset_position.y + reference.offset_size.height,
+                );
+            }
+            taffy::WritingMode::SidewaysLr => {
+                assert!(reference.offset_size.height > 0.0);
+                assert_close(target.offset_position.x, reference.offset_position.x);
+                // `sideways-lr` advances its inline axis from bottom to top;
+                // the zero-size following fragment is therefore anchored at
+                // the reference fragment's physical top edge.
+                assert_close(target.offset_position.y, reference.offset_position.y);
+            }
+        }
+    }
+}
+
+#[test]
+fn multiline_inline_offset_size_is_the_nonempty_fragment_union() {
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("multiline-inline", vec![2]),
+        Node::text("wrapped-text", "ref ref ref"),
+    ]);
+    let mut styles = Styles::default();
+    styles.0.insert(
+        0,
+        fixed_size(LayoutDisplay::Block, 14.0, 100.0).with_text_metrics(10.0, 10.0),
+    );
+    for node in 1..=2 {
+        styles.0.insert(
+            node,
+            resolved(LayoutDisplay::Inline, Style::default()).with_text_metrics(10.0, 10.0),
+        );
+    }
+
+    let output = build(&source, &mut styles);
+    let fragments = output
+        .client_rects_for_source(1)
+        .into_iter()
+        .map(|quad| quad.bounding_rect())
+        .filter(|rect| rect.width > 0.0 && rect.height > 0.0)
+        .collect::<Vec<_>>();
+    assert!(
+        fragments.len() > 1,
+        "the fixture must generate multiple inline fragments: {fragments:?}"
+    );
+    let union = fragments[1..]
+        .iter()
+        .copied()
+        .fold(fragments[0], LayoutRect::union);
+    let metrics = output
+        .element_metrics_for_source(1)
+        .expect("multiline inline metrics");
+
+    assert_close(metrics.offset_position.x, fragments[0].x);
+    assert_close(metrics.offset_position.y, fragments[0].y);
+    assert_close(metrics.offset_size.width, union.width);
+    assert_close(metrics.offset_size.height, union.height);
 }
 
 #[test]
@@ -595,9 +774,9 @@ fn caret_query_uses_parley_cluster_sides_and_inline_direction() {
                 matches!(
                     fragment.kind,
                     LayoutFragmentKind::Text {
-                        source_utf16_range: ref range,
+                        source_span: ref span,
                         ..
-                    } if *range == (0..1)
+                    } if span.utf16_range() == &(0..1)
                 )
             })
             .expect("one UTF-16 code-unit text fragment");
@@ -643,6 +822,82 @@ fn caret_query_uses_parley_cluster_sides_and_inline_direction() {
 }
 
 #[test]
+fn caret_and_range_queries_follow_the_physical_inline_axis() {
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::text("text", "ab"),
+    ]);
+    let mut styles = Styles::default();
+    styles.0.insert(
+        0,
+        fixed_size(LayoutDisplay::Block, 80.0, 200.0)
+            .with_writing_mode(taffy::WritingMode::VerticalRl),
+    );
+    styles
+        .0
+        .insert(1, resolved(LayoutDisplay::Inline, Style::default()));
+
+    let output = build(&source, &mut styles);
+    let fragment = output
+        .source_output(1)
+        .into_iter()
+        .flat_map(|source| source.fragments)
+        .filter_map(|id| output.fragment(id))
+        .find(|fragment| {
+            matches!(
+                fragment.kind,
+                LayoutFragmentKind::Text {
+                    source_span: ref span,
+                    ..
+                } if span.utf16_range() == &(0..1)
+            )
+        })
+        .expect("first vertical text fragment");
+    let LayoutFragmentKind::Text { inline_axis, .. } = &fragment.kind else {
+        unreachable!();
+    };
+    assert_eq!(*inline_axis, LayoutPhysicalAxis::Vertical);
+    assert!(fragment.rect.width > 0.0);
+    assert!(fragment.rect.height > 0.0);
+
+    let top = output
+        .caret_position(LayoutPoint::new(
+            fragment.rect.x + fragment.rect.width * 0.5,
+            fragment.rect.y + fragment.rect.height * 0.25,
+        ))
+        .expect("top cluster half should resolve a vertical caret");
+    let bottom = output
+        .caret_position(LayoutPoint::new(
+            fragment.rect.x + fragment.rect.width * 0.5,
+            fragment.rect.y + fragment.rect.height * 0.75,
+        ))
+        .expect("bottom cluster half should resolve a vertical caret");
+    assert_eq!(top.utf16_offset, Some(0));
+    assert_eq!(bottom.utf16_offset, Some(1));
+    let top_rect = top.rect.bounding_rect();
+    let bottom_rect = bottom.rect.bounding_rect();
+    assert_close(top_rect.x, fragment.rect.x);
+    assert_close(top_rect.y, fragment.rect.y);
+    assert_close(top_rect.width, fragment.rect.width);
+    assert_close(top_rect.height, 0.0);
+    assert_close(bottom_rect.x, fragment.rect.x);
+    assert_close(bottom_rect.y, fragment.rect.bottom());
+    assert_close(bottom_rect.width, fragment.rect.width);
+    assert_close(bottom_rect.height, 0.0);
+
+    let range = output.text_range_rects(1, 0..2);
+    assert_eq!(
+        range.len(),
+        1,
+        "adjacent vertical clusters should merge along their inline axis"
+    );
+    let range = range[0].bounding_rect();
+    assert_close(range.x, fragment.rect.x);
+    assert_close(range.width, fragment.rect.width);
+    assert!(range.height > fragment.rect.height);
+}
+
+#[test]
 fn split_inline_continuations_remain_mapped_to_the_originating_element() {
     let source = Source(vec![
         Node::element("root", vec![1]),
@@ -681,6 +936,32 @@ fn split_inline_continuations_remain_mapped_to_the_originating_element() {
         .border
         .bounding_rect();
     assert!(union.height >= second.bottom() - first.y);
+}
+
+#[test]
+fn block_in_inline_offset_parent_uses_the_structural_inline_ancestor() {
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("positioned-inline", vec![2]),
+        Node::element("promoted-block", Vec::new()),
+    ]);
+    let mut styles = Styles::default();
+    styles
+        .0
+        .insert(0, fixed_size(LayoutDisplay::Block, 200.0, 120.0));
+    styles.0.insert(
+        1,
+        resolved(LayoutDisplay::Inline, Style::default()).with_position(LayoutPosition::Relative),
+    );
+    styles
+        .0
+        .insert(2, fixed_size(LayoutDisplay::Block, 50.0, 20.0));
+
+    let output = build(&source, &mut styles);
+    let metrics = output
+        .element_metrics_for_source(2)
+        .expect("promoted block metrics");
+    assert_eq!(metrics.offset_parent, Some(1));
 }
 
 #[test]
@@ -730,6 +1011,13 @@ fn scroll_is_sampled_per_pass_and_updates_geometry_clip_and_hit_testing() {
             .bounding_rect()
             .x,
         -40.0,
+    );
+    assert_eq!(
+        first
+            .element_metrics_for_source(2)
+            .expect("the scrolled child has element metrics")
+            .border_origin_in_viewport_ignoring_css_transforms,
+        LayoutPoint::new(-40.0, -30.0),
     );
     assert_eq!(
         first
@@ -815,6 +1103,14 @@ fn transforms_and_semantic_paint_order_share_the_hit_test_projection() {
     );
     assert_eq!(
         output
+            .element_metrics_for_source(2)
+            .expect("the transformed box has element metrics")
+            .border_origin_in_viewport_ignoring_css_transforms,
+        LayoutPoint::new(20.0, 20.0),
+        "transform-free mapping must retain layout placement while skipping CSS transforms",
+    );
+    assert_eq!(
+        output
             .hit_test(LayoutPoint::new(40.0, 40.0), false)
             .unwrap()
             .source,
@@ -890,6 +1186,14 @@ fn viewport_fixed_geometry_does_not_move_with_root_scroll() {
         .bounding_rect();
     assert_close(fixed.x, 10.0);
     assert_close(fixed.y, 15.0);
+    assert_eq!(
+        output
+            .element_metrics_for_source(2)
+            .expect("the fixed box has element metrics")
+            .border_origin_in_viewport_ignoring_css_transforms,
+        LayoutPoint::new(10.0, 15.0),
+        "transform-free viewport mapping must preserve fixed positioning",
+    );
     assert_close(
         output
             .box_model_for_source(1)

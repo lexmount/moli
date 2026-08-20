@@ -5,7 +5,12 @@
 //! decision here so containing-block selection, stacking, geometry projection,
 //! hit testing, and paint clipping all consume one Chromium-aligned answer.
 
-use crate::world::{LayoutBox, LayoutBoxKind};
+use std::{fmt::Debug, hash::Hash};
+
+use crate::{
+    LayoutDisplay,
+    world::{LayoutBox, LayoutBoxId, LayoutBoxKind, LayoutWorld},
+};
 
 impl<N> LayoutBox<N> {
     /// Mirrors Blink's `LayoutObject::IsBox()` boundary.
@@ -45,18 +50,102 @@ impl<N> LayoutBox<N> {
             )
     }
 
-    pub(crate) fn establishes_positioned_containing_block(&self) -> bool {
-        self.style.establishes_positioned_containing_block(
-            self.is_css_box(),
-            self.is_eligible_for_paint_or_layout_containment(),
+    /// Mirrors Blink's `LayoutObject::IsEligibleForSizeContainment()`
+    /// boundary. Ordinary CSS boxes opt in, while table layout objects reject
+    /// size containment even where paint/layout containment may apply.
+    pub(crate) fn is_eligible_for_size_containment(&self) -> bool {
+        self.is_css_box()
+            && !matches!(
+                self.kind,
+                LayoutBoxKind::TableWrapper
+                    | LayoutBoxKind::InlineTableWrapper
+                    | LayoutBoxKind::TableRowGroup
+                    | LayoutBoxKind::TableHeaderGroup
+                    | LayoutBoxKind::TableFooterGroup
+                    | LayoutBoxKind::TableColumnGroup
+                    | LayoutBoxKind::TableColumn
+                    | LayoutBoxKind::TableRow
+                    | LayoutBoxKind::TableCell
+                    | LayoutBoxKind::AnonymousTableWrapper
+                    | LayoutBoxKind::AnonymousTableRowGroup
+                    | LayoutBoxKind::AnonymousTableRow
+                    | LayoutBoxKind::AnonymousTableCell
+            )
+    }
+
+    /// Mirrors Blink's display-lock applicability check.
+    ///
+    /// This is deliberately narrower than paint/layout containment
+    /// eligibility. Blink rejects non-atomic inline boxes and every table
+    /// display type except table cells, after first exempting replaced content
+    /// and the atomic layout objects used by HTML form controls.
+    pub(crate) fn is_eligible_for_display_lock(&self) -> bool {
+        if !self.is_css_box() {
+            return false;
+        }
+        if self
+            .element_semantics
+            .as_ref()
+            .is_some_and(|semantics| semantics.bypasses_display_lock_display_type_check())
+        {
+            return true;
+        }
+        !matches!(
+            self.style.display(),
+            LayoutDisplay::None
+                | LayoutDisplay::Contents
+                | LayoutDisplay::Inline
+                | LayoutDisplay::InlineListItem
+                | LayoutDisplay::Table
+                | LayoutDisplay::InlineTable
+                | LayoutDisplay::TableCaption
+                | LayoutDisplay::TableRowGroup
+                | LayoutDisplay::TableHeaderGroup
+                | LayoutDisplay::TableFooterGroup
+                | LayoutDisplay::TableColumnGroup
+                | LayoutDisplay::TableColumn
+                | LayoutDisplay::TableRow
         )
     }
 
-    pub(crate) fn establishes_fixed_containing_block(&self) -> bool {
-        self.style.establishes_fixed_containing_block(
-            self.is_css_box(),
-            self.is_eligible_for_paint_or_layout_containment(),
-        )
+    pub(crate) fn applies_any_size_containment(&self) -> bool {
+        let containment = self.used_size_containment();
+        containment.axes.width || containment.axes.height
+    }
+
+    /// Whether this exact principal box owns an active display lock for the
+    /// current epoch. Computed `content-visibility` alone is insufficient:
+    /// non-atomic inline and internal table layout objects are not eligible
+    /// and must keep constructing their descendants.
+    pub(crate) fn used_content_visibility_skips_contents(&self) -> bool {
+        self.style.content_visibility_skips_contents() && self.is_eligible_for_display_lock()
+    }
+
+    /// Whether this box stops HTML/body style propagation to the viewport.
+    ///
+    /// Style containment applies independently of principal-box eligibility;
+    /// size, layout, and paint containment retain their normal LayoutObject
+    /// eligibility rules. This is the same boundary Blink exposes through
+    /// `LayoutObject::ShouldApplyAnyContainment()`.
+    pub(crate) fn applies_any_containment(&self) -> bool {
+        self.style.applies_style_containment()
+            || self.applies_any_size_containment()
+            || (self.is_eligible_for_paint_or_layout_containment()
+                && (self.style.applies_layout_containment()
+                    || self.style.applies_paint_containment()))
+    }
+
+    /// Resolve computed containment to the used node-level layout protocol.
+    ///
+    /// Stylo owns the effective logical axes and physical fallback values;
+    /// this box boundary owns principal-box eligibility. Remembered sizes can
+    /// later be selected here without changing Taffy's numeric algorithms.
+    pub(crate) fn used_size_containment(&self) -> taffy::SizeContainment {
+        if self.is_eligible_for_size_containment() {
+            self.style.size_containment()
+        } else {
+            taffy::SizeContainment::NONE
+        }
     }
 
     pub(crate) fn creates_stacking_context(
@@ -70,10 +159,33 @@ impl<N> LayoutBox<N> {
             self.is_eligible_for_paint_or_layout_containment(),
         )
     }
+}
 
-    pub(crate) fn clips_descendant_paint(&self) -> bool {
-        self.style.clips_overflow()
-            || (self.is_eligible_for_paint_or_layout_containment()
-                && self.style.applies_paint_containment())
+impl<N> LayoutWorld<N>
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    /// Resolve the complete LayoutObject-level fixed-position capability.
+    ///
+    /// Style supplies transform/effect/containment triggers, while the box
+    /// tree supplies applicability and document-element identity. Keeping the
+    /// query on `LayoutWorld` prevents numeric layout and CSSOM projection
+    /// from deriving subtly different answers.
+    pub(crate) fn establishes_fixed_containing_block(&self, id: LayoutBoxId) -> bool {
+        let layout_box = &self.boxes[id.index()];
+        layout_box.style.establishes_fixed_containing_block(
+            id == self.root,
+            layout_box.is_css_box(),
+            layout_box.is_eligible_for_paint_or_layout_containment(),
+        )
+    }
+
+    pub(crate) fn establishes_positioned_containing_block(&self, id: LayoutBoxId) -> bool {
+        let layout_box = &self.boxes[id.index()];
+        layout_box.style.establishes_positioned_containing_block(
+            id == self.root,
+            layout_box.is_css_box(),
+            layout_box.is_eligible_for_paint_or_layout_containment(),
+        )
     }
 }

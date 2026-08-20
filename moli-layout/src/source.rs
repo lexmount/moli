@@ -1,6 +1,6 @@
 use std::{fmt::Debug, hash::Hash, sync::Arc};
 
-use crate::{LayoutError, ResolvedLayoutStyle};
+use crate::{LayoutError, LayoutPoint, ResolvedLayoutStyle};
 
 /// Source-node category needed by CSS box construction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -9,6 +9,18 @@ pub enum LayoutSourceKind {
     Text,
     Comment,
     Other,
+}
+
+/// Document mode that changes browser layout and CSSOM View semantics.
+///
+/// This is sampled once into the pass-local layout world. Layout never retains
+/// or calls back into the live document after construction.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum LayoutDocumentMode {
+    #[default]
+    NoQuirks,
+    LimitedQuirks,
+    Quirks,
 }
 
 /// Namespace family needed by box construction and diagnostics.
@@ -130,6 +142,19 @@ pub enum LayoutFormControlKind {
     Meter,
 }
 
+/// Used native presentation selected for an HTML `<select>` element.
+///
+/// This is layout-object state, not a CSS `display` value. Chromium creates a
+/// flexible menu-list object for popup selects and a block-flow object for
+/// in-page list boxes while both retain their observable `inline-block`
+/// display.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum LayoutSelectPresentation {
+    #[default]
+    MenuList,
+    ListBox,
+}
+
 impl LayoutFormControlKind {
     const fn debug_name(self) -> &'static str {
         match self {
@@ -216,6 +241,75 @@ pub enum LayoutReplacedKind {
     FormControl,
 }
 
+/// Renderer-resolved fallback content for an unavailable HTML image.
+///
+/// Resource lifecycle is deliberately absent from the layout crate. The
+/// renderer selects this disposition only after the image request can no
+/// longer produce primary replaced content; layout then owns the resulting
+/// box construction and used-style adjustment.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct LayoutImageFallbackContent {
+    alternative_text: Arc<str>,
+    has_nonempty_alt_attribute: bool,
+    quirks_mode: bool,
+}
+
+impl LayoutImageFallbackContent {
+    pub fn new(
+        alternative_text: impl Into<Arc<str>>,
+        has_nonempty_alt_attribute: bool,
+        quirks_mode: bool,
+    ) -> Self {
+        Self {
+            alternative_text: alternative_text.into(),
+            has_nonempty_alt_attribute,
+            quirks_mode,
+        }
+    }
+
+    pub fn alternative_text(&self) -> &str {
+        &self.alternative_text
+    }
+
+    pub const fn has_nonempty_alt_attribute(&self) -> bool {
+        self.has_nonempty_alt_attribute
+    }
+
+    pub const fn is_quirks_mode(&self) -> bool {
+        self.quirks_mode
+    }
+}
+
+/// Mutually exclusive content selected for an element's principal layout box.
+///
+/// Keeping fallback content in this sum type prevents an element from being
+/// classified as both a replaced leaf and a fallback container. That mirrors
+/// the layout-object reattachment boundary used by browser engines when an
+/// image request becomes terminally unavailable.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub enum LayoutElementContent {
+    #[default]
+    Normal,
+    Replaced(LayoutReplacedKind),
+    ImageFallback(LayoutImageFallbackContent),
+}
+
+impl LayoutElementContent {
+    pub const fn replaced_kind(&self) -> Option<LayoutReplacedKind> {
+        match self {
+            Self::Replaced(kind) => Some(*kind),
+            Self::Normal | Self::ImageFallback(_) => None,
+        }
+    }
+
+    pub const fn image_fallback(&self) -> Option<&LayoutImageFallbackContent> {
+        match self {
+            Self::ImageFallback(content) => Some(content),
+            Self::Normal | Self::Replaced(_) => None,
+        }
+    }
+}
+
 /// Typed HTML inputs consumed by table construction and sizing.
 ///
 /// Values are normalized by the renderer adapter so the layout crate never
@@ -277,6 +371,28 @@ impl Default for LayoutFormControlData {
     }
 }
 
+impl LayoutFormControlData {
+    /// Resolve HTML's menu-list/listbox split from normalized `multiple` and
+    /// `size` state.
+    ///
+    /// A multiple select defaults to a listbox, except for the explicit
+    /// `size=1` popup form. A non-multiple select becomes a listbox only when
+    /// its positive display size is greater than one.
+    pub const fn select_presentation(&self) -> LayoutSelectPresentation {
+        if self.multiple {
+            if matches!(self.size, Some(1)) {
+                LayoutSelectPresentation::MenuList
+            } else {
+                LayoutSelectPresentation::ListBox
+            }
+        } else if matches!(self.size, Some(size) if size > 1) {
+            LayoutSelectPresentation::ListBox
+        } else {
+            LayoutSelectPresentation::MenuList
+        }
+    }
+}
+
 /// Optional typed HTML metadata retained beside element classification.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct LayoutElementMetadata {
@@ -305,7 +421,7 @@ pub struct LayoutElementSemantics {
     pub namespace: LayoutNamespace,
     pub local_name: Arc<str>,
     pub category: LayoutElementCategory,
-    pub replaced: Option<LayoutReplacedKind>,
+    pub content: LayoutElementContent,
     pub metadata: LayoutElementMetadata,
 }
 
@@ -314,13 +430,13 @@ impl LayoutElementSemantics {
         namespace: LayoutNamespace,
         local_name: impl Into<Arc<str>>,
         category: LayoutElementCategory,
-        replaced: Option<LayoutReplacedKind>,
+        content: LayoutElementContent,
     ) -> Self {
         Self {
             namespace,
             local_name: local_name.into(),
             category,
-            replaced,
+            content,
             metadata: LayoutElementMetadata {
                 table: matches!(category, LayoutElementCategory::Table(_))
                     .then(LayoutTableData::default),
@@ -338,7 +454,56 @@ impl LayoutElementSemantics {
     }
 
     pub const fn is_replaced(&self) -> bool {
-        self.replaced.is_some()
+        matches!(&self.content, LayoutElementContent::Replaced(_))
+    }
+
+    /// Whether Blink skips its computed-display type rejection when deciding
+    /// if this element can own a display lock.
+    ///
+    /// Replaced content, broken-image fallback, and HTML form controls other
+    /// than `output` use dedicated atomic layout objects even when their
+    /// computed display would otherwise look like a non-atomic inline or a
+    /// table display type. Options, optgroups, legends, and output elements do
+    /// not inherit that exception merely because Moli groups their semantics
+    /// with form-control construction.
+    pub const fn bypasses_display_lock_display_type_check(&self) -> bool {
+        if matches!(
+            &self.content,
+            LayoutElementContent::Replaced(_) | LayoutElementContent::ImageFallback(_)
+        ) {
+            return true;
+        }
+        matches!(
+            self.category,
+            LayoutElementCategory::FormControl(
+                LayoutFormControlKind::Button
+                    | LayoutFormControlKind::Input(_)
+                    | LayoutFormControlKind::TextArea
+                    | LayoutFormControlKind::Select
+                    | LayoutFormControlKind::FieldSet
+            )
+        )
+    }
+
+    pub const fn replaced_kind(&self) -> Option<LayoutReplacedKind> {
+        self.content.replaced_kind()
+    }
+
+    pub const fn image_fallback(&self) -> Option<&LayoutImageFallbackContent> {
+        self.content.image_fallback()
+    }
+
+    pub(crate) fn select_presentation(&self) -> Option<LayoutSelectPresentation> {
+        if self.category != LayoutElementCategory::FormControl(LayoutFormControlKind::Select) {
+            return None;
+        }
+        Some(
+            self.metadata
+                .form_control
+                .as_ref()
+                .map(LayoutFormControlData::select_presentation)
+                .unwrap_or_default(),
+        )
     }
 
     pub(crate) fn is_html_element(&self, local_name: &str) -> bool {
@@ -404,19 +569,37 @@ impl LayoutPseudo {
     }
 }
 
-/// Replaced-element inputs known without decoding or querying a paint backend.
+/// Natural replaced-element inputs owned by the DOM/resource layer.
 ///
-/// Attribute dimensions remain distinct from intrinsic dimensions because CSS
-/// replaced sizing gives them different precedence. An unavailable HTML image
-/// has no intrinsic dimensions and represents no content, while replaced
-/// categories with a CSS default object size (for example canvas) keep their
-/// category-specific fallback.
+/// HTML width/height presentation attributes are deliberately absent here:
+/// they enter layout through the normal computed-style cascade. Canvas
+/// dimensions are different because they define the intrinsic bitmap and are
+/// converted to natural metrics before crossing this boundary. An unavailable
+/// HTML image therefore has no natural dimensions, while categories with a
+/// concrete default object size retain their category-specific fallback.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ReplacedObjectSize {
+    pub width: f32,
+    pub height: f32,
+}
+
+impl ReplacedObjectSize {
+    pub const fn new(width: f32, height: f32) -> Self {
+        Self { width, height }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ReplacedMetrics {
+    /// Actual natural content-box dimensions. Missing axes stay absent even
+    /// when the decoded resource has a concrete default object size.
     pub intrinsic_width: Option<f32>,
     pub intrinsic_height: Option<f32>,
-    pub attribute_width: Option<f32>,
-    pub attribute_height: Option<f32>,
+    /// Category-specific CSS default natural size for missing natural axes.
+    /// This is distinct from a resource's concrete object size, which may
+    /// already have applied its intrinsic ratio to the default object box.
+    /// When absent, the element category supplies its HTML/CSS default.
+    pub default_object_size: Option<ReplacedObjectSize>,
     pub intrinsic_ratio: Option<f32>,
 }
 
@@ -472,6 +655,27 @@ pub trait LayoutSource {
         Self: 'a;
 
     fn root(&self) -> Self::NodeId;
+    /// Whether the view root is the document element associated with the
+    /// layout viewport.
+    ///
+    /// Subtree and synthetic layout sources also receive a viewport-sized
+    /// containing block, but they must not participate in HTML document style
+    /// propagation to that internal carrier.
+    fn root_is_document_element(&self) -> bool {
+        false
+    }
+    fn document_mode(&self) -> LayoutDocumentMode {
+        LayoutDocumentMode::NoQuirks
+    }
+    /// The first HTML body belonging to this document view, whether or not it
+    /// currently generates a CSS box.
+    fn document_body(&self) -> Option<Self::NodeId> {
+        None
+    }
+    /// Scroll offset owned by the layout viewport rather than by a CSS box.
+    fn viewport_scroll_offset(&self) -> LayoutPoint {
+        self.scroll_offset(self.root())
+    }
     /// Returns the parent in the same flattened tree exposed by [`Self::flat_children`].
     /// The view root must return `None`, even when it has a DOM parent outside the view.
     fn flat_parent(&self, node: Self::NodeId) -> Option<Self::NodeId>;

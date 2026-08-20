@@ -9,14 +9,17 @@ use style::{
     Atom,
     color::ColorSpace,
     computed_values::{
-        content_visibility::T as StyloContentVisibility, isolation::T as StyloIsolation,
-        mix_blend_mode::T as StyloMixBlendMode,
+        content_visibility::T as StyloContentVisibility, flex_direction::T as StyloFlexDirection,
+        isolation::T as StyloIsolation, mix_blend_mode::T as StyloMixBlendMode,
+        visibility::T as StyloVisibility,
     },
     properties::ComputedValues,
     properties::generated::longhands::position::computed_value::T as StyloPosition,
     properties::generated::longhands::{
         direction::computed_value::T as StyloDirection,
+        text_orientation::computed_value::T as StyloTextOrientation,
         unicode_bidi::computed_value::T as StyloUnicodeBidi,
+        writing_mode::computed_value::T as StyloWritingMode,
     },
     servo_arc::Arc as ServoArc,
     values::{
@@ -28,7 +31,7 @@ use style::{
         generics::{
             box_::{
                 BaselineShift as GenericBaselineShift, BaselineShiftKeyword,
-                Perspective as GenericPerspective,
+                GenericContainIntrinsicSize, Perspective as GenericPerspective,
             },
             flex::GenericFlexBasis,
             grid::GenericGridTemplateComponent,
@@ -37,19 +40,23 @@ use style::{
             position::PreferredRatio,
             transform::{Rotate, Scale, Translate},
         },
-        specified::box_::{DisplayInside, DisplayOutside},
+        specified::box_::{ContainerType, DisplayInside, DisplayOutside},
         specified::{
             TextAlignKeyword, WillChangeBits,
+            align::{AlignFlags, ContentDistribution},
             text::{TextTransform, TextTransformCase},
         },
     },
 };
-use taffy::{BoxSizing, Display as TaffyDisplay, Position as TaffyPosition, Size, Style};
+use taffy::{
+    BoxSizing, Display as TaffyDisplay, FontBaseline, LogicalSize, Position as TaffyPosition,
+    ResolvedAspectRatio, Size, SizeContainment, Style,
+};
 
 use crate::{
-    LayoutPoint, LayoutRect, LayoutTransform2D, PaintBlendMode, PaintBorderColors,
-    PaintBorderStyle, PaintBorderStyles, PaintBoxShadow, PaintColor, PaintCornerRadii,
-    PaintCornerRadius, PaintEdgeSizes, PaintFragment,
+    LayoutElementContent, LayoutPoint, LayoutRect, LayoutSize, LayoutTransform2D, PaintBlendMode,
+    PaintBorderColors, PaintBorderStyle, PaintBorderStyles, PaintBoxShadow, PaintColor,
+    PaintCornerRadii, PaintCornerRadius, PaintEdgeSizes, PaintFragment,
 };
 
 /// Marker families implemented by the Phase 4 list formatter.
@@ -91,6 +98,206 @@ fn stylo_blend_mode(mode: StyloMixBlendMode) -> PaintBlendMode {
     }
 }
 
+/// Splits one physical `contain-intrinsic-*` component into the authored
+/// fallback and the stateful `auto` selector.
+fn contain_intrinsic_component(
+    value: &style::values::computed::ContainIntrinsicSize,
+) -> (Option<f32>, bool) {
+    match value {
+        GenericContainIntrinsicSize::Length(length) => (Some(length.px()), false),
+        GenericContainIntrinsicSize::AutoLength(length) => (Some(length.px()), true),
+        GenericContainIntrinsicSize::None => (None, false),
+        GenericContainIntrinsicSize::AutoNone => (None, true),
+    }
+}
+
+/// Last content-box size recorded for an element with an `auto`
+/// `contain-intrinsic-*` component.
+///
+/// Values are logical CSS pixels. The browser owns their lifetime and passes
+/// them into a new layout epoch; layout converts them back into the element's
+/// current physical writing mode and effective zoom.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LayoutLastRememberedSize {
+    pub inline_size: Option<f32>,
+    pub block_size: Option<f32>,
+}
+
+impl LayoutLastRememberedSize {
+    pub const fn is_empty(self) -> bool {
+        self.inline_size.is_none() && self.block_size.is_none()
+    }
+}
+
+/// Axis and writing-mode policy used by the browser's intrinsic-size observer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LayoutLastRememberedSizePolicy {
+    auto_inline_size: bool,
+    auto_block_size: bool,
+    horizontal_writing_mode: bool,
+}
+
+impl LayoutLastRememberedSizePolicy {
+    pub const fn records_inline_size(self) -> bool {
+        self.auto_inline_size
+    }
+
+    pub const fn records_block_size(self) -> bool {
+        self.auto_block_size
+    }
+
+    pub const fn records_any_size(self) -> bool {
+        self.auto_inline_size || self.auto_block_size
+    }
+
+    /// Converts an unzoomed physical content box into the logical axes that
+    /// remain meaningful if the element later changes writing mode.
+    pub fn observe(self, physical_size: LayoutSize) -> LayoutLastRememberedSize {
+        let (inline_size, block_size) = if self.horizontal_writing_mode {
+            (physical_size.width, physical_size.height)
+        } else {
+            (physical_size.height, physical_size.width)
+        };
+        LayoutLastRememberedSize {
+            inline_size: self.auto_inline_size.then_some(inline_size),
+            block_size: self.auto_block_size.then_some(block_size),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum LayoutContentVisibility {
+    #[default]
+    Visible,
+    Hidden,
+    Auto,
+}
+
+/// Computed `visibility` retained without collapsing CSS's table-specific
+/// `collapse` value into ordinary paint suppression.
+///
+/// `hidden` and `collapse` both suppress ordinary paint. Table layout also
+/// consumes `collapse` as a track-level used value, so that distinction must
+/// survive the Stylo projection boundary.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum LayoutVisibility {
+    #[default]
+    Visible,
+    Hidden,
+    Collapse,
+}
+
+/// One style's complete path from authored containment to the used value
+/// consumed by Taffy. Browser state is injected once per layout epoch; all
+/// writing-mode and zoom projection remains owned by this object.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct LayoutSizeContainmentState {
+    authored_axes: LogicalSize<bool>,
+    intrinsic_fallback: Size<Option<f32>>,
+    intrinsic_auto_axes: Size<bool>,
+    content_visibility: LayoutContentVisibility,
+    contents_skipped: bool,
+    remembered_size: LayoutLastRememberedSize,
+    used: SizeContainment,
+}
+
+impl Default for LayoutSizeContainmentState {
+    fn default() -> Self {
+        Self {
+            authored_axes: LogicalSize {
+                inline_size: false,
+                block_size: false,
+            },
+            intrinsic_fallback: Size::NONE,
+            intrinsic_auto_axes: Size {
+                width: false,
+                height: false,
+            },
+            content_visibility: LayoutContentVisibility::Visible,
+            contents_skipped: false,
+            remembered_size: LayoutLastRememberedSize::default(),
+            used: SizeContainment::NONE,
+        }
+    }
+}
+
+impl LayoutSizeContainmentState {
+    fn new(
+        authored_axes: LogicalSize<bool>,
+        intrinsic_fallback: Size<Option<f32>>,
+        intrinsic_auto_axes: Size<bool>,
+        content_visibility: LayoutContentVisibility,
+        writing_mode: taffy::WritingMode,
+        effective_zoom: f32,
+    ) -> Self {
+        let mut state = Self {
+            authored_axes,
+            intrinsic_fallback,
+            intrinsic_auto_axes,
+            content_visibility,
+            contents_skipped: content_visibility == LayoutContentVisibility::Hidden,
+            remembered_size: LayoutLastRememberedSize::default(),
+            used: SizeContainment::NONE,
+        };
+        state.recompute(writing_mode, effective_zoom);
+        state
+    }
+
+    fn resolve_browser_state(
+        &mut self,
+        auto_contents_skipped: bool,
+        remembered_size: LayoutLastRememberedSize,
+        writing_mode: taffy::WritingMode,
+        effective_zoom: f32,
+    ) {
+        self.contents_skipped = match self.content_visibility {
+            LayoutContentVisibility::Visible => false,
+            LayoutContentVisibility::Hidden => true,
+            LayoutContentVisibility::Auto => auto_contents_skipped,
+        };
+        self.remembered_size = remembered_size;
+        self.recompute(writing_mode, effective_zoom);
+    }
+
+    fn recompute(&mut self, writing_mode: taffy::WritingMode, effective_zoom: f32) {
+        let logical_axes = LogicalSize {
+            inline_size: self.authored_axes.inline_size || self.contents_skipped,
+            block_size: self.authored_axes.block_size || self.contents_skipped,
+        };
+        let mut intrinsic_content_size = self.intrinsic_fallback;
+        if self.contents_skipped {
+            let to_layout_space = |size: Option<f32>| {
+                size.filter(|size| size.is_finite())
+                    .map(|size| (size.max(0.0) * effective_zoom).max(0.0))
+                    .filter(|size| size.is_finite())
+            };
+            let remembered = writing_mode.to_physical(LogicalSize {
+                inline_size: to_layout_space(self.remembered_size.inline_size),
+                block_size: to_layout_space(self.remembered_size.block_size),
+            });
+            if self.intrinsic_auto_axes.width && remembered.width.is_some() {
+                intrinsic_content_size.width = remembered.width;
+            }
+            if self.intrinsic_auto_axes.height && remembered.height.is_some() {
+                intrinsic_content_size.height = remembered.height;
+            }
+        }
+        self.used = SizeContainment::new(
+            writing_mode.to_physical(logical_axes),
+            intrinsic_content_size,
+        );
+    }
+
+    fn observer_policy(self, writing_mode: taffy::WritingMode) -> LayoutLastRememberedSizePolicy {
+        let auto_axes = writing_mode.to_logical(self.intrinsic_auto_axes);
+        LayoutLastRememberedSizePolicy {
+            auto_inline_size: auto_axes.inline_size,
+            auto_block_size: auto_axes.block_size,
+            horizontal_writing_mode: writing_mode.is_horizontal(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum LayoutListMarkerPosition {
     Inside,
@@ -123,6 +330,53 @@ pub(crate) enum InlineDirection {
     #[default]
     Ltr,
     Rtl,
+}
+
+/// Glyph orientation selected inside a vertical inline formatting context.
+///
+/// The shaping backend still owns glyph forms. Layout retains the full CSS
+/// value because it also selects the IFC's dominant baseline: `sideways`
+/// uses the alphabetic baseline while `mixed` and `upright` use the central
+/// baseline in vertical flow.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum InlineTextOrientation {
+    #[default]
+    Mixed,
+    Upright,
+    Sideways,
+}
+
+impl InlineTextOrientation {
+    const fn font_baseline(self, writing_mode: taffy::WritingMode) -> FontBaseline {
+        match writing_mode {
+            taffy::WritingMode::VerticalRl | taffy::WritingMode::VerticalLr
+                if !matches!(self, Self::Sideways) =>
+            {
+                FontBaseline::Central
+            }
+            taffy::WritingMode::HorizontalTb
+            | taffy::WritingMode::VerticalRl
+            | taffy::WritingMode::VerticalLr
+            | taffy::WritingMode::SidewaysRl
+            | taffy::WritingMode::SidewaysLr => FontBaseline::Alphabetic,
+        }
+    }
+}
+
+impl InlineDirection {
+    const fn from_taffy(direction: taffy::Direction) -> Self {
+        match direction {
+            taffy::Direction::Ltr => Self::Ltr,
+            taffy::Direction::Rtl => Self::Rtl,
+        }
+    }
+
+    const fn to_taffy(self) -> taffy::Direction {
+        match self {
+            Self::Ltr => taffy::Direction::Ltr,
+            Self::Rtl => taffy::Direction::Rtl,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -170,13 +424,6 @@ pub(crate) enum PreferredAspectRatio {
     AutoAndRatio(f32),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct ResolvedAspectRatio {
-    pub(crate) ratio: Option<f32>,
-    /// The box whose dimensions the ratio constrains.
-    pub(crate) box_sizing: BoxSizing,
-}
-
 impl PreferredAspectRatio {
     fn from_components(auto: bool, ratio: Option<f32>) -> Self {
         match (auto, usable_aspect_ratio(ratio)) {
@@ -197,26 +444,26 @@ impl PreferredAspectRatio {
         }
     }
 
-    fn resolve_for_replaced(
+    fn resolve(
         self,
-        inherent_ratio: Option<f32>,
+        natural_ratio: Option<f32>,
         authored_box_sizing: BoxSizing,
     ) -> ResolvedAspectRatio {
-        let inherent_ratio = usable_aspect_ratio(inherent_ratio);
+        let natural_ratio = usable_aspect_ratio(natural_ratio);
         match self {
             Self::Ratio(ratio) => ResolvedAspectRatio {
                 ratio: Some(ratio),
                 box_sizing: authored_box_sizing,
             },
             Self::Auto => ResolvedAspectRatio {
-                ratio: inherent_ratio,
+                ratio: natural_ratio,
                 box_sizing: BoxSizing::ContentBox,
             },
             // Blink's BoxSizingForAspectRatio() uses content-box for the
             // combined `auto <ratio>` value, including when its ratio is used
             // as the fallback because no natural ratio is available.
             Self::AutoAndRatio(fallback) => ResolvedAspectRatio {
-                ratio: inherent_ratio.or(Some(fallback)),
+                ratio: natural_ratio.or(Some(fallback)),
                 box_sizing: BoxSizing::ContentBox,
             },
         }
@@ -380,6 +627,13 @@ pub(crate) struct ResolvedLayoutTransform {
     pub(crate) establishes_property_space: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum TableLayoutPreference {
+    #[default]
+    Automatic,
+    Fixed,
+}
+
 impl ResolvedLayoutTransform {
     pub(crate) const IDENTITY: Self = Self {
         transform: LayoutTransform2D::IDENTITY,
@@ -413,6 +667,8 @@ pub struct ResolvedLayoutStyle {
     text_transform: InlineTextTransform,
     text_align: parley::Alignment,
     direction: InlineDirection,
+    writing_mode: taffy::WritingMode,
+    text_orientation: InlineTextOrientation,
     unicode_bidi: InlineUnicodeBidi,
     vertical_align: InlineVerticalAlign,
     text_projection_deferred: bool,
@@ -422,18 +678,22 @@ pub struct ResolvedLayoutStyle {
     sticky_inset: taffy::Rect<taffy::LengthPercentageAuto>,
     establishes_transform_containing_block: bool,
     synthetic_transform: Option<LayoutTransform2D>,
-    visible: bool,
+    visibility: LayoutVisibility,
     pointer_events: bool,
     order: i32,
-    intrinsic_sizing_deferred: bool,
+    anchor_sizing_deferred: bool,
     grid_template_mode_deferred: bool,
+    table_layout: TableLayoutPreference,
     explicit_z_index: Option<i32>,
     opacity: f32,
     blend_mode: PaintBlendMode,
     has_filter_effect: bool,
+    has_filter_containing_block_trigger: bool,
     has_clip_path: bool,
     has_mask: bool,
     isolation: bool,
+    size_containment: LayoutSizeContainmentState,
+    style_containment: bool,
     layout_containment: bool,
     paint_containment: bool,
     will_change_containment: bool,
@@ -460,6 +720,8 @@ impl std::fmt::Debug for ResolvedLayoutStyle {
             .field("text_transform", &self.text_transform)
             .field("text_align", &self.text_align)
             .field("direction", &self.direction)
+            .field("writing_mode", &self.writing_mode)
+            .field("text_orientation", &self.text_orientation)
             .field("unicode_bidi", &self.unicode_bidi)
             .field("vertical_align", &self.vertical_align)
             .field("text_projection_deferred", &self.text_projection_deferred)
@@ -474,21 +736,28 @@ impl std::fmt::Debug for ResolvedLayoutStyle {
                 "has_synthetic_transform",
                 &self.synthetic_transform.is_some(),
             )
-            .field("visible", &self.visible)
+            .field("visibility", &self.visibility)
             .field("pointer_events", &self.pointer_events)
             .field("order", &self.order)
-            .field("intrinsic_sizing_deferred", &self.intrinsic_sizing_deferred)
+            .field("anchor_sizing_deferred", &self.anchor_sizing_deferred)
             .field(
                 "grid_template_mode_deferred",
                 &self.grid_template_mode_deferred,
             )
+            .field("table_layout", &self.table_layout)
             .field("explicit_z_index", &self.explicit_z_index)
             .field("opacity", &self.opacity)
             .field("blend_mode", &self.blend_mode)
             .field("has_filter_effect", &self.has_filter_effect)
+            .field(
+                "has_filter_containing_block_trigger",
+                &self.has_filter_containing_block_trigger,
+            )
             .field("has_clip_path", &self.has_clip_path)
             .field("has_mask", &self.has_mask)
             .field("isolation", &self.isolation)
+            .field("size_containment", &self.size_containment)
+            .field("style_containment", &self.style_containment)
             .field("layout_containment", &self.layout_containment)
             .field("paint_containment", &self.paint_containment)
             .field("will_change_containment", &self.will_change_containment)
@@ -550,6 +819,18 @@ impl ResolvedLayoutStyle {
             StyloDirection::Ltr => InlineDirection::Ltr,
             StyloDirection::Rtl => InlineDirection::Rtl,
         };
+        let writing_mode = match computed.clone_writing_mode() {
+            StyloWritingMode::HorizontalTb => taffy::WritingMode::HorizontalTb,
+            StyloWritingMode::VerticalRl => taffy::WritingMode::VerticalRl,
+            StyloWritingMode::VerticalLr => taffy::WritingMode::VerticalLr,
+            StyloWritingMode::SidewaysRl => taffy::WritingMode::SidewaysRl,
+            StyloWritingMode::SidewaysLr => taffy::WritingMode::SidewaysLr,
+        };
+        let text_orientation = match computed.clone_text_orientation() {
+            StyloTextOrientation::Mixed => InlineTextOrientation::Mixed,
+            StyloTextOrientation::Upright => InlineTextOrientation::Upright,
+            StyloTextOrientation::Sideways => InlineTextOrientation::Sideways,
+        };
         let unicode_bidi = match computed.clone_unicode_bidi() {
             StyloUnicodeBidi::Normal => InlineUnicodeBidi::Normal,
             StyloUnicodeBidi::Embed => InlineUnicodeBidi::Embed,
@@ -573,39 +854,6 @@ impl ResolvedLayoutStyle {
             StyloPosition::Sticky => LayoutPosition::Sticky,
         };
         let position_style = computed.get_position();
-        let intrinsic_sizing_deferred = [&position_style.height, &position_style.min_height]
-            .into_iter()
-            .any(|size| !matches!(size, GenericSize::Auto | GenericSize::LengthPercentage(_)))
-            || [&position_style.max_height].into_iter().any(|size| {
-                !matches!(
-                    size,
-                    GenericMaxSize::None | GenericMaxSize::LengthPercentage(_)
-                )
-            })
-            || [&position_style.width, &position_style.min_width]
-                .into_iter()
-                .any(|size| {
-                    !matches!(
-                        size,
-                        GenericSize::Auto
-                            | GenericSize::LengthPercentage(_)
-                            | GenericSize::MinContent
-                            | GenericSize::MaxContent
-                            | GenericSize::FitContent
-                            | GenericSize::Stretch
-                            | GenericSize::WebkitFillAvailable
-                    )
-                })
-            || !matches!(
-                &position_style.max_width,
-                GenericMaxSize::None
-                    | GenericMaxSize::LengthPercentage(_)
-                    | GenericMaxSize::MinContent
-                    | GenericMaxSize::MaxContent
-                    | GenericMaxSize::FitContent
-                    | GenericMaxSize::Stretch
-                    | GenericMaxSize::WebkitFillAvailable
-            );
         let grid_template_mode_deferred = [
             &position_style.grid_template_rows,
             &position_style.grid_template_columns,
@@ -617,6 +865,12 @@ impl ResolvedLayoutStyle {
                 GenericGridTemplateComponent::Subgrid(_) | GenericGridTemplateComponent::Masonry
             )
         });
+        let table_layout =
+            if computed.clone_table_layout() == style::computed_values::table_layout::T::Fixed {
+                TableLayoutPreference::Fixed
+            } else {
+                TableLayoutPreference::Automatic
+            };
         let out_of_flow = !matches!(
             stylo_position,
             StyloPosition::Static | StyloPosition::Relative | StyloPosition::Sticky
@@ -637,9 +891,48 @@ impl ResolvedLayoutStyle {
             .any(|image| !matches!(image, GenericImage::None));
         let isolation = computed.clone_isolation() == StyloIsolation::Isolate;
         let contain = computed.clone_contain();
+        let stylo_content_visibility = computed.clone_content_visibility();
+        let content_visibility = match stylo_content_visibility {
+            StyloContentVisibility::Visible => LayoutContentVisibility::Visible,
+            StyloContentVisibility::Hidden => LayoutContentVisibility::Hidden,
+            StyloContentVisibility::Auto => LayoutContentVisibility::Auto,
+        };
+        // Blink's EffectiveContainment folds authored containment,
+        // container-type, and content-visibility:hidden into the size axes.
+        // `content-visibility:auto` only adds size containment while the
+        // browser's display-lock policy actively skips the subtree.
+        let container_type = computed.clone_container_type();
+        let authored_size_containment_axes = LogicalSize {
+            inline_size: contain.contains(style::values::computed::Contain::INLINE_SIZE)
+                || container_type.intersects(ContainerType::INLINE_SIZE)
+                || container_type.intersects(ContainerType::SIZE),
+            block_size: contain.contains(style::values::computed::Contain::BLOCK_SIZE)
+                || container_type.intersects(ContainerType::SIZE),
+        };
+        let (contain_intrinsic_width_fallback, contain_intrinsic_width_auto) =
+            contain_intrinsic_component(&computed.clone_contain_intrinsic_width());
+        let (contain_intrinsic_height_fallback, contain_intrinsic_height_auto) =
+            contain_intrinsic_component(&computed.clone_contain_intrinsic_height());
+        let contain_intrinsic_fallback = Size {
+            width: contain_intrinsic_width_fallback,
+            height: contain_intrinsic_height_fallback,
+        };
+        let contain_intrinsic_auto_axes = Size {
+            width: contain_intrinsic_width_auto,
+            height: contain_intrinsic_height_auto,
+        };
+        let size_containment = LayoutSizeContainmentState::new(
+            authored_size_containment_axes,
+            contain_intrinsic_fallback,
+            contain_intrinsic_auto_axes,
+            content_visibility,
+            writing_mode,
+            computed.effective_zoom.value(),
+        );
+        let style_containment = contain.contains(style::values::computed::Contain::STYLE);
         let mut layout_containment = contain.contains(style::values::computed::Contain::LAYOUT);
         let mut paint_containment = contain.contains(style::values::computed::Contain::PAINT);
-        if computed.clone_content_visibility() != StyloContentVisibility::Visible {
+        if stylo_content_visibility != StyloContentVisibility::Visible {
             // Blink folds `content-visibility:auto/hidden` into effective
             // layout and paint containment before asking the LayoutObject
             // whether containment applies to its principal box. Standalone
@@ -651,6 +944,12 @@ impl ResolvedLayoutStyle {
         let will_change = computed.clone_will_change().bits;
         let will_change_containment = will_change.contains(WillChangeBits::CONTAIN);
         let will_change_position = will_change.contains(WillChangeBits::POSITION);
+        // Stylo folds `will-change: filter/backdrop-filter` into the same
+        // non-SVG fixed-position containing-block hint used by Gecko. Blink's
+        // `HasNonInitialFilter*()` exposes the equivalent union of an actual
+        // effect and that hint.
+        let has_filter_containing_block_trigger =
+            has_filter_effect || will_change.contains(WillChangeBits::FIXPOS_CB_NON_SVG);
         let will_change_stacking_context = will_change.intersects(
             WillChangeBits::STACKING_CONTEXT_UNCONDITIONAL
                 | WillChangeBits::TRANSFORM
@@ -680,30 +979,60 @@ impl ResolvedLayoutStyle {
             specified_aspect_ratio,
         );
         let mut taffy = stylo_taffy::to_taffy_style(&computed);
-        taffy.size = Size {
-            width: taffy_size_dimension(&position_style.width, taffy.size.width),
-            height: taffy_size_dimension(&position_style.height, taffy.size.height),
+        // Alignment keywords are layout protocol, not merely numeric style.
+        // Keep their lossless projection at Moli's browser boundary: the
+        // pinned generic converter predates Taffy's first/last-baseline model.
+        // Layout algorithms, rather than style conversion, choose the
+        // context-dependent fallback or baseline-sharing group.
+        taffy.align_content = taffy_content_alignment(position_style.align_content);
+        taffy.justify_content = taffy_justify_content(
+            position_style.justify_content,
+            position_style.flex_direction,
+            computed.clone_direction(),
+        );
+        taffy.align_items = taffy_item_alignment(position_style.align_items.0);
+        taffy.align_self = taffy_item_alignment(position_style.align_self.0);
+        taffy.justify_items = taffy_item_alignment((position_style.justify_items.computed.0).0);
+        taffy.justify_self = taffy_item_alignment(position_style.justify_self.0);
+        let size = Size {
+            width: project_taffy_size_value(&position_style.width, taffy.size.width),
+            height: project_taffy_size_value(&position_style.height, taffy.size.height),
         };
-        taffy.min_size = Size {
-            width: taffy_size_dimension(&position_style.min_width, taffy.min_size.width),
-            height: taffy_size_dimension(&position_style.min_height, taffy.min_size.height),
+        let min_size = Size {
+            width: project_taffy_size_value(&position_style.min_width, taffy.min_size.width),
+            height: project_taffy_size_value(&position_style.min_height, taffy.min_size.height),
         };
-        taffy.max_size = Size {
-            width: taffy_max_size_dimension(&position_style.max_width, taffy.max_size.width),
-            height: taffy_max_size_dimension(&position_style.max_height, taffy.max_size.height),
+        let max_size = Size {
+            width: project_taffy_max_size_dimension(
+                &position_style.max_width,
+                taffy.max_size.width,
+            ),
+            height: project_taffy_max_size_dimension(
+                &position_style.max_height,
+                taffy.max_size.height,
+            ),
         };
+        let flex_basis = project_taffy_flex_basis(&position_style.flex_basis, taffy.flex_basis);
+        let anchor_sizing_deferred = [
+            size.width,
+            size.height,
+            min_size.width,
+            min_size.height,
+            max_size.width,
+            max_size.height,
+            flex_basis,
+        ]
+        .into_iter()
+        .any(|projection| projection.anchor_sizing_deferred);
+        taffy.size = size.map(|projection| projection.dimension);
+        taffy.min_size = min_size.map(|projection| projection.dimension);
+        taffy.max_size = max_size.map(|projection| projection.dimension);
+        taffy.flex_basis = flex_basis.dimension;
         // Taffy's generic leaf algorithm transfers aspect ratios before a
         // replaced-element measure callback runs. CSS Sizing 4 defines zero,
         // infinite and NaN ratios as degenerate, so normalize them at the
         // Stylo/Taffy seam instead of relying only on replaced measurement.
         taffy.aspect_ratio = preferred_aspect_ratio.numeric_ratio();
-        if matches!(position_style.flex_basis, GenericFlexBasis::Content) {
-            // Blitz's fixed stylo_taffy revision predates Taffy's typed
-            // `content` flex-basis. Preserve the Stylo distinction here so
-            // Taffy ignores the preferred main size and follows the content
-            // flex-base-size algorithm instead of treating it as `auto`.
-            taffy.flex_basis = taffy::Dimension::content();
-        }
         taffy.item_is_table = matches!(display, LayoutDisplay::Table | LayoutDisplay::InlineTable);
         let sticky_inset = taffy.inset;
         let establishes_transform_containing_block =
@@ -717,7 +1046,11 @@ impl ResolvedLayoutStyle {
             // in `display` while selecting the non-collapsing block algorithm.
             taffy.display = TaffyDisplay::FlowRoot;
         }
-        let visible = computed.clone_visibility() == style::computed_values::visibility::T::Visible;
+        let visibility = match computed.clone_visibility() {
+            StyloVisibility::Visible => LayoutVisibility::Visible,
+            StyloVisibility::Hidden => LayoutVisibility::Hidden,
+            StyloVisibility::Collapse => LayoutVisibility::Collapse,
+        };
         let pointer_events =
             computed.clone_pointer_events() != style::computed_values::pointer_events::T::None;
         if matches!(position, LayoutPosition::Static | LayoutPosition::Sticky) {
@@ -748,6 +1081,8 @@ impl ResolvedLayoutStyle {
             text_transform,
             text_align,
             direction,
+            writing_mode,
+            text_orientation,
             unicode_bidi,
             vertical_align,
             text_projection_deferred,
@@ -757,18 +1092,22 @@ impl ResolvedLayoutStyle {
             sticky_inset,
             establishes_transform_containing_block,
             synthetic_transform: None,
-            visible,
+            visibility,
             pointer_events,
             order,
-            intrinsic_sizing_deferred,
+            anchor_sizing_deferred,
             grid_template_mode_deferred,
+            table_layout,
             explicit_z_index,
             opacity,
             blend_mode,
             has_filter_effect,
+            has_filter_containing_block_trigger,
             has_clip_path,
             has_mask,
             isolation,
+            size_containment,
+            style_containment,
             layout_containment,
             paint_containment,
             will_change_containment,
@@ -785,6 +1124,7 @@ impl ResolvedLayoutStyle {
         mut taffy: Style<Atom>,
         background_color: PaintColor,
     ) -> Self {
+        let direction = InlineDirection::from_taffy(taffy.direction);
         taffy.aspect_ratio = usable_aspect_ratio(taffy.aspect_ratio);
         let preferred_aspect_ratio = PreferredAspectRatio::from_taffy(taffy.aspect_ratio);
         taffy.display = taffy_display(display);
@@ -813,7 +1153,9 @@ impl ResolvedLayoutStyle {
             white_space_collapse: InlineWhiteSpaceCollapse::Collapse,
             text_transform: InlineTextTransform::None,
             text_align: parley::Alignment::Start,
-            direction: InlineDirection::Ltr,
+            direction,
+            writing_mode: taffy::WritingMode::HorizontalTb,
+            text_orientation: InlineTextOrientation::Mixed,
             unicode_bidi: InlineUnicodeBidi::Normal,
             vertical_align: InlineVerticalAlign::default(),
             text_projection_deferred: false,
@@ -823,18 +1165,22 @@ impl ResolvedLayoutStyle {
             sticky_inset,
             establishes_transform_containing_block: false,
             synthetic_transform: None,
-            visible: true,
+            visibility: LayoutVisibility::Visible,
             pointer_events: true,
             order: 0,
-            intrinsic_sizing_deferred: false,
+            anchor_sizing_deferred: false,
             grid_template_mode_deferred: false,
+            table_layout: TableLayoutPreference::Automatic,
             explicit_z_index: None,
             opacity: 1.0,
             blend_mode: PaintBlendMode::Normal,
             has_filter_effect: false,
+            has_filter_containing_block_trigger: false,
             has_clip_path: false,
             has_mask: false,
             isolation: false,
+            size_containment: LayoutSizeContainmentState::default(),
+            style_containment: false,
             layout_containment: false,
             paint_containment: false,
             will_change_containment: false,
@@ -881,6 +1227,54 @@ impl ResolvedLayoutStyle {
     pub fn with_inline_alignment(mut self, alignment: LayoutInlineAlignment) -> Self {
         self.vertical_align.kind = alignment;
         self
+    }
+
+    /// Overrides the flow-relative axes used by deterministic layout tests.
+    pub fn with_writing_mode(mut self, writing_mode: taffy::WritingMode) -> Self {
+        self.writing_mode = writing_mode;
+        let effective_zoom = self.effective_zoom();
+        self.size_containment
+            .recompute(self.writing_mode, effective_zoom);
+        self
+    }
+
+    /// Selects the fixed CSS table algorithm for a synthetic style. The
+    /// effective mode still depends on this style having a non-auto logical
+    /// inline size, exactly as it does for a Stylo-backed style.
+    pub fn with_fixed_table_layout(mut self) -> Self {
+        self.table_layout = TableLayoutPreference::Fixed;
+        self
+    }
+
+    /// Returns the inherited writing mode retained for layout.
+    pub(crate) fn writing_mode(&self) -> taffy::WritingMode {
+        self.writing_mode
+    }
+
+    /// Override only the writing direction consumed by layout.
+    ///
+    /// HTML may propagate the body's writing mode and direction to the root
+    /// LayoutObject while CSSOM keeps the root element's computed values.
+    /// Retaining `computed` and changing this pass-local projection preserves
+    /// that used-style/computed-style split.
+    pub(crate) fn use_layout_writing_direction(
+        &mut self,
+        writing_direction: taffy::WritingDirection,
+    ) {
+        self.writing_mode = writing_direction.mode;
+        self.direction = InlineDirection::from_taffy(writing_direction.direction);
+        self.taffy.direction = writing_direction.direction;
+        let effective_zoom = self.effective_zoom();
+        self.size_containment
+            .recompute(self.writing_mode, effective_zoom);
+    }
+
+    pub(crate) fn font_baseline(&self) -> FontBaseline {
+        self.text_orientation.font_baseline(self.writing_mode)
+    }
+
+    pub(crate) const fn writing_direction(&self) -> taffy::WritingDirection {
+        taffy::WritingDirection::new(self.writing_mode, self.direction.to_taffy())
     }
 
     /// Overrides the CSS-pixel baseline shift for a synthetic inline style.
@@ -978,6 +1372,16 @@ impl ResolvedLayoutStyle {
 
     pub fn display(&self) -> LayoutDisplay {
         self.display
+    }
+
+    /// Used inner formatting context after browser layout-object adjustments.
+    ///
+    /// `display` retains the authored/computed outer+inner value for box-tree
+    /// semantics. Native controls can select a different internal algorithm
+    /// without changing that observable CSS value, just as Blink's menu-list
+    /// select has computed `inline-block` display but owns a LayoutFlexibleBox.
+    pub(crate) fn uses_flex_formatting_context(&self) -> bool {
+        self.taffy.display == TaffyDisplay::Flex
     }
 
     /// Whether the box would have been inline-level before absolute/fixed
@@ -1160,20 +1564,29 @@ impl ResolvedLayoutStyle {
 
     pub(crate) fn establishes_positioned_containing_block(
         &self,
+        is_document_element: bool,
         is_css_box: bool,
         containment_eligible: bool,
     ) -> bool {
         self.position.is_positioned()
             || self.will_change_position
-            || self.establishes_fixed_containing_block(is_css_box, containment_eligible)
+            || self.establishes_fixed_containing_block(
+                is_document_element,
+                is_css_box,
+                containment_eligible,
+            )
     }
 
     pub(crate) fn establishes_fixed_containing_block(
         &self,
+        is_document_element: bool,
         is_css_box: bool,
         containment_eligible: bool,
     ) -> bool {
-        (is_css_box && self.establishes_transform_containing_block)
+        // Filter effects apply to inline LayoutObjects too, unlike transforms,
+        // but Filter Effects explicitly excludes the document element.
+        (!is_document_element && self.has_filter_containing_block_trigger)
+            || (is_css_box && self.establishes_transform_containing_block)
             || (containment_eligible
                 && (self.layout_containment
                     || self.paint_containment
@@ -1184,8 +1597,74 @@ impl ResolvedLayoutStyle {
         self.paint_containment
     }
 
+    pub(crate) const fn applies_layout_containment(&self) -> bool {
+        self.layout_containment
+    }
+
+    pub(crate) const fn applies_style_containment(&self) -> bool {
+        self.style_containment
+    }
+
+    /// Resolves the browser-owned display-lock decision for this layout epoch.
+    ///
+    /// `content-visibility:hidden` always skips. `auto_contents_skipped` is the
+    /// viewport/display-lock decision for `content-visibility:auto`; it is
+    /// ignored for other computed values. Remembered sizes are logical,
+    /// unzoomed CSS pixels and are selected only while contents are skipped.
+    pub fn resolve_content_visibility_state(
+        &mut self,
+        auto_contents_skipped: bool,
+        remembered: LayoutLastRememberedSize,
+    ) {
+        let effective_zoom = self.effective_zoom();
+        self.size_containment.resolve_browser_state(
+            auto_contents_skipped,
+            remembered,
+            self.writing_mode,
+            effective_zoom,
+        );
+    }
+
+    /// Returns the axis policy for the document's intrinsic-size observer.
+    /// `content-visibility:auto` makes both axes stateful, matching Blink's
+    /// computed-style adjustment, even while the current epoch stays visible.
+    pub fn last_remembered_size_policy(&self) -> LayoutLastRememberedSizePolicy {
+        self.size_containment.observer_policy(self.writing_mode)
+    }
+
+    /// Whether this computed style requests the viewport-driven display-lock
+    /// mode. Principal-box eligibility is resolved later by box construction.
+    pub fn content_visibility_is_auto(&self) -> bool {
+        self.size_containment.content_visibility == LayoutContentVisibility::Auto
+    }
+
+    pub(crate) const fn content_visibility_skips_contents(&self) -> bool {
+        self.size_containment.contents_skipped
+    }
+
+    pub(crate) const fn size_containment(&self) -> SizeContainment {
+        self.size_containment.used
+    }
+
+    /// Returns the accumulated CSS `zoom` applied to this box's layout values.
+    ///
+    /// Stylo has already applied this factor to computed CSS lengths. Layout,
+    /// paint, and client rects retain that zoomed space. Browser resources are
+    /// scaled into it on import, while CSSOM integer box and scroll metrics
+    /// remove the factor when they are published. Synthetic styles have no
+    /// Stylo value and therefore use the initial factor.
+    pub(crate) fn effective_zoom(&self) -> f32 {
+        self.computed
+            .as_ref()
+            .map_or(1.0, |computed| computed.effective_zoom.value())
+    }
+
     pub(crate) const fn is_visible(&self) -> bool {
-        self.visible
+        matches!(self.visibility, LayoutVisibility::Visible)
+    }
+
+    pub(crate) const fn visibility_is_collapsed(&self) -> bool {
+        matches!(self.visibility, LayoutVisibility::Collapse)
     }
 
     /// Returns the computed CSS `color` sampled for this pass.
@@ -1281,9 +1760,15 @@ impl ResolvedLayoutStyle {
     }
 
     pub(crate) fn table_layout_is_fixed(&self) -> bool {
-        self.computed.as_ref().is_some_and(|computed| {
-            computed.clone_table_layout() == style::computed_values::table_layout::T::Fixed
-        })
+        if self.table_layout != TableLayoutPreference::Fixed {
+            return false;
+        }
+
+        // CSS Tables applies the fixed algorithm only when the table has a
+        // non-auto logical width. Blink additionally treats max-content as
+        // automatic under the stable (non TableIsAutoFixedLayout) behavior.
+        let logical_width = self.writing_mode.to_logical(self.taffy.size).inline_size;
+        !logical_width.is_auto() && !logical_width.is_max_content()
     }
 
     pub(crate) fn table_border_is_collapsed(&self) -> bool {
@@ -1312,8 +1797,8 @@ impl ResolvedLayoutStyle {
         self.taffy.float != taffy::Float::None
     }
 
-    pub(crate) fn has_deferred_intrinsic_sizing(&self) -> bool {
-        self.intrinsic_sizing_deferred
+    pub(crate) fn has_deferred_anchor_sizing(&self) -> bool {
+        self.anchor_sizing_deferred
     }
 
     pub(crate) fn has_deferred_grid_template_mode(&self) -> bool {
@@ -1323,62 +1808,6 @@ impl ResolvedLayoutStyle {
     pub(crate) fn has_auto_inset_axis(&self) -> bool {
         (self.taffy.inset.left.is_auto() && self.taffy.inset.right.is_auto())
             || (self.taffy.inset.top.is_auto() && self.taffy.inset.bottom.is_auto())
-    }
-
-    /// Creates a zero-sized, non-painted absolute placeholder that asks the
-    /// original block formatting context to compute a positioned descendant's
-    /// hypothetical static position. The real box remains a child of its CSS
-    /// containing block in the numeric tree.
-    pub(crate) fn positioned_static_placeholder(&self) -> Self {
-        let mut placeholder = self.clone();
-        let zero_dimension = taffy::Dimension::length(0.0);
-        let zero_length = taffy::LengthPercentage::length(0.0);
-        placeholder.display = LayoutDisplay::Block;
-        placeholder.taffy.display = TaffyDisplay::Block;
-        placeholder.taffy.size = Size {
-            width: zero_dimension,
-            height: zero_dimension,
-        };
-        placeholder.taffy.min_size = Size {
-            width: zero_dimension,
-            height: zero_dimension,
-        };
-        placeholder.taffy.max_size = Size {
-            width: zero_dimension,
-            height: zero_dimension,
-        };
-        placeholder.taffy.padding = taffy::Rect {
-            left: zero_length,
-            right: zero_length,
-            top: zero_length,
-            bottom: zero_length,
-        };
-        placeholder.taffy.border = taffy::Rect {
-            left: zero_length,
-            right: zero_length,
-            top: zero_length,
-            bottom: zero_length,
-        };
-        placeholder.taffy.aspect_ratio = None;
-        placeholder.preferred_aspect_ratio = PreferredAspectRatio::Auto;
-        placeholder.background_color = PaintColor::TRANSPARENT;
-        placeholder.border_colors = PaintBorderColors::all(PaintColor::TRANSPARENT);
-        placeholder.generated_content = GeneratedContent::None;
-        placeholder.establishes_transform_containing_block = false;
-        placeholder.synthetic_transform = None;
-        // This is an internal static-position probe, not the authored CSS
-        // principal box. Do not let copied containment or `will-change`
-        // metadata turn it into a containing block, stacking context, or
-        // descendant clip in the later projection passes.
-        placeholder.layout_containment = false;
-        placeholder.paint_containment = false;
-        placeholder.will_change_containment = false;
-        placeholder.will_change_position = false;
-        placeholder.will_change_stacking_context = false;
-        placeholder.visible = false;
-        placeholder.pointer_events = false;
-        placeholder.explicit_z_index = None;
-        placeholder
     }
 
     pub(crate) const fn sticky_inset(&self) -> taffy::Rect<taffy::LengthPercentageAuto> {
@@ -1427,8 +1856,20 @@ impl ResolvedLayoutStyle {
         self.text_transform
     }
 
-    pub(crate) fn text_align(&self) -> parley::Alignment {
-        self.text_align
+    /// Resolves CSS flow-relative alignment before crossing into Parley.
+    ///
+    /// Parley 0.10 derives `start` and `end` from the first strong character
+    /// in the text. CSS derives them from the containing block's `direction`,
+    /// including for empty, numeric, and neutral-only lines. Physical
+    /// alignment is therefore part of this browser-owned style seam.
+    pub(crate) fn resolved_text_align(&self) -> parley::Alignment {
+        match (self.text_align, self.direction) {
+            (parley::Alignment::Start, InlineDirection::Ltr)
+            | (parley::Alignment::End, InlineDirection::Rtl) => parley::Alignment::Left,
+            (parley::Alignment::Start, InlineDirection::Rtl)
+            | (parley::Alignment::End, InlineDirection::Ltr) => parley::Alignment::Right,
+            (alignment, _) => alignment,
+        }
     }
 
     pub(crate) fn direction(&self) -> InlineDirection {
@@ -1504,6 +1945,23 @@ impl ResolvedLayoutStyle {
         self.taffy.overflow.y == taffy::Overflow::Scroll
     }
 
+    /// The viewport treats propagated `overflow: visible` as an automatic
+    /// scrolling mechanism. `hidden` and `clip` still permit programmatic
+    /// scrolling, but they suppress user-initiated scrolling.
+    pub(crate) fn allows_viewport_user_scroll_x(&self) -> bool {
+        matches!(
+            self.taffy.overflow.x,
+            taffy::Overflow::Visible | taffy::Overflow::Scroll
+        )
+    }
+
+    pub(crate) fn allows_viewport_user_scroll_y(&self) -> bool {
+        matches!(
+            self.taffy.overflow.y,
+            taffy::Overflow::Visible | taffy::Overflow::Scroll
+        )
+    }
+
     pub(crate) fn text_leaf_from(parent: &Self) -> Self {
         Self {
             computed: parent.computed.clone(),
@@ -1524,6 +1982,8 @@ impl ResolvedLayoutStyle {
             text_transform: parent.text_transform,
             text_align: parent.text_align,
             direction: parent.direction,
+            writing_mode: parent.writing_mode,
+            text_orientation: parent.text_orientation,
             unicode_bidi: InlineUnicodeBidi::Normal,
             vertical_align: parent.vertical_align,
             text_projection_deferred: parent.text_projection_deferred,
@@ -1538,18 +1998,22 @@ impl ResolvedLayoutStyle {
             },
             establishes_transform_containing_block: false,
             synthetic_transform: None,
-            visible: parent.visible,
+            visibility: parent.visibility,
             pointer_events: parent.pointer_events,
             order: 0,
-            intrinsic_sizing_deferred: false,
+            anchor_sizing_deferred: false,
             grid_template_mode_deferred: false,
+            table_layout: TableLayoutPreference::Automatic,
             explicit_z_index: None,
             opacity: 1.0,
             blend_mode: PaintBlendMode::Normal,
             has_filter_effect: false,
+            has_filter_containing_block_trigger: false,
             has_clip_path: false,
             has_mask: false,
             isolation: false,
+            size_containment: LayoutSizeContainmentState::default(),
+            style_containment: false,
             layout_containment: false,
             paint_containment: false,
             will_change_containment: false,
@@ -1582,6 +2046,8 @@ impl ResolvedLayoutStyle {
             text_transform: parent.text_transform,
             text_align: parent.text_align,
             direction: parent.direction,
+            writing_mode: parent.writing_mode,
+            text_orientation: parent.text_orientation,
             unicode_bidi: InlineUnicodeBidi::Normal,
             vertical_align: parent.vertical_align,
             text_projection_deferred: parent.text_projection_deferred,
@@ -1596,18 +2062,22 @@ impl ResolvedLayoutStyle {
             },
             establishes_transform_containing_block: false,
             synthetic_transform: None,
-            visible: parent.visible,
+            visibility: parent.visibility,
             pointer_events: parent.pointer_events,
             order: 0,
-            intrinsic_sizing_deferred: false,
+            anchor_sizing_deferred: false,
             grid_template_mode_deferred: false,
+            table_layout: TableLayoutPreference::Automatic,
             explicit_z_index: None,
             opacity: 1.0,
             blend_mode: PaintBlendMode::Normal,
             has_filter_effect: false,
+            has_filter_containing_block_trigger: false,
             has_clip_path: false,
             has_mask: false,
             isolation: false,
+            size_containment: LayoutSizeContainmentState::default(),
+            style_containment: false,
             layout_containment: false,
             paint_containment: false,
             will_change_containment: false,
@@ -1629,27 +2099,69 @@ impl ResolvedLayoutStyle {
         }
     }
 
-    pub(crate) fn mark_replaced(&mut self, inherent_ratio: Option<f32>) {
+    pub(crate) fn mark_replaced(&mut self) {
         self.taffy.item_is_replaced = true;
-        self.taffy.aspect_ratio = self
-            .preferred_aspect_ratio
-            .resolve_for_replaced(inherent_ratio, self.taffy.box_sizing)
-            .ratio;
     }
 
-    pub(crate) fn resolved_replaced_aspect_ratio(
-        &self,
-        inherent_ratio: Option<f32>,
-    ) -> ResolvedAspectRatio {
+    /// Applies element-content-dependent used-style rules at the box-tree
+    /// construction boundary.
+    ///
+    /// A terminally unavailable HTML image is rebuilt as fallback flow
+    /// content, not measured as a replaced leaf. Blink resets a standards-mode
+    /// inline fallback's preferred dimensions when non-empty `alt` text makes
+    /// it non-replaced; missing/empty `alt`, quirks mode, and non-inline author
+    /// display retain the authored sizing behavior.
+    pub(crate) fn adjust_for_element_content(&mut self, content: &LayoutElementContent) {
+        let LayoutElementContent::ImageFallback(fallback) = content else {
+            return;
+        };
+
+        let width_is_auto = self.taffy.size.width.is_auto();
+        let height_is_auto = self.taffy.size.height.is_auto();
+        if fallback.is_quirks_mode() {
+            if !width_is_auto && height_is_auto {
+                self.taffy.size.height = self.taffy.size.width;
+            } else if !height_is_auto && width_is_auto {
+                self.taffy.size.width = self.taffy.size.height;
+            }
+        }
+
+        if !self.image_fallback_is_atomic(content) && self.display == LayoutDisplay::Inline {
+            self.taffy.size = Size {
+                width: taffy::Dimension::auto(),
+                height: taffy::Dimension::auto(),
+            };
+            self.preferred_aspect_ratio = PreferredAspectRatio::Auto;
+            self.taffy.aspect_ratio = None;
+        }
+    }
+
+    /// Whether failed-image fallback content participates as a sized atomic
+    /// object instead of ordinary phrasing content.
+    ///
+    /// This is the layout-object counterpart of Blink's
+    /// `TreatImageAsReplaced`: the fallback remains content-bearing (its alt
+    /// text is laid out), but an authored two-axis size or one size plus a
+    /// preferred ratio makes it atomic when the document is in quirks mode or
+    /// the image has no non-empty `alt` value.
+    pub(crate) fn image_fallback_is_atomic(&self, content: &LayoutElementContent) -> bool {
+        let LayoutElementContent::ImageFallback(fallback) = content else {
+            return false;
+        };
+        let has_intrinsic_dimensions =
+            !self.taffy.size.width.is_auto() && !self.taffy.size.height.is_auto();
+        let has_dimensions_from_ratio = self.preferred_aspect_ratio != PreferredAspectRatio::Auto
+            && (!self.taffy.size.width.is_auto() || !self.taffy.size.height.is_auto());
+        (has_intrinsic_dimensions || has_dimensions_from_ratio)
+            && (fallback.is_quirks_mode() || !fallback.has_nonempty_alt_attribute())
+    }
+
+    pub(crate) fn resolved_aspect_ratio(&self, natural_ratio: Option<f32>) -> ResolvedAspectRatio {
         self.preferred_aspect_ratio
-            .resolve_for_replaced(inherent_ratio, self.taffy.box_sizing)
+            .resolve(natural_ratio, self.taffy.box_sizing)
     }
 
-    pub(crate) fn mark_intrinsic_form_control_container(&mut self) {
-        // A button retains and lays out its real DOM children, but its
-        // block-level outer display still uses the same non-stretch intrinsic
-        // width exception as other native controls.
-        self.taffy.item_is_table = true;
+    pub(crate) fn adjust_button_flow_layout(&mut self) {
         // Blink's UA sheet gives <button> a private safe block-content center
         // alignment. Taffy's block algorithm already implements the standard
         // equivalent. Only flow buttons use that algorithm; author flex/grid
@@ -1664,38 +2176,221 @@ impl ResolvedLayoutStyle {
             self.taffy.align_content = Some(taffy::AlignContent::SAFE_CENTER);
         }
     }
+
+    pub(crate) fn mark_menu_list_formatting_context(&mut self) {
+        // Blink gives an appearance:auto menu-list select a LayoutFlexibleBox
+        // even though its computed display remains inline-block. Keep the
+        // observable display in `display` and select only the inner numeric
+        // formatting algorithm here.
+        self.taffy.display = TaffyDisplay::Flex;
+    }
 }
 
 fn usable_aspect_ratio(ratio: Option<f32>) -> Option<f32> {
     ratio.filter(|ratio| ratio.is_finite() && *ratio > 0.0)
 }
 
-fn taffy_size_dimension(
-    size: &GenericSize<style::values::computed::NonNegativeLengthPercentage>,
-    fallback: taffy::Dimension,
-) -> taffy::Dimension {
-    match size {
-        GenericSize::MinContent => taffy::Dimension::min_content(),
-        GenericSize::MaxContent => taffy::Dimension::max_content(),
-        GenericSize::FitContent => taffy::Dimension::fit_content(),
-        GenericSize::Stretch | GenericSize::WebkitFillAvailable => taffy::Dimension::stretch(),
-        _ => fallback,
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TaffyDimensionProjection {
+    dimension: taffy::Dimension,
+    anchor_sizing_deferred: bool,
+}
+
+impl TaffyDimensionProjection {
+    const fn supported(dimension: taffy::Dimension) -> Self {
+        Self {
+            dimension,
+            anchor_sizing_deferred: false,
+        }
+    }
+
+    const fn deferred(dimension: taffy::Dimension) -> Self {
+        Self {
+            dimension,
+            anchor_sizing_deferred: true,
+        }
     }
 }
 
-fn taffy_max_size_dimension(
+/// Project one computed CSS `<width>` value through a single capability seam.
+///
+/// Width, height, minimum sizes, and `flex-basis` share this grammar. Intrinsic
+/// and stretch keywords therefore retain the same typed layout meaning on
+/// every path. Anchor sizing is different: resolving it requires the
+/// anchor-query context, so the generic Stylo/Taffy fallback remains in force
+/// and the same projection marks that missing context for diagnostics.
+fn project_taffy_size_value(
+    size: &GenericSize<style::values::computed::NonNegativeLengthPercentage>,
+    fallback: taffy::Dimension,
+) -> TaffyDimensionProjection {
+    match size {
+        GenericSize::MinContent => {
+            TaffyDimensionProjection::supported(taffy::Dimension::min_content())
+        }
+        GenericSize::MaxContent => {
+            TaffyDimensionProjection::supported(taffy::Dimension::max_content())
+        }
+        GenericSize::FitContent => {
+            TaffyDimensionProjection::supported(taffy::Dimension::fit_content())
+        }
+        GenericSize::FitContentFunction(limit) => {
+            TaffyDimensionProjection::supported(taffy::Dimension::fit_content_function(
+                stylo_taffy::convert::length_percentage(&limit.0),
+            ))
+        }
+        GenericSize::Stretch | GenericSize::WebkitFillAvailable => {
+            TaffyDimensionProjection::supported(taffy::Dimension::stretch())
+        }
+        GenericSize::Auto | GenericSize::LengthPercentage(_) => {
+            TaffyDimensionProjection::supported(fallback)
+        }
+        GenericSize::AnchorSizeFunction(_) | GenericSize::AnchorContainingCalcFunction(_) => {
+            TaffyDimensionProjection::deferred(fallback)
+        }
+    }
+}
+
+/// Preserve the complete `flex-basis` grammar at the browser/layout boundary.
+///
+/// The pinned `stylo_taffy` converter predates Taffy's typed content and
+/// intrinsic bases. Reusing the shared `<width>` projection keeps `auto`,
+/// `content`, intrinsic functions, stretch, and deferred anchor sizing
+/// distinguishable until the flex algorithm has its constraint space.
+fn project_taffy_flex_basis(
+    flex_basis: &style::values::computed::FlexBasis,
+    fallback: taffy::Dimension,
+) -> TaffyDimensionProjection {
+    match flex_basis {
+        GenericFlexBasis::Content => {
+            TaffyDimensionProjection::supported(taffy::Dimension::content())
+        }
+        GenericFlexBasis::Size(size) => project_taffy_size_value(size, fallback),
+    }
+}
+
+fn project_taffy_max_size_dimension(
     size: &GenericMaxSize<style::values::computed::NonNegativeLengthPercentage>,
     fallback: taffy::Dimension,
-) -> taffy::Dimension {
+) -> TaffyDimensionProjection {
     match size {
-        GenericMaxSize::MinContent => taffy::Dimension::min_content(),
-        GenericMaxSize::MaxContent => taffy::Dimension::max_content(),
-        GenericMaxSize::FitContent => taffy::Dimension::fit_content(),
-        GenericMaxSize::Stretch | GenericMaxSize::WebkitFillAvailable => {
-            taffy::Dimension::stretch()
+        GenericMaxSize::MinContent => {
+            TaffyDimensionProjection::supported(taffy::Dimension::min_content())
         }
-        _ => fallback,
+        GenericMaxSize::MaxContent => {
+            TaffyDimensionProjection::supported(taffy::Dimension::max_content())
+        }
+        GenericMaxSize::FitContent => {
+            TaffyDimensionProjection::supported(taffy::Dimension::fit_content())
+        }
+        GenericMaxSize::FitContentFunction(limit) => {
+            TaffyDimensionProjection::supported(taffy::Dimension::fit_content_function(
+                stylo_taffy::convert::length_percentage(&limit.0),
+            ))
+        }
+        GenericMaxSize::Stretch | GenericMaxSize::WebkitFillAvailable => {
+            TaffyDimensionProjection::supported(taffy::Dimension::stretch())
+        }
+        GenericMaxSize::None | GenericMaxSize::LengthPercentage(_) => {
+            TaffyDimensionProjection::supported(fallback)
+        }
+        GenericMaxSize::AnchorSizeFunction(_) | GenericMaxSize::AnchorContainingCalcFunction(_) => {
+            TaffyDimensionProjection::deferred(fallback)
+        }
     }
+}
+
+/// Losslessly project the CSS self-alignment grammar into Taffy's typed
+/// alignment protocol.
+///
+/// This is deliberately complete rather than a `last baseline` special case:
+/// all four item/self properties cross one stable browser-layout boundary,
+/// including writing-mode-relative self edges and overflow safety.
+fn taffy_item_alignment(input: AlignFlags) -> Option<taffy::AlignItems> {
+    let mut alignment = match input.value() {
+        AlignFlags::AUTO => None,
+        AlignFlags::NORMAL => Some(taffy::AlignItems::NORMAL),
+        AlignFlags::STRETCH => Some(taffy::AlignItems::STRETCH),
+        AlignFlags::FLEX_START => Some(taffy::AlignItems::FLEX_START),
+        AlignFlags::FLEX_END => Some(taffy::AlignItems::FLEX_END),
+        AlignFlags::SELF_START => Some(taffy::AlignItems::SELF_START),
+        AlignFlags::SELF_END => Some(taffy::AlignItems::SELF_END),
+        AlignFlags::START => Some(taffy::AlignItems::START),
+        AlignFlags::END => Some(taffy::AlignItems::END),
+        AlignFlags::LEFT => Some(taffy::AlignItems::LEFT),
+        AlignFlags::RIGHT => Some(taffy::AlignItems::RIGHT),
+        AlignFlags::CENTER => Some(taffy::AlignItems::CENTER),
+        AlignFlags::BASELINE => Some(taffy::AlignItems::BASELINE),
+        AlignFlags::LAST_BASELINE => Some(taffy::AlignItems::LAST_BASELINE),
+        _ => None,
+    }?;
+    alignment.safety = taffy_alignment_safety(input);
+    Some(alignment)
+}
+
+/// Preserve whether the CSS overflow-position modifier was omitted, safe, or
+/// explicitly unsafe. The omitted/default case has layout-specific overflow
+/// behavior and therefore cannot be folded into authored `unsafe`.
+fn taffy_alignment_safety(input: AlignFlags) -> taffy::AlignmentSafety {
+    if input.flags().contains(AlignFlags::SAFE) {
+        taffy::AlignmentSafety::Safe
+    } else if input.flags().contains(AlignFlags::UNSAFE) {
+        taffy::AlignmentSafety::Unsafe
+    } else {
+        taffy::AlignmentSafety::Default
+    }
+}
+
+/// Losslessly project the CSS content-distribution grammar into Taffy's typed
+/// alignment protocol. Baseline preference is retained; it is not equivalent
+/// to its positional fallback until a layout context determines that no
+/// baseline-sharing group exists.
+fn taffy_content_alignment(input: ContentDistribution) -> Option<taffy::AlignContent> {
+    let primary = input.primary();
+    let mut alignment = match primary.value() {
+        AlignFlags::NORMAL | AlignFlags::AUTO => None,
+        AlignFlags::START | AlignFlags::LEFT => Some(taffy::AlignContent::START),
+        AlignFlags::END | AlignFlags::RIGHT => Some(taffy::AlignContent::END),
+        AlignFlags::FLEX_START => Some(taffy::AlignContent::FLEX_START),
+        AlignFlags::FLEX_END => Some(taffy::AlignContent::FLEX_END),
+        AlignFlags::CENTER => Some(taffy::AlignContent::CENTER),
+        AlignFlags::BASELINE => Some(taffy::AlignContent::BASELINE),
+        AlignFlags::LAST_BASELINE => Some(taffy::AlignContent::LAST_BASELINE),
+        AlignFlags::STRETCH => Some(taffy::AlignContent::STRETCH),
+        AlignFlags::SPACE_BETWEEN => Some(taffy::AlignContent::SPACE_BETWEEN),
+        AlignFlags::SPACE_AROUND => Some(taffy::AlignContent::SPACE_AROUND),
+        AlignFlags::SPACE_EVENLY => Some(taffy::AlignContent::SPACE_EVENLY),
+        _ => None,
+    }?;
+    alignment.safety = taffy_alignment_safety(primary);
+    Some(alignment)
+}
+
+/// Resolve physical `left`/`right` for `justify-content` before preserving the
+/// rest of the content-alignment protocol. Physical sides only apply when the
+/// Flex main axis is inline; on a column axis both values fall back to start.
+fn taffy_justify_content(
+    input: ContentDistribution,
+    flex_direction: StyloFlexDirection,
+    direction: StyloDirection,
+) -> Option<taffy::JustifyContent> {
+    let primary = input.primary();
+    let is_right = match primary.value() {
+        AlignFlags::LEFT => false,
+        AlignFlags::RIGHT => true,
+        _ => return taffy_content_alignment(input),
+    };
+    let is_row = matches!(
+        flex_direction,
+        StyloFlexDirection::Row | StyloFlexDirection::RowReverse
+    );
+    let is_rtl = direction == StyloDirection::Rtl;
+    let mut alignment = if is_row && is_right != is_rtl {
+        taffy::AlignContent::END
+    } else {
+        taffy::AlignContent::START
+    };
+    alignment.safety = taffy_alignment_safety(primary);
+    Some(alignment)
 }
 
 fn taffy_display(display: LayoutDisplay) -> TaffyDisplay {
@@ -2081,24 +2776,316 @@ pub(crate) fn resolve_stylo_calc_value(calc_ptr: *const (), parent_size: f32) ->
 }
 
 #[cfg(test)]
-mod aspect_ratio_tests {
+mod sizing_projection_tests {
     use super::*;
 
     #[test]
+    fn flex_basis_projection_preserves_typed_sizing_functions() {
+        let project = |basis| project_taffy_flex_basis(&basis, taffy::Dimension::auto()).dimension;
+
+        assert!(project(GenericFlexBasis::Content).is_content());
+        assert!(project(GenericFlexBasis::Size(GenericSize::MinContent)).is_min_content());
+        assert!(project(GenericFlexBasis::Size(GenericSize::MaxContent)).is_max_content());
+        assert!(project(GenericFlexBasis::Size(GenericSize::FitContent)).is_fit_content());
+        assert!(project(GenericFlexBasis::Size(GenericSize::Stretch)).is_stretch());
+        assert!(project(GenericFlexBasis::Size(GenericSize::Auto)).is_auto());
+    }
+
+    #[test]
+    fn remembered_containment_size_stays_logical_and_reenters_zoomed_layout_space() {
+        let mut state = LayoutSizeContainmentState::new(
+            LogicalSize {
+                inline_size: false,
+                block_size: false,
+            },
+            Size {
+                width: Some(2.0),
+                height: Some(1.0),
+            },
+            Size {
+                width: true,
+                height: true,
+            },
+            LayoutContentVisibility::Hidden,
+            taffy::WritingMode::HorizontalTb,
+            1.0,
+        );
+        assert_eq!(
+            state.used.axes,
+            Size {
+                width: true,
+                height: true,
+            }
+        );
+        assert_eq!(
+            state.used.intrinsic_content_size,
+            Size {
+                width: Some(2.0),
+                height: Some(1.0),
+            }
+        );
+
+        state.resolve_browser_state(
+            false,
+            LayoutLastRememberedSize {
+                inline_size: Some(100.0),
+                block_size: Some(50.0),
+            },
+            taffy::WritingMode::HorizontalTb,
+            2.0,
+        );
+        assert_eq!(
+            state.used.intrinsic_content_size,
+            Size {
+                width: Some(200.0),
+                height: Some(100.0),
+            }
+        );
+
+        state.recompute(taffy::WritingMode::VerticalLr, 2.0);
+        assert_eq!(
+            state.used.intrinsic_content_size,
+            Size {
+                width: Some(100.0),
+                height: Some(200.0),
+            }
+        );
+    }
+
+    #[test]
+    fn physical_auto_components_map_to_the_current_logical_observer_axis() {
+        let state = LayoutSizeContainmentState::new(
+            LogicalSize {
+                inline_size: false,
+                block_size: false,
+            },
+            Size::NONE,
+            Size {
+                width: true,
+                height: false,
+            },
+            LayoutContentVisibility::Visible,
+            taffy::WritingMode::HorizontalTb,
+            1.0,
+        );
+        let horizontal = state.observer_policy(taffy::WritingMode::HorizontalTb);
+        assert!(horizontal.records_inline_size());
+        assert!(!horizontal.records_block_size());
+
+        let vertical = state.observer_policy(taffy::WritingMode::VerticalLr);
+        assert!(!vertical.records_inline_size());
+        assert!(vertical.records_block_size());
+    }
+}
+
+#[cfg(test)]
+mod aspect_ratio_tests {
+    use super::*;
+    use crate::LayoutImageFallbackContent;
+
+    #[test]
     fn replaced_ratio_resolution_preserves_auto_precedence_and_box_basis() {
-        let specified =
-            PreferredAspectRatio::Ratio(1.0).resolve_for_replaced(Some(2.0), BoxSizing::BorderBox);
+        let specified = PreferredAspectRatio::Ratio(1.0).resolve(Some(2.0), BoxSizing::BorderBox);
         assert_eq!(specified.ratio, Some(1.0));
         assert_eq!(specified.box_sizing, BoxSizing::BorderBox);
 
-        let natural = PreferredAspectRatio::AutoAndRatio(1.0)
-            .resolve_for_replaced(Some(2.0), BoxSizing::BorderBox);
+        let natural =
+            PreferredAspectRatio::AutoAndRatio(1.0).resolve(Some(2.0), BoxSizing::BorderBox);
         assert_eq!(natural.ratio, Some(2.0));
         assert_eq!(natural.box_sizing, BoxSizing::ContentBox);
 
-        let fallback = PreferredAspectRatio::AutoAndRatio(1.0)
-            .resolve_for_replaced(None, BoxSizing::BorderBox);
+        let fallback = PreferredAspectRatio::AutoAndRatio(1.0).resolve(None, BoxSizing::BorderBox);
         assert_eq!(fallback.ratio, Some(1.0));
         assert_eq!(fallback.box_sizing, BoxSizing::ContentBox);
+    }
+
+    #[test]
+    fn failed_image_fallback_adjusts_used_sizing_from_content_disposition() {
+        let style_for = |display, has_nonempty_alt_attribute, quirks_mode| {
+            let mut style = ResolvedLayoutStyle::synthetic(
+                display,
+                Style {
+                    size: Size {
+                        width: taffy::Dimension::length(100.0),
+                        height: taffy::Dimension::auto(),
+                    },
+                    aspect_ratio: Some(0.2),
+                    ..Style::default()
+                },
+                PaintColor::TRANSPARENT,
+            );
+            style.adjust_for_element_content(&LayoutElementContent::ImageFallback(
+                LayoutImageFallbackContent::new(
+                    "fallback",
+                    has_nonempty_alt_attribute,
+                    quirks_mode,
+                ),
+            ));
+            style
+        };
+
+        let inline_text = style_for(LayoutDisplay::Inline, true, false);
+        assert!(inline_text.taffy.size.width.is_auto());
+        assert!(inline_text.taffy.size.height.is_auto());
+        assert_eq!(inline_text.taffy.aspect_ratio, None);
+
+        let missing_alt = style_for(LayoutDisplay::Inline, false, false);
+        assert!(!missing_alt.taffy.size.width.is_auto());
+        assert!(missing_alt.taffy.size.height.is_auto());
+        assert_eq!(missing_alt.taffy.aspect_ratio, Some(0.2));
+
+        let block = style_for(LayoutDisplay::Block, true, false);
+        assert!(!block.taffy.size.width.is_auto());
+        assert!(block.taffy.size.height.is_auto());
+        assert_eq!(block.taffy.aspect_ratio, Some(0.2));
+
+        let quirks = style_for(LayoutDisplay::Inline, true, true);
+        assert_eq!(quirks.taffy.size.width, quirks.taffy.size.height);
+        assert_eq!(quirks.taffy.aspect_ratio, Some(0.2));
+    }
+}
+
+#[cfg(test)]
+mod alignment_tests {
+    use super::*;
+
+    #[test]
+    fn flow_relative_text_alignment_resolves_from_css_direction() {
+        let style_for = |direction| {
+            ResolvedLayoutStyle::synthetic(
+                LayoutDisplay::Block,
+                Style {
+                    direction,
+                    ..Style::default()
+                },
+                PaintColor::TRANSPARENT,
+            )
+        };
+
+        let mut ltr = style_for(taffy::Direction::Ltr);
+        let mut rtl = style_for(taffy::Direction::Rtl);
+        assert_eq!(ltr.resolved_text_align(), parley::Alignment::Left);
+        assert_eq!(rtl.resolved_text_align(), parley::Alignment::Right);
+
+        ltr.text_align = parley::Alignment::End;
+        rtl.text_align = parley::Alignment::End;
+        assert_eq!(ltr.resolved_text_align(), parley::Alignment::Right);
+        assert_eq!(rtl.resolved_text_align(), parley::Alignment::Left);
+
+        rtl.text_align = parley::Alignment::Center;
+        assert_eq!(rtl.resolved_text_align(), parley::Alignment::Center);
+    }
+
+    #[test]
+    fn inline_baseline_follows_writing_mode_and_text_orientation() {
+        let mut style = ResolvedLayoutStyle::synthetic(
+            LayoutDisplay::Block,
+            Style::default(),
+            PaintColor::TRANSPARENT,
+        );
+
+        for writing_mode in [
+            taffy::WritingMode::HorizontalTb,
+            taffy::WritingMode::SidewaysRl,
+            taffy::WritingMode::SidewaysLr,
+        ] {
+            style.writing_mode = writing_mode;
+            assert_eq!(style.font_baseline(), FontBaseline::Alphabetic);
+        }
+        for writing_mode in [
+            taffy::WritingMode::VerticalRl,
+            taffy::WritingMode::VerticalLr,
+        ] {
+            style.writing_mode = writing_mode;
+            for text_orientation in [InlineTextOrientation::Mixed, InlineTextOrientation::Upright] {
+                style.text_orientation = text_orientation;
+                assert_eq!(style.font_baseline(), FontBaseline::Central);
+            }
+            style.text_orientation = InlineTextOrientation::Sideways;
+            assert_eq!(style.font_baseline(), FontBaseline::Alphabetic);
+        }
+    }
+
+    #[test]
+    fn stylo_item_alignment_preserves_layout_protocol_values() {
+        assert_eq!(
+            taffy_item_alignment(AlignFlags::NORMAL),
+            Some(taffy::AlignItems::NORMAL)
+        );
+        assert_ne!(
+            taffy_item_alignment(AlignFlags::NORMAL),
+            taffy_item_alignment(AlignFlags::STRETCH)
+        );
+        assert_eq!(
+            taffy_item_alignment(AlignFlags::LAST_BASELINE),
+            Some(taffy::AlignItems::LAST_BASELINE)
+        );
+        assert_eq!(
+            taffy_item_alignment(AlignFlags::SELF_START),
+            Some(taffy::AlignItems::SELF_START)
+        );
+        assert_eq!(
+            taffy_item_alignment(AlignFlags::LEFT),
+            Some(taffy::AlignItems::LEFT)
+        );
+        assert_eq!(
+            taffy_item_alignment(AlignFlags::RIGHT),
+            Some(taffy::AlignItems::RIGHT)
+        );
+
+        let safe_center = taffy_item_alignment(AlignFlags::CENTER | AlignFlags::SAFE)
+            .expect("safe center should project");
+        assert_eq!(safe_center.keyword, taffy::AlignItemsKeyword::Center);
+        assert_eq!(safe_center.safety, taffy::AlignmentSafety::Safe);
+
+        let default_end = taffy_item_alignment(AlignFlags::END).expect("end should project");
+        let unsafe_end = taffy_item_alignment(AlignFlags::END | AlignFlags::UNSAFE)
+            .expect("unsafe end should project");
+        assert_eq!(default_end.safety, taffy::AlignmentSafety::Default);
+        assert_eq!(unsafe_end.safety, taffy::AlignmentSafety::Unsafe);
+    }
+
+    #[test]
+    fn stylo_content_alignment_preserves_layout_protocol_values() {
+        assert_eq!(
+            taffy_content_alignment(ContentDistribution::new(AlignFlags::BASELINE)),
+            Some(taffy::AlignContent::BASELINE)
+        );
+        assert_eq!(
+            taffy_content_alignment(ContentDistribution::new(AlignFlags::LAST_BASELINE)),
+            Some(taffy::AlignContent::LAST_BASELINE)
+        );
+
+        let safe_center = taffy_content_alignment(ContentDistribution::new(
+            AlignFlags::CENTER | AlignFlags::SAFE,
+        ))
+        .expect("safe center should project");
+        assert_eq!(safe_center.keyword, taffy::AlignContentKeyword::Center);
+        assert_eq!(safe_center.safety, taffy::AlignmentSafety::Safe);
+
+        assert_eq!(
+            taffy_justify_content(
+                ContentDistribution::new(AlignFlags::RIGHT),
+                StyloFlexDirection::Row,
+                StyloDirection::Ltr,
+            ),
+            Some(taffy::JustifyContent::END)
+        );
+        assert_eq!(
+            taffy_justify_content(
+                ContentDistribution::new(AlignFlags::RIGHT),
+                StyloFlexDirection::Row,
+                StyloDirection::Rtl,
+            ),
+            Some(taffy::JustifyContent::START)
+        );
+        assert_eq!(
+            taffy_justify_content(
+                ContentDistribution::new(AlignFlags::RIGHT),
+                StyloFlexDirection::Column,
+                StyloDirection::Ltr,
+            ),
+            Some(taffy::JustifyContent::START)
+        );
     }
 }

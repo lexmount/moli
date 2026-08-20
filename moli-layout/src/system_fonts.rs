@@ -2,7 +2,7 @@
 
 use std::{borrow::Cow, collections::HashMap};
 
-use parley::{FontFamily, FontFamilyName, TextStyle, fontique::Collection};
+use parley::{FontFamily, FontFamilyName, GenericFamily, TextStyle, fontique::Collection};
 
 use crate::stylo_to_parley::TextBrush;
 
@@ -44,16 +44,33 @@ impl SystemFontFamilyResolver {
         collection: &mut Collection,
         family: &mut FontFamilyName<'static>,
     ) {
-        let FontFamilyName::Named(name) = family else {
-            return;
-        };
-        if collection.family_id(name).is_some() {
-            return;
+        match family {
+            FontFamilyName::Generic(generic) => {
+                let Some(preferred) = chromium_preferred_family(*generic) else {
+                    return;
+                };
+                if let Some(resolved) = self.available_named_family(collection, preferred) {
+                    *family = FontFamilyName::Named(Cow::Owned(resolved));
+                }
+            }
+            FontFamilyName::Named(name) if collection.family_id(name).is_none() => {
+                if let Some(resolved) = self.resolve_missing_family(name) {
+                    *name = Cow::Owned(resolved);
+                }
+            }
+            FontFamilyName::Named(_) => {}
         }
-        let Some(substitute) = self.resolve_missing_family(name) else {
-            return;
-        };
-        *name = Cow::Owned(substitute);
+    }
+
+    fn available_named_family(
+        &mut self,
+        collection: &mut Collection,
+        family: &str,
+    ) -> Option<String> {
+        collection
+            .family_id(family)
+            .map(|_| family.to_owned())
+            .or_else(|| self.resolve_missing_family(family))
     }
 
     fn resolve_missing_family(&mut self, family: &str) -> Option<String> {
@@ -70,6 +87,33 @@ impl SystemFontFamilyResolver {
             });
         self.substitutions.insert(key, substitution.clone());
         substitution
+    }
+}
+
+/// Browser font preferences precede platform font matching. Fontconfig's
+/// generic `serif` alias is a desktop default (often DejaVu Serif), while
+/// Chromium's common-script web preference is Times New Roman and only then
+/// resolves that named family through Fontconfig (commonly to Liberation
+/// Serif). Keeping this policy in the resolver prevents layout code from
+/// compensating for different font metrics case by case.
+fn chromium_preferred_family(family: GenericFamily) -> Option<&'static str> {
+    match family {
+        GenericFamily::Serif => Some("Times New Roman"),
+        GenericFamily::SansSerif => Some("Arial"),
+        #[cfg(target_vendor = "apple")]
+        GenericFamily::Monospace => Some("Menlo"),
+        #[cfg(not(target_vendor = "apple"))]
+        GenericFamily::Monospace => Some("Courier New"),
+        GenericFamily::Cursive => Some("Comic Sans MS"),
+        GenericFamily::Fantasy => Some("Impact"),
+        GenericFamily::Math => Some("Latin Modern Math"),
+        GenericFamily::SystemUi
+        | GenericFamily::UiSerif
+        | GenericFamily::UiSansSerif
+        | GenericFamily::UiMonospace
+        | GenericFamily::UiRounded
+        | GenericFamily::Emoji
+        | GenericFamily::FangSong => None,
     }
 }
 
@@ -212,6 +256,19 @@ mod tests {
             explicit_substitution_prefix(&unknown, &defaults),
             &unknown[..1]
         );
+    }
+
+    #[test]
+    fn chromium_common_script_font_preferences_match_browser_defaults() {
+        assert_eq!(
+            chromium_preferred_family(GenericFamily::Serif),
+            Some("Times New Roman")
+        );
+        assert_eq!(
+            chromium_preferred_family(GenericFamily::SansSerif),
+            Some("Arial")
+        );
+        assert_eq!(chromium_preferred_family(GenericFamily::SystemUi), None);
     }
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]

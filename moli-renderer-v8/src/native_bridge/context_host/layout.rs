@@ -10,7 +10,7 @@ use crate::{
     css_resource_urls::{CompletedStylesheetWebFont, StylesheetLoadBlockingResource},
     document_runtime::DomHandle,
     native_bridge::element::iframe_handle_viewport,
-    script_vm::web_fonts::DocumentWebFontCompletion,
+    script_vm::web_fonts::{DocumentWebFontCompletion, DocumentWebFontLoadCycleId},
 };
 
 /// Resets the entry flag on every return path, including unwinding.
@@ -45,6 +45,15 @@ pub(crate) struct LayoutSnapshotCacheObservability {
 }
 
 impl JsContextHost {
+    /// Returns the display-lock result published by the latest rendering
+    /// lifecycle. Synchronous DOM reads deliberately do not force a new pass;
+    /// screenshots and other rendering demands advance this state.
+    pub(crate) fn auto_content_visibility_is_locked(&self, element: DomHandle) -> bool {
+        self.document_layout_state
+            .borrow()
+            .auto_display_lock_is_locked(element)
+    }
+
     pub(crate) fn set_layout_policy(&mut self, policy: moli_page_types::LayoutPolicy) {
         if !policy.uses_real_layout() {
             self.document_layout_state.get_mut().clear_latest_layout();
@@ -113,15 +122,20 @@ impl JsContextHost {
                 self.child_browsing_context_host_for_document_handle(candidate)
                     .is_some()
             });
-            state.with_services_for_document(
+            state.with_layout_pass_state_for_document(
                 document,
                 self.document_handle(),
-                |services, embedded_document_services| {
+                |services,
+                 embedded_document_services,
+                 auto_display_locks,
+                 intrinsic_size_observer| {
                     crate::layout_renderer::build_native_layout_pass(
                         self,
                         root,
                         services,
                         embedded_document_services,
+                        auto_display_locks,
+                        intrinsic_size_observer,
                         request,
                     )
                 },
@@ -309,6 +323,69 @@ impl JsContextHost {
             .take_web_font_sources_dirty()
     }
 
+    pub(crate) fn current_document_web_font_resources(
+        &self,
+    ) -> Vec<StylesheetLoadBlockingResource> {
+        let Some(root) = self.dom_host().document_element_handle() else {
+            return Vec::new();
+        };
+        crate::layout_renderer::current_native_stylesheet_web_font_resources(self, root)
+    }
+
+    /// Establishes the document-font loading cycle synchronously observed by
+    /// the `ready` getter, before task-boundary source reconciliation admits
+    /// concrete network requests.
+    pub(crate) fn reserve_document_web_font_ready_cycle(
+        &self,
+    ) -> Option<DocumentWebFontLoadCycleId> {
+        let font_fetch_enabled =
+            self.current_main_document_resource_loader()
+                .is_some_and(|loader| {
+                    loader.request_client().optional_resource_fetch_enabled(
+                        crate::types::SubresourceResourceType::Font,
+                    )
+                });
+        let resources = if font_fetch_enabled && self.layout_policy().uses_real_layout() {
+            self.current_document_web_font_resources()
+        } else {
+            Vec::new()
+        };
+        self.document_layout_state
+            .borrow_mut()
+            .reserve_web_font_ready_cycle(resources.iter())
+    }
+
+    pub(crate) fn active_document_web_font_load_cycle(&self) -> Option<DocumentWebFontLoadCycleId> {
+        self.document_layout_state
+            .borrow()
+            .active_web_font_load_cycle()
+    }
+
+    pub(crate) fn document_web_font_ready_layout_task_needed(
+        &self,
+    ) -> Option<DocumentWebFontLoadCycleId> {
+        self.document_layout_state
+            .borrow()
+            .web_font_ready_layout_task_needed()
+    }
+
+    pub(crate) fn document_web_font_cycle_ready_for_layout(
+        &self,
+    ) -> Option<DocumentWebFontLoadCycleId> {
+        self.document_layout_state
+            .borrow()
+            .web_font_cycle_ready_for_layout()
+    }
+
+    pub(crate) fn complete_document_web_font_cycle_after_layout(
+        &self,
+        cycle: DocumentWebFontLoadCycleId,
+    ) -> bool {
+        self.document_layout_state
+            .borrow_mut()
+            .complete_web_font_cycle_after_layout(cycle)
+    }
+
     #[cfg(test)]
     pub(crate) fn force_fresh_layout_reads_for_test(&mut self) {
         self.force_fresh_layout_reads_for_test = true;
@@ -332,10 +409,12 @@ impl JsContextHost {
     }
 
     pub(crate) fn complete_document_web_font(
-        &self,
+        &mut self,
         terminal: CompletedStylesheetWebFont,
     ) -> DocumentWebFontCompletion {
-        self.document_layout_state.borrow_mut().complete(terminal)
+        let completion = self.document_layout_state.borrow_mut().complete(terminal);
+        self.queue_document_web_font_ready_rendering_update_if_needed();
+        completion
     }
 
     #[cfg(test)]

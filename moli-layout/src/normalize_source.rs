@@ -122,7 +122,7 @@ where
                 ));
             }
             (LayoutSourceKind::Element, Some(element))
-                if element.replaced.is_none() && self.source.replaced_metrics(node).is_some() =>
+                if !element.is_replaced() && self.source.replaced_metrics(node).is_some() =>
             {
                 return Err(LayoutError::source_contract(
                     label,
@@ -200,8 +200,14 @@ fn write_source_node(
             element.local_name,
             element.category.debug_name()
         )?;
-        if let Some(replaced) = element.replaced {
+        if let Some(replaced) = element.replaced_kind() {
             write!(formatter, " replaced={}", replaced.debug_name())?;
+        } else if let Some(fallback) = element.image_fallback() {
+            write!(
+                formatter,
+                " content=image-fallback alternative={:?}",
+                fallback.alternative_text()
+            )?;
         }
     }
     if let Some(text) = &node.text {

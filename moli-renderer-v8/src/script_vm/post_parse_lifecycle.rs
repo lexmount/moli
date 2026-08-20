@@ -2813,7 +2813,17 @@ impl ScriptVm {
                 host.settle_stylesheet_subresource_load_delay(binding);
             }
         }
+        let document_font_cycle = {
+            let host = context_host.borrow();
+            host.active_document_web_font_load_cycle()
+                .map(|cycle| (host.document_handle(), cycle))
+        };
         let result = self.with_default_context_scope(move |scope, _host_ptr| {
+            if let Some((document, cycle)) = document_font_cycle {
+                crate::native_bridge::document::begin_document_font_face_set_load_cycle_for_document(
+                    scope, document, cycle,
+                );
+            }
             let mut host = context_host.borrow_mut();
             let mut local_web_fonts = Vec::new();
             for (binding, resource, css_image) in admitted {

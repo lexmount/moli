@@ -47,12 +47,82 @@ pub struct LayoutSize {
     pub height: f32,
 }
 
+/// Four physical used-value edges of a CSS box.
+///
+/// Unlike a bounding rectangle, a strut preserves negative and independently
+/// resolved opposite edges. That distinction matters for layout-dependent
+/// CSSOM values such as percentage and automatic margins.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LayoutPhysicalBoxStrut {
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+    pub left: f32,
+}
+
+impl LayoutPhysicalBoxStrut {
+    pub const ZERO: Self = Self::new(0.0, 0.0, 0.0, 0.0);
+
+    pub const fn new(top: f32, right: f32, bottom: f32, left: f32) -> Self {
+        Self {
+            top,
+            right,
+            bottom,
+            left,
+        }
+    }
+}
+
+/// CSSOM-observable used values retained for a principal CSS box.
+///
+/// Size and margin come from one numeric layout epoch. Keeping them behind a
+/// single applicability boundary prevents consumers from observing a partial
+/// box state for non-box layout objects.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LayoutUsedBoxValues {
+    pub size: LayoutSize,
+    pub margin: LayoutPhysicalBoxStrut,
+}
+
 impl LayoutSize {
     pub const ZERO: Self = Self::new(0.0, 0.0);
 
     pub const fn new(width: f32, height: f32) -> Self {
         Self { width, height }
     }
+}
+
+/// Used geometry for one axis of a CSS Grid formatting context.
+///
+/// Track and gutter sizes are retained in layout CSS pixels. The explicit
+/// range is kept separately from leading and trailing implicit tracks so
+/// resolved-style consumers can merge used sizes with authored line names
+/// without retaining a layout-backend track tree.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LayoutGridTrackGeometry {
+    pub negative_implicit_track_count: usize,
+    pub explicit_track_count: usize,
+    pub positive_implicit_track_count: usize,
+    pub sizes: Vec<f32>,
+    pub gutters: Vec<f32>,
+    /// Expanded names for each explicit grid line. The length is the explicit
+    /// track count plus one; names at repeat boundaries are already merged.
+    pub explicit_line_names: Vec<Vec<String>>,
+}
+
+impl LayoutGridTrackGeometry {
+    pub fn track_count(&self) -> usize {
+        self.negative_implicit_track_count
+            .saturating_add(self.explicit_track_count)
+            .saturating_add(self.positive_implicit_track_count)
+    }
+}
+
+/// Used row and column geometry retained for a CSS Grid container.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LayoutGridGeometry {
+    pub rows: LayoutGridTrackGeometry,
+    pub columns: LayoutGridTrackGeometry,
 }
 
 /// An axis-aligned rectangle in one explicit layout coordinate space.
@@ -255,6 +325,12 @@ pub(crate) struct LayoutCoordinateSpace {
     pub(crate) local_to_document: LayoutTransform2D,
     /// Maps local coordinates directly to viewport CSS pixels.
     pub(crate) local_to_viewport: LayoutTransform2D,
+    /// Maps local coordinates to the visual document coordinate system while
+    /// omitting authored CSS transforms. Layout placement, scrolling, CSS
+    /// zoom, and fixed-position anchoring are retained.
+    pub(crate) local_to_document_ignoring_css_transforms: LayoutTransform2D,
+    /// The corresponding transform-free mapping to viewport CSS pixels.
+    pub(crate) local_to_viewport_ignoring_css_transforms: LayoutTransform2D,
 }
 
 /// Query-facing coordinate data retained for one frozen box-tree node.
@@ -262,6 +338,7 @@ pub(crate) struct LayoutCoordinateSpace {
 pub struct FrozenCoordinateSpace {
     pub owner: Option<LayoutOutputBoxId>,
     pub local_to_viewport: LayoutTransform2D,
+    pub(crate) local_to_viewport_ignoring_css_transforms: LayoutTransform2D,
 }
 
 impl From<LayoutCoordinateSpace> for FrozenCoordinateSpace {
@@ -269,6 +346,8 @@ impl From<LayoutCoordinateSpace> for FrozenCoordinateSpace {
         Self {
             owner: space.owner,
             local_to_viewport: space.local_to_viewport,
+            local_to_viewport_ignoring_css_transforms: space
+                .local_to_viewport_ignoring_css_transforms,
         }
     }
 }
@@ -310,7 +389,17 @@ pub struct LayoutScrollExtent {
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutBoxGeometry {
     pub id: LayoutOutputBoxId,
+    /// Accumulated CSS `zoom` already applied to this box's layout lengths.
+    ///
+    /// Transformed client geometry keeps the zoomed values. CSSOM integer box
+    /// metrics divide their untransformed layout values by this factor, as
+    /// Blink's `AdjustForAbsoluteZoom` does at its DOM binding boundary.
+    pub effective_zoom: f32,
+    /// Source/LayoutObject ancestry before formatting-tree normalization.
+    pub structural_parent: Option<LayoutOutputBoxId>,
+    /// Parent in the normalized formatting tree.
     pub parent: Option<LayoutOutputBoxId>,
+    /// Parent used by the numeric layout algorithm.
     pub layout_parent: Option<LayoutOutputBoxId>,
     pub position: LayoutPosition,
     pub coordinate_space: LayoutCoordinateSpaceId,
@@ -319,13 +408,33 @@ pub struct LayoutBoxGeometry {
     pub padding_box: LayoutRect,
     pub border_box: LayoutRect,
     pub margin_box: LayoutRect,
+    /// CSSOM used size and physical margins selected during this layout epoch.
+    ///
+    /// Margins stay separate from `margin_box`: opposite negative margins can
+    /// make that rectangle degenerate, while CSSOM still exposes each edge.
+    /// Values remain in effective-zoomed layout space; query projection removes
+    /// the retained zoom. `None` means this is not a principal CSS box.
+    pub used_values: Option<LayoutUsedBoxValues>,
     pub fragments: Vec<LayoutFragmentId>,
     /// Untransformed border-box origin in document layout coordinates.
     pub layout_origin_in_document: LayoutPoint,
     pub is_body_element: bool,
+    /// CSSOM View projects the standards-mode root element and quirks body
+    /// client dimensions through the layout viewport instead of their
+    /// physical padding boxes.
+    pub uses_viewport_client_metrics: bool,
     pub is_table_offset_parent: bool,
     pub establishes_positioned_containing_block: bool,
     pub establishes_fixed_containing_block: bool,
+    /// Whether this principal layout object can own a display lock.
+    ///
+    /// This is a box-type capability rather than the current lock state. It
+    /// remains available when an unlocked `content-visibility:auto` box is
+    /// observed after layout.
+    pub display_lock_eligible: bool,
+    /// Whether this box's descendants were display-locked for this layout
+    /// epoch. This is used state, not merely computed `content-visibility`.
+    pub contents_skipped: bool,
     pub visible: bool,
     pub pointer_events: bool,
 }
@@ -338,6 +447,98 @@ pub struct LayoutFragmentBoxModel {
     pub padding: LayoutRect,
     pub border: LayoutRect,
     pub margin: LayoutRect,
+}
+
+/// Physical axis followed by an inline fragment after writing-mode
+/// projection. Text offsets advance horizontally in horizontal writing modes
+/// and vertically in vertical or sideways writing modes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayoutPhysicalAxis {
+    Horizontal,
+    Vertical,
+}
+
+/// DOM text provenance retained for one shaped source atom.
+///
+/// Inline normalization can expand one DOM scalar into several shaped
+/// characters (for example through `text-transform`), and shaping can merge
+/// several scalars into one glyph. The frozen tree nevertheless keeps the
+/// geometry owned by each source scalar as one span. Its two UTF-16 endpoints
+/// are valid caret boundaries; an offset between the surrogate halves of a
+/// supplementary scalar is not.
+///
+/// This is the frozen-tree counterpart of Blink's text-offset range plus its
+/// shape result: Range starts inside the atom snap to the leading edge and
+/// Range ends snap to the trailing edge instead of linearly slicing a glyph.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LayoutTextSourceSpan {
+    utf16_range: Range<usize>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LayoutTextSourceEdge {
+    Start,
+    End,
+}
+
+impl LayoutTextSourceEdge {
+    pub(crate) const fn visual_fraction(self, rtl: bool) -> f32 {
+        match (self, rtl) {
+            (Self::Start, false) | (Self::End, true) => 0.0,
+            (Self::End, false) | (Self::Start, true) => 1.0,
+        }
+    }
+}
+
+impl LayoutTextSourceSpan {
+    pub(crate) fn new(utf16_range: Range<usize>) -> Self {
+        debug_assert!(
+            utf16_range.start < utf16_range.end,
+            "a shaped source atom must own at least one UTF-16 code unit"
+        );
+        Self { utf16_range }
+    }
+
+    pub fn utf16_range(&self) -> &Range<usize> {
+        &self.utf16_range
+    }
+
+    /// Resolves a DOM Range to the two shaped edges selected from this atom.
+    ///
+    /// The asymmetric interior rule matches Blink's `AdjustMidCluster` use:
+    /// the start adjusts towards the atom start while the end adjusts towards
+    /// its end. Consequently a collapsed DOM Range between surrogate halves
+    /// encloses the complete glyph, while a collapsed Range at a valid scalar
+    /// boundary remains a zero-width caret.
+    pub(crate) fn selected_edges(
+        &self,
+        requested: &Range<usize>,
+    ) -> Option<(LayoutTextSourceEdge, LayoutTextSourceEdge)> {
+        if requested.is_empty() {
+            let offset = requested.start;
+            if offset < self.utf16_range.start || offset > self.utf16_range.end {
+                return None;
+            }
+            if offset == self.utf16_range.start {
+                return Some((LayoutTextSourceEdge::Start, LayoutTextSourceEdge::Start));
+            }
+            if offset == self.utf16_range.end {
+                return Some((LayoutTextSourceEdge::End, LayoutTextSourceEdge::End));
+            }
+            return Some((LayoutTextSourceEdge::Start, LayoutTextSourceEdge::End));
+        }
+
+        (requested.start < self.utf16_range.end && self.utf16_range.start < requested.end)
+            .then_some((LayoutTextSourceEdge::Start, LayoutTextSourceEdge::End))
+    }
+
+    pub(crate) fn utf16_offset_at_visual_side(&self, rtl: bool, visual_start: bool) -> usize {
+        if visual_start != rtl {
+            self.utf16_range.start
+        } else {
+            self.utf16_range.end
+        }
+    }
 }
 
 /// A geometry fragment kind. IDs contained here are valid only in the same
@@ -357,10 +558,22 @@ pub enum LayoutFragmentKind {
         has_start_edge: bool,
         has_end_edge: bool,
     },
+    /// A non-painting forced-line-break fragment owned by a DOM `<br>`.
+    /// Its inline-axis extent is zero while its block-axis extent follows the
+    /// text strut that participated in line layout.
+    LineBreak {
+        box_id: LayoutOutputBoxId,
+        line_index: usize,
+    },
     Text {
         box_id: LayoutOutputBoxId,
         line_index: usize,
-        source_utf16_range: Range<usize>,
+        source_span: LayoutTextSourceSpan,
+        /// Whether this source fragment is a preserved segment break that
+        /// forced a new line. Collapsed Range geometry treats it differently
+        /// from an ordinary soft-wrap boundary.
+        is_forced_line_break: bool,
+        inline_axis: LayoutPhysicalAxis,
         rtl: bool,
     },
 }

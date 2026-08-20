@@ -23,6 +23,32 @@ pub(crate) struct ReadyImageForLayout {
     pub(crate) svg: Option<Arc<moli_image::SvgImage>>,
 }
 
+/// Layout-facing resource sizing data before CSS replaced-element
+/// normalization. SVG natural axes remain independently optional.
+///
+/// Decoded concrete dimensions are intentionally exposed through
+/// `intrinsic_dimensions()` instead: they serve DOM dimensions and paint, but
+/// are not CSS natural axes or a default natural size.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ImageNaturalSizing {
+    pub(crate) width: Option<f32>,
+    pub(crate) height: Option<f32>,
+    pub(crate) ratio: Option<f32>,
+}
+
+/// Layout-visible state of one element-owned image resource.
+///
+/// Consumers such as `<object>` need the terminal failure state to decide
+/// whether their layout tree contains replaced content or fallback children.
+/// Keep that decision on the resource lifecycle rather than inferring it from
+/// missing decoded pixels, which also describes an ordinary pending request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ImageResourceStatus {
+    Pending,
+    Ready,
+    Failed,
+}
+
 pub(in crate::native_bridge::context_host) struct ImageResourceStore {
     slots: HashMap<DomHandle, ImageResourceSlot>,
     ready_by_request: ReadyImageResourceIndex,
@@ -276,6 +302,17 @@ impl ImageResourceStore {
             .is_some_and(|slot| matches!(slot.state, ImageResourceState::Ready(_)))
     }
 
+    pub(super) fn status(&self, element: DomHandle) -> Option<ImageResourceStatus> {
+        let slot = self.slots.get(&element)?;
+        Some(match &slot.state {
+            ImageResourceState::Pending | ImageResourceState::DecodeQueued(_) => {
+                ImageResourceStatus::Pending
+            }
+            ImageResourceState::Ready(_) => ImageResourceStatus::Ready,
+            ImageResourceState::Failed => ImageResourceStatus::Failed,
+        })
+    }
+
     pub(super) fn has_ready_request(&self, request_key: &ImageRequestKey) -> bool {
         self.ready_by_request.contains_live(request_key)
     }
@@ -286,6 +323,14 @@ impl ImageResourceStore {
             return None;
         };
         Some(intrinsic_dimensions(resource))
+    }
+
+    pub(super) fn natural_sizing(&self, element: DomHandle) -> Option<ImageNaturalSizing> {
+        let slot = self.slots.get(&element)?;
+        let ImageResourceState::Ready(resource) = &slot.state else {
+            return None;
+        };
+        Some(natural_sizing(resource))
     }
 
     pub(super) fn retire_element(&mut self, element: DomHandle) -> bool {
@@ -308,11 +353,7 @@ impl ImageResourceStore {
 }
 
 pub(super) fn intrinsic_dimensions(resource: &ReadyImageResource) -> (f32, f32) {
-    let density = if resource.density.is_finite() && resource.density > 0.0 {
-        resource.density as f32
-    } else {
-        1.0
-    };
+    let density = resource_density(resource);
     // `ImageResponseDescriptor::{width,height}` deliberately stores integer
     // dimensions for the HTMLImageElement naturalWidth/naturalHeight surface.
     // SVG layout cannot reuse those rounded values: a viewBox-only 96:12 SVG
@@ -329,6 +370,39 @@ pub(super) fn intrinsic_dimensions(resource: &ReadyImageResource) -> (f32, f32) 
         }
     };
     (width / density, height / density)
+}
+
+pub(super) fn natural_sizing(resource: &ReadyImageResource) -> ImageNaturalSizing {
+    let density = resource_density(resource);
+    let (width, height, ratio) = match resource.descriptor.decode_metadata {
+        super::ImageDecodeMetadata::Raster(metadata) => {
+            let width = metadata.width as f32 / density;
+            let height = metadata.height as f32 / density;
+            (
+                Some(width),
+                Some(height),
+                (height > 0.0).then_some(width / height),
+            )
+        }
+        super::ImageDecodeMetadata::Svg(metadata) => (
+            metadata.intrinsic_width.map(|width| width / density),
+            metadata.intrinsic_height.map(|height| height / density),
+            metadata.intrinsic_ratio,
+        ),
+    };
+    ImageNaturalSizing {
+        width,
+        height,
+        ratio,
+    }
+}
+
+fn resource_density(resource: &ReadyImageResource) -> f32 {
+    if resource.density.is_finite() && resource.density > 0.0 {
+        resource.density as f32
+    } else {
+        1.0
+    }
 }
 
 #[cfg(test)]
@@ -356,5 +430,27 @@ mod tests {
             ..resource
         };
         assert_eq!(intrinsic_dimensions(&high_density_resource), (150.0, 18.75));
+    }
+
+    #[test]
+    fn svg_natural_sizing_keeps_missing_axes_distinct_from_concrete_fallbacks() {
+        let metadata =
+            moli_image::svg_image_metadata_from_root_attributes(Some("50px"), None, None);
+        let resource = ReadyImageResource {
+            descriptor: ImageResponseDescriptor::svg(metadata).expect("valid SVG descriptor"),
+            density: 1.0,
+            pixels: None,
+            svg: None,
+            _decoded_bytes_permit: None,
+        };
+
+        assert_eq!(
+            natural_sizing(&resource),
+            ImageNaturalSizing {
+                width: Some(50.0),
+                height: None,
+                ratio: None,
+            }
+        );
     }
 }

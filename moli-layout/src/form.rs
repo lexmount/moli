@@ -6,11 +6,11 @@ use taffy::Size;
 
 use crate::{
     LayoutAnonymousReason, LayoutBoxId, LayoutBoxKind, LayoutDisplay, LayoutElementCategory,
-    LayoutElementSemantics, LayoutFormControlKind, LayoutInputControlKind, LayoutWorld,
-    ResolvedLayoutStyle, replaced::ReplacedContext,
+    LayoutElementSemantics, LayoutError, LayoutFormControlKind, LayoutInputControlKind,
+    LayoutSelectPresentation, LayoutWorld, ResolvedLayoutStyle,
 };
 
-pub(crate) fn prepare_form_controls<N>(world: &mut LayoutWorld<N>)
+pub(crate) fn prepare_form_controls<N>(world: &mut LayoutWorld<N>) -> Result<(), LayoutError>
 where
     N: Copy + Debug + Eq + Hash,
 {
@@ -42,7 +42,6 @@ where
             LayoutBoxKind::AnonymousBlock,
             wrapper_style,
             None,
-            None,
         );
         wrapper.inline_formatting_context = true;
         let wrapper_id = world.allocate(wrapper);
@@ -57,13 +56,11 @@ where
             LayoutBoxKind::Text,
             text_style,
             Some(Arc::from(text)),
-            None,
         ));
-        world.boxes[text_id.index()].parent = Some(wrapper_id);
-        world.boxes[wrapper_id.index()].children.push(text_id);
-        world.boxes[wrapper_id.index()].parent = Some(control);
-        world.boxes[control.index()].children.push(wrapper_id);
+        world.append_synthesized_child(wrapper_id, text_id)?;
+        world.append_synthesized_child(control, wrapper_id)?;
     }
+    Ok(())
 }
 
 fn form_control_text(semantics: &Option<LayoutElementSemantics>) -> Option<String> {
@@ -71,15 +68,23 @@ fn form_control_text(semantics: &Option<LayoutElementSemantics>) -> Option<Strin
     let LayoutElementCategory::FormControl(kind) = semantics.category else {
         return None;
     };
-    if !semantics.is_replaced() {
-        return None;
-    }
     let data = semantics
         .metadata
         .form_control
         .as_ref()
         .cloned()
         .unwrap_or_default();
+    // Native menu-list selects are content-bearing layout containers, not
+    // replaced leaves. Their source <option> descendants stay out of the box
+    // tree and the selected label is exposed through this browser-owned inner
+    // content, matching Blink's MenuListInnerElement boundary. Listboxes keep
+    // their real option children instead.
+    if !semantics.is_replaced()
+        && (kind != LayoutFormControlKind::Select
+            || data.select_presentation() != LayoutSelectPresentation::MenuList)
+    {
+        return None;
+    }
     let text = match kind {
         LayoutFormControlKind::Input(input) => match input {
             LayoutInputControlKind::Button => data.value.to_string(),
@@ -148,11 +153,11 @@ fn form_control_text(semantics: &Option<LayoutElementSemantics>) -> Option<Strin
     Some(text)
 }
 
-pub(crate) fn form_control_context(
+pub(crate) fn form_control_intrinsic_size(
     semantics: &LayoutElementSemantics,
     font_size: f32,
     line_height: f32,
-) -> Option<ReplacedContext> {
+) -> Option<Size<f32>> {
     let LayoutElementCategory::FormControl(kind) = semantics.category else {
         return None;
     };
@@ -232,11 +237,11 @@ pub(crate) fn form_control_context(
             height: f32::from(data.rows) * line_height.max(font_size),
         },
         LayoutFormControlKind::Select => {
+            let listbox = data.select_presentation() == LayoutSelectPresentation::ListBox;
             let rows = data
                 .size
                 .unwrap_or(if data.multiple { 4 } else { 1 })
                 .max(1);
-            let listbox = data.multiple || rows > 1;
             let characters = data
                 .maximum_option_characters
                 .max(u16::try_from(data.value.chars().count()).unwrap_or(u16::MAX))
@@ -264,5 +269,5 @@ pub(crate) fn form_control_context(
             height: single_line_height,
         },
     };
-    Some(ReplacedContext::form_control(size))
+    Some(size)
 }

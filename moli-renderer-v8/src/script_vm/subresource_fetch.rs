@@ -271,12 +271,13 @@ impl ImageSubresourceTerminal<'_> {
     fn resource_performance_entry(
         &self,
         request_url: &url::Url,
+        initiator_type: &'static str,
     ) -> crate::context_bootstrap::ResourcePerformanceEntry {
         match self {
             Self::Response(response) => {
                 crate::context_bootstrap::ResourcePerformanceEntry::from_network_response(
                     request_url.as_str(),
-                    "img",
+                    initiator_type,
                     None,
                     response,
                 )
@@ -284,7 +285,7 @@ impl ImageSubresourceTerminal<'_> {
             Self::Failure => {
                 crate::context_bootstrap::ResourcePerformanceEntry::from_network_failure(
                     request_url.as_str(),
-                    "img",
+                    initiator_type,
                     None,
                 )
             }
@@ -328,9 +329,15 @@ fn apply_image_subresource_terminal(
         }
     };
     if accepted {
+        let initiator_type = crate::native_bridge::element::image_resource_element_kind(
+            &context_host.borrow(),
+            image_handle,
+        )
+        .map(crate::native_bridge::element::ImageResourceElementKind::performance_initiator_type)
+        .unwrap_or("img");
         crate::context_bootstrap::record_resource_performance_entry(
             scope,
-            terminal.resource_performance_entry(request_url),
+            terminal.resource_performance_entry(request_url, initiator_type),
         );
     }
     let host_ptr: *mut JsContextHost = context_host.as_ref().as_ptr();

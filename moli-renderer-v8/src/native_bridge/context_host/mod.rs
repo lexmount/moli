@@ -102,8 +102,8 @@ mod image_decodes;
 mod image_loads;
 mod image_resources;
 pub(crate) use image_resources::{
-    CssImageResourceAdmission, CssImageResourceRequestIdentity, ImageResponseDescriptor,
-    ScannedImagePreloadAdmission,
+    CssImageResourceAdmission, CssImageResourceRequestIdentity, ImageNaturalSizing,
+    ImageResourceStatus, ImageResponseDescriptor, ScannedImagePreloadAdmission,
 };
 mod indexed_db_tasks;
 mod interaction_batch;
@@ -212,7 +212,8 @@ pub(crate) use runtime_observable::{
     current_runtime_observable_context_token, install_runtime_observable_context_token_for_context,
 };
 pub(crate) use selection_records::{
-    SelectionBoundaryRole, SelectionBoundarySnapshot, SelectionRecordHandle,
+    DocumentSelectionSnapshot, SelectionBoundaryRole, SelectionBoundarySnapshot,
+    SelectionRecordHandle,
 };
 use websockets::WebSocketConnectionState;
 pub(crate) use window_execution_context::{

@@ -15,6 +15,7 @@ mod containment;
 mod error;
 mod form;
 mod gradient;
+mod grid;
 mod inline;
 mod intrinsic;
 mod layout_tree;
@@ -23,7 +24,6 @@ mod normalize;
 mod normalize_source;
 mod paint;
 mod pass;
-mod positioned;
 mod projection;
 mod replaced;
 mod snapshot;
@@ -46,13 +46,16 @@ pub use error::LayoutError;
 pub use layout_tree::{
     FrozenCoordinateSpace, FrozenLayoutBox, FrozenLayoutTree, GeometryProvider, LayoutAnswers,
     LayoutBoxGeometry, LayoutBoxModel, LayoutCaretPosition, LayoutClipChainId, LayoutClipNode,
-    LayoutCoordinateSpaceId, LayoutDocumentMetrics, LayoutElementMetrics, LayoutFlushReason,
-    LayoutFragment, LayoutFragmentBoxModel, LayoutFragmentId, LayoutFragmentKind, LayoutHit,
+    LayoutCoordinateSpaceId, LayoutDocumentMetrics, LayoutDocumentScrollMetrics,
+    LayoutElementMetrics, LayoutFlushReason, LayoutFragment, LayoutFragmentBoxModel,
+    LayoutFragmentId, LayoutFragmentKind, LayoutGridGeometry, LayoutGridTrackGeometry, LayoutHit,
     LayoutIntersectionGeometry, LayoutNodeOutput, LayoutOutputBoxId, LayoutPassMetrics,
-    LayoutPassResult, LayoutPoint, LayoutQuad, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch,
-    LayoutRect, LayoutScrollContainerMetrics, LayoutScrollExtent, LayoutScrollIntoViewGeometry,
-    LayoutSize, LayoutTransform2D, LayoutTreeRetentionMetrics, LayoutViewport,
-    MAX_RETAINED_LAYOUT_BOXES, MAX_RETAINED_LAYOUT_FRAGMENTS, MAX_RETAINED_LAYOUT_TREE_BYTES,
+    LayoutPassResult, LayoutPhysicalAxis, LayoutPhysicalBoxStrut, LayoutPoint, LayoutQuad,
+    LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutRect, LayoutScrollContainerKind,
+    LayoutScrollContainerMetrics, LayoutScrollExtent, LayoutScrollIntoViewGeometry, LayoutSize,
+    LayoutTextSourceSpan, LayoutTransform2D, LayoutTreeRetentionMetrics, LayoutUsedBoxValues,
+    LayoutViewport, MAX_RETAINED_LAYOUT_BOXES, MAX_RETAINED_LAYOUT_FRAGMENTS,
+    MAX_RETAINED_LAYOUT_TREE_BYTES,
 };
 pub use normalize::{NormalizedBoxNode, NormalizedBoxTree, NormalizedFormattingContext};
 pub use normalize_source::{
@@ -77,15 +80,16 @@ pub use snapshot::{
     pixel_snap_paint_rect,
 };
 pub use source::{
-    LayoutElementCategory, LayoutElementMetadata, LayoutElementSemantics, LayoutFormControlData,
-    LayoutFormControlKind, LayoutImageResource, LayoutInputControlKind, LayoutListData,
-    LayoutListRole, LayoutNamespace, LayoutPseudo, LayoutReplacedKind, LayoutSource,
-    LayoutSourceKind, LayoutStyleResolver, LayoutTableData, LayoutTableRole, LayoutTextSelection,
-    ReplacedMetrics,
+    LayoutDocumentMode, LayoutElementCategory, LayoutElementContent, LayoutElementMetadata,
+    LayoutElementSemantics, LayoutFormControlData, LayoutFormControlKind,
+    LayoutImageFallbackContent, LayoutImageResource, LayoutInputControlKind, LayoutListData,
+    LayoutListRole, LayoutNamespace, LayoutPseudo, LayoutReplacedKind, LayoutSelectPresentation,
+    LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutTableData, LayoutTableRole,
+    LayoutTextSelection, ReplacedMetrics, ReplacedObjectSize,
 };
 pub use style::{
-    LayoutDisplay, LayoutInlineAlignment, LayoutListMarkerPosition, LayoutListMarkerType,
-    LayoutPosition, ResolvedLayoutStyle,
+    LayoutDisplay, LayoutInlineAlignment, LayoutLastRememberedSize, LayoutLastRememberedSizePolicy,
+    LayoutListMarkerPosition, LayoutListMarkerType, LayoutPosition, ResolvedLayoutStyle,
 };
 pub use text::{
     DocumentLayoutServices, SystemFontPolicy, WebFontFace, WebFontRegistration,

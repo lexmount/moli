@@ -14,7 +14,7 @@ use crate::{
 pub(crate) use css::{CssImageResourceAdmission, CssImageResourceRequestIdentity};
 pub(crate) use preload::{ScannedImagePreloadAdmission, SharedScannedImagePreloadLoad};
 pub(super) use state::ImageResourceStore;
-pub(crate) use state::ReadyImageForLayout;
+pub(crate) use state::{ImageNaturalSizing, ImageResourceStatus, ReadyImageForLayout};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(super) struct ImageResourceRequestIdentity {
@@ -267,6 +267,17 @@ impl super::JsContextHost {
         self.image_resources.is_ready(element)
     }
 
+    pub(crate) fn image_resource_status(&self, element: DomHandle) -> Option<ImageResourceStatus> {
+        self.image_resources.status(element)
+    }
+
+    pub(crate) fn fail_image_resource_for_element(&mut self, element: DomHandle) -> bool {
+        let Some(identity) = self.image_resources.identity(element).cloned() else {
+            return false;
+        };
+        self.image_resources.fail(&identity)
+    }
+
     pub(crate) fn has_ready_image_request(&self, request_key: &ImageRequestKey) -> bool {
         self.image_resources.has_ready_request(request_key)
     }
@@ -284,6 +295,13 @@ impl super::JsContextHost {
 
     pub(crate) fn image_resource_intrinsic_size(&self, element: DomHandle) -> Option<(f32, f32)> {
         self.image_resources.intrinsic_dimensions(element)
+    }
+
+    pub(crate) fn image_resource_natural_sizing(
+        &self,
+        element: DomHandle,
+    ) -> Option<ImageNaturalSizing> {
+        self.image_resources.natural_sizing(element)
     }
 
     pub(crate) fn complete_pending_image_load_local_response_if_matches(

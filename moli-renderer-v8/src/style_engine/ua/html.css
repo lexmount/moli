@@ -85,14 +85,22 @@ table {
 
 thead {
   display: table-header-group;
+  vertical-align: middle;
 }
 
 tbody {
   display: table-row-group;
+  vertical-align: middle;
 }
 
 tfoot {
   display: table-footer-group;
+  vertical-align: middle;
+}
+
+/* XHTML and script-created tables may contain rows without a section. */
+table > tr {
+  vertical-align: middle;
 }
 
 col {
@@ -105,10 +113,19 @@ colgroup {
 
 tr {
   display: table-row;
+  vertical-align: inherit;
 }
 
 td, th {
   display: table-cell;
+  vertical-align: inherit;
+}
+
+/* Normal table cells receive their padding from the nearest table's legacy
+   shared cell style. Keep Blink's UA fallback for orphan cells. */
+td:not(table td),
+th:not(table th) {
+  padding: 1px;
 }
 
 caption {

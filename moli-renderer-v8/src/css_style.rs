@@ -85,28 +85,6 @@ impl CssInlineStyleDeclarationState {
         self.entries.clone()
     }
 
-    /// Returns the winning value for an already-canonicalized longhand without
-    /// cloning the declaration list or canonicalizing every stored name.
-    ///
-    /// This intentionally does not expand shorthands. It is for renderer-only
-    /// typed facts whose declarations are stored in the side projection
-    /// because the Servo-flavored Stylo build does not expose that longhand.
-    pub(crate) fn canonical_longhand_value(&self, property: &str) -> Option<&str> {
-        let mut normal = None;
-        let mut important = None;
-        for entry in &self.entries {
-            if entry.name != property {
-                continue;
-            }
-            if entry.priority {
-                important = Some(entry.value.as_str());
-            } else {
-                normal = Some(entry.value.as_str());
-            }
-        }
-        important.or(normal)
-    }
-
     pub(crate) fn property_names(&self) -> Vec<String> {
         if self.side_entries.is_empty() && self.entries.is_empty() && !self.block.is_empty() {
             return stylo_declaration_block_property_names(&self.block);
@@ -1233,39 +1211,6 @@ pub(crate) fn css_declaration_list_property_value(
         winner = Some(entry);
     }
     winner.map(|entry| entry.value)
-}
-
-/// Returns one exact, already-canonicalized longhand from raw declaration text
-/// without routing through the general CSSOM property-name canonicalizer.
-///
-/// `cssparser` has already decoded the declaration name, so an ASCII
-/// case-insensitive comparison covers CSS property-name matching, including
-/// escaped identifiers. This is the uncached fallback for renderer-only typed
-/// facts; live elements normally use `CssInlineStyleDeclarationState`.
-pub(crate) fn css_declaration_list_canonical_longhand_value(
-    style_text: &str,
-    property: &str,
-) -> Option<String> {
-    let mut normal = None;
-    let mut important = None;
-    for declaration in parse_declaration_list(
-        style_text,
-        DeclarationParseOptions {
-            canonicalize_property_name: false,
-            unescape_value_semicolons: true,
-            preserve_empty_values: true,
-        },
-    ) {
-        if !declaration.name.eq_ignore_ascii_case(property) {
-            continue;
-        }
-        if declaration.important {
-            important = Some(declaration.value);
-        } else {
-            normal = Some(declaration.value);
-        }
-    }
-    important.or(normal)
 }
 
 pub(crate) fn resolve_css_url_function(value: &str, base_url: &url::Url) -> String {
@@ -2665,39 +2610,6 @@ mod tests {
         assert_eq!(entries[0].name, "display");
         assert_eq!(entries[0].value, "block");
         assert!(entries[0].priority);
-    }
-
-    #[test]
-    fn canonical_longhand_fast_path_preserves_css_priority_and_identifier_matching() {
-        let raw = r#"
-            CONTENT-VISIBILITY: auto !important;
-            content\2d visibility: visible;
-            content-visibility: hidden;
-        "#;
-        assert_eq!(
-            css_declaration_list_canonical_longhand_value(raw, "content-visibility").as_deref(),
-            Some("auto")
-        );
-
-        let state = CssInlineStyleDeclarationState {
-            entries: vec![
-                CssStyleEntry {
-                    name: "content-visibility".to_owned(),
-                    value: "hidden".to_owned(),
-                    priority: true,
-                },
-                CssStyleEntry {
-                    name: "content-visibility".to_owned(),
-                    value: "visible".to_owned(),
-                    priority: false,
-                },
-            ],
-            ..Default::default()
-        };
-        assert_eq!(
-            state.canonical_longhand_value("content-visibility"),
-            Some("hidden")
-        );
     }
 
     #[test]

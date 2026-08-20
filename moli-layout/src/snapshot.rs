@@ -654,12 +654,10 @@ pub enum PaintTextDecorationStyle {
 /// One resolved decoration segment for a shaped style run.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PaintTextDecoration {
-    /// Local horizontal start in CSS pixels.
-    pub x: f32,
-    /// Local vertical center of the decoration stroke.
-    pub y: f32,
-    /// Segment advance in CSS pixels.
-    pub width: f32,
+    /// Physical start of the decoration centerline in local CSS pixels.
+    pub start: PaintPoint,
+    /// Physical end of the decoration centerline in local CSS pixels.
+    pub end: PaintPoint,
     /// Used stroke thickness in CSS pixels.
     pub thickness: f32,
     pub color: PaintColor,
@@ -1020,11 +1018,13 @@ impl PaintSnapshot {
             shape: PaintShape::Rect(clip),
             transform: local_to_surface,
         });
-        self.push_fragment(PaintFragment::Fill {
-            shape: PaintShape::Rect(clip),
-            brush: PaintBrush::Solid(child.canvas_color),
-            transform: local_to_surface,
-        });
+        if child.canvas_color.alpha > 0.0 {
+            self.push_fragment(PaintFragment::Fill {
+                shape: PaintShape::Rect(clip),
+                brush: PaintBrush::Solid(child.canvas_color),
+                transform: local_to_surface,
+            });
+        }
         for fragment in child.fragments {
             if let Some(fragment) = rebase_embedded_fragment(
                 fragment,

@@ -9,8 +9,9 @@ use crate::{
     FrozenCoordinateSpace, FrozenLayoutBox, FrozenLayoutTree, LayoutAnonymousReason,
     LayoutBoxGeometry, LayoutBoxId, LayoutClipChainId, LayoutClipNode, LayoutCoordinateSpaceId,
     LayoutError, LayoutFlushReason, LayoutFragment, LayoutFragmentBoxModel, LayoutFragmentId,
-    LayoutFragmentKind, LayoutOutputBoxId, LayoutPassMetrics, LayoutPassResult, LayoutPoint,
-    LayoutRect, LayoutScrollExtent, LayoutSize, LayoutTransform2D, LayoutViewport, LayoutWorld,
+    LayoutFragmentKind, LayoutOutputBoxId, LayoutPassMetrics, LayoutPassResult,
+    LayoutPhysicalBoxStrut, LayoutPoint, LayoutRect, LayoutScrollExtent, LayoutSize,
+    LayoutTextSourceSpan, LayoutTransform2D, LayoutUsedBoxValues, LayoutViewport, LayoutWorld,
     PaintCaptureRequest, PaintDiagnostic, PaintDiagnosticSeverity,
 };
 
@@ -162,12 +163,13 @@ where
     fragments: Vec<LayoutFragment>,
     scroll_proxy_links: Vec<(N, LayoutOutputBoxId)>,
     pub(crate) scroll_extents: Vec<LayoutScrollExtent>,
+    viewport_scroll_extent: Option<LayoutScrollExtent>,
     pub(crate) coordinate_spaces: Vec<ProjectedCoordinateSpace>,
     pub(crate) clip_chain: Vec<LayoutClipNode>,
     paint_order_count: usize,
     pub(crate) diagnostics: Vec<PaintDiagnostic>,
     resolved_transforms: Vec<ResolvedLayoutTransform>,
-    overflow: Vec<LayoutRect>,
+    scrollable_overflow: Vec<LayoutRect>,
     viewport_anchored: Vec<bool>,
     direct_fragments: Vec<Option<LayoutFragmentId>>,
     owner_paint_fragments: Vec<Vec<LayoutFragmentId>>,
@@ -206,12 +208,13 @@ where
             fragments: Vec::new(),
             scroll_proxy_links,
             scroll_extents: Vec::with_capacity(count),
+            viewport_scroll_extent: None,
             coordinate_spaces: Vec::with_capacity(count + 1),
             clip_chain: Vec::new(),
             paint_order_count: 0,
             diagnostics: Vec::new(),
             resolved_transforms: vec![ResolvedLayoutTransform::IDENTITY; count],
-            overflow: vec![LayoutRect::ZERO; count],
+            scrollable_overflow: vec![LayoutRect::ZERO; count],
             viewport_anchored: vec![false; count],
             direct_fragments: vec![None; count],
             owner_paint_fragments: vec![Vec::new(); count],
@@ -235,6 +238,7 @@ where
                 ));
             }
             let id = LayoutOutputBoxId::from_index(index);
+            let layout_box_id = LayoutBoxId::from_index(index);
             let layout = layout_box.final_layout;
             let border_box = LayoutRect::new(
                 0.0,
@@ -277,12 +281,16 @@ where
                     PaintDiagnosticSeverity::Warning,
                 ));
             }
-            let mut overflow = border_box;
+            // Blink initializes layout/scrollable overflow from the padding
+            // rect. A box's own border is self visual geometry, not content
+            // reachable by scrolling; descendants still propagate their
+            // border and margin boxes into the parent's overflow below.
+            let mut overflow = padding_box;
             let content_extent = LayoutRect::new(
-                0.0,
-                0.0,
-                layout.size.width.max(layout.content_size.width).max(0.0),
-                layout.size.height.max(layout.content_size.height).max(0.0),
+                padding_box.x,
+                padding_box.y,
+                padding_box.width.max(layout.content_size.width).max(0.0),
+                padding_box.height.max(layout.content_size.height).max(0.0),
             );
             overflow = overflow.union(content_extent);
             if let Some(context) = layout_box.inline_layout.as_ref() {
@@ -291,16 +299,30 @@ where
                     layout.border.top + layout.padding.top,
                 );
                 for line in &context.fragments.lines {
-                    overflow = overflow.union(offset_rect(line.rect, origin));
+                    overflow = overflow.union(offset_rect(line.used_rect, origin));
                 }
                 for fragment in &context.fragments.text {
-                    overflow = overflow.union(offset_rect(fragment.rect, origin));
+                    let rect = context
+                        .fragments
+                        .lines
+                        .get(fragment.line_index)
+                        .map_or(fragment.rect, |line| {
+                            line.adjust_scrollable_overflow(fragment.rect)
+                        });
+                    overflow = overflow.union(offset_rect(rect, origin));
                 }
                 for fragment in &context.fragments.boxes {
-                    overflow = overflow.union(offset_rect(fragment.rect, origin));
+                    let rect = context
+                        .fragments
+                        .lines
+                        .get(fragment.line_index)
+                        .map_or(fragment.rect, |line| {
+                            line.adjust_scrollable_overflow(fragment.rect)
+                        });
+                    overflow = overflow.union(offset_rect(rect, origin));
                 }
             }
-            self.overflow[index] = overflow;
+            self.scrollable_overflow[index] = overflow;
             let source = layout_box.source.or_else(|| {
                 (layout_box.anonymous_reason
                     == Some(LayoutAnonymousReason::InlineSplitContinuation))
@@ -316,11 +338,35 @@ where
                 .flatten()
             }));
             let semantics = layout_box.element_semantics();
-            let (layout_x, layout_y) = self
-                .world
-                .global_layout_origin(LayoutBoxId::from_index(index));
+            let is_body_element = self.world.is_document_body(layout_box_id);
+            let is_document_element = self.world.is_document_element(layout_box_id);
+            let root_uses_viewport_client_metrics = is_document_element
+                && self.world.document_mode != crate::LayoutDocumentMode::Quirks;
+            let body_uses_viewport_client_metrics =
+                is_body_element && self.world.document_mode == crate::LayoutDocumentMode::Quirks;
+            let (layout_x, layout_y) = self.world.global_layout_origin(layout_box_id);
+            let used_values = layout_box.is_css_box().then(|| {
+                let margin = LayoutPhysicalBoxStrut::new(
+                    layout.margin.top,
+                    layout.margin.right,
+                    layout.margin.bottom,
+                    layout.margin.left,
+                );
+                let box_rect = match layout_box.style.taffy.box_sizing {
+                    taffy::BoxSizing::ContentBox => content_box,
+                    taffy::BoxSizing::BorderBox => border_box,
+                };
+                LayoutUsedBoxValues {
+                    size: LayoutSize::new(box_rect.width, box_rect.height),
+                    margin,
+                }
+            });
             self.boxes.push(LayoutBoxGeometry {
                 id,
+                effective_zoom: layout_box.style.effective_zoom(),
+                structural_parent: layout_box
+                    .structural_parent
+                    .map(|parent| LayoutOutputBoxId::from_index(parent.index())),
                 parent: layout_box
                     .parent
                     .map(|parent| LayoutOutputBoxId::from_index(parent.index())),
@@ -334,18 +380,26 @@ where
                 padding_box,
                 border_box,
                 margin_box,
+                used_values,
                 fragments: Vec::new(),
                 layout_origin_in_document: LayoutPoint::new(layout_x, layout_y),
-                is_body_element: semantics.is_some_and(|element| element.is_html_element("body")),
+                is_body_element,
+                uses_viewport_client_metrics: root_uses_viewport_client_metrics
+                    || body_uses_viewport_client_metrics,
                 is_table_offset_parent: semantics.is_some_and(|element| {
                     element.is_html_element("table")
                         || element.is_html_element("td")
                         || element.is_html_element("th")
                 }),
-                establishes_positioned_containing_block: layout_box
-                    .establishes_positioned_containing_block(),
-                establishes_fixed_containing_block: layout_box.establishes_fixed_containing_block(),
-                visible: layout_box.style.is_visible(),
+                establishes_positioned_containing_block: self
+                    .world
+                    .establishes_positioned_containing_block(layout_box_id),
+                establishes_fixed_containing_block: self
+                    .world
+                    .establishes_fixed_containing_block(layout_box_id),
+                display_lock_eligible: layout_box.is_eligible_for_display_lock(),
+                contents_skipped: layout_box.used_content_visibility_skips_contents(),
+                visible: layout_box.is_visible_for_paint(),
                 pointer_events: layout_box.style.accepts_pointer_events(),
             });
         }
@@ -368,10 +422,10 @@ where
                 continue;
             }
             let child_geometry = &self.boxes[index];
-            let visual_overflow = if self.world.boxes[index].style.clips_overflow() {
+            let visual_overflow = if self.world.clips_overflow(LayoutBoxId::from_index(index)) {
                 child_geometry.border_box
             } else {
-                self.overflow[index]
+                self.scrollable_overflow[index]
             };
             let location = self.world.boxes[index].final_layout.location;
             let layout_translation = LayoutTransform2D::translation(location.x, location.y);
@@ -385,23 +439,15 @@ where
                         .map_rect(child_geometry.margin_box)
                         .bounding_rect(),
                 );
-            self.overflow[parent_id.index()] = self.overflow[parent_id.index()].union(mapped);
+            self.scrollable_overflow[parent_id.index()] =
+                self.scrollable_overflow[parent_id.index()].union(mapped);
         }
 
         for index in 0..self.world.boxes.len() {
             let geometry = &self.boxes[index];
-            let overflow = self.overflow[index];
-            let is_root = index == self.world.root.index();
-            let scrollport = if is_root {
-                LayoutRect::new(
-                    0.0,
-                    0.0,
-                    self.viewport.css_width as f32,
-                    self.viewport.css_height as f32,
-                )
-            } else {
-                geometry.padding_box
-            };
+            let overflow = self.scrollable_overflow[index];
+            let id = LayoutBoxId::from_index(index);
+            let scrollport = geometry.padding_box;
             let scroll_size = LayoutSize::new(
                 scrollport
                     .width
@@ -412,8 +458,7 @@ where
             );
             let horizontal_range = (scroll_size.width - scrollport.width).max(0.0);
             let vertical_range = (scroll_size.height - scrollport.height).max(0.0);
-            let is_scroll_container =
-                is_root || self.world.boxes[index].style.establishes_scroll_container();
+            let is_scroll_container = self.world.establishes_scroll_container(id);
             let requested = finite_point(self.world.boxes[index].scroll_offset);
             let (minimum_offset, maximum_offset) = if is_scroll_container {
                 if self.world.boxes[index].style.direction() == crate::style::InlineDirection::Rtl {
@@ -446,14 +491,61 @@ where
                 minimum_offset,
                 maximum_offset,
                 is_scroll_container,
-                allows_user_scroll_x: is_root
-                    || self.world.boxes[index].style.allows_user_scroll_x(),
-                allows_user_scroll_y: is_root
-                    || self.world.boxes[index].style.allows_user_scroll_y(),
-                clips_overflow: self.world.boxes[index].style.clips_overflow(),
+                allows_user_scroll_x: self.world.boxes[index].style.allows_user_scroll_x(),
+                allows_user_scroll_y: self.world.boxes[index].style.allows_user_scroll_y(),
+                clips_overflow: self.world.clips_overflow(id),
             });
         }
-        self.viewport_scroll = self.scroll_extents[self.world.root.index()].applied_offset;
+
+        let scrollport = LayoutRect::new(
+            0.0,
+            0.0,
+            self.viewport.css_width as f32,
+            self.viewport.css_height as f32,
+        );
+        let overflow = self.document_scrollable_overflow();
+        let scroll_size = LayoutSize::new(
+            scrollport
+                .width
+                .max((overflow.right() - scrollport.x).max(0.0)),
+            scrollport
+                .height
+                .max((overflow.bottom() - scrollport.y).max(0.0)),
+        );
+        let horizontal_range = (scroll_size.width - scrollport.width).max(0.0);
+        let vertical_range = (scroll_size.height - scrollport.height).max(0.0);
+        let (minimum_offset, maximum_offset) =
+            if self.world.boxes[self.world.root.index()].style.direction()
+                == crate::style::InlineDirection::Rtl
+            {
+                (
+                    LayoutPoint::new(-horizontal_range, 0.0),
+                    LayoutPoint::new(0.0, vertical_range),
+                )
+            } else {
+                (
+                    LayoutPoint::ZERO,
+                    LayoutPoint::new(horizontal_range, vertical_range),
+                )
+            };
+        let requested = finite_point(self.world.viewport_scroll_offset);
+        let applied_offset = LayoutPoint::new(
+            requested.x.clamp(minimum_offset.x, maximum_offset.x),
+            requested.y.clamp(minimum_offset.y, maximum_offset.y),
+        );
+        self.viewport_scroll = applied_offset;
+        self.viewport_scroll_extent = Some(LayoutScrollExtent {
+            scrollport,
+            scrollable_overflow: overflow,
+            scroll_size,
+            applied_offset,
+            minimum_offset,
+            maximum_offset,
+            is_scroll_container: true,
+            allows_user_scroll_x: self.world.viewport_allows_user_scroll_x(),
+            allows_user_scroll_y: self.world.viewport_allows_user_scroll_y(),
+            clips_overflow: true,
+        });
     }
 
     fn build_coordinate_spaces(&mut self) -> Result<(), LayoutError> {
@@ -466,6 +558,8 @@ where
                 local_to_parent: LayoutTransform2D::IDENTITY,
                 local_to_document: LayoutTransform2D::IDENTITY,
                 local_to_viewport: LayoutTransform2D::IDENTITY,
+                local_to_document_ignoring_css_transforms: LayoutTransform2D::IDENTITY,
+                local_to_viewport_ignoring_css_transforms: LayoutTransform2D::IDENTITY,
             },
             paint: PaintSpace::ROOT,
         });
@@ -533,7 +627,7 @@ where
                         owner: output_box,
                         line_index: line.line_index,
                     },
-                    rect: offset_rect(line.rect, content_origin),
+                    rect: offset_rect(line.used_rect, content_origin),
                     box_model: None,
                     coordinate_space,
                     clip_chain: None,
@@ -561,6 +655,22 @@ where
                 self.owner_paint_fragments[index].push(fragment);
                 self.register_box_fragment(target, fragment);
             }
+            for line_break in &context.fragments.line_breaks {
+                let target = line_break.box_id.index();
+                let fragment = self.push_fragment(LayoutFragment {
+                    id: LayoutFragmentId::from_index(0),
+                    kind: LayoutFragmentKind::LineBreak {
+                        box_id: LayoutOutputBoxId::from_index(target),
+                        line_index: line_break.line_index,
+                    },
+                    rect: offset_rect(line_break.rect, content_origin),
+                    box_model: None,
+                    coordinate_space,
+                    clip_chain: None,
+                    paint_order: None,
+                });
+                self.register_box_fragment(target, fragment);
+            }
             for text in &context.fragments.text {
                 let target = text.box_id.index();
                 let fragment = self.push_fragment(LayoutFragment {
@@ -568,7 +678,9 @@ where
                     kind: LayoutFragmentKind::Text {
                         box_id: LayoutOutputBoxId::from_index(target),
                         line_index: text.line_index,
-                        source_utf16_range: text.source_utf16_range.clone(),
+                        source_span: LayoutTextSourceSpan::new(text.source_utf16_range.clone()),
+                        is_forced_line_break: text.is_forced_line_break,
+                        inline_axis: text.inline_axis,
                         rtl: text.rtl,
                     },
                     rect: offset_rect(text.rect, content_origin),
@@ -661,17 +773,16 @@ where
         self.boxes[index].clip_chain = box_clip;
         self.background_clips[index] = box_clip;
 
-        let child_clip =
-            if id != self.world.root && self.world.boxes[index].clips_descendant_paint() {
-                Some(self.push_clip(
-                    box_clip,
-                    Some(LayoutOutputBoxId::from_index(index)),
-                    self.boxes[index].coordinate_space,
-                    self.boxes[index].padding_box,
-                ))
-            } else {
-                box_clip
-            };
+        let child_clip = if id != self.world.root && self.world.clips_descendant_paint(id) {
+            Some(self.push_clip(
+                box_clip,
+                Some(LayoutOutputBoxId::from_index(index)),
+                self.boxes[index].coordinate_space,
+                self.boxes[index].padding_box,
+            ))
+        } else {
+            box_clip
+        };
         self.content_clips[index] = child_clip;
         for child in self.world.boxes[index].children.clone() {
             self.assign_box_clip_metadata(child, child_clip, viewport_clip);
@@ -689,7 +800,7 @@ where
             LayoutFragmentKind::Box { .. }
             | LayoutFragmentKind::InlineBox { .. }
             | LayoutFragmentKind::Text { .. } => {}
-            LayoutFragmentKind::Line { .. } => return,
+            LayoutFragmentKind::Line { .. } | LayoutFragmentKind::LineBreak { .. } => return,
         }
         let fragment = &mut self.fragments[fragment_id.index()];
         fragment.clip_chain = clip_chain;
@@ -714,23 +825,26 @@ where
         id
     }
 
-    pub(crate) fn document_content_size(&self) -> LayoutSize {
+    fn document_scrollable_overflow(&self) -> LayoutRect {
         let root = self.world.root.index();
         let root_layout = self.world.boxes[root].final_layout.location;
         let layout_translation = LayoutTransform2D::translation(root_layout.x, root_layout.y);
-        let overflow = layout_translation
+        layout_translation
             .concatenate(self.resolved_transforms[root].transform)
-            .map_rect(self.overflow[root])
+            .map_rect(self.scrollable_overflow[root])
             .bounding_rect()
             .union(
                 layout_translation
                     .map_rect(self.boxes[root].margin_box)
                     .bounding_rect(),
-            );
-        LayoutSize::new(
-            (self.viewport.css_width as f32).max(overflow.right().max(0.0)),
-            (self.viewport.css_height as f32).max(overflow.bottom().max(0.0)),
-        )
+            )
+    }
+
+    pub(crate) fn document_content_size(&self) -> LayoutSize {
+        self.viewport_scroll_extent
+            .as_ref()
+            .expect("scrollable overflow resolves before document content size")
+            .scroll_size
     }
 
     fn into_frozen_tree(self, content_size: LayoutSize) -> FrozenLayoutTree<N> {
@@ -744,6 +858,11 @@ where
                 .next()
                 .expect("a frozen layout tree always owns the viewport coordinate space"),
         );
+        let grid_geometries = self
+            .world
+            .boxes
+            .iter()
+            .map(|layout_box| layout_box.grid_geometry.clone());
         let boxes = self
             .boxes
             .into_iter()
@@ -752,10 +871,17 @@ where
             .zip(self.hit_sources)
             .zip(self.scroll_extents)
             .zip(coordinate_spaces.map(FrozenCoordinateSpace::from))
+            .zip(grid_geometries)
             .map(
                 |(
-                    ((((geometry, geometry_source), principal_source), hit_source), scroll_extent),
-                    coordinate_space,
+                    (
+                        (
+                            (((geometry, geometry_source), principal_source), hit_source),
+                            scroll_extent,
+                        ),
+                        coordinate_space,
+                    ),
+                    grid_geometry,
                 )| FrozenLayoutBox {
                     geometry,
                     scroll_extent,
@@ -763,6 +889,7 @@ where
                     geometry_source,
                     principal_source,
                     hit_source,
+                    grid_geometry,
                 },
             )
             .collect();
@@ -770,6 +897,11 @@ where
             self.viewport,
             self.viewport_scroll,
             content_size,
+            self.world.document_element,
+            self.world.document_body,
+            self.world.document_scrolling_element(),
+            self.viewport_scroll_extent
+                .expect("scrollable overflow resolves before freezing the layout tree"),
             root_box,
             boxes,
             self.fragments,
@@ -922,15 +1054,20 @@ where
     let parent_space = parent_box.map_or(LayoutCoordinateSpaceId::from_index(0), |parent| {
         LayoutCoordinateSpaceId::from_index(parent.index() + 1)
     });
-    let parent_transform = match parent_box {
+    let (parent_transform, parent_transform_ignoring_css_transforms) = match parent_box {
         Some(parent) => spaces
             .get(parent.index() + 1)
             .and_then(Option::as_ref)
-            .map(|space| space.layout.local_to_document)
+            .map(|space| {
+                (
+                    space.layout.local_to_document,
+                    space.layout.local_to_document_ignoring_css_transforms,
+                )
+            })
             .ok_or(LayoutError::InvalidBoxReference {
                 index: parent.index(),
             })?,
-        None => LayoutTransform2D::IDENTITY,
+        None => (LayoutTransform2D::IDENTITY, LayoutTransform2D::IDENTITY),
     };
     let is_viewport_anchored = parent_box.map_or_else(
         || layout_box.style.is_fixed_positioned(),
@@ -948,11 +1085,23 @@ where
         location.y - applied_parent_scroll.y,
     )
     .concatenate(resolved_transforms[index].transform);
+    let local_to_parent_ignoring_css_transforms = LayoutTransform2D::translation(
+        location.x - applied_parent_scroll.x,
+        location.y - applied_parent_scroll.y,
+    );
     let local_to_document = if parent_box.is_none() && is_viewport_anchored {
         LayoutTransform2D::translation(viewport_scroll.x, viewport_scroll.y)
             .concatenate(local_to_parent)
     } else {
         parent_transform.concatenate(local_to_parent)
+    };
+    let local_to_document_ignoring_css_transforms = if parent_box.is_none() && is_viewport_anchored
+    {
+        LayoutTransform2D::translation(viewport_scroll.x, viewport_scroll.y)
+            .concatenate(local_to_parent_ignoring_css_transforms)
+    } else {
+        parent_transform_ignoring_css_transforms
+            .concatenate(local_to_parent_ignoring_css_transforms)
     };
     let parent_paint_state = match parent_box {
         Some(parent) => Some(
@@ -977,6 +1126,9 @@ where
     let exact_local_to_viewport =
         LayoutTransform2D::translation(-viewport_scroll.x, -viewport_scroll.y)
             .concatenate(local_to_document);
+    let local_to_viewport_ignoring_css_transforms =
+        LayoutTransform2D::translation(-viewport_scroll.x, -viewport_scroll.y)
+            .concatenate(local_to_document_ignoring_css_transforms);
     spaces[index + 1] = Some(ProjectedCoordinateSpace {
         layout: LayoutCoordinateSpace {
             id: LayoutCoordinateSpaceId::from_index(index + 1),
@@ -985,6 +1137,8 @@ where
             local_to_parent,
             local_to_document,
             local_to_viewport: exact_local_to_viewport,
+            local_to_document_ignoring_css_transforms,
+            local_to_viewport_ignoring_css_transforms,
         },
         paint,
     });
@@ -1044,83 +1198,51 @@ where
         owner_layout.border.left + owner_layout.padding.left,
         owner_layout.border.top + owner_layout.padding.top,
     );
-    let containing_width = (owner_layout.size.width
-        - owner_layout.border.left
-        - owner_layout.border.right
-        - owner_layout.padding.left
-        - owner_layout.padding.right)
-        .max(0.0);
+    let content_box_size = taffy::Size {
+        width: (owner_layout.size.width
+            - owner_layout.border.left
+            - owner_layout.border.right
+            - owner_layout.padding.left
+            - owner_layout.padding.right)
+            .max(0.0),
+        height: (owner_layout.size.height
+            - owner_layout.border.top
+            - owner_layout.border.bottom
+            - owner_layout.padding.top
+            - owner_layout.padding.bottom)
+            .max(0.0),
+    };
+    let containing_inline_size = owner
+        .style
+        .writing_mode()
+        .to_logical(content_box_size)
+        .inline_size;
     let inline_box = &world.boxes[fragment.box_id.index()];
     let style = &inline_box.style;
     let padding = style.taffy.padding.resolve_or_zero(
-        Some(containing_width),
+        Some(containing_inline_size),
         crate::style::resolve_stylo_calc_value,
     );
     let border = style.taffy.border.resolve_or_zero(
-        Some(containing_width),
+        Some(containing_inline_size),
         crate::style::resolve_stylo_calc_value,
     );
     let margin = style.taffy.margin.resolve_or_zero(
-        Some(containing_width),
+        Some(containing_inline_size),
         crate::style::resolve_stylo_calc_value,
     );
-    let ltr = style.direction() == crate::style::InlineDirection::Ltr;
-    let has_left_edge = if ltr {
-        fragment.has_start_edge
-    } else {
-        fragment.has_end_edge
-    };
-    let has_right_edge = if ltr {
-        fragment.has_end_edge
-    } else {
-        fragment.has_start_edge
-    };
-    let left_margin = if has_left_edge {
-        margin.left.max(0.0)
-    } else {
-        0.0
-    };
-    let right_margin = if has_right_edge {
-        margin.right.max(0.0)
-    } else {
-        0.0
-    };
-    let left_padding = if has_left_edge { padding.left } else { 0.0 };
-    let right_padding = if has_right_edge { padding.right } else { 0.0 };
-    let left_border = if has_left_edge { border.left } else { 0.0 };
-    let right_border = if has_right_edge { border.right } else { 0.0 };
-    let border_box = LayoutRect::new(
-        content_origin.x + fragment.rect.x + left_margin,
-        content_origin.y + fragment.rect.y - padding.top - border.top,
-        (fragment.rect.width - left_margin - right_margin).max(0.0),
-        fragment.rect.height + padding.top + padding.bottom + border.top + border.bottom,
-    );
-    let padding_box = inset_rect(
-        border_box,
-        border.top,
-        right_border,
-        border.bottom,
-        left_border,
-    );
-    let content_box = inset_rect(
-        padding_box,
-        padding.top,
-        right_padding,
-        padding.bottom,
-        left_padding,
-    );
-    let margin_box = outset_rect(
-        border_box,
-        margin.top,
-        right_margin,
-        margin.bottom,
-        left_margin,
+    let geometry = crate::inline::inline_fragment_box_geometry(
+        fragment,
+        style.writing_direction(),
+        margin,
+        padding,
+        border,
     );
     LayoutFragmentBoxModel {
-        content: content_box,
-        padding: padding_box,
-        border: border_box,
-        margin: margin_box,
+        content: offset_rect(geometry.content_rect, content_origin),
+        padding: offset_rect(geometry.padding_rect, content_origin),
+        border: offset_rect(geometry.border_rect, content_origin),
+        margin: offset_rect(geometry.margin_rect, content_origin),
     }
 }
 

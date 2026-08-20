@@ -5,7 +5,8 @@ use std::{collections::HashSet, fmt::Debug, hash::Hash};
 use super::{
     model::{
         LayoutBoxModel, LayoutClipChainId, LayoutCoordinateSpaceId, LayoutFragmentId,
-        LayoutFragmentKind, LayoutOutputBoxId, LayoutPoint, LayoutQuad, LayoutRect,
+        LayoutFragmentKind, LayoutOutputBoxId, LayoutPhysicalAxis, LayoutPoint, LayoutQuad,
+        LayoutRect,
     },
     tree::FrozenLayoutTree,
 };
@@ -148,7 +149,9 @@ where
                     LayoutFragmentKind::Box { box_id }
                     | LayoutFragmentKind::InlineBox { box_id, .. } => (box_id, false),
                     LayoutFragmentKind::Text { box_id, .. } => (box_id, true),
-                    LayoutFragmentKind::Line { .. } => return None,
+                    LayoutFragmentKind::Line { .. } | LayoutFragmentKind::LineBreak { .. } => {
+                        return None;
+                    }
                 };
                 let layout_box = self.boxes.get(box_id.index())?;
                 if !layout_box.visible {
@@ -178,7 +181,8 @@ where
         let fragment = self.fragment(entry.fragment)?;
         let LayoutFragmentKind::Text {
             box_id,
-            source_utf16_range,
+            source_span,
+            inline_axis,
             rtl,
             ..
         } = &fragment.kind
@@ -187,26 +191,29 @@ where
         };
         let space = self.coordinate_space(entry.coordinate_space)?;
         let local_point = space.local_to_viewport.inverse()?.map_point(viewport_point);
-        let source_len = source_utf16_range
-            .end
-            .saturating_sub(source_utf16_range.start);
-        let on_left_half = local_point.x <= fragment.rect.x + fragment.rect.width * 0.5;
-        let at_source_start = if *rtl { !on_left_half } else { on_left_half };
-        let fragment_offset = if at_source_start { 0 } else { source_len };
-        let caret_x = if at_source_start == *rtl {
-            fragment.rect.right()
-        } else {
-            fragment.rect.x
+        let on_visual_start_half = match inline_axis {
+            LayoutPhysicalAxis::Horizontal => {
+                local_point.x <= fragment.rect.x + fragment.rect.width * 0.5
+            }
+            LayoutPhysicalAxis::Vertical => {
+                local_point.y <= fragment.rect.y + fragment.rect.height * 0.5
+            }
+        };
+        let caret_fraction = if on_visual_start_half { 0.0 } else { 1.0 };
+        let caret_rect = match inline_axis {
+            LayoutPhysicalAxis::Horizontal => {
+                let x = fragment.rect.x + fragment.rect.width * caret_fraction;
+                LayoutRect::new(x, fragment.rect.y, 0.0, fragment.rect.height)
+            }
+            LayoutPhysicalAxis::Vertical => {
+                let y = fragment.rect.y + fragment.rect.height * caret_fraction;
+                LayoutRect::new(fragment.rect.x, y, fragment.rect.width, 0.0)
+            }
         };
         Some(LayoutCaretPosition {
             source: entry.source,
-            utf16_offset: Some(source_utf16_range.start + fragment_offset),
-            rect: space.local_to_viewport.map_rect(LayoutRect::new(
-                caret_x,
-                fragment.rect.y,
-                0.0,
-                fragment.rect.height,
-            )),
+            utf16_offset: Some(source_span.utf16_offset_at_visual_side(*rtl, on_visual_start_half)),
+            rect: space.local_to_viewport.map_rect(caret_rect),
             ancestor_boxes: self.ancestor_box_models(*box_id),
         })
     }
@@ -239,6 +246,7 @@ where
         match self.fragment(fragment)?.kind {
             LayoutFragmentKind::Box { box_id }
             | LayoutFragmentKind::InlineBox { box_id, .. }
+            | LayoutFragmentKind::LineBreak { box_id, .. }
             | LayoutFragmentKind::Text { box_id, .. } => Some(box_id),
             LayoutFragmentKind::Line { owner, .. } => Some(owner),
         }
