@@ -267,7 +267,7 @@ Source lookup and hit-test candidates are derived from the frozen tree when
 queried. The system has no incrementally maintained layout tree, damage graph,
 retained display list, GPU compositor, or persistent window.
 
-## Test data
+## Benchmark
 
 The following measurements show Moli's current capability envelope. They cover
 real websites, automation clients, Chromium/WPT behavior checks, and a large
