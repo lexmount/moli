@@ -227,3 +227,131 @@ document.body.innerHTML = [
     .await
     .expect("table baseline fixture should run");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_collapses_table_tracks_after_normal_sizing_like_chromium() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/table-track-visibility-collapse.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;background:white}
+table{border-spacing:10px;margin-bottom:5px}
+td{padding:0;height:20px}
+.c1{width:40px}.c2{width:60px;visibility:collapse}.c3{width:80px}
+#fixed{width:300px}
+#rows td{width:40px}
+#rows .collapsed{visibility:collapse;height:30px}
+#start-middle col:nth-child(2){visibility:collapse}
+#groups colgroup:first-child{visibility:collapse}
+#rowgroup tbody:first-child{visibility:collapse}
+#rowspan tr:first-child{visibility:collapse}
+.paint{position:absolute;top:0;margin:0}
+.paint td{width:40px}
+.probe{visibility:visible;width:20px;height:20px}
+#paint-column{left:300px}#paint-column col{visibility:collapse}
+#paint-column .probe,#paint-row .probe{background:red}
+#paint-hidden{left:350px}#paint-hidden td{visibility:hidden}
+#paint-hidden .probe{background:lime}
+#paint-row{left:430px}#paint-row tr{visibility:collapse}
+</style>`;
+document.body.innerHTML = `
+<table id=auto><col class=c1><col class=c2><col class=c3><tr><td id=a1></td><td id=a2></td><td id=a3></td></tr></table>
+<table id=fixed><col class=c1><col class=c2><col class=c3><tr><td id=f1></td><td id=f2></td><td id=f3></td></tr></table>
+<table id=span><col class=c1><col class=c2><col class=c3><tr><td id=s12 colspan=2></td><td id=s3></td></tr></table>
+<table id=rows><tr><td id=r1></td></tr><tr class=collapsed><td id=r2></td></tr><tr><td id=r3></td></tr></table>
+<table id=start-middle><col class=c1><col class=c2><col class=c3><tr><td id=sm1></td><td id=sm23 colspan=2></td></tr></table>
+<table id=groups><colgroup><col class=c1><col class=c2></colgroup><colgroup><col class=c3></colgroup><tr><td id=g1></td><td id=g2></td><td id=g3></td></tr></table>
+<table id=rowgroup><tbody><tr><td id=rg1 class=c1></td></tr><tr><td id=rg2></td></tr></tbody><tbody><tr><td id=rg3></td></tr></tbody></table>
+<table id=rowspan><tr><td id=rs12 class=c1 rowspan=2></td><td id=rs1 class=c1></td></tr><tr><td id=rs2></td></tr></table>
+<table id=paint-column class=paint><col><tr><td><div class=probe></div></td></tr></table>
+<table id=paint-hidden class=paint><tr><td><div class=probe></div></td></tr></table>
+<table id=paint-row class=paint><tr><td><div class=probe></div></td></tr></table>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        let snapshot = page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(500, 420, 1.0))?
+            .expect("table collapse screenshot layout");
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries(['auto','a1','a2','a3','fixed','f1','f2','f3','span','s12','s3','rows','r1','r2','r3','start-middle','sm1','sm23','groups','g1','g2','g3','rowgroup','rg1','rg2','rg3','rowspan','rs12','rs1','rs2'].map(id=>{const r=document.getElementById(id).getBoundingClientRect();return [id,[r.x,r.y,r.width,r.height]]})))"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        for (id, expected) in [
+            ("auto", [0.0, 0.0, 150.0, 40.0]),
+            ("a1", [10.0, 10.0, 40.0, 20.0]),
+            ("a2", [50.0, 10.0, 0.0, 20.0]),
+            ("a3", [60.0, 10.0, 80.0, 20.0]),
+            ("fixed", [0.0, 45.0, 203.34375, 40.0]),
+            ("f1", [10.0, 55.0, 57.765625, 20.0]),
+            ("f2", [67.765625, 55.0, 0.0, 20.0]),
+            ("f3", [77.765625, 55.0, 115.578125, 20.0]),
+            ("span", [0.0, 90.0, 150.0, 40.0]),
+            ("s12", [10.0, 100.0, 40.0, 20.0]),
+            ("s3", [60.0, 100.0, 80.0, 20.0]),
+            ("rows", [0.0, 135.0, 60.0, 70.0]),
+            ("r1", [10.0, 145.0, 40.0, 20.0]),
+            ("r2", [10.0, 165.0, 40.0, 0.0]),
+            ("r3", [10.0, 175.0, 40.0, 20.0]),
+            ("start-middle", [0.0, 210.0, 150.0, 40.0]),
+            ("sm1", [10.0, 220.0, 40.0, 20.0]),
+            ("sm23", [50.0, 220.0, 90.0, 20.0]),
+            ("groups", [0.0, 255.0, 100.0, 40.0]),
+            ("g1", [10.0, 265.0, 0.0, 20.0]),
+            ("g2", [10.0, 265.0, 0.0, 20.0]),
+            ("g3", [10.0, 265.0, 80.0, 20.0]),
+            ("rowgroup", [0.0, 300.0, 60.0, 50.0]),
+            ("rg1", [10.0, 310.0, 40.0, 0.0]),
+            ("rg2", [10.0, 310.0, 40.0, 0.0]),
+            ("rg3", [10.0, 320.0, 40.0, 20.0]),
+            ("rowspan", [0.0, 355.0, 110.0, 40.0]),
+            ("rs12", [10.0, 365.0, 40.0, 0.0]),
+            ("rs1", [60.0, 365.0, 40.0, 0.0]),
+            ("rs2", [60.0, 365.0, 40.0, 20.0]),
+        ] {
+            let actual = geometry[id]
+                .as_array()
+                .unwrap_or_else(|| panic!("missing geometry for {id}: {geometry}"));
+            for (axis, expected) in expected.into_iter().enumerate() {
+                let actual = actual[axis].as_f64().expect("numeric geometry") as f32;
+                assert!(
+                    (actual - expected).abs() <= 0.05,
+                    "{id}[{axis}]: expected {expected}, got {actual}; geometry={geometry}"
+                );
+            }
+        }
+
+        let image = moli_paint::raster_snapshot(&snapshot)?;
+        let pixel = |x: u32, y: u32| {
+            let index = ((y * image.width + x) * 4) as usize;
+            <[u8; 4]>::try_from(&image.rgba[index..index + 4]).expect("RGBA pixel")
+        };
+        assert_eq!(
+            pixel(315, 15),
+            [255, 255, 255, 255],
+            "a cell wholly inside collapsed columns must hide visible overflow descendants"
+        );
+        assert_eq!(
+            pixel(365, 15),
+            [0, 255, 0, 255],
+            "ordinary visibility:hidden keeps its track and permits a visible descendant"
+        );
+        assert_eq!(
+            pixel(445, 15),
+            [255, 255, 255, 255],
+            "a collapsed row must hide visible overflow descendants"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("table track-collapse fixture should run");
+}

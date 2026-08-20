@@ -14,11 +14,11 @@ use std::{fmt::Debug, hash::Hash};
 use style::Atom;
 use taffy::{
     AutoSizeBehavior, AvailableSpace, CacheTree, DetailedGridInfo, Dimension, Display,
-    FontBaseline, GridAutoFlow, IntrinsicSizeResult, Layout, LayoutGridContainer, LayoutInput,
-    LayoutOutput, LayoutPartialTree, Line, LogicalOffset, LogicalSize, MaybeResolve, NodeId, Point,
-    Rect, RequestedAxis, ResolveOrZero, RunMode, Size, SizingMode, SizingPurpose, Style,
-    TableCellLayoutInput, TraversePartialTree, TraverseTree, WritingDirection, compute_grid_layout,
-    style_helpers,
+    FontBaseline, GridAutoFlow, GridPlacement, GridTemplateComponent, IntrinsicSizeResult, Layout,
+    LayoutGridContainer, LayoutInput, LayoutOutput, LayoutPartialTree, Line, LogicalOffset,
+    LogicalSize, MaybeResolve, NodeId, Point, Rect, RequestedAxis, ResolveOrZero, RunMode, Size,
+    SizingMode, SizingPurpose, Style, TableCellLayoutInput, TraversePartialTree, TraverseTree,
+    WritingDirection, compute_grid_layout, style_helpers,
 };
 
 use crate::{
@@ -65,6 +65,7 @@ struct TableRowBaselineMetrics {
 /// that requirement as a Grid item preserves authored row percentages and the
 /// existing excess-height distribution instead of replacing the row track.
 struct TableRowBaselineStrut {
+    row: usize,
     style: Style<Atom>,
     size: Size<f32>,
 }
@@ -75,6 +76,7 @@ struct TableRow {
     group: Option<LayoutBoxId>,
     index: usize,
     track: taffy::TrackSizingFunction,
+    collapsed: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -83,6 +85,93 @@ struct TableColumn {
     group: Option<LayoutBoxId>,
     start: usize,
     span: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct TableTrackLocation {
+    offset: f32,
+    size: f32,
+    collapsed: bool,
+}
+
+/// Canonical logical geometry for semantic CSS table tracks.
+///
+/// Taffy may use an expanded, gap-free numeric grid for the final collapsed
+/// pass, but table parts, cells, borders, baselines, and CSSOM all consume this
+/// source-track model. This is the same separation Blink maintains between
+/// column constraints and final `TableColumnLocation`s.
+#[derive(Clone, Debug, Default)]
+struct TableTrackGeometry {
+    tracks: Vec<TableTrackLocation>,
+    extent: f32,
+}
+
+impl TableTrackGeometry {
+    fn from_grid(sizes: &[f32], gutters: &[f32], flow_reversed: bool) -> Self {
+        let (sizes, gutters) = tracks_in_logical_order(sizes, gutters, flow_reversed);
+        let starts = track_starts(0.0, &sizes, &gutters);
+        let tracks = starts
+            .into_iter()
+            .zip(sizes.iter().copied())
+            .map(|(offset, size)| TableTrackLocation {
+                offset,
+                size,
+                collapsed: false,
+            })
+            .collect();
+        Self {
+            tracks,
+            extent: track_extent(&sizes, &gutters),
+        }
+    }
+
+    /// Collapse source tracks after normal measure/distribution and return the
+    /// gap-free expanded tracks consumed by the final numeric Grid pass.
+    fn collapsed(sizes: &[f32], collapsed: &[bool], leading_spacings: &[f32]) -> (Self, Vec<f32>) {
+        let mut tracks = Vec::with_capacity(sizes.len());
+        let mut expanded = Vec::with_capacity(sizes.len().saturating_mul(2));
+        let mut cursor = 0.0;
+        for (index, size) in sizes.iter().copied().enumerate() {
+            let is_collapsed = collapsed.get(index).copied().unwrap_or(false);
+            let leading_spacing = leading_spacings.get(index).copied().unwrap_or(0.0).max(0.0);
+            expanded.push(leading_spacing);
+            cursor += leading_spacing;
+            let used_size = if is_collapsed { 0.0 } else { size.max(0.0) };
+            tracks.push(TableTrackLocation {
+                offset: cursor,
+                size: used_size,
+                collapsed: is_collapsed,
+            });
+            expanded.push(used_size);
+            cursor += used_size;
+        }
+        (
+            Self {
+                tracks,
+                extent: cursor,
+            },
+            expanded,
+        )
+    }
+
+    fn range_extent(&self, start: usize, end: usize) -> f32 {
+        let end = end.min(self.tracks.len());
+        let Some(first) = self.tracks.get(start).filter(|_| start < end) else {
+            return 0.0;
+        };
+        let last = self.tracks[end - 1];
+        (last.offset + last.size - first.offset).max(0.0)
+    }
+
+    fn line_offsets(&self, origin: f32) -> Vec<f32> {
+        let mut offsets = self
+            .tracks
+            .iter()
+            .map(|track| origin + track.offset)
+            .collect::<Vec<_>>();
+        offsets.push(origin + self.extent);
+        offsets
+    }
 }
 
 /// The single boundary where logical table-grid geometry becomes physical
@@ -200,6 +289,8 @@ struct TableContext {
     top_caption_height: f32,
     bottom_caption_height: f32,
     detailed: Option<DetailedGridInfo>,
+    column_geometry: TableTrackGeometry,
+    row_geometry: TableTrackGeometry,
     collapsed_borders: bool,
     column_count: usize,
     column_constraints: Vec<TableColumnConstraint>,
@@ -339,6 +430,17 @@ where
         };
         compute_grid_layout(&mut wrapper, NodeId::from(0usize), grid_inputs)
     };
+    context.capture_grid_track_geometry();
+    if let Some(collapsed_inputs) = context.prepare_collapsed_grid(grid_inputs) {
+        grid_inputs = collapsed_inputs;
+        let mut wrapper = TableTreeWrapper {
+            world,
+            context: &mut context,
+        };
+        output = compute_grid_layout(&mut wrapper, NodeId::from(0usize), grid_inputs);
+        context.apply_collapsed_cell_geometry(world);
+        context.apply_collapsed_paint_state(world);
+    }
     let (first_baselines, last_baselines) =
         table_row_baseline_sets(&context, grid_inputs, output.size);
     output.first_baselines = first_baselines;
@@ -540,7 +642,15 @@ where
         );
     }
     for section in grouped_children.sections() {
-        collect_rows(world, section, None, &mut rows, &mut cells, writing_mode);
+        collect_rows(
+            world,
+            section,
+            None,
+            false,
+            &mut rows,
+            &mut cells,
+            writing_mode,
+        );
     }
     place_table_cells(&mut cells, &rows, &mut max_columns);
     for cell in &mut cells {
@@ -583,6 +693,8 @@ where
         top_caption_height: 0.0,
         bottom_caption_height: 0.0,
         detailed: None,
+        column_geometry: TableTrackGeometry::default(),
+        row_geometry: TableTrackGeometry::default(),
         collapsed_borders: collapsed,
         column_count: max_columns,
         column_constraints: column_tracks,
@@ -766,6 +878,246 @@ impl TableContext {
         inputs.known_dimensions = subtract_captions(inputs.known_dimensions);
         inputs.definite_dimensions = subtract_captions(inputs.definite_dimensions);
         inputs
+    }
+
+    fn capture_grid_track_geometry(&mut self) {
+        let Some(detailed) = self.detailed.as_ref() else {
+            self.column_geometry = TableTrackGeometry::default();
+            self.row_geometry = TableTrackGeometry::default();
+            return;
+        };
+        self.column_geometry = TableTrackGeometry::from_grid(
+            &detailed.columns.sizes,
+            &detailed.columns.gutters,
+            self.writing_direction.is_inline_flow_reversed(),
+        );
+        self.row_geometry = TableTrackGeometry::from_grid(
+            &detailed.rows.sizes,
+            &detailed.rows.gutters,
+            self.writing_direction.is_block_flow_reversed(),
+        );
+        if self.column_geometry.tracks.len() != self.column_count {
+            self.column_geometry.tracks.truncate(self.column_count);
+            self.column_geometry.extent = self
+                .column_geometry
+                .tracks
+                .last()
+                .map_or(0.0, |last| last.offset + last.size);
+        }
+        if self.row_geometry.tracks.len() != self.rows.len() {
+            self.row_geometry.tracks.truncate(self.rows.len());
+            self.row_geometry.extent = self
+                .row_geometry
+                .tracks
+                .last()
+                .map_or(0.0, |last| last.offset + last.size);
+        }
+    }
+
+    /// Convert normal table tracks into final collapsed geometry.
+    ///
+    /// CSS Tables measures and distributes every track first, then removes
+    /// collapsed tracks and their adjacent border spacing. The second Grid
+    /// pass is strictly a fragment-layout adapter: all semantic sizes are
+    /// fixed here, and zero-sized spacer tracks encode the non-uniform gaps.
+    fn prepare_collapsed_grid(&mut self, inputs: LayoutInput) -> Option<LayoutInput> {
+        let collapsed_columns = self
+            .column_constraints
+            .iter()
+            .map(|column| column.is_collapsed)
+            .collect::<Vec<_>>();
+        let collapsed_rows = self
+            .rows
+            .iter()
+            .map(|row| row.collapsed)
+            .collect::<Vec<_>>();
+        let expands_columns = collapsed_columns.iter().copied().any(|value| value);
+        let expands_rows = collapsed_rows.iter().copied().any(|value| value);
+        if !expands_columns && !expands_rows {
+            return None;
+        }
+
+        let normal_column_sizes = self
+            .column_geometry
+            .tracks
+            .iter()
+            .map(|track| track.size)
+            .collect::<Vec<_>>();
+        let normal_row_sizes = self
+            .row_geometry
+            .tracks
+            .iter()
+            .map(|track| track.size)
+            .collect::<Vec<_>>();
+
+        let column_tracks = if expands_columns {
+            let leading_spacings =
+                collapsed_column_leading_spacings(&collapsed_columns, self.inline_border_spacing);
+            let (geometry, expanded) = TableTrackGeometry::collapsed(
+                &normal_column_sizes,
+                &collapsed_columns,
+                &leading_spacings,
+            );
+            self.column_geometry = geometry;
+            expanded
+        } else {
+            normal_column_sizes
+        };
+        let row_tracks = if expands_rows {
+            let leading_spacings =
+                collapsed_row_leading_spacings(&self.rows, self.outer_border_spacing.height);
+            let (geometry, expanded) = TableTrackGeometry::collapsed(
+                &normal_row_sizes,
+                &collapsed_rows,
+                &leading_spacings,
+            );
+            self.row_geometry = geometry;
+            expanded
+        } else {
+            normal_row_sizes
+        };
+
+        self.style.grid_template_columns = fixed_grid_tracks(column_tracks);
+        self.style.grid_template_rows = fixed_grid_tracks(row_tracks);
+        self.style.gap = Size {
+            width: style_helpers::length(if expands_columns {
+                0.0
+            } else {
+                self.inline_border_spacing
+            }),
+            height: style_helpers::length(if expands_rows {
+                0.0
+            } else {
+                self.outer_border_spacing.height
+            }),
+        };
+        for cell in &mut self.cells {
+            if expands_columns {
+                cell.style.grid_column = expanded_track_placement(
+                    cell.column,
+                    cell.column_span,
+                    &collapsed_columns,
+                    false,
+                );
+            }
+            if expands_rows {
+                cell.style.grid_row = expanded_track_placement(
+                    cell.row,
+                    cell.row_span,
+                    &collapsed_rows,
+                    collapsed_rows.get(cell.row).copied().unwrap_or(false),
+                );
+            }
+        }
+        if expands_rows {
+            for strut in &mut self.row_baseline_struts {
+                strut.style.grid_row = expanded_track_placement(
+                    strut.row,
+                    1,
+                    &collapsed_rows,
+                    collapsed_rows.get(strut.row).copied().unwrap_or(false),
+                );
+            }
+        }
+
+        let percentage_basis = inputs
+            .constraint_space(self.writing_mode)
+            .margin_padding_percentage_basis();
+        let padding = self
+            .style
+            .padding
+            .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
+        let border = self
+            .style
+            .border
+            .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
+        let logical_insets = self
+            .writing_direction
+            .to_logical_box_strut(padding + border);
+        let border_box_size = LogicalSize {
+            inline_size: (self.column_geometry.extent
+                + logical_insets.inline_start
+                + logical_insets.inline_end)
+                .max(self.caption_min_inline_size),
+            block_size: self.row_geometry.extent
+                + logical_insets.block_start
+                + logical_insets.block_end,
+        };
+        let numeric_size = if self.style.box_sizing == taffy::BoxSizing::ContentBox {
+            LogicalSize {
+                inline_size: (border_box_size.inline_size
+                    - logical_insets.inline_start
+                    - logical_insets.inline_end)
+                    .max(0.0),
+                block_size: (border_box_size.block_size
+                    - logical_insets.block_start
+                    - logical_insets.block_end)
+                    .max(0.0),
+            }
+        } else {
+            border_box_size
+        };
+        self.style.size = self
+            .writing_mode
+            .to_physical(numeric_size)
+            .map(style_helpers::length);
+        self.style.min_size = Size::NONE.map(|_| Dimension::auto());
+        self.style.max_size = Size::NONE.map(|_| Dimension::auto());
+
+        let physical_border_box_size = self.writing_mode.to_physical(border_box_size);
+        let mut inputs = inputs;
+        inputs.known_dimensions = physical_border_box_size.map(Some);
+        inputs.definite_dimensions = physical_border_box_size.map(Some);
+        Some(inputs)
+    }
+
+    fn apply_collapsed_paint_state<N>(&self, world: &mut LayoutWorld<N>)
+    where
+        N: Copy + Debug + Eq + Hash,
+    {
+        for row in self.rows.iter().filter(|row| row.collapsed) {
+            mark_subtree_hidden_for_paint(world, row.id);
+        }
+        for cell in &self.cells {
+            let end = cell
+                .column
+                .saturating_add(cell.column_span)
+                .min(self.column_geometry.tracks.len());
+            if cell.column < end
+                && self.column_geometry.tracks[cell.column..end]
+                    .iter()
+                    .all(|column| column.collapsed)
+            {
+                mark_subtree_hidden_for_paint(world, cell.id);
+            }
+        }
+    }
+
+    /// Grid items retain their automatic minimum size when their area becomes
+    /// zero. CSS table cells do not: the row/column locations are the cell's
+    /// used border-box constraint even when its contents overflow. Keep the
+    /// descendant layout produced by the final pass, but publish the semantic
+    /// table-cell fragment size here.
+    fn apply_collapsed_cell_geometry<N>(&self, world: &mut LayoutWorld<N>)
+    where
+        N: Copy + Debug + Eq + Hash,
+    {
+        for cell in &self.cells {
+            let inline_size = self
+                .column_geometry
+                .range_extent(cell.column, cell.column.saturating_add(cell.column_span));
+            let block_size = if self.rows.get(cell.row).is_some_and(|row| row.collapsed) {
+                0.0
+            } else {
+                self.row_geometry
+                    .range_extent(cell.row, cell.row.saturating_add(cell.row_span))
+            };
+            world.boxes[cell.id.index()].unrounded_layout.size =
+                self.writing_mode.to_physical(LogicalSize {
+                    inline_size,
+                    block_size,
+                });
+        }
     }
 
     /// Gather cell measures after the table tree is complete. Fixed layout
@@ -1028,7 +1380,7 @@ impl TableContext {
                 end: style_helpers::span(1),
             };
             self.row_baseline_struts
-                .push(TableRowBaselineStrut { style, size });
+                .push(TableRowBaselineStrut { row, style, size });
         }
     }
 
@@ -1168,10 +1520,11 @@ fn collect_columns<N>(
             }
             if tracks.len() == before {
                 let span = table_data(world, current).span.max(1) as usize;
-                let track = table_column_constraint(
+                let mut track = table_column_constraint(
                     &world.boxes[current.index()].style.taffy,
                     writing_mode,
                 );
+                track.is_collapsed = world.boxes[current.index()].style.visibility_is_collapsed();
                 tracks.extend(std::iter::repeat_n(track, span));
                 columns.push(TableColumn {
                     id: current,
@@ -1184,8 +1537,9 @@ fn collect_columns<N>(
         LayoutBoxKind::TableColumn => {
             let span = table_data(world, current).span.max(1) as usize;
             let start = tracks.len();
-            let track =
+            let mut track =
                 table_column_constraint(&world.boxes[current.index()].style.taffy, writing_mode);
+            track.is_collapsed = world.boxes[current.index()].style.visibility_is_collapsed();
             tracks.extend(std::iter::repeat_n(track, span));
             columns.push(TableColumn {
                 id: current,
@@ -1202,6 +1556,7 @@ fn collect_rows<N>(
     world: &LayoutWorld<N>,
     current: LayoutBoxId,
     group: Option<LayoutBoxId>,
+    group_collapsed: bool,
     rows: &mut Vec<TableRow>,
     cells: &mut Vec<TableCell>,
     writing_mode: taffy::WritingMode,
@@ -1213,8 +1568,18 @@ fn collect_rows<N>(
         | LayoutBoxKind::TableHeaderGroup
         | LayoutBoxKind::TableFooterGroup
         | LayoutBoxKind::AnonymousTableRowGroup => {
+            let group_collapsed =
+                group_collapsed || world.boxes[current.index()].style.visibility_is_collapsed();
             for child in world.boxes[current.index()].children.iter().copied() {
-                collect_rows(world, child, Some(current), rows, cells, writing_mode);
+                collect_rows(
+                    world,
+                    child,
+                    Some(current),
+                    group_collapsed,
+                    rows,
+                    cells,
+                    writing_mode,
+                );
             }
         }
         LayoutBoxKind::TableRow | LayoutBoxKind::AnonymousTableRow => {
@@ -1228,6 +1593,8 @@ fn collect_rows<N>(
                         .to_logical(world.boxes[current.index()].style.taffy.size)
                         .block_size,
                 ),
+                collapsed: group_collapsed
+                    || world.boxes[current.index()].style.visibility_is_collapsed(),
             });
             for cell in world.boxes[current.index()].children.iter().copied() {
                 if !matches!(
@@ -1719,9 +2086,6 @@ fn table_row_baseline_sets(
     inputs: LayoutInput,
     grid_outer_size: Size<f32>,
 ) -> (Point<Option<f32>>, Point<Option<f32>>) {
-    let Some(detailed) = context.detailed.as_ref() else {
-        return (Point::NONE, Point::NONE);
-    };
     if context.rows.is_empty() || context.row_baselines.is_empty() {
         return (Point::NONE, Point::NONE);
     }
@@ -1740,21 +2104,20 @@ fn table_row_baseline_sets(
     let logical_padding = context.writing_direction.to_logical_box_strut(padding);
     let logical_border = context.writing_direction.to_logical_box_strut(border);
     let block_origin = logical_border.block_start + logical_padding.block_start;
-    let (row_sizes, row_gutters) = tracks_in_logical_order(
-        &detailed.rows.sizes,
-        &detailed.rows.gutters,
-        context.writing_direction.is_block_flow_reversed(),
-    );
-    let row_starts = track_starts(block_origin, &row_sizes, &row_gutters);
-    let first = row_starts
-        .first()
-        .zip(context.row_baselines.first())
-        .map(|(start, baseline)| start + baseline);
-    let last_row = context.rows.len().saturating_sub(1);
-    let last = row_starts
-        .get(last_row)
-        .zip(context.row_baselines.get(last_row))
-        .map(|(start, baseline)| start + baseline);
+    let first_row = context.rows.iter().position(|row| !row.collapsed);
+    let last_row = context.rows.iter().rposition(|row| !row.collapsed);
+    let baseline = |row: Option<usize>| {
+        row.and_then(|row| {
+            context
+                .row_geometry
+                .tracks
+                .get(row)
+                .zip(context.row_baselines.get(row))
+                .map(|(track, baseline)| block_origin + track.offset + baseline)
+        })
+    };
+    let first = baseline(first_row);
+    let last = baseline(last_row);
 
     (
         physical_baseline(first, grid_outer_size, context.writing_direction),
@@ -1782,28 +2145,25 @@ fn apply_structural_layout<N>(
     let border = root_style
         .border
         .resolve_or_zero(root_percentage_basis, resolve_stylo_calc_value);
-    let Some(detailed) = context.detailed.as_ref() else {
-        return;
-    };
     let writing_direction = world.boxes[root.index()].style.writing_direction();
     let logical_padding = writing_direction.to_logical_box_strut(padding);
     let logical_border = writing_direction.to_logical_box_strut(border);
     let inline_origin = logical_border.inline_start + logical_padding.inline_start;
     let block_origin = logical_border.block_start + logical_padding.block_start;
-    let (column_sizes, column_gutters) = tracks_in_logical_order(
-        &detailed.columns.sizes,
-        &detailed.columns.gutters,
-        writing_direction.is_inline_flow_reversed(),
-    );
-    let (row_sizes, row_gutters) = tracks_in_logical_order(
-        &detailed.rows.sizes,
-        &detailed.rows.gutters,
-        writing_direction.is_block_flow_reversed(),
-    );
-    let column_starts = track_starts(inline_origin, &column_sizes, &column_gutters);
-    let row_starts = track_starts(block_origin, &row_sizes, &row_gutters);
-    let content_inline_size = track_extent(&column_sizes, &column_gutters);
-    let content_block_size = track_extent(&row_sizes, &row_gutters);
+    let column_starts = context
+        .column_geometry
+        .tracks
+        .iter()
+        .map(|track| inline_origin + track.offset)
+        .collect::<Vec<_>>();
+    let row_starts = context
+        .row_geometry
+        .tracks
+        .iter()
+        .map(|track| block_origin + track.offset)
+        .collect::<Vec<_>>();
+    let content_inline_size = context.column_geometry.extent;
+    let content_block_size = context.row_geometry.extent;
     let coordinate_space = TableGridCoordinateSpace::new(
         writing_direction,
         grid_outer_size,
@@ -1813,16 +2173,18 @@ fn apply_structural_layout<N>(
         },
     );
     if context.collapsed_borders {
-        let mut row_lines = row_starts.clone();
-        row_lines.push(block_origin + content_block_size);
-        let mut column_lines = column_starts.clone();
-        column_lines.push(inline_origin + content_inline_size);
+        let row_lines = context.row_geometry.line_offsets(block_origin);
+        let column_lines = context.column_geometry.line_offsets(inline_origin);
         set_collapsed_border_geometry(world, root, &column_lines, &row_lines, coordinate_space);
     }
 
     for row in &context.rows {
         let block_start = row_starts.get(row.index).copied().unwrap_or(block_origin);
-        let block_size = row_sizes.get(row.index).copied().unwrap_or(0.0);
+        let block_size = context
+            .row_geometry
+            .tracks
+            .get(row.index)
+            .map_or(0.0, |track| track.size);
         set_logical_structural_rect(
             world,
             row.id,
@@ -1854,7 +2216,7 @@ fn apply_structural_layout<N>(
         }
         if start != usize::MAX {
             let block_start = row_starts.get(start).copied().unwrap_or(block_origin);
-            let block_size = track_range_extent(&row_sizes, &row_gutters, start, end);
+            let block_size = context.row_geometry.range_extent(start, end);
             set_logical_structural_rect(
                 world,
                 group,
@@ -1875,12 +2237,9 @@ fn apply_structural_layout<N>(
             .get(column.start)
             .copied()
             .unwrap_or(inline_origin);
-        let inline_size = track_range_extent(
-            &column_sizes,
-            &column_gutters,
-            column.start,
-            column.start.saturating_add(column.span),
-        );
+        let inline_size = context
+            .column_geometry
+            .range_extent(column.start, column.start.saturating_add(column.span));
         set_logical_structural_rect(
             world,
             column.id,
@@ -1915,7 +2274,7 @@ fn apply_structural_layout<N>(
         }
         if start != usize::MAX {
             let inline_start = column_starts.get(start).copied().unwrap_or(inline_origin);
-            let inline_size = track_range_extent(&column_sizes, &column_gutters, start, end);
+            let inline_size = context.column_geometry.range_extent(start, end);
             set_logical_structural_rect(
                 world,
                 group,
@@ -1934,6 +2293,97 @@ fn apply_structural_layout<N>(
 
     // Keep the root in the numeric tree even for an empty table.
     let _ = root;
+}
+
+fn fixed_grid_tracks(sizes: Vec<f32>) -> Vec<GridTemplateComponent<Atom>> {
+    sizes
+        .into_iter()
+        .map(|size| {
+            let track: taffy::TrackSizingFunction = style_helpers::length(size.max(0.0));
+            track.into()
+        })
+        .collect()
+}
+
+fn collapsed_column_leading_spacings(collapsed: &[bool], spacing: f32) -> Vec<f32> {
+    let spacing = spacing.max(0.0);
+    let mut has_visible_column = false;
+    collapsed
+        .iter()
+        .copied()
+        .map(|is_collapsed| {
+            let leading = if is_collapsed || !has_visible_column {
+                0.0
+            } else {
+                spacing
+            };
+            has_visible_column |= !is_collapsed;
+            leading
+        })
+        .collect()
+}
+
+/// Row groups are independently laid out table sections. A non-empty section
+/// keeps its separating border spacing even if all of its rows collapse;
+/// within one section, spacing exists only between non-collapsed rows.
+fn collapsed_row_leading_spacings(rows: &[TableRow], spacing: f32) -> Vec<f32> {
+    let spacing = spacing.max(0.0);
+    let mut active_group = None::<Option<LayoutBoxId>>;
+    let mut has_visible_row_in_group = false;
+    rows.iter()
+        .map(|row| {
+            let starts_group = active_group != Some(row.group);
+            let leading = if starts_group {
+                let leading = if active_group.is_some() { spacing } else { 0.0 };
+                active_group = Some(row.group);
+                has_visible_row_in_group = false;
+                leading
+            } else if !row.collapsed && has_visible_row_in_group {
+                spacing
+            } else {
+                0.0
+            };
+            has_visible_row_in_group |= !row.collapsed;
+            leading
+        })
+        .collect()
+}
+
+/// Map one source-track range into the gap-free `[leading-space, track]`
+/// representation used only by the collapsed final Grid pass.
+fn expanded_track_placement(
+    start: usize,
+    span: usize,
+    collapsed: &[bool],
+    collapse_originating_span: bool,
+) -> Line<GridPlacement<Atom>> {
+    let start_track = start.saturating_mul(2).saturating_add(1);
+    let semantic_end = if collapse_originating_span {
+        start.saturating_add(1)
+    } else {
+        start.saturating_add(span.max(1)).min(collapsed.len())
+    };
+    let end_track = semantic_end.saturating_mul(2).max(start_track + 1);
+    Line {
+        start: style_helpers::line(grid_line_number(start_track)),
+        end: style_helpers::line(grid_line_number(end_track)),
+    }
+}
+
+fn grid_line_number(track_index: usize) -> i16 {
+    track_index.saturating_add(1).min(i16::MAX as usize) as i16
+}
+
+fn mark_subtree_hidden_for_paint<N>(world: &mut LayoutWorld<N>, root: LayoutBoxId)
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    let mut pending = vec![root];
+    while let Some(id) = pending.pop() {
+        let layout_box = &mut world.boxes[id.index()];
+        layout_box.hidden_for_paint = true;
+        pending.extend(layout_box.children.iter().copied());
+    }
 }
 
 /// Reconstruct logical start-to-end order from Taffy's detailed tracks, which
@@ -1964,19 +2414,6 @@ fn track_starts(origin: f32, sizes: &[f32], gutters: &[f32]) -> Vec<f32> {
 
 fn track_extent(sizes: &[f32], gutters: &[f32]) -> f32 {
     sizes.iter().sum::<f32>() + gutters.iter().sum::<f32>()
-}
-
-fn track_range_extent(sizes: &[f32], gutters: &[f32], start: usize, end: usize) -> f32 {
-    let end = end.min(sizes.len());
-    if start >= end {
-        return 0.0;
-    }
-    sizes[start..end].iter().sum::<f32>()
-        + gutters
-            .get(start + 1..end)
-            .unwrap_or_default()
-            .iter()
-            .sum::<f32>()
 }
 
 fn set_logical_structural_rect<N>(

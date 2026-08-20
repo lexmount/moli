@@ -61,7 +61,7 @@ pub(super) fn project_inline_box_fragments<N>(
         let Some(inline_box) = world.box_by_id(fragment.box_id) else {
             continue;
         };
-        if !inline_box.style.is_visible() {
+        if !inline_box.is_visible_for_paint() {
             continue;
         }
         let style = inline_box.style();

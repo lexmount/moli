@@ -17,7 +17,7 @@ pub(super) fn project_collapsed_table_borders<N>(
     N: Copy + Debug + Eq + Hash,
 {
     let layout_box = &projection.world.boxes[id.index()];
-    if !layout_box.style.is_visible() {
+    if !layout_box.is_visible_for_paint() {
         return;
     }
     let Some(borders) = layout_box.collapsed_table_borders.as_ref() else {

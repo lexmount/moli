@@ -290,6 +290,10 @@ pub struct LayoutBox<N> {
     /// collapsed table. Their authored borders have already entered the table
     /// owner's conflict-resolution grid.
     pub(crate) collapsed_table_border_part: bool,
+    /// Used fragment state that suppresses this box independently of its
+    /// computed `visibility` (for example, a row or a cell wholly contained in
+    /// collapsed table tracks).
+    pub(crate) hidden_for_paint: bool,
     /// Authored logical `min-inline-size` saved while the parent-facing Taffy
     /// style projects the table's GRID_MIN as `min-content`.
     ///
@@ -405,6 +409,10 @@ impl<N> LayoutBox<N> {
         self.element_semantics
             .as_ref()
             .is_some_and(LayoutElementSemantics::is_replaced)
+    }
+
+    pub(crate) const fn is_visible_for_paint(&self) -> bool {
+        self.style.is_visible() && !self.hidden_for_paint
     }
 
     /// Resolve the used ratio at the layout-node boundary, after both authored
@@ -1013,6 +1021,7 @@ where
             css_images: crate::source::LayoutCssImageResources::default(),
             collapsed_table_borders: None,
             collapsed_table_border_part: false,
+            hidden_for_paint: false,
             table_authored_min_inline_size: None,
             inline_formatting_context: false,
             grid_geometry: None,

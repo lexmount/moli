@@ -469,7 +469,7 @@ fn project_box_background<N>(
     N: Copy + Debug + Eq + Hash,
 {
     let layout_box = &projection.world.boxes[id.index()];
-    if layout_box.inline_flattened || !layout_box.style.is_visible() {
+    if layout_box.inline_flattened || !layout_box.is_visible_for_paint() {
         return;
     }
     let geometry = &projection.boxes[id.index()];
@@ -606,7 +606,7 @@ fn project_box_text_clip_mask<N>(
     N: Copy + Debug + Eq + Hash,
 {
     let layout_box = &projection.world.boxes[id.index()];
-    if !layout_box.style.is_visible() {
+    if !layout_box.is_visible_for_paint() {
         return;
     }
     let geometry = &projection.boxes[id.index()];
@@ -628,7 +628,7 @@ fn project_outset_box_shadows<N>(
     N: Copy + Debug + Eq + Hash,
 {
     let layout_box = &projection.world.boxes[id.index()];
-    if layout_box.inline_flattened || !layout_box.style.is_visible() {
+    if layout_box.inline_flattened || !layout_box.is_visible_for_paint() {
         return;
     }
     let geometry = &projection.boxes[id.index()];
@@ -669,7 +669,7 @@ fn project_box_outline<N>(
     N: Copy + Debug + Eq + Hash,
 {
     let layout_box = &projection.world.boxes[id.index()];
-    if layout_box.inline_flattened || !layout_box.style.is_visible() {
+    if layout_box.inline_flattened || !layout_box.is_visible_for_paint() {
         return;
     }
     let geometry = &projection.boxes[id.index()];
@@ -697,7 +697,7 @@ fn project_box_contents<N>(
     N: Copy + Debug + Eq + Hash,
 {
     let layout_box = &projection.world.boxes[id.index()];
-    if !layout_box.style.is_visible() {
+    if !layout_box.is_visible_for_paint() {
         return;
     }
     let geometry = &projection.boxes[id.index()];

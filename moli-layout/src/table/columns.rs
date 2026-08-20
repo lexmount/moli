@@ -34,6 +34,9 @@ pub(super) struct TableColumnConstraint {
     pub(super) percent: Option<f32>,
     pub(super) percent_border_padding: f32,
     pub(super) is_constrained: bool,
+    /// Whether the column participates in measure/distribution but is removed
+    /// from the final table-grid geometry by `visibility: collapse`.
+    pub(super) is_collapsed: bool,
 }
 
 /// Inline-size information contributed by a table cell.
@@ -118,6 +121,7 @@ impl TableColumnConstraint {
             percent: None,
             percent_border_padding: 0.0,
             is_constrained: false,
+            is_collapsed: false,
         }
     }
 

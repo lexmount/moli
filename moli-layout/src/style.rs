@@ -11,6 +11,7 @@ use style::{
     computed_values::{
         content_visibility::T as StyloContentVisibility, flex_direction::T as StyloFlexDirection,
         isolation::T as StyloIsolation, mix_blend_mode::T as StyloMixBlendMode,
+        visibility::T as StyloVisibility,
     },
     properties::ComputedValues,
     properties::generated::longhands::position::computed_value::T as StyloPosition,
@@ -170,6 +171,20 @@ enum LayoutContentVisibility {
     Visible,
     Hidden,
     Auto,
+}
+
+/// Computed `visibility` retained without collapsing CSS's table-specific
+/// `collapse` value into ordinary paint suppression.
+///
+/// `hidden` and `collapse` both suppress ordinary paint. Table layout also
+/// consumes `collapse` as a track-level used value, so that distinction must
+/// survive the Stylo projection boundary.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum LayoutVisibility {
+    #[default]
+    Visible,
+    Hidden,
+    Collapse,
 }
 
 /// One style's complete path from authored containment to the used value
@@ -663,7 +678,7 @@ pub struct ResolvedLayoutStyle {
     sticky_inset: taffy::Rect<taffy::LengthPercentageAuto>,
     establishes_transform_containing_block: bool,
     synthetic_transform: Option<LayoutTransform2D>,
-    visible: bool,
+    visibility: LayoutVisibility,
     pointer_events: bool,
     order: i32,
     anchor_sizing_deferred: bool,
@@ -721,7 +736,7 @@ impl std::fmt::Debug for ResolvedLayoutStyle {
                 "has_synthetic_transform",
                 &self.synthetic_transform.is_some(),
             )
-            .field("visible", &self.visible)
+            .field("visibility", &self.visibility)
             .field("pointer_events", &self.pointer_events)
             .field("order", &self.order)
             .field("anchor_sizing_deferred", &self.anchor_sizing_deferred)
@@ -1031,7 +1046,11 @@ impl ResolvedLayoutStyle {
             // in `display` while selecting the non-collapsing block algorithm.
             taffy.display = TaffyDisplay::FlowRoot;
         }
-        let visible = computed.clone_visibility() == style::computed_values::visibility::T::Visible;
+        let visibility = match computed.clone_visibility() {
+            StyloVisibility::Visible => LayoutVisibility::Visible,
+            StyloVisibility::Hidden => LayoutVisibility::Hidden,
+            StyloVisibility::Collapse => LayoutVisibility::Collapse,
+        };
         let pointer_events =
             computed.clone_pointer_events() != style::computed_values::pointer_events::T::None;
         if matches!(position, LayoutPosition::Static | LayoutPosition::Sticky) {
@@ -1073,7 +1092,7 @@ impl ResolvedLayoutStyle {
             sticky_inset,
             establishes_transform_containing_block,
             synthetic_transform: None,
-            visible,
+            visibility,
             pointer_events,
             order,
             anchor_sizing_deferred,
@@ -1146,7 +1165,7 @@ impl ResolvedLayoutStyle {
             sticky_inset,
             establishes_transform_containing_block: false,
             synthetic_transform: None,
-            visible: true,
+            visibility: LayoutVisibility::Visible,
             pointer_events: true,
             order: 0,
             anchor_sizing_deferred: false,
@@ -1641,7 +1660,11 @@ impl ResolvedLayoutStyle {
     }
 
     pub(crate) const fn is_visible(&self) -> bool {
-        self.visible
+        matches!(self.visibility, LayoutVisibility::Visible)
+    }
+
+    pub(crate) const fn visibility_is_collapsed(&self) -> bool {
+        matches!(self.visibility, LayoutVisibility::Collapse)
     }
 
     /// Returns the computed CSS `color` sampled for this pass.
@@ -1975,7 +1998,7 @@ impl ResolvedLayoutStyle {
             },
             establishes_transform_containing_block: false,
             synthetic_transform: None,
-            visible: parent.visible,
+            visibility: parent.visibility,
             pointer_events: parent.pointer_events,
             order: 0,
             anchor_sizing_deferred: false,
@@ -2039,7 +2062,7 @@ impl ResolvedLayoutStyle {
             },
             establishes_transform_containing_block: false,
             synthetic_transform: None,
-            visible: parent.visible,
+            visibility: parent.visibility,
             pointer_events: parent.pointer_events,
             order: 0,
             anchor_sizing_deferred: false,
