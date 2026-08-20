@@ -17,10 +17,14 @@ use taffy::{
     FontBaseline, GridAutoFlow, IntrinsicSizeResult, Layout, LayoutGridContainer, LayoutInput,
     LayoutOutput, LayoutPartialTree, Line, LogicalOffset, LogicalSize, MaybeResolve, NodeId, Point,
     Rect, RequestedAxis, ResolveOrZero, RunMode, Size, SizingMode, SizingPurpose, Style,
-    TraversePartialTree, TraverseTree, WritingDirection, compute_grid_layout, style_helpers,
+    TableCellLayoutInput, TraversePartialTree, TraverseTree, WritingDirection, compute_grid_layout,
+    style_helpers,
 };
 
-use crate::{LayoutBoxId, LayoutBoxKind, LayoutRect, LayoutWorld, style::resolve_stylo_calc_value};
+use crate::{
+    LayoutBoxId, LayoutBoxKind, LayoutInlineAlignment, LayoutRect, LayoutWorld,
+    style::resolve_stylo_calc_value,
+};
 
 mod collapsed_borders;
 mod columns;
@@ -41,6 +45,28 @@ struct TableCell {
     column: usize,
     row_span: usize,
     column_span: usize,
+    has_in_flow_content: bool,
+}
+
+/// Baseline data gathered while a row's cells still have intrinsic block
+/// sizes. CSS Tables resolves this before distributing any excess table
+/// height, then feeds the shared ascent back into final cell layout.
+#[derive(Clone, Copy, Debug, Default)]
+struct TableRowBaselineMetrics {
+    max_ascent: Option<f32>,
+    max_descent: Option<f32>,
+    fallback_descent: Option<f32>,
+}
+
+/// A sizing-only item in the pass-local Grid adapter.
+///
+/// CSS table rows must be at least the sum of the largest baseline ascent and
+/// descent, even when those extrema come from different cells. Representing
+/// that requirement as a Grid item preserves authored row percentages and the
+/// existing excess-height distribution instead of replacing the row track.
+struct TableRowBaselineStrut {
+    style: Style<Atom>,
+    size: Size<f32>,
 }
 
 #[derive(Clone, Copy)]
@@ -171,14 +197,21 @@ struct TableContext {
     columns: Vec<TableColumn>,
     captions: Vec<LayoutBoxId>,
     caption_min_inline_size: f32,
+    top_caption_height: f32,
+    bottom_caption_height: f32,
     detailed: Option<DetailedGridInfo>,
     collapsed_borders: bool,
     column_count: usize,
     column_constraints: Vec<TableColumnConstraint>,
+    column_sizes: Vec<f32>,
+    row_baseline_metrics: Vec<TableRowBaselineMetrics>,
+    row_baseline_struts: Vec<TableRowBaselineStrut>,
+    row_baselines: Vec<f32>,
     layout_mode: TableLayoutMode,
     inline_border_spacing: f32,
     outer_border_spacing: Size<f32>,
     writing_mode: taffy::WritingMode,
+    writing_direction: WritingDirection,
     font_baseline: FontBaseline,
 }
 
@@ -265,7 +298,15 @@ where
     context.resolve_used_table_box(inputs);
     context.collect_caption_inline_constraints(world);
     context.collect_cell_inline_constraints(world);
-    let grid_inputs = context.resolve_column_tracks(inputs);
+    let mut grid_inputs = context.resolve_column_tracks(inputs);
+    let block_size_is_requested = inputs.run_mode == RunMode::PerformLayout
+        || inputs.axis.contains(context.writing_mode.block_axis());
+    if block_size_is_requested {
+        context.collect_caption_block_sizes(world, grid_inputs);
+        grid_inputs = context.row_grid_inputs(grid_inputs);
+        context.measure_row_baselines(world);
+        context.materialize_row_baseline_struts();
+    }
     // CSS Tables determines ROWMIN before applying the table-root's block
     // sizing properties. The authored height is then a minimum target for the
     // row grid, and max-height is not allowed to shrink the table below
@@ -273,16 +314,19 @@ where
     // content-size pass with an indefinite block axis, followed by the normal
     // constrained pass that distributes any excess height among rows.
     normalize_table_block_intrinsic_sizing(&mut context.style, context.writing_mode);
-    let block_size_is_requested = inputs.run_mode == RunMode::PerformLayout
-        || inputs.axis.contains(context.writing_mode.block_axis());
     let natural_grid_block_size = block_size_is_requested.then(|| {
-        let natural_inputs = table_intrinsic_block_inputs(grid_inputs, context.writing_mode);
+        let natural_inputs = table_intrinsic_block_inputs(
+            grid_inputs,
+            context.writing_mode,
+            inputs.run_mode == RunMode::PerformLayout,
+        );
         let mut wrapper = TableTreeWrapper {
             world,
             context: &mut context,
         };
         let natural_output =
             compute_grid_layout(&mut wrapper, NodeId::from(0usize), natural_inputs);
+        context.resolve_natural_row_baselines();
         context
             .writing_mode
             .to_logical(natural_output.size)
@@ -295,6 +339,10 @@ where
         };
         compute_grid_layout(&mut wrapper, NodeId::from(0usize), grid_inputs)
     };
+    let (first_baselines, last_baselines) =
+        table_row_baseline_sets(&context, grid_inputs, output.size);
+    output.first_baselines = first_baselines;
+    output.last_baselines = last_baselines;
 
     // A parent-owned known block size is already the final used size for this
     // box. Otherwise the table owns its synthesized block size and CSS Tables
@@ -329,14 +377,22 @@ where
             .filter(|caption| world.boxes[caption.index()].style.caption_is_bottom())
             .collect::<Vec<_>>();
         let writing_mode = world.boxes[root.index()].style.writing_mode();
-        let top_height = layout_captions(world, &top_captions, output.size, writing_mode, 0.0);
+        let top_height = compute_caption_stack(
+            world,
+            &top_captions,
+            output.size,
+            writing_mode,
+            0.0,
+            RunMode::PerformLayout,
+        );
         shift_grid_children(world, &context.cells, top_height);
-        let bottom_height = layout_captions(
+        let bottom_height = compute_caption_stack(
             world,
             &bottom_captions,
             output.size,
             writing_mode,
             top_height + output.size.height,
+            RunMode::PerformLayout,
         );
         apply_structural_layout(world, root, &context, inputs, grid_outer_size, top_height);
         if let Some(first_baseline) = &mut output.first_baselines.y {
@@ -347,6 +403,18 @@ where
         }
         output.size.height += top_height + bottom_height;
         output.content_size.height += top_height + bottom_height;
+        output.content_size.width = output.content_size.width.min(output.size.width);
+        output.content_size.height = output.content_size.height.min(output.size.height);
+    } else {
+        let caption_height = context.top_caption_height + context.bottom_caption_height;
+        if let Some(first_baseline) = &mut output.first_baselines.y {
+            *first_baseline += context.top_caption_height;
+        }
+        if let Some(last_baseline) = &mut output.last_baselines.y {
+            *last_baseline += context.top_caption_height;
+        }
+        output.size.height += caption_height;
+        output.content_size.height += caption_height;
         output.content_size.width = output.content_size.width.min(output.size.width);
         output.content_size.height = output.content_size.height.min(output.size.height);
     }
@@ -361,6 +429,7 @@ where
 fn table_intrinsic_block_inputs(
     mut inputs: LayoutInput,
     writing_mode: taffy::WritingMode,
+    retain_fragment_geometry: bool,
 ) -> LayoutInput {
     let mut known_size = writing_mode.to_logical(inputs.known_dimensions);
     known_size.block_size = None;
@@ -378,7 +447,14 @@ fn table_intrinsic_block_inputs(
     available_size.block_size = AvailableSpace::MaxContent;
     inputs.available_space = writing_mode.to_physical(available_size);
 
-    inputs.run_mode = RunMode::ComputeSize;
+    // Final table layout needs the natural row tracks as well as their total
+    // size. Ask Grid to retain fragment geometry only for that final pass;
+    // intrinsic probes stay side-effect free and consume the size alone.
+    inputs.run_mode = if retain_fragment_geometry {
+        RunMode::PerformLayout
+    } else {
+        RunMode::ComputeSize
+    };
     inputs.sizing_mode = SizingMode::ContentSize;
     inputs.sizing_purpose = SizingPurpose::IntrinsicContribution;
     inputs.axis = RequestedAxis::from(writing_mode.block_axis());
@@ -496,6 +572,7 @@ where
         width: style_helpers::length(spacing.width),
         height: style_helpers::length(spacing.height),
     };
+    let row_count = rows.len();
     TableContext {
         style,
         cells,
@@ -503,14 +580,21 @@ where
         columns,
         captions: grouped_children.captions,
         caption_min_inline_size: 0.0,
+        top_caption_height: 0.0,
+        bottom_caption_height: 0.0,
         detailed: None,
         collapsed_borders: collapsed,
         column_count: max_columns,
         column_constraints: column_tracks,
+        column_sizes: Vec::new(),
+        row_baseline_metrics: vec![TableRowBaselineMetrics::default(); row_count],
+        row_baseline_struts: Vec::new(),
+        row_baselines: Vec::new(),
         layout_mode,
         inline_border_spacing: spacing.width,
         outer_border_spacing: spacing,
         writing_mode,
+        writing_direction: root_style.writing_direction(),
         font_baseline: root_style.font_baseline(),
     }
 }
@@ -601,6 +685,7 @@ impl TableContext {
             inline_auto_behavior: AutoSizeBehavior::FitContent,
             block_auto_behavior: AutoSizeBehavior::FitContent,
             block_margins_are_collapsible: Line::FALSE,
+            table_cell: None,
         };
 
         self.caption_min_inline_size = self
@@ -621,6 +706,66 @@ impl TableContext {
                 contribution + inline_margin
             })
             .fold(0.0, f32::max);
+    }
+
+    /// Measure caption stacks at the table's resolved inline size. Captions
+    /// participate in the outer table wrapper, so a parent-owned known block
+    /// size must be split between these stacks and the inner row grid.
+    fn collect_caption_block_sizes<N>(&mut self, world: &mut LayoutWorld<N>, inputs: LayoutInput)
+    where
+        N: Copy + Debug + Eq + Hash,
+    {
+        let inline_size = self
+            .writing_mode
+            .to_logical(inputs.known_dimensions)
+            .inline_size
+            .unwrap_or(0.0);
+        let containing_size = self.writing_mode.to_physical(LogicalSize {
+            inline_size,
+            block_size: 0.0,
+        });
+        let top = self
+            .captions
+            .iter()
+            .copied()
+            .filter(|caption| !world.boxes[caption.index()].style.caption_is_bottom())
+            .collect::<Vec<_>>();
+        let bottom = self
+            .captions
+            .iter()
+            .copied()
+            .filter(|caption| world.boxes[caption.index()].style.caption_is_bottom())
+            .collect::<Vec<_>>();
+        self.top_caption_height = compute_caption_stack(
+            world,
+            &top,
+            containing_size,
+            self.writing_mode,
+            0.0,
+            RunMode::ComputeSize,
+        );
+        self.bottom_caption_height = compute_caption_stack(
+            world,
+            &bottom,
+            containing_size,
+            self.writing_mode,
+            0.0,
+            RunMode::ComputeSize,
+        );
+    }
+
+    fn row_grid_inputs(&self, mut inputs: LayoutInput) -> LayoutInput {
+        let caption_height = self.top_caption_height + self.bottom_caption_height;
+        let subtract_captions = |size: Size<Option<f32>>| {
+            let mut logical = self.writing_mode.to_logical(size);
+            logical.block_size = logical
+                .block_size
+                .map(|block_size| (block_size - caption_height).max(0.0));
+            self.writing_mode.to_physical(logical)
+        };
+        inputs.known_dimensions = subtract_captions(inputs.known_dimensions);
+        inputs.definite_dimensions = subtract_captions(inputs.definite_dimensions);
+        inputs
     }
 
     /// Gather cell measures after the table tree is complete. Fixed layout
@@ -705,6 +850,7 @@ impl TableContext {
                 /* treat_target_size_as_constrained */ true,
             )
         };
+        self.column_sizes.clone_from(&column_sizes);
         self.style.grid_template_columns = column_sizes
             .into_iter()
             .map(|size| {
@@ -742,6 +888,189 @@ impl TableContext {
         grid_space.known_size.inline_size = Some(used_inline_size);
         grid_space.definite_size.inline_size = Some(used_inline_size);
         grid_space.into_layout_input()
+    }
+
+    /// Measure cell fragments with their final column widths before row
+    /// sizing distributes any excess table block-size.
+    ///
+    /// CSS Tables forms one shared baseline per row from the largest ascent
+    /// and descent of its baseline-aligned cells. Cells that span later rows
+    /// contribute their ascent to the starting row but no descent. The
+    /// fallback descent is retained separately for rows without a baseline
+    /// participant.
+    fn measure_row_baselines<N>(&mut self, world: &mut LayoutWorld<N>)
+    where
+        N: Copy + Debug + Eq + Hash,
+    {
+        self.row_baseline_metrics
+            .fill(TableRowBaselineMetrics::default());
+
+        for cell_index in 0..self.cells.len() {
+            let cell = &self.cells[cell_index];
+            let inline_size = self.cell_inline_size(cell);
+            let known_dimensions = self.writing_mode.to_physical(LogicalSize {
+                inline_size: Some(inline_size),
+                block_size: None,
+            });
+            let available_space = self.writing_mode.to_physical(LogicalSize {
+                inline_size: AvailableSpace::Definite(inline_size),
+                block_size: AvailableSpace::MaxContent,
+            });
+            let inputs = LayoutInput {
+                known_dimensions,
+                definite_dimensions: known_dimensions,
+                parent_size: known_dimensions,
+                parent_writing_mode: self.writing_mode,
+                available_space,
+                sizing_mode: SizingMode::InherentSize,
+                sizing_purpose: SizingPurpose::Layout,
+                run_mode: RunMode::ComputeSize,
+                axis: RequestedAxis::Both,
+                inline_auto_behavior: AutoSizeBehavior::StretchImplicit,
+                block_auto_behavior: AutoSizeBehavior::FitContent,
+                block_margins_are_collapsible: Line::FALSE,
+                table_cell: Some(TableCellLayoutInput::MEASURE),
+            };
+            let output = {
+                let mut wrapper = TableTreeWrapper {
+                    world,
+                    context: self,
+                };
+                wrapper.with_grid_cell_style(cell_index, |world, cell| {
+                    world.compute_child_layout(cell.to_taffy(), inputs)
+                })
+            };
+
+            let cell = &self.cells[cell_index];
+            let row = cell.row;
+            let block_size = self
+                .writing_mode
+                .to_logical(output.size)
+                .block_size
+                .max(0.0);
+            let baseline =
+                logical_block_baseline(output.first_baselines, output.size, self.writing_direction);
+            let participates = cell.has_in_flow_content
+                && cell
+                    .style
+                    .align_content
+                    .is_some_and(|alignment| alignment == taffy::AlignContent::BASELINE);
+
+            let percentage_basis = Some(inline_size);
+            let padding = cell
+                .style
+                .padding
+                .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
+            let border = cell
+                .style
+                .border
+                .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
+            let fallback_descent = self
+                .writing_direction
+                .to_logical_box_strut(padding + border)
+                .block_end;
+            let metrics = &mut self.row_baseline_metrics[row];
+            metrics.fallback_descent = Some(
+                metrics
+                    .fallback_descent
+                    .map_or(fallback_descent, |current| current.min(fallback_descent)),
+            );
+
+            if participates && let Some(baseline) = baseline {
+                let ascent = baseline.clamp(0.0, block_size);
+                let descent = if cell.row_span > 1 {
+                    0.0
+                } else {
+                    (block_size - ascent).max(0.0)
+                };
+                metrics.max_ascent = Some(
+                    metrics
+                        .max_ascent
+                        .map_or(ascent, |current| current.max(ascent)),
+                );
+                metrics.max_descent = Some(
+                    metrics
+                        .max_descent
+                        .map_or(descent, |current| current.max(descent)),
+                );
+            }
+        }
+    }
+
+    /// Add one sizing-only Grid item for every row with a shared baseline.
+    /// The item carries ROWMIN's `max ascent + max descent` requirement while
+    /// leaving authored track functions and excess-height distribution intact.
+    fn materialize_row_baseline_struts(&mut self) {
+        self.row_baseline_struts.clear();
+        for (row, metrics) in self.row_baseline_metrics.iter().copied().enumerate() {
+            let Some(ascent) = metrics.max_ascent else {
+                continue;
+            };
+            let block_size = ascent + metrics.max_descent.unwrap_or(0.0);
+            let logical_size = LogicalSize {
+                inline_size: 0.0,
+                block_size,
+            };
+            let size = self.writing_mode.to_physical(logical_size);
+            let mut style = Style::<Atom> {
+                display: Display::Block,
+                size: size.map(style_helpers::length),
+                min_size: size.map(style_helpers::length),
+                max_size: size.map(style_helpers::length),
+                ..Style::default()
+            };
+            style.grid_column = Line {
+                start: style_helpers::line(1),
+                end: style_helpers::span(1),
+            };
+            style.grid_row = Line {
+                start: style_helpers::line((row + 1).min(i16::MAX as usize) as i16),
+                end: style_helpers::span(1),
+            };
+            self.row_baseline_struts
+                .push(TableRowBaselineStrut { style, size });
+        }
+    }
+
+    /// Resolve each row's baseline against its natural track size. Baseline
+    /// rows retain their measured shared ascent; rows without participants
+    /// synthesize a baseline at block-end minus the smallest cell end inset.
+    fn resolve_natural_row_baselines(&mut self) {
+        let Some(detailed) = self.detailed.as_ref() else {
+            self.row_baselines.clear();
+            return;
+        };
+        let (row_sizes, _) = tracks_in_logical_order(
+            &detailed.rows.sizes,
+            &detailed.rows.gutters,
+            self.writing_direction.is_block_flow_reversed(),
+        );
+        self.row_baselines = self
+            .row_baseline_metrics
+            .iter()
+            .enumerate()
+            .map(|(row, metrics)| {
+                if let Some(ascent) = metrics.max_ascent {
+                    return ascent;
+                }
+                let row_size = row_sizes.get(row).copied().unwrap_or(0.0);
+                metrics
+                    .fallback_descent
+                    .map_or(0.0, |descent| (row_size - descent).max(0.0))
+            })
+            .collect();
+    }
+
+    fn cell_inline_size(&self, cell: &TableCell) -> f32 {
+        let end = cell
+            .column
+            .saturating_add(cell.column_span)
+            .min(self.column_sizes.len());
+        if cell.column >= end {
+            return 0.0;
+        }
+        self.column_sizes[cell.column..end].iter().sum::<f32>()
+            + self.inline_border_spacing.max(0.0) * (end - cell.column - 1) as f32
     }
 
     fn resolve_used_inline_size(
@@ -910,7 +1239,13 @@ fn collect_rows<N>(
                 let data = table_data(world, cell);
                 let column_span = usize::from(data.column_span.max(1));
                 let row_span = usize::from(data.row_span.max(1));
-                let mut cell_style = world.boxes[cell.index()].style.taffy.clone();
+                let resolved_style = &world.boxes[cell.index()].style;
+                let mut cell_style = resolved_style.taffy.clone();
+                if cell_style.align_content.is_none() {
+                    cell_style.align_content = Some(table_cell_normal_content_alignment(
+                        resolved_style.vertical_align().kind,
+                    ));
+                }
                 cell_style.margin = Rect::ZERO.map(style_helpers::length);
                 cells.push(TableCell {
                     id: cell,
@@ -919,10 +1254,46 @@ fn collect_rows<N>(
                     column: 0,
                     row_span,
                     column_span,
+                    has_in_flow_content: table_cell_has_in_flow_content(world, cell),
                 });
             }
         }
         _ => {}
+    }
+}
+
+/// Whether the table cell produces any normal-flow fragment that can supply
+/// or consume a row baseline. Out-of-flow-only cells deliberately return
+/// false: CSS Tables leaves their static positions at block-start when there
+/// is no in-flow alignment subject.
+fn table_cell_has_in_flow_content<N>(world: &LayoutWorld<N>, cell: LayoutBoxId) -> bool
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    world.boxes[cell.index()]
+        .layout_children
+        .iter()
+        .any(|child| world.boxes[child.index()].style.taffy.position != taffy::Position::Absolute)
+}
+
+/// Resolve table-cell `align-content: normal` through legacy
+/// `vertical-align`, as required by CSS Box Alignment.
+///
+/// Explicit `align-content` is retained before this function is called.
+/// Baseline-class values remain typed baseline requests rather than being
+/// collapsed to a positional fallback. Positional values reuse block content
+/// alignment so in-flow fragments and out-of-flow static-position candidates
+/// move as one group.
+fn table_cell_normal_content_alignment(
+    vertical_align: LayoutInlineAlignment,
+) -> taffy::AlignContent {
+    match vertical_align {
+        LayoutInlineAlignment::Top => taffy::AlignContent::START,
+        LayoutInlineAlignment::Middle => taffy::AlignContent::SAFE_CENTER,
+        LayoutInlineAlignment::Bottom => taffy::AlignContent::SAFE_END,
+        LayoutInlineAlignment::Baseline
+        | LayoutInlineAlignment::TextTop
+        | LayoutInlineAlignment::TextBottom => taffy::AlignContent::BASELINE,
     }
 }
 
@@ -1135,6 +1506,7 @@ where
         inline_auto_behavior: AutoSizeBehavior::FitContent,
         block_auto_behavior: AutoSizeBehavior::FitContent,
         block_margins_are_collapsible: Line::FALSE,
+        table_cell: None,
     };
     table_writing_mode
         .to_logical(
@@ -1167,19 +1539,19 @@ fn clear_table_cell_inline_sizing(style: &mut Style<Atom>, writing_mode: taffy::
 }
 
 fn normalize_table_cell_block_sizing(style: &mut Style<Atom>, writing_mode: taffy::WritingMode) {
-    let size = writing_mode.to_logical(style.size).block_size;
-    let min_size = writing_mode.to_logical(style.min_size).block_size;
-    if writing_mode.is_horizontal() {
-        if min_size.is_auto() {
-            style.min_size.height = size;
-        }
-        style.size.height = Dimension::auto();
-    } else {
-        if min_size.is_auto() {
-            style.min_size.width = size;
-        }
-        style.size.width = Dimension::auto();
-    }
+    // Table-cell layout ignores min/max block-size. An authored block-size is
+    // instead a minimum contribution to its row (Blink's
+    // `cell_css_block_size`), while the final row constraint stretches the
+    // cell fragment separately.
+    let mut size = writing_mode.to_logical(style.size);
+    let mut min_size = writing_mode.to_logical(style.min_size);
+    let mut max_size = writing_mode.to_logical(style.max_size);
+    min_size.block_size = size.block_size;
+    size.block_size = Dimension::auto();
+    max_size.block_size = Dimension::auto();
+    style.size = writing_mode.to_physical(size);
+    style.min_size = writing_mode.to_physical(min_size);
+    style.max_size = writing_mode.to_physical(max_size);
 }
 
 fn set_physical_inline_dimension(
@@ -1202,12 +1574,13 @@ fn physical_inline_sum(writing_mode: taffy::WritingMode, rect: Rect<f32>) -> f32
     }
 }
 
-fn layout_captions<N>(
+fn compute_caption_stack<N>(
     world: &mut LayoutWorld<N>,
     captions: &[LayoutBoxId],
     containing_size: Size<f32>,
     parent_writing_mode: taffy::WritingMode,
     mut y: f32,
+    run_mode: RunMode,
 ) -> f32
 where
     N: Copy + Debug + Eq + Hash,
@@ -1244,14 +1617,15 @@ where
             available_space,
             sizing_mode: SizingMode::InherentSize,
             sizing_purpose: SizingPurpose::Layout,
-            run_mode: RunMode::PerformLayout,
+            run_mode,
             axis: taffy::RequestedAxis::Both,
             inline_auto_behavior: AutoSizeBehavior::StretchImplicit,
             block_auto_behavior: AutoSizeBehavior::FitContent,
             block_margins_are_collapsible: Line::FALSE,
+            table_cell: None,
         };
         let output = world.compute_child_layout(caption.to_taffy(), inputs);
-        if parent_writing_mode.is_horizontal() {
+        if run_mode == RunMode::PerformLayout && parent_writing_mode.is_horizontal() {
             let free_inline_space =
                 (width - output.size.width - margin.left - margin.right).max(0.0);
             let auto_count = style.margin.left.is_auto() as u8 + style.margin.right.is_auto() as u8;
@@ -1265,15 +1639,17 @@ where
                 }
             }
         }
-        set_box_layout(
-            world,
-            caption,
-            Point { x: margin.left, y },
-            output,
-            order,
-            Some(percentage_basis),
-            margin,
-        );
+        if run_mode == RunMode::PerformLayout {
+            set_box_layout(
+                world,
+                caption,
+                Point { x: margin.left, y },
+                output,
+                order,
+                Some(percentage_basis),
+                margin,
+            );
+        }
         y += output.size.height + margin.bottom;
     }
     y - start
@@ -1289,6 +1665,101 @@ where
     for cell in cells {
         world.boxes[cell.id.index()].unrounded_layout.location.y += offset;
     }
+}
+
+/// Project a physical fragment baseline into a table's logical block axis.
+fn logical_block_baseline(
+    baseline: Point<Option<f32>>,
+    fragment_size: Size<f32>,
+    writing_direction: WritingDirection,
+) -> Option<f32> {
+    if writing_direction.mode.is_horizontal() {
+        baseline.y
+    } else {
+        baseline.x.map(|offset| {
+            if writing_direction.is_block_flow_reversed() {
+                fragment_size.width - offset
+            } else {
+                offset
+            }
+        })
+    }
+}
+
+/// Materialize one logical table baseline in physical fragment coordinates.
+fn physical_baseline(
+    baseline: Option<f32>,
+    fragment_size: Size<f32>,
+    writing_direction: WritingDirection,
+) -> Point<Option<f32>> {
+    if writing_direction.mode.is_horizontal() {
+        Point {
+            x: None,
+            y: baseline,
+        }
+    } else {
+        Point {
+            x: baseline.map(|offset| {
+                if writing_direction.is_block_flow_reversed() {
+                    fragment_size.width - offset
+                } else {
+                    offset
+                }
+            }),
+            y: None,
+        }
+    }
+}
+
+/// Export the first and last row baselines from the CSS table rather than the
+/// generic Grid adapter. Captions remain outside this grid coordinate space
+/// and are added by the table-wrapper path after they are laid out.
+fn table_row_baseline_sets(
+    context: &TableContext,
+    inputs: LayoutInput,
+    grid_outer_size: Size<f32>,
+) -> (Point<Option<f32>>, Point<Option<f32>>) {
+    let Some(detailed) = context.detailed.as_ref() else {
+        return (Point::NONE, Point::NONE);
+    };
+    if context.rows.is_empty() || context.row_baselines.is_empty() {
+        return (Point::NONE, Point::NONE);
+    }
+
+    let percentage_basis = inputs
+        .constraint_space(context.writing_mode)
+        .margin_padding_percentage_basis();
+    let padding = context
+        .style
+        .padding
+        .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
+    let border = context
+        .style
+        .border
+        .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
+    let logical_padding = context.writing_direction.to_logical_box_strut(padding);
+    let logical_border = context.writing_direction.to_logical_box_strut(border);
+    let block_origin = logical_border.block_start + logical_padding.block_start;
+    let (row_sizes, row_gutters) = tracks_in_logical_order(
+        &detailed.rows.sizes,
+        &detailed.rows.gutters,
+        context.writing_direction.is_block_flow_reversed(),
+    );
+    let row_starts = track_starts(block_origin, &row_sizes, &row_gutters);
+    let first = row_starts
+        .first()
+        .zip(context.row_baselines.first())
+        .map(|(start, baseline)| start + baseline);
+    let last_row = context.rows.len().saturating_sub(1);
+    let last = row_starts
+        .get(last_row)
+        .zip(context.row_baselines.get(last_row))
+        .map(|(start, baseline)| start + baseline);
+
+    (
+        physical_baseline(first, grid_outer_size, context.writing_direction),
+        physical_baseline(last, grid_outer_size, context.writing_direction),
+    )
 }
 
 fn apply_structural_layout<N>(
@@ -1651,6 +2122,41 @@ where
         self.world.cache_clear(cell.to_taffy());
         result
     }
+
+    fn virtual_child_count(&self) -> usize {
+        self.context.cells.len() + self.context.row_baseline_struts.len()
+    }
+
+    fn strut_index(&self, node_id: NodeId) -> Option<usize> {
+        usize::from(node_id).checked_sub(self.context.cells.len())
+    }
+
+    fn prepare_cell_layout_input(&self, cell_index: usize, mut inputs: LayoutInput) -> LayoutInput {
+        let cell = &self.context.cells[cell_index];
+        inputs.table_cell = Some(TableCellLayoutInput::MEASURE);
+        let cell_writing_mode = self.world.boxes[cell.id.index()].style.writing_mode();
+        if !cell_writing_mode.is_orthogonal_to(self.context.writing_mode)
+            && cell.has_in_flow_content
+            && cell
+                .style
+                .align_content
+                .is_some_and(|alignment| alignment == taffy::AlignContent::BASELINE)
+            && let Some(row_baseline) = self.context.row_baselines.get(cell.row).copied()
+        {
+            let alignment_baseline = if cell_writing_mode.is_block_flow_reversed()
+                != self.context.writing_mode.is_block_flow_reversed()
+            {
+                cell_writing_mode
+                    .to_logical(inputs.known_dimensions)
+                    .block_size
+                    .map_or(row_baseline, |block_size| block_size - row_baseline)
+            } else {
+                row_baseline
+            };
+            inputs.table_cell = Some(TableCellLayoutInput::aligned_to(alignment_baseline));
+        }
+        inputs
+    }
 }
 
 impl<N> TraversePartialTree for TableTreeWrapper<'_, N>
@@ -1663,11 +2169,11 @@ where
         Self: 'a;
 
     fn child_ids(&self, _parent_node_id: NodeId) -> Self::ChildIter<'_> {
-        VirtualChildIter(0..self.context.cells.len())
+        VirtualChildIter(0..self.virtual_child_count())
     }
 
     fn child_count(&self, _parent_node_id: NodeId) -> usize {
-        self.context.cells.len()
+        self.virtual_child_count()
     }
 
     fn get_child_id(&self, _parent_node_id: NodeId, child_index: usize) -> NodeId {
@@ -1715,12 +2221,19 @@ where
     }
 
     fn set_unrounded_layout(&mut self, node_id: NodeId, layout: &Layout) {
-        let cell = self.context.cells[usize::from(node_id)].id;
-        self.world.boxes[cell.index()].unrounded_layout = *layout;
+        if let Some(cell) = self.context.cells.get(usize::from(node_id)) {
+            self.world.boxes[cell.id.index()].unrounded_layout = *layout;
+        }
     }
 
     fn compute_child_layout(&mut self, node_id: NodeId, inputs: LayoutInput) -> LayoutOutput {
         let cell_index = usize::from(node_id);
+        if let Some(strut_index) = self.strut_index(node_id) {
+            return LayoutOutput::from_outer_size(
+                self.context.row_baseline_struts[strut_index].size,
+            );
+        }
+        let inputs = self.prepare_cell_layout_input(cell_index, inputs);
         // The virtual table grid owns the used grid-item style: margins are
         // zero, column sizing has consumed every applicable width constraint,
         // and cell block size is a minimum contribution.
@@ -1729,8 +2242,18 @@ where
         })
     }
 
-    fn compute_child_size(&mut self, node_id: NodeId, inputs: LayoutInput) -> IntrinsicSizeResult {
+    fn compute_child_size(
+        &mut self,
+        node_id: NodeId,
+        mut inputs: LayoutInput,
+    ) -> IntrinsicSizeResult {
         let cell_index = usize::from(node_id);
+        if let Some(strut_index) = self.strut_index(node_id) {
+            return IntrinsicSizeResult::from_size(
+                self.context.row_baseline_struts[strut_index].size,
+            );
+        }
+        inputs.table_cell = Some(TableCellLayoutInput::MEASURE);
         self.with_grid_cell_style(cell_index, |world, cell| {
             world.compute_child_size(cell.to_taffy(), inputs)
         })
@@ -1755,7 +2278,12 @@ where
     }
 
     fn get_grid_child_style(&self, child_node_id: NodeId) -> Self::GridItemStyle<'_> {
-        &self.context.cells[usize::from(child_node_id)].style
+        let child_index = usize::from(child_node_id);
+        if let Some(cell) = self.context.cells.get(child_index) {
+            &cell.style
+        } else {
+            &self.context.row_baseline_struts[child_index - self.context.cells.len()].style
+        }
     }
 
     fn set_detailed_grid_info(&mut self, _node_id: NodeId, detailed_grid_info: DetailedGridInfo) {
