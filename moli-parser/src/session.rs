@@ -13,6 +13,7 @@ use moli_dom::native::NativeNodeId;
 
 use super::{
     html::{DocumentSink, ParseHandle, ParserFinishDiscoverySignals, ParserInputQueue},
+    html_input::InputStack,
     live_target::ParserStreamHtmlTreeSinkTarget,
 };
 
@@ -23,8 +24,7 @@ pub(super) struct HtmlTreeSinkSession {
 
 pub(super) struct HtmlParserSession {
     tokenizer: Tokenizer<EmbedderPausingTreeBuilder>,
-    input_buffer: BufferQueue,
-    suspended_input_buffers: Vec<BufferQueue>,
+    input: InputStack,
 }
 
 pub(super) enum HtmlParserSessionResult {
@@ -137,8 +137,7 @@ impl HtmlParserSession {
         let tree_builder = EmbedderPausingTreeBuilder::new(sink, opts.tree_builder);
         Self {
             tokenizer: Tokenizer::new(tree_builder, opts.tokenizer),
-            input_buffer: BufferQueue::default(),
-            suspended_input_buffers: Vec::new(),
+            input: InputStack::default(),
         }
     }
 
@@ -160,15 +159,14 @@ impl HtmlParserSession {
         };
         Self {
             tokenizer: Tokenizer::new(tree_builder, tokenizer_options),
-            input_buffer: BufferQueue::default(),
-            suspended_input_buffers: Vec::new(),
+            input: InputStack::default(),
         }
     }
 
     pub(super) fn process(&mut self, input: StrTendril) {
-        self.input_buffer.push_back(input);
+        self.input.push_back(input);
         while let HtmlParserSessionResult::Script(_) =
-            feed_with_definitive_encoding(&self.tokenizer, &self.input_buffer)
+            feed_with_definitive_encoding(&self.tokenizer, self.input.current())
         {
             // Non-pump callers intentionally parse through embedder pauses. They have no
             // runtime owner to notify, so parser-side custom-element handoffs and
@@ -178,7 +176,7 @@ impl HtmlParserSession {
     }
 
     pub(super) fn push_back(&mut self, input: StrTendril) {
-        self.input_buffer.push_back(input);
+        self.input.push_back(input);
     }
 
     pub(super) fn begin_inserted_input(&mut self, input: StrTendril) {
@@ -190,63 +188,31 @@ impl HtmlParserSession {
         // restored. Prefer permanent unknown locations over reporting
         // plausible but incorrect document lines.
         self.tokenizer.sink.sink().mark_source_positions_unknown();
-        let parent = std::mem::take(&mut self.input_buffer);
-        self.suspended_input_buffers.push(parent);
-        self.input_buffer.push_back(input);
+        self.input.begin_inserted(input);
     }
 
     pub(super) fn append_to_current_inserted_input(&mut self, input: StrTendril) -> bool {
-        if input.is_empty() {
-            return true;
-        }
-        if self.suspended_input_buffers.is_empty() {
-            return false;
-        }
-        self.input_buffer.push_back(input);
-        true
+        self.input.append_to_current_inserted(input)
     }
 
     pub(super) fn has_buffered_input(&self) -> bool {
-        !self.input_buffer.is_empty()
-            || self
-                .suspended_input_buffers
-                .iter()
-                .any(|input| !input.is_empty())
+        self.input.has_input()
     }
 
     pub(super) fn buffered_input_len(&self) -> usize {
-        let mut len = 0usize;
-        for input in
-            std::iter::once(&self.input_buffer).chain(self.suspended_input_buffers.iter().rev())
-        {
-            let input = input.clone();
-            while let Some(chunk) = input.pop_front() {
-                len = len.saturating_add(chunk.len());
-            }
-        }
-        len
+        self.input.len()
     }
 
     pub(super) fn snapshot_buffered_input(&self) -> String {
-        let mut buffered = String::new();
-        for input in
-            std::iter::once(&self.input_buffer).chain(self.suspended_input_buffers.iter().rev())
-        {
-            let input = input.clone();
-            while let Some(chunk) = input.pop_front() {
-                buffered.push_str(&chunk);
-            }
-        }
-        buffered
+        self.input.snapshot()
     }
 
     pub(super) fn feed(&mut self) -> HtmlParserSessionResult {
-        let result = feed_with_definitive_encoding(&self.tokenizer, &self.input_buffer);
-        if matches!(result, HtmlParserSessionResult::InputDrained)
-            && self.input_buffer.is_empty()
-            && let Some(parent) = self.suspended_input_buffers.pop()
-        {
-            self.input_buffer = parent;
+        let result = feed_with_definitive_encoding(&self.tokenizer, self.input.current());
+        if matches!(result, HtmlParserSessionResult::InputDrained) {
+            // The restored parent is intentionally consumed by the next parser
+            // step so each insertion depth keeps an explicit input boundary.
+            self.input.restore_parent_if_current_empty();
         }
         result
     }
@@ -256,12 +222,8 @@ impl HtmlParserSession {
     }
 
     pub(super) fn finish(self) -> ParserStreamHtmlTreeSinkTarget {
-        let Self {
-            tokenizer,
-            mut input_buffer,
-            mut suspended_input_buffers,
-        } = self;
-        restore_all_suspended_input(&mut input_buffer, &mut suspended_input_buffers);
+        let Self { tokenizer, input } = self;
+        let input_buffer = input.into_buffer();
         while let HtmlParserSessionResult::Script(_) =
             feed_with_definitive_encoding(&tokenizer, &input_buffer)
         {
@@ -281,12 +243,8 @@ impl HtmlParserSession {
     }
 
     pub(super) fn finish_live_runtime_dom_sink_parser(self) -> ParserFinishDiscoverySignals {
-        let Self {
-            tokenizer,
-            mut input_buffer,
-            mut suspended_input_buffers,
-        } = self;
-        restore_all_suspended_input(&mut input_buffer, &mut suspended_input_buffers);
+        let Self { tokenizer, input } = self;
+        let input_buffer = input.into_buffer();
         while let HtmlParserSessionResult::Script(_) =
             feed_with_definitive_encoding(&tokenizer, &input_buffer)
         {
@@ -342,17 +300,6 @@ fn feed_with_definitive_encoding(
             TokenizerResult::Script(handle) => {
                 return HtmlParserSessionResult::Script(handle);
             }
-        }
-    }
-}
-
-fn restore_all_suspended_input(
-    input_buffer: &mut BufferQueue,
-    suspended_input_buffers: &mut Vec<BufferQueue>,
-) {
-    while let Some(parent) = suspended_input_buffers.pop() {
-        while let Some(chunk) = parent.pop_front() {
-            input_buffer.push_back(chunk);
         }
     }
 }

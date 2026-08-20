@@ -4,6 +4,7 @@
 //! discovery outputs without depending on the renderer implementation.
 
 mod html;
+mod html_input;
 mod live_target;
 mod script_planning;
 mod session;
