@@ -5929,6 +5929,176 @@ fn child_document_write_nested_write_preserves_parser_insertion_point() {
     );
 }
 
+#[test]
+fn child_parser_script_document_close_drains_restored_parent_input() {
+    let mut vm = new_storage_test_vm("https://child-parser-close.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.createElement("iframe");
+  (document.body || document.documentElement || document).appendChild(frame);
+  const childDocument = frame.contentDocument;
+  childDocument.open();
+  childDocument.write(
+    '<script>document.close();<\/script>' +
+    '<main id="tail-after-parser-close">tail</main>'
+  );
+  return String(!!childDocument.getElementById("tail-after-parser-close"));
+})()
+"#,
+        )
+        .expect("document.close() from a parser script must drain the restored parent input");
+
+    assert_eq!(result, "true");
+}
+
+#[tokio::test]
+async fn srcdoc_child_parser_write_script_drains_restored_parent_input() {
+    let mut vm = new_storage_test_vm("https://srcdoc-write-drain.test/");
+    vm.eval(
+        r##"
+(() => {
+  const frame = document.createElement("iframe");
+  frame.srcdoc =
+    '<body><script>document.title = "script-ran"; ' +
+    "document.write('<b id=\"inserted\">i</b>'); " +
+    '</' + 'script>' +
+    '<main id="tail-after-write">tail</main></body>';
+  (document.body || document.documentElement || document).appendChild(frame);
+})()
+"##,
+    )
+    .expect("srcdoc write frame fixture should evaluate");
+    run_realm_prerequisite_then_expected_child_frame_semantic_turn_for_test(
+        &mut vm,
+        ChildFrameSemanticTurnKind::NavigationCommit,
+        "srcdoc write frame should commit before its parser script",
+    )
+    .await;
+    while vm.has_ready_child_frame_semantic_turn_for_test(
+        ChildFrameSemanticTurnKind::RealmMaterialization,
+    ) {
+        assert_eq!(
+            vm.run_next_child_frame_semantic_turn_for_test().await,
+            Some(ChildFrameSemanticTurnKind::RealmMaterialization),
+            "srcdoc write child realm should materialize before its parser script"
+        );
+    }
+    while vm.has_ready_child_frame_semantic_turn_for_test(
+        ChildFrameSemanticTurnKind::DocumentScriptReady,
+    ) {
+        assert_eq!(
+            vm.run_next_child_frame_semantic_turn_for_test().await,
+            Some(ChildFrameSemanticTurnKind::DocumentScriptReady),
+            "srcdoc write parser script should run on DocumentScriptReady"
+        );
+    }
+    run_child_document_lifecycle_and_host_load_for_test(&mut vm, "srcdoc write frame").await;
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const childDocument = document.querySelector("iframe").contentDocument;
+  return [
+    childDocument.title,
+    !!childDocument.getElementById("inserted"),
+    !!childDocument.getElementById("tail-after-write")
+  ].join("|");
+})()
+"#,
+        )
+        .expect("a finite child parser must drain the parent input restored after a write script");
+
+    assert_eq!(result, "script-ran|true|true");
+}
+
+#[tokio::test]
+async fn child_parser_resumes_write_queued_during_external_script_block() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    loader.set_network_offline(true);
+    let mut vm = new_storage_test_vm_with_loader("https://child-parent-write-block.test/", &loader);
+
+    vm.eval(
+        r#"
+(() => {
+  const root = document.documentElement || document.appendChild(document.createElement("html"));
+  const body = document.body || root.appendChild(document.createElement("body"));
+  const frame = document.createElement("iframe");
+  frame.srcdoc = `
+    <script src="data:text/javascript,globalThis.__childDataScriptRan%3Dtrue"><\/script>
+    <main id="tail-after-block">tail</main>
+  `;
+  body.appendChild(frame);
+})()
+"#,
+    )
+    .expect("parent write block frame fixture should evaluate");
+    assert!(
+        vm.run_child_frame_task_source_once_for_test(ChildFrameSemanticTurnKind::NavigationCommit)
+            .await,
+        "parent write block frame should commit"
+    );
+    while vm.has_ready_child_frame_semantic_turn_for_test(
+        ChildFrameSemanticTurnKind::RealmMaterialization,
+    ) {
+        assert_eq!(
+            vm.run_next_child_frame_semantic_turn_for_test().await,
+            Some(ChildFrameSemanticTurnKind::RealmMaterialization),
+            "parent write block child realm should materialize"
+        );
+    }
+
+    vm.eval(
+        r#"
+(() => {
+  const frame = document.querySelector("iframe");
+  frame.contentDocument.write('<b id="from-parent">p</b>');
+})()
+"#,
+    )
+    .expect("a parent write during the child parser suspension should evaluate");
+
+    while vm
+        .run_next_child_frame_semantic_turn_for_test()
+        .await
+        .is_some()
+    {
+        // Drain the data-script source load, its execution, and the parser
+        // resume that must consume the parent-queued write input.
+    }
+    let mut lifecycle_turns = 0;
+    while lifecycle_turns < 8
+        && vm
+            .run_child_frame_task_source_once_for_test(
+                ChildFrameSemanticTurnKind::DocumentLifecycle,
+            )
+            .await
+    {
+        lifecycle_turns += 1;
+    }
+    let _ = vm
+        .run_child_frame_task_source_once_for_test(ChildFrameSemanticTurnKind::HostLoad)
+        .await;
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const childDocument = document.querySelector("iframe").contentDocument;
+  return [
+    !!childDocument.getElementById("from-parent"),
+    !!childDocument.getElementById("tail-after-block")
+  ].join("|");
+})()
+"#,
+        )
+        .expect("resuming a child parser with parent-queued write input must drain all input");
+
+    assert_eq!(result, "true|true");
+}
+
 #[tokio::test]
 async fn pending_child_navigation_does_not_materialize_initial_empty_preload_realm() {
     let mut vm = new_storage_test_vm("https://child-preload-lazy.test/");

@@ -467,7 +467,14 @@ impl JsContextHost {
             );
             match outcome {
                 LiveDocumentParserStepOutcome::Continue => {
-                    return ChildLiveDocumentParserProgress::Complete;
+                    if parser.input_is_empty() {
+                        return ChildLiveDocumentParserProgress::Complete;
+                    }
+                    // Draining one insertion frame restores its parent input
+                    // inside the same feed and still reports an input
+                    // boundary. Keep driving until the parser-owned input
+                    // stack is truly empty.
+                    continue;
                 }
                 LiveDocumentParserStepOutcome::CustomElementConstructionHandoff(_) => {}
                 LiveDocumentParserStepOutcome::BlockingStylesheetPause(pause) => {
@@ -1065,8 +1072,22 @@ impl JsContextHost {
             match outcome {
                 LiveDocumentParserStepOutcome::Continue => {
                     if parser_insertion_only {
+                        // Script-inserted input parks after one boundary; the
+                        // post-script resume drains the remaining stack in its
+                        // own turn so following scripts keep their scheduler
+                        // ordering.
                         self.child_document_parsers.replace(owner, entry);
-                    } else if entry.finishes_when_drained() {
+                        return true;
+                    }
+                    if !entry.input_is_empty() {
+                        // Draining one insertion frame restores its parent
+                        // input inside the same feed and still reports an
+                        // input boundary. Keep driving until the parser-owned
+                        // input stack is truly empty before finishing or
+                        // parking.
+                        continue;
+                    }
+                    if entry.finishes_when_drained() {
                         if close_requested {
                             self.finish_child_document_write_parser_on_current_stack(
                                 scope,
@@ -1188,7 +1209,7 @@ impl JsContextHost {
                                     return false;
                                 }
                                 ChildLiveDocumentParserProgress::FailedToQueueParserScript => {
-                                    if entry.finishes_when_drained() {
+                                    if entry.finishes_when_drained() && entry.input_is_empty() {
                                         if close_requested {
                                             self.finish_child_document_write_parser_on_current_stack(
                                                 scope,
@@ -1541,14 +1562,19 @@ impl JsContextHost {
                 ChildLiveDocumentParserStartResult::parser_blocked(None)
             }
             ChildLiveDocumentParserProgress::FailedToQueueParserScript => {
-                let parser_stop_action = self.finish_live_child_document_parser(
-                    scope,
-                    child_handle,
-                    owner,
-                    document_handle,
-                    parser,
-                );
-                ChildLiveDocumentParserStartResult::parser_stopped(parser_stop_action)
+                if parser.input_is_empty() {
+                    let parser_stop_action = self.finish_live_child_document_parser(
+                        scope,
+                        child_handle,
+                        owner,
+                        document_handle,
+                        parser,
+                    );
+                    ChildLiveDocumentParserStartResult::parser_stopped(parser_stop_action)
+                } else {
+                    self.child_document_parsers.replace(owner, parser);
+                    ChildLiveDocumentParserStartResult::parser_blocked(None)
+                }
             }
         }
     }
@@ -1655,7 +1681,7 @@ impl JsContextHost {
                 FrameDocumentClassicParserResumeApplication::resumed(None)
             }
             ChildLiveDocumentParserProgress::FailedToQueueParserScript => {
-                if entry.finishes_when_drained() {
+                if entry.finishes_when_drained() && entry.input_is_empty() {
                     self.finish_and_queue_live_child_document_parser(
                         scope,
                         child_handle,
