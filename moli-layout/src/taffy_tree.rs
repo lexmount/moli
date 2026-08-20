@@ -411,6 +411,7 @@ where
             inline_auto_behavior: AutoSizeBehavior::FitContent,
             block_auto_behavior: AutoSizeBehavior::FitContent,
             block_margins_are_collapsible: Line::FALSE,
+            table_cell: None,
         };
         let output = world.compute_child_layout(marker.to_taffy(), inputs);
         let marker_style = &world.boxes[marker.index()].style;
@@ -541,6 +542,7 @@ where
             inline_auto_behavior: AutoSizeBehavior::StretchImplicit,
             block_auto_behavior: AutoSizeBehavior::FitContent,
             block_margins_are_collapsible: Line::FALSE,
+            table_cell: None,
         };
         let output = world.compute_child_layout(content.to_taffy(), inputs);
         let x = control_layout.border.left + control_layout.padding.left + 4.0;
@@ -1649,10 +1651,26 @@ where
             };
             let logical_content_box_size = inline_coordinates.to_logical_size(content_box_size);
             let logical_padding = writing_direction.to_logical_box_strut(padding);
-            let block_offset = single_subject_block_alignment_offset(
-                style.align_content,
-                logical_content_box_size.block_size - measurement.alignment_block_size,
-            );
+            let logical_border = writing_direction.to_logical_box_strut(border);
+            let natural_first_baseline = measurement
+                .line_placements
+                .iter()
+                .find(|line| !line.phantom)
+                .map(|line| {
+                    logical_border.block_start + logical_padding.block_start + line.baseline
+                });
+            let table_cell_baseline_offset = inputs
+                .table_cell
+                .and_then(|cell| cell.alignment_baseline)
+                .filter(|_| style.align_content == Some(AlignContent::BASELINE))
+                .zip(natural_first_baseline)
+                .map(|(row_baseline, cell_baseline)| row_baseline - cell_baseline);
+            let block_offset = table_cell_baseline_offset.unwrap_or_else(|| {
+                single_subject_block_alignment_offset(
+                    style.align_content,
+                    logical_content_box_size.block_size - measurement.alignment_block_size,
+                )
+            });
             measurement.translate_block_axis(block_offset);
             let mut logical_content_size = inline_coordinates.to_logical_size(output.content_size);
             logical_content_size.block_size = logical_content_size.block_size.max(
@@ -1887,6 +1905,7 @@ where
             parent_writing_mode,
             available_space,
             block_margins_are_collapsible: Line::FALSE,
+            table_cell: None,
         };
         // A float's max-content contribution is measured independently from
         // the finite line slot it will eventually occupy. Final fit-content
