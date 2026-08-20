@@ -5133,11 +5133,13 @@ pub struct RendererCapturedScreenshot {
     pub width: u32,
     pub height: u32,
     pub bytes: Arc<[u8]>,
+    pub visual_state: Option<RendererVisualStateToken>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RendererCaptureScreenshotReply {
     Captured(RendererCapturedScreenshot),
+    ScreencastUnchanged,
     LayoutDisabled,
     NoDocument,
 }

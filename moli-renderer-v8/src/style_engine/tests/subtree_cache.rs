@@ -4916,6 +4916,43 @@ fn style_subtree_invalidation_retains_style_system() {
 }
 
 #[test]
+fn retained_style_system_keeps_cascade_data_for_empty_shadow_scopes() {
+    let mut host = test_host();
+    let document = host.document_handle();
+    let open_host = host.create_element("section");
+    let closed_host = host.create_element("article");
+    assert!(host.append_child(document, open_host));
+    assert!(host.append_child(document, closed_host));
+    let open_root = host
+        .attach_shadow_root(open_host, "open")
+        .expect("open host should accept a shadow root");
+    let closed_root = host
+        .attach_shadow_root(closed_host, "closed")
+        .expect("closed host should accept a shadow root");
+
+    let engine = MoliStyleEngine::new();
+    let document_url = url::Url::parse("https://example.test/empty-scopes.html").unwrap();
+    let mut inputs = StyloComputedStyleInputs::default();
+    inputs
+        .shadow_stylesheet_sources
+        .push((open_root, Vec::new()));
+    inputs
+        .shadow_stylesheet_sources
+        .push((closed_root, Vec::new()));
+    let key = StyleSystemCacheKey::new(&document_url, &inputs, None);
+    engine.ensure_retained_style_system_for_document(&host, document, key, &inputs);
+
+    engine.with_retained_style_system_for_document_for_test(document, |retained| {
+        let roots = retained
+            .shadow_cascade_data
+            .iter()
+            .map(|(root, _)| *root)
+            .collect::<Vec<_>>();
+        assert_eq!(roots, vec![open_root, closed_root]);
+    });
+}
+
+#[test]
 fn style_subtree_invalidation_clears_only_affected_shadow_cascade_data() {
     let mut host = test_host();
     let document = host.document_handle();
@@ -5297,6 +5334,7 @@ fn document_replacement_cleanup_preserves_unreplaced_document_world_and_shared_s
     assert!(engine.dom_adapter.has_element_data(detached));
     let input_cache_key = StyloDocumentComputedStyleInputCacheKey::new(
         None,
+        &[],
         &document_url,
         StyleViewport::default(),
         StyloStyleEnvironment::default(),

@@ -233,6 +233,7 @@ mod tests {
     fn key(path: &str) -> StyloDocumentComputedStyleInputCacheKey {
         StyloDocumentComputedStyleInputCacheKey::new(
             None,
+            &[],
             &url::Url::parse(&format!("https://document.test/{path}"))
                 .expect("cache test document URL should parse"),
             StyleViewport::default(),

@@ -1,8 +1,68 @@
 use moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE;
 use moli_layout::{LayoutRect, PaintCaptureRequest, PaintViewport};
 use moli_page_types::LayoutPolicy;
+use std::sync::Arc;
 
-use super::{PageVm, RendererCaptureScreenshotReply, RendererCapturedScreenshot};
+use super::{
+    PageVm, RendererCaptureScreenshotReply, RendererCapturedScreenshot,
+    RendererDocumentLifecycleIdentity,
+};
+
+/// Opaque identity for the renderer state that can affect one viewport frame.
+///
+/// The token retains generation metadata only. It never owns layout, paint,
+/// raster, or encoded-image data.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RendererVisualStateToken(Arc<RendererVisualState>);
+
+#[derive(Debug, PartialEq, Eq)]
+struct RendererVisualState {
+    document: RendererDocumentLifecycleIdentity,
+    dom_generation: u64,
+    style_generations: Vec<(u32, u64, u64, u64)>,
+    interaction_generation: u64,
+    html_image_generation: u64,
+    css_image_generation: u64,
+    canvas_generation: u64,
+    viewport_width: u32,
+    viewport_height: u32,
+    device_pixel_ratio_bits: u32,
+}
+
+impl RendererVisualStateToken {
+    pub(crate) fn new(
+        document: RendererDocumentLifecycleIdentity,
+        dom_generation: u64,
+        style_generations: Vec<(crate::document_runtime::DomHandle, u64, u64, u64)>,
+        interaction_generation: u64,
+        resource_generations: (u64, u64, u64),
+        viewport: PaintViewport,
+    ) -> Self {
+        Self(Arc::new(RendererVisualState {
+            document,
+            dom_generation,
+            style_generations: style_generations
+                .into_iter()
+                .map(|(document, source, computed, context)| {
+                    (document.index_u32(), source, computed, context)
+                })
+                .collect(),
+            interaction_generation,
+            html_image_generation: resource_generations.0,
+            css_image_generation: resource_generations.1,
+            canvas_generation: resource_generations.2,
+            viewport_width: viewport.css_width,
+            viewport_height: viewport.css_height,
+            device_pixel_ratio_bits: viewport.device_pixel_ratio.to_bits(),
+        }))
+    }
+
+    fn has_same_paint_resources(&self, other: &Self) -> bool {
+        self.0.html_image_generation == other.0.html_image_generation
+            && self.0.css_image_generation == other.0.css_image_generation
+            && self.0.canvas_generation == other.0.canvas_generation
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RendererScreenshotFormat {
@@ -48,6 +108,9 @@ pub struct RendererCaptureScreenshotRequest {
     pub optimize_for_speed: bool,
     pub max_width: Option<u32>,
     pub max_height: Option<u32>,
+    /// Last frame state observed by this screencast subscription. Ordinary
+    /// screenshots leave this empty and always execute a fresh paint pass.
+    pub known_visual_state: Option<RendererVisualStateToken>,
 }
 
 impl RendererCaptureScreenshotRequest {
@@ -60,15 +123,17 @@ impl RendererCaptureScreenshotRequest {
             optimize_for_speed: false,
             max_width: None,
             max_height: None,
+            known_visual_state: None,
         }
     }
 }
 
 impl PageVm {
     /// Captures the current committed document at one renderer-owner command
-    /// turn. The pass-local world, Stylo values, Taffy cache, and paint
-    /// resources do not escape; the remaining owned geometry projection is
-    /// published as the Document's latest observable layout snapshot.
+    /// turn. The pass-local world, Stylo values, and Taffy cache do not escape;
+    /// the owned geometry projection is published as the Document's latest
+    /// observable layout snapshot. Screencast polling can be suppressed by an
+    /// unchanged generation token, but every emitted frame is painted fresh.
     pub(super) fn capture_screenshot(
         &mut self,
         request: RendererCaptureScreenshotRequest,
@@ -114,6 +179,16 @@ impl PageVm {
             surface.device_pixel_ratio as f32,
         );
         let paint_capture = request.paint_capture_request()?;
+        let visual_state_before = matches!(request.purpose, RendererScreenshotPurpose::Screencast)
+            .then(|| {
+                self.vm()
+                    .visual_state_token(self.document_lifecycle.identity(), viewport)
+            });
+        if visual_state_before.is_some()
+            && visual_state_before.as_ref() == request.known_visual_state.as_ref()
+        {
+            return Ok(RendererCaptureScreenshotReply::ScreencastUnchanged);
+        }
         let layout_reason = match request.purpose {
             RendererScreenshotPurpose::Screenshot | RendererScreenshotPurpose::Print { .. } => {
                 moli_layout::LayoutFlushReason::Screenshot
@@ -128,6 +203,22 @@ impl PageVm {
         else {
             return Ok(RendererCaptureScreenshotReply::NoDocument);
         };
+        let visual_state = visual_state_before.map(|before| {
+            let after = self
+                .vm()
+                .visual_state_token(self.document_lifecycle.identity(), viewport);
+            // Resource decoders can publish from another task while layout is
+            // sampling immutable resources. Keep the older token in that
+            // race so the next poll cannot mistake a potentially stale frame
+            // for the newly completed resource state. Other generation
+            // changes here are renderer-internal world preparation and are
+            // represented by the completed fresh frame.
+            if before.has_same_paint_resources(&after) {
+                after
+            } else {
+                before
+            }
+        });
 
         let raster = moli_paint::raster_snapshot(&snapshot)?;
         let (mime_type, width, height, bytes) = match request.format {
@@ -151,6 +242,7 @@ impl PageVm {
                 width,
                 height,
                 bytes: bytes.into(),
+                visual_state,
             },
         ))
     }

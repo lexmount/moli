@@ -312,6 +312,7 @@ async fn run_cdp_scheduler_actor(
                         event,
                         session_id,
                         generation,
+                        visual_state,
                     } = frame;
                     let output = route_top_level_background_event(
                         &mut adapter_scheduler,
@@ -331,6 +332,7 @@ async fn run_cdp_scheduler_actor(
                     scheduler.note_page_screencast_frame_emitted(
                         &session_id,
                         generation,
+                        visual_state,
                         TokioInstant::now(),
                     );
                 }

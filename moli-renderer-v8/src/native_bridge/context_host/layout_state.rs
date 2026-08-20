@@ -7,7 +7,36 @@ use crate::{
     css_resource_urls::{CompletedStylesheetWebFont, StylesheetLoadBlockingResource},
     document_runtime::DomHandle,
     script_vm::web_fonts::{DocumentWebFontCompletion, DocumentWebFontState},
+    style_engine::StyleViewport,
 };
+
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct CssImageDiscoveryStamp {
+    dom_version: u64,
+    style_generations: Vec<(DomHandle, u64, u64, u64)>,
+    viewport: StyleViewport,
+}
+
+impl CssImageDiscoveryStamp {
+    pub(super) fn new(
+        dom_version: u64,
+        style_generations: Vec<(DomHandle, u64, u64, u64)>,
+        viewport: StyleViewport,
+    ) -> Self {
+        Self {
+            dom_version,
+            style_generations,
+            viewport,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PaintResourceGenerations {
+    pub(super) html_images: u64,
+    pub(super) css_images: u64,
+    pub(super) canvas: u64,
+}
 
 /// Layout-facing state whose lifetime is bounded by exactly one main Document.
 ///
@@ -25,6 +54,10 @@ pub(super) struct DocumentLayoutState {
     embedded_document_services: HashMap<DomHandle, DocumentLayoutServices>,
     web_fonts: DocumentWebFontState,
     web_font_sources_dirty: bool,
+    css_image_discovery_stamp: Option<CssImageDiscoveryStamp>,
+    #[cfg(test)]
+    css_image_discovery_count: u64,
+    visual_state_generation: u64,
     latest_layout: LatestLayoutTreeCache,
     /// Last used content viewport published by each live iframe owner's
     /// parent layout. Blink keeps the equivalent size on LocalFrameView; it is
@@ -40,6 +73,10 @@ impl Default for DocumentLayoutState {
             embedded_document_services: HashMap::new(),
             web_fonts: DocumentWebFontState::default(),
             web_font_sources_dirty: true,
+            css_image_discovery_stamp: None,
+            #[cfg(test)]
+            css_image_discovery_count: 0,
+            visual_state_generation: 0,
             latest_layout: LatestLayoutTreeCache::default(),
             frame_viewports: HashMap::new(),
         }
@@ -53,6 +90,31 @@ impl DocumentLayoutState {
 
     pub(super) fn take_web_font_sources_dirty(&mut self) -> bool {
         std::mem::take(&mut self.web_font_sources_dirty)
+    }
+
+    pub(super) fn css_image_discovery_is_current(&self, stamp: CssImageDiscoveryStamp) -> bool {
+        self.css_image_discovery_stamp == Some(stamp)
+    }
+
+    pub(super) fn publish_css_image_discovery(&mut self, stamp: CssImageDiscoveryStamp) {
+        self.css_image_discovery_stamp = Some(stamp);
+        #[cfg(test)]
+        {
+            self.css_image_discovery_count = self.css_image_discovery_count.saturating_add(1);
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) const fn css_image_discovery_count(&self) -> u64 {
+        self.css_image_discovery_count
+    }
+
+    pub(super) const fn visual_state_generation(&self) -> u64 {
+        self.visual_state_generation
+    }
+
+    pub(super) fn mark_visual_state_dirty(&mut self) {
+        self.visual_state_generation = self.visual_state_generation.saturating_add(1);
     }
 
     pub(crate) fn with_services_for_document<T>(
@@ -112,6 +174,7 @@ impl DocumentLayoutState {
 
     pub(super) fn clear_latest_layout(&mut self) {
         self.latest_layout.clear();
+        self.mark_visual_state_dirty();
     }
 
     pub(super) fn frame_viewport(&self, frame: DomHandle) -> Option<LayoutViewport> {
@@ -167,7 +230,11 @@ impl DocumentLayoutState {
         &mut self,
         terminal: CompletedStylesheetWebFont,
     ) -> DocumentWebFontCompletion {
-        self.web_fonts.complete(terminal, &mut self.services)
+        let completion = self.web_fonts.complete(terminal, &mut self.services);
+        if !matches!(&completion, DocumentWebFontCompletion::Stale) {
+            self.mark_visual_state_dirty();
+        }
+        completion
     }
 
     #[cfg(test)]

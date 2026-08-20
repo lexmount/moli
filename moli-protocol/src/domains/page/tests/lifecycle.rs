@@ -3783,8 +3783,9 @@ async fn screencast_capture_materializes_jpeg_frame_and_ack_budget() {
         ctx.conn.page_screencast_subscription_status(&registration),
         PageScreencastSubscriptionStatus::Ready
     );
-    let PageScreencastCaptureStart::Pending(capture) =
-        ctx.conn.start_page_screencast_frame_capture(&registration)
+    let PageScreencastCaptureStart::Pending(capture) = ctx
+        .conn
+        .start_page_screencast_frame_capture(&registration, None)
     else {
         panic!("loaded screencast should start an async renderer capture");
     };
@@ -3793,7 +3794,10 @@ async fn screencast_capture_materializes_jpeg_frame_and_ack_budget() {
         PageScreencastSubscriptionStatus::CaptureInProgress
     );
 
-    let PageScreencastCaptureCompletion::Frame(frame) = ctx
+    let PageScreencastCaptureCompletion::Frame {
+        event: frame,
+        visual_state,
+    } = ctx
         .conn
         .complete_page_screencast_frame_capture(capture.wait().await)
     else {
@@ -3834,6 +3838,31 @@ async fn screencast_capture_materializes_jpeg_frame_and_ack_budget() {
     assert_eq!(
         ctx.conn.page_screencast_subscription_status(&registration),
         PageScreencastSubscriptionStatus::Ready
+    );
+
+    let PageScreencastCaptureStart::Pending(clean_capture) = ctx
+        .conn
+        .start_page_screencast_frame_capture(&registration, Some(visual_state))
+    else {
+        panic!("an acknowledged subscription should poll its visual state");
+    };
+    assert!(matches!(
+        ctx.conn
+            .complete_page_screencast_frame_capture(clean_capture.wait().await),
+        PageScreencastCaptureCompletion::Unchanged
+    ));
+    assert_eq!(
+        ctx.conn.page_screencast_subscription_status(&registration),
+        PageScreencastSubscriptionStatus::Ready,
+        "an unchanged poll must neither emit a frame nor wait for an ACK",
+    );
+    assert_eq!(
+        ctx.conn
+            .acknowledge_page_screencast_frame_for_session_owner(
+                Some("SID-screencast-frame"),
+                registration.generation(),
+            ),
+        Some(false),
     );
 }
 

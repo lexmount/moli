@@ -127,8 +127,8 @@ pub use moli_renderer_v8::{
     RendererServiceWorkerTargetInfo, RendererServiceWorkerVersionStatus,
     RendererSetDocumentContentResult, RendererSharedWorkerConsoleMessage,
     RendererSharedWorkerTargetEvent, RendererSharedWorkerTargetInfo, RendererSyntheticResponseBody,
-    RendererTextSearchMatch, RendererTouchPoint, RendererWindowDocumentSource,
-    RuntimeConsoleMessageSnapshot,
+    RendererTextSearchMatch, RendererTouchPoint, RendererVisualStateToken,
+    RendererWindowDocumentSource, RuntimeConsoleMessageSnapshot,
 };
 pub use moli_renderer_v8::{
     RendererAppManifest, RendererAppManifestDisplayMode, RendererAppManifestError,

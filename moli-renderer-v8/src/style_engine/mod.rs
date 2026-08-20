@@ -269,6 +269,7 @@ pub(crate) struct StyloStyleEnvironment {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct StyloDocumentComputedStyleInputCacheKey {
     read_document: Option<DomHandle>,
+    tree_scope_roots: Vec<DomHandle>,
     document_url: url::Url,
     viewport_width_bits: Option<u64>,
     viewport_height_bits: Option<u64>,
@@ -281,6 +282,7 @@ pub(crate) struct StyloDocumentComputedStyleInputCacheKey {
 impl StyloDocumentComputedStyleInputCacheKey {
     pub(crate) fn new(
         read_document: Option<DomHandle>,
+        tree_scope_roots: &[DomHandle],
         document_url: &url::Url,
         viewport: StyleViewport,
         environment: StyloStyleEnvironment,
@@ -290,6 +292,7 @@ impl StyloDocumentComputedStyleInputCacheKey {
         document_url.set_fragment(None);
         Self {
             read_document,
+            tree_scope_roots: tree_scope_roots.to_vec(),
             document_url,
             viewport_width_bits: viewport.width.map(f64::to_bits),
             viewport_height_bits: viewport.height.map(f64::to_bits),
@@ -460,6 +463,23 @@ impl MoliStyleEngine {
         self.world_for_document(document)
             .document_state
             .computed_cache_generation()
+    }
+
+    pub(crate) fn computed_style_observation_generations(
+        &self,
+        documents: impl IntoIterator<Item = DomHandle>,
+    ) -> Vec<(DomHandle, u64, u64, u64)> {
+        self.document_worlds.observation_generations(documents)
+    }
+
+    #[cfg(debug_assertions)]
+    pub(crate) fn computed_style_read_invariant_state(&self, document: DomHandle) -> (u64, u64) {
+        let world = self.world_for_document(document);
+        let generations = world.document_state.generation_snapshot();
+        (
+            generations.source_set_generation,
+            generations.retained_style_system_generation,
+        )
     }
 
     pub(crate) fn cached_document_prepared_style_inputs(

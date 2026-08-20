@@ -1790,6 +1790,151 @@ fn computed_style_reuses_retained_system_across_connected_shadow_roots() {
         2
     );
 }
+
+#[test]
+fn child_layout_uses_complete_stable_tree_scope_universe() {
+    let mut vm = new_storage_test_vm("https://child-tree-scope-universe.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  const body = document.body || document.documentElement || document;
+  const frame = document.createElement('iframe');
+  frame.id = 'tree-scope-universe-frame';
+  frame.style.cssText = 'width: 320px; height: 240px; border: 0';
+  body.appendChild(frame);
+
+  const childDocument = frame.contentDocument;
+  childDocument.open();
+  childDocument.write('<style>body { color: rgb(4, 5, 6); }</style><body><main>child</main></body>');
+  childDocument.close();
+  for (let index = 0; index < 32; index += 1) {
+    const host = childDocument.createElement('section');
+    childDocument.body.appendChild(host);
+    const shadow = host.attachShadow({mode: 'open'});
+    shadow.append(`empty-${index}`);
+    if (index % 8 === 0) {
+      const style = childDocument.createElement('style');
+      style.textContent = ':host { display: block; }';
+      shadow.prepend(style);
+    }
+  }
+})()
+"#,
+    )
+    .expect("child TreeScope universe fixture should initialize");
+
+    let child_document = child_document_handle_for_frame_id(&vm, "tree-scope-universe-frame");
+    let rebuilds_before =
+        vm.retained_style_system_rebuild_count_for_document_for_test(child_document);
+    let builds_before = vm
+        ._context_host
+        .borrow()
+        .stylo_computed_style_input_builds_for_test();
+    let key_builds_before = vm
+        ._context_host
+        .borrow()
+        .stylo_style_system_key_builds_for_test();
+
+    vm.screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0))
+        .expect("child TreeScope universe paint layout should succeed")
+        .expect("the fixture should have a layout root");
+
+    assert_eq!(
+        vm.retained_style_system_rebuild_count_for_document_for_test(child_document)
+            .saturating_sub(rebuilds_before),
+        1,
+        "one child-document layout must build one retained style system",
+    );
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .stylo_computed_style_input_builds_for_test()
+            .saturating_sub(builds_before),
+        2,
+        "the paint layout must prepare exactly one input for each document",
+    );
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .stylo_style_system_key_builds_for_test()
+            .saturating_sub(key_builds_before),
+        2,
+        "the paint layout must hash exactly one style-system key for each document",
+    );
+}
+
+#[test]
+fn empty_shadow_root_universe_changes_rebuild_once_per_dom_mutation() {
+    let mut vm = new_storage_test_vm("https://empty-shadow-universe-mutation.test/");
+    let document = vm.document_handle_for_test();
+
+    let initial = vm
+        .eval(
+            r#"
+(() => {
+  const root = document.documentElement || document.appendChild(document.createElement('html'));
+  const body = document.body || root.appendChild(document.createElement('body'));
+  const light = document.createElement('main');
+  light.id = 'universe-light';
+  body.appendChild(light);
+  return getComputedStyle(light).display;
+})()
+"#,
+        )
+        .expect("initial light-tree style should evaluate");
+    assert_eq!(initial, "block");
+    let rebuilds_after_initial =
+        vm.retained_style_system_rebuild_count_for_document_for_test(document);
+
+    let attached = vm
+        .eval(
+            r#"
+(() => {
+  const host = document.createElement('section');
+  host.id = 'universe-host';
+  document.body.appendChild(host);
+  const shadow = host.attachShadow({mode: 'open'});
+  const target = document.createElement('span');
+  target.id = 'universe-shadow-target';
+  shadow.appendChild(target);
+  return [
+    getComputedStyle(document.getElementById('universe-light')).display,
+    getComputedStyle(target).display,
+    getComputedStyle(document.getElementById('universe-light')).display
+  ].join('|');
+})()
+"#,
+        )
+        .expect("styles after empty Shadow Root attachment should evaluate");
+    assert_eq!(attached, "block|inline|block");
+    let rebuilds_after_attach =
+        vm.retained_style_system_rebuild_count_for_document_for_test(document);
+    assert_eq!(
+        rebuilds_after_attach.saturating_sub(rebuilds_after_initial),
+        1,
+        "attaching one empty Shadow Root must replace the document universe exactly once",
+    );
+
+    let removed = vm
+        .eval(
+            r#"
+(() => {
+  document.getElementById('universe-host').remove();
+  const light = document.getElementById('universe-light');
+  return [getComputedStyle(light).display, getComputedStyle(light).display].join('|');
+})()
+"#,
+        )
+        .expect("styles after empty Shadow Root removal should evaluate");
+    assert_eq!(removed, "block|block");
+    assert_eq!(
+        vm.retained_style_system_rebuild_count_for_document_for_test(document)
+            .saturating_sub(rebuilds_after_attach),
+        1,
+        "disconnecting one empty Shadow Root must replace the document universe exactly once",
+    );
+}
 #[test]
 fn computed_style_is_empty_for_detached_and_non_flat_tree_elements() {
     let mut vm = new_storage_test_vm("https://computed-style-non-flat-tree.test/");

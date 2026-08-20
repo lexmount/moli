@@ -26,7 +26,7 @@ use moli_core::page::{
     RendererDocumentSourcedTopLevelLocationNavigation, RendererLayoutMetrics,
     RendererPendingTopLevelHistoryTraversal, RendererPendingWindowOpenEvent,
     RendererScreenshotClip, RendererScreenshotFormat, RendererScreenshotPurpose,
-    RendererScreenshotRegion, RendererSetDocumentContentResult,
+    RendererScreenshotRegion, RendererSetDocumentContentResult, RendererVisualStateToken,
 };
 use moli_core::{RendererDocumentTitleChanged, RendererRuntimeCommandCausalIdentity};
 use serde::Deserialize;
@@ -1769,7 +1769,11 @@ impl PendingPageScreencastCapture {
 }
 
 pub enum PageScreencastCaptureCompletion {
-    Frame(BackgroundProtocolEvent),
+    Frame {
+        event: BackgroundProtocolEvent,
+        visual_state: RendererVisualStateToken,
+    },
+    Unchanged,
     Retry,
     Stale,
 }
@@ -1878,6 +1882,7 @@ impl CdpConnection {
     pub fn start_page_screencast_frame_capture(
         &mut self,
         registration: &PageScreencastRegistration,
+        known_visual_state: Option<RendererVisualStateToken>,
     ) -> PageScreencastCaptureStart {
         let session_id = registration.session_id().map(str::to_owned);
         let generation = registration.generation;
@@ -1909,6 +1914,7 @@ impl CdpConnection {
             optimize_for_speed: true,
             max_width: config.max_width(),
             max_height: config.max_height(),
+            known_visual_state,
         };
         let pending = match conn.loaded_page_mut_for_protocol_access(session_id_ref) {
             Ok(page) => match page.start_capture_screenshot_with_request(request) {
@@ -1974,6 +1980,17 @@ impl CdpConnection {
                 };
                 match page.finish_capture_screenshot(*completion) {
                     Ok(RendererCaptureScreenshotReply::Captured(image)) => image,
+                    Ok(RendererCaptureScreenshotReply::ScreencastUnchanged) => {
+                        if conn.complete_page_screencast_capture_for_session_owner(
+                            session_id_ref,
+                            generation,
+                            false,
+                        ) != Some(true)
+                        {
+                            return PageScreencastCaptureCompletion::Stale;
+                        }
+                        return PageScreencastCaptureCompletion::Unchanged;
+                    }
                     Ok(
                         RendererCaptureScreenshotReply::LayoutDisabled
                         | RendererCaptureScreenshotReply::NoDocument,
@@ -1998,6 +2015,19 @@ impl CdpConnection {
             }
         };
 
+        let Some(visual_state) = image.visual_state else {
+            tracing::debug!(
+                generation,
+                ?session_id,
+                "screencast capture returned a frame without visual-state metadata"
+            );
+            let _ = conn.complete_page_screencast_capture_for_session_owner(
+                session_id_ref,
+                generation,
+                false,
+            );
+            return PageScreencastCaptureCompletion::Retry;
+        };
         if conn.complete_page_screencast_capture_for_session_owner(session_id_ref, generation, true)
             != Some(true)
         {
@@ -2015,12 +2045,15 @@ impl CdpConnection {
                 .unwrap_or_default()
                 .as_secs_f64(),
         };
-        PageScreencastCaptureCompletion::Frame(BackgroundProtocolEvent::page_screencast_frame(
-            session_id_ref,
-            BASE64_STANDARD.encode(&image.bytes),
-            metadata,
-            generation,
-        ))
+        PageScreencastCaptureCompletion::Frame {
+            event: BackgroundProtocolEvent::page_screencast_frame(
+                session_id_ref,
+                BASE64_STANDARD.encode(&image.bytes),
+                metadata,
+                generation,
+            ),
+            visual_state,
+        }
     }
 }
 
@@ -6702,6 +6735,7 @@ fn start_devtools_capture_screenshot_command(
         optimize_for_speed: command.optimize_for_speed,
         max_width: None,
         max_height: None,
+        known_visual_state: None,
     };
     match page.start_capture_screenshot_with_request(request) {
         Ok(pending) => PageCommandTaskStep::Pending(PendingPageCommandDispatch {
@@ -6765,6 +6799,7 @@ fn start_devtools_print_to_pdf_command(
         optimize_for_speed: false,
         max_width: None,
         max_height: None,
+        known_visual_state: None,
     };
     match page.start_capture_screenshot_with_request(request) {
         Ok(pending) => PageCommandTaskStep::Pending(PendingPageCommandDispatch {
@@ -7788,6 +7823,12 @@ async fn complete_pending_page_command_inner(
                 Ok(RendererCaptureScreenshotReply::NoDocument) => {
                     CommandOutputPlan::error(-32000, "NoDocumentLoaded")
                 }
+                Ok(RendererCaptureScreenshotReply::ScreencastUnchanged) => {
+                    CommandOutputPlan::error(
+                        -32000,
+                        "Screenshot capture returned an invalid screencast-only reply",
+                    )
+                }
                 Err(error) => CommandOutputPlan::error(
                     -32000,
                     format!("Failed to capture page screenshot: {error}"),
@@ -7828,6 +7869,12 @@ async fn complete_pending_page_command_inner(
                     return PageCommandTaskStep::Complete(CommandOutputPlan::error(
                         -32000,
                         "NoDocumentLoaded",
+                    ));
+                }
+                Ok(RendererCaptureScreenshotReply::ScreencastUnchanged) => {
+                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
+                        -32000,
+                        "PDF capture returned an invalid screencast-only reply",
                     ));
                 }
                 Err(error) => {

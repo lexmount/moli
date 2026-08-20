@@ -8196,7 +8196,7 @@ fn inner_text_document_input_cache_tracks_document_url_changes() {
 }
 
 #[test]
-fn inner_text_keeps_distinct_shadow_style_input_scopes() {
+fn inner_text_reuses_one_document_style_world_across_shadow_scopes() {
     let mut vm = new_parsed_test_vm(
         "https://inner-text-shadow-style-inputs.test/",
         r#"<!doctype html><html><body>
@@ -8253,23 +8253,106 @@ host.attachShadow({mode: 'open'}).innerHTML =
     assert_eq!(layout_after_second.1, layout_after_first.1);
     assert_eq!(
         builds_after_first.saturating_sub(builds_before),
-        5,
-        "layout and rendered-text collection must preserve all shadow-aware style scopes"
+        1,
+        "layout and rendered-text collection must share one document TreeScope universe"
     );
     assert_eq!(
         builds_after_second.saturating_sub(builds_after_first),
-        2,
-        "the rendered-text collector still resolves current shadow-aware styles on a geometry cache hit"
+        0,
+        "an unchanged document TreeScope universe must reuse its prepared input"
     );
     assert_eq!(
         key_builds_after_first.saturating_sub(key_builds_before),
-        5,
-        "each layout and collector style input must own its exact retained-system key"
+        1,
+        "one observation must build one retained-system key for the document"
     );
     assert_eq!(
         key_builds_after_second.saturating_sub(key_builds_after_first),
-        2,
-        "the rendered-text collector keeps exact owner-local Stylo keys without rebuilding layout"
+        0,
+        "the rendered-text collector must reuse the unchanged document key"
+    );
+}
+
+#[test]
+fn paint_layout_reuses_one_style_world_across_many_empty_shadow_roots() {
+    let mut vm = new_parsed_test_vm(
+        "https://paint-empty-shadow-style-world.test/",
+        r#"<!doctype html><html><head><style>
+          body { color: rgb(1, 2, 3); }
+        </style></head><body><main id="light">light</main></body></html>"#,
+    );
+    vm.eval(
+        r#"
+const body = document.body;
+for (let index = 0; index < 64; index += 1) {
+  const host = document.createElement('section');
+  body.appendChild(host);
+  const shadow = host.attachShadow({mode: index % 2 === 0 ? 'open' : 'closed'});
+  const target = document.createElement('span');
+  target.textContent = `shadow-${index}`;
+  shadow.appendChild(target);
+  if (index % 8 === 0) {
+    const nestedHost = document.createElement('article');
+    shadow.appendChild(nestedHost);
+    nestedHost.attachShadow({mode: 'open'}).append(`nested-${index}`);
+  }
+}
+"#,
+    )
+    .expect("empty shadow-root paint fixture should initialize");
+
+    let document = vm.document_handle_for_test();
+    let rebuilds_before = vm.retained_style_system_rebuild_count_for_document_for_test(document);
+    let builds_before = vm
+        ._context_host
+        .borrow()
+        .stylo_computed_style_input_builds_for_test();
+    let key_builds_before = vm
+        ._context_host
+        .borrow()
+        .stylo_style_system_key_builds_for_test();
+
+    vm.screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0))
+        .expect("first empty shadow-root paint layout should succeed")
+        .expect("the fixture should have a layout root");
+    let rebuilds_after_first =
+        vm.retained_style_system_rebuild_count_for_document_for_test(document);
+    let builds_after_first = vm
+        ._context_host
+        .borrow()
+        .stylo_computed_style_input_builds_for_test();
+    let key_builds_after_first = vm
+        ._context_host
+        .borrow()
+        .stylo_style_system_key_builds_for_test();
+
+    vm.screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0))
+        .expect("second empty shadow-root paint layout should succeed")
+        .expect("the fixture should have a layout root");
+
+    assert_eq!(
+        rebuilds_after_first.saturating_sub(rebuilds_before),
+        1,
+        "entering and leaving empty shadow roots must not replace the retained style system",
+    );
+    assert_eq!(
+        vm.retained_style_system_rebuild_count_for_document_for_test(document),
+        rebuilds_after_first,
+        "an unchanged fresh paint layout must retain the same document style system",
+    );
+    assert_eq!(builds_after_first.saturating_sub(builds_before), 1);
+    assert_eq!(key_builds_after_first.saturating_sub(key_builds_before), 1);
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .stylo_computed_style_input_builds_for_test(),
+        builds_after_first,
+    );
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .stylo_style_system_key_builds_for_test(),
+        key_builds_after_first,
     );
 }
 

@@ -9,6 +9,21 @@ use crate::page_task_queue::{
 };
 use crate::script_vm::MainDocumentLifecycleBody;
 
+fn viewport_screencast_request(
+    known_visual_state: Option<crate::runtime::RendererVisualStateToken>,
+) -> crate::runtime::RendererCaptureScreenshotRequest {
+    crate::runtime::RendererCaptureScreenshotRequest {
+        purpose: crate::runtime::RendererScreenshotPurpose::Screencast,
+        format: crate::runtime::RendererScreenshotFormat::Png,
+        quality: 100,
+        region: crate::runtime::RendererScreenshotRegion::Viewport,
+        optimize_for_speed: true,
+        max_width: None,
+        max_height: None,
+        known_visual_state,
+    }
+}
+
 async fn dispatch_main_document_domcontentloaded_for_rendering_test(
     page_vm: &mut PageVm,
 ) -> anyhow::Result<crate::frame_owner_model::FrameDocumentTaskOwner> {
@@ -419,6 +434,183 @@ document.body.innerHTML = '<div id=target></div>';
     })
     .await
     .expect("screencast layout cache test should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn screencast_visual_token_tracks_child_document_styles_without_retaining_paint() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/child-screencast-style-generation.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.documentElement.style.cssText = 'margin:0;background:white';
+document.body.style.cssText = 'margin:0';
+const frame = document.createElement('iframe');
+frame.style.cssText = 'display:block;width:40px;height:20px;border:0';
+document.body.appendChild(frame);
+const child = frame.contentDocument;
+child.documentElement.style.cssText = 'margin:0';
+child.body.style.cssText = 'margin:0;width:40px;height:20px';
+globalThis.__childScreencastSheet = new frame.contentWindow.CSSStyleSheet();
+globalThis.__childScreencastSheet.replaceSync('body { background: red; }');
+child.adoptedStyleSheets = [globalThis.__childScreencastSheet];
+'installed'
+"#,
+        )?;
+
+        let passes_before = page_vm.vm().layout_pass_observability_for_test().1;
+        let crate::runtime::RendererCaptureScreenshotReply::Captured(first) =
+            page_vm.capture_screenshot(viewport_screencast_request(None))?
+        else {
+            panic!("first child-style screencast demand must capture a frame");
+        };
+        let first_raster = moli_image::decode_png(&first.bytes)?;
+        assert_eq!(&first_raster.rgba[0..4], [255, 0, 0, 255]);
+        let first_visual_state = first
+            .visual_state
+            .expect("a screencast frame must publish visual-state metadata");
+        let passes_after_first = page_vm.vm().layout_pass_observability_for_test().1;
+        assert_eq!(passes_after_first, passes_before + 1);
+
+        assert_eq!(
+            page_vm.capture_screenshot(viewport_screencast_request(Some(
+                first_visual_state.clone(),
+            )))?,
+            crate::runtime::RendererCaptureScreenshotReply::ScreencastUnchanged,
+        );
+        assert_eq!(
+            page_vm.vm().layout_pass_observability_for_test().1,
+            passes_after_first,
+            "an unchanged token must avoid layout and paint entirely",
+        );
+
+        page_vm
+            .vm_mut()
+            .eval("globalThis.__childScreencastSheet.replaceSync('body { background: blue; }')")?;
+        let crate::runtime::RendererCaptureScreenshotReply::Captured(refreshed) = page_vm
+            .capture_screenshot(viewport_screencast_request(Some(
+                first_visual_state.clone(),
+            )))?
+        else {
+            panic!("a child stylesheet mutation must capture a fresh frame");
+        };
+        assert_eq!(
+            page_vm.vm().layout_pass_observability_for_test().1,
+            passes_after_first + 1,
+            "a child-only stylesheet generation must invalidate the session token",
+        );
+        assert_ne!(refreshed.visual_state.as_ref(), Some(&first_visual_state));
+        let refreshed_raster = moli_image::decode_png(&refreshed.bytes)?;
+        assert_eq!(&refreshed_raster.rgba[0..4], [0, 0, 255, 255]);
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("child screencast style-generation fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn screencast_visual_token_tracks_canvas_and_scroll_while_screenshot_stays_fresh() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/screencast-visual-generations.html")?,
+        );
+        page_vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+            inner_width: 40,
+            inner_height: 30,
+            outer_width: 40,
+            outer_height: 30,
+            device_pixel_ratio: 1.0,
+            screen_width: 40,
+            screen_height: 30,
+            screen_avail_width: 40,
+            screen_avail_height: 30,
+        }))?;
+        page_vm.vm_mut().eval(
+            r#"
+document.documentElement.style.cssText = 'margin:0;background:white';
+document.body.style.cssText = 'margin:0;height:100px';
+const canvas = document.createElement('canvas');
+canvas.id = 'surface';
+canvas.width = 40;
+canvas.height = 100;
+canvas.style.cssText = 'display:block;width:40px;height:100px';
+document.body.appendChild(canvas);
+const context = canvas.getContext('2d');
+context.fillStyle = 'red';
+context.fillRect(0, 0, 40, 100);
+'installed'
+"#,
+        )?;
+
+        let crate::runtime::RendererCaptureScreenshotReply::Captured(first) =
+            page_vm.capture_screenshot(viewport_screencast_request(None))?
+        else {
+            panic!("initial canvas screencast demand must capture a frame");
+        };
+        let first_state = first.visual_state.expect("initial visual-state token");
+        assert_eq!(&moli_image::decode_png(&first.bytes)?.rgba[0..4], [255, 0, 0, 255]);
+
+        assert_eq!(
+            page_vm.capture_screenshot(viewport_screencast_request(Some(first_state.clone())))?,
+            crate::runtime::RendererCaptureScreenshotReply::ScreencastUnchanged,
+        );
+
+        // Canvas pixel writes do not mutate the DOM or stylesheet worlds. The
+        // resource generation must independently invalidate the token.
+        page_vm.vm_mut().eval(
+            "const c=document.getElementById('surface').getContext('2d');c.fillStyle='#0000ff';c.fillRect(0,0,40,100);'painted'",
+        )?;
+        let crate::runtime::RendererCaptureScreenshotReply::Captured(canvas_frame) = page_vm
+            .capture_screenshot(viewport_screencast_request(Some(first_state.clone())))?
+        else {
+            panic!("canvas mutation must capture a fresh screencast frame");
+        };
+        let canvas_state = canvas_frame
+            .visual_state
+            .expect("canvas frame visual-state token");
+        assert_ne!(canvas_state, first_state);
+        assert_eq!(
+            &moli_image::decode_png(&canvas_frame.bytes)?.rgba[0..4],
+            [0, 0, 255, 255]
+        );
+
+        page_vm.vm_mut().eval("scrollTo(0, 30); scrollY")?;
+        let crate::runtime::RendererCaptureScreenshotReply::Captured(scrolled) = page_vm
+            .capture_screenshot(viewport_screencast_request(Some(canvas_state.clone())))?
+        else {
+            panic!("scroll mutation must capture a fresh screencast frame");
+        };
+        let scrolled_state = scrolled
+            .visual_state
+            .expect("scrolled frame visual-state token");
+        assert_ne!(scrolled_state, canvas_state);
+
+        let passes_before_screenshot = page_vm.vm().layout_pass_observability_for_test().1;
+        let mut screenshot = crate::runtime::RendererCaptureScreenshotRequest::viewport_png();
+        screenshot.known_visual_state = Some(scrolled_state);
+        let crate::runtime::RendererCaptureScreenshotReply::Captured(screenshot) =
+            page_vm.capture_screenshot(screenshot)?
+        else {
+            panic!("ordinary screenshots must ignore screencast token suppression");
+        };
+        assert!(screenshot.visual_state.is_none());
+        assert_eq!(
+            page_vm.vm().layout_pass_observability_for_test().1,
+            passes_before_screenshot + 1,
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("screencast visual generations fixture should run");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1961,7 +2153,82 @@ document.body.innerHTML = '<div id=negative class=case></div><div id=overflow cl
 }
 
 #[tokio::test]
-async fn screenshot_paint_consumes_ready_webp_and_svg_css_url_layers() {
+async fn child_document_cssom_invalidates_generation_gated_image_discovery() {
+    run_page_vm_async_test(async move {
+        let image_url =
+            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+3MxZ5wAAAABJRU5ErkJggg==";
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        loader.set_optional_resource_fetch_mask(
+            crate::protocol_types::OptionalResourceFetchMask::IMAGE,
+        );
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/child-css-image-discovery.html")?,
+        );
+        page_vm
+            .vm_mut()
+            .set_layout_policy(crate::real_layout_test_policy());
+        page_vm.vm_mut().eval(
+            r#"
+const frame = document.createElement('iframe');
+document.body.appendChild(frame);
+const child = frame.contentDocument;
+child.body.innerHTML = '<div id=target style="width:20px;height:20px"></div>';
+globalThis.__childImageSheet = new frame.contentWindow.CSSStyleSheet();
+globalThis.__childImageSheet.replaceSync('#target { background: red; }');
+child.adoptedStyleSheets = [globalThis.__childImageSheet];
+'installed'
+"#,
+        )?;
+
+        let viewport = moli_layout::PaintViewport::new(80, 60, 1.0);
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(viewport)?
+            .expect("initial child document paint");
+        let after_first = page_vm.vm().css_image_discovery_count_for_test();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(viewport)?
+            .expect("clean child document paint");
+        assert_eq!(
+            page_vm.vm().css_image_discovery_count_for_test(),
+            after_first,
+            "a clean child style world must reuse its discovery result",
+        );
+
+        page_vm.vm_mut().eval(&format!(
+            "globalThis.__childImageSheet.replaceSync('#target {{ background-image: url({}); }}')",
+            serde_json::to_string(image_url)?,
+        ))?;
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(viewport)?
+            .expect("mutated child document paint");
+        assert_eq!(
+            page_vm.vm().css_image_discovery_count_for_test(),
+            after_first + 1,
+            "a child-only CSSOM generation must invalidate root paint discovery",
+        );
+        assert!(
+            page_vm
+                .vm()
+                .css_image_resource_observability_for_test()
+                .4
+                .iter()
+                .any(|url| url == image_url),
+            "computed discovery must walk the child Document root",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("child CSS image discovery fixture should run");
+}
+
+#[tokio::test]
+async fn css_image_discovery_is_generation_gated_across_fresh_paint_passes() {
     run_page_vm_async_test(async move {
         // A lossless 2x2 red WebP. Keep the HTTP fixture encoded so this
         // product path exercises metadata probing and bounded WebP decode.
@@ -2015,12 +2282,19 @@ html,body{{margin:0;padding:0;background:white}}
             // The first paint demand discovers computed CSSOM URLs and queues
             // the bounded decoders. CSS images have no DOM load-event task; a
             // later screencast/screenshot samples immutable ready resources.
+            let discoveries_before = page_vm.vm().css_image_discovery_count_for_test();
+            let passes_before = page_vm.vm().layout_pass_observability_for_test().1;
             page_vm
                 .vm_mut()
-                .screenshot_layout_snapshot(moli_layout::PaintViewport::new(
-                    80, 120, 1.0,
-                ))?
+                .paint_layout_snapshot(
+                    moli_layout::PaintViewport::new(80, 120, 1.0),
+                    moli_layout::LayoutFlushReason::Screencast,
+                )?
                 .expect("CSS image fixture must retain a layout root");
+            let discoveries_after_first = page_vm.vm().css_image_discovery_count_for_test();
+            assert_eq!(discoveries_after_first, discoveries_before + 1);
+            let passes_after_first = page_vm.vm().layout_pass_observability_for_test().1;
+            assert_eq!(passes_after_first, passes_before + 1);
             let urls = [&raster_url, &vector_url, &mask_url];
             let completion_notify = page_vm.vm().css_image_completion_notify_for_test();
             let all_ready = tokio::time::timeout(std::time::Duration::from_secs(3), async {
@@ -2048,10 +2322,22 @@ html,body{{margin:0;padding:0;background:white}}
 
             let snapshot = page_vm
                 .vm_mut()
-                .screenshot_layout_snapshot(moli_layout::PaintViewport::new(
-                    80, 120, 1.0,
-                ))?
+                .paint_layout_snapshot(
+                    moli_layout::PaintViewport::new(80, 120, 1.0),
+                    moli_layout::LayoutFlushReason::Screencast,
+                )?
                 .expect("ready CSS image fixture must retain a layout root");
+            let passes_after_ready = page_vm.vm().layout_pass_observability_for_test().1;
+            assert_eq!(
+                passes_after_ready,
+                passes_after_first + 1,
+                "each explicit paint demand must still execute a fresh layout",
+            );
+            assert_eq!(
+                page_vm.vm().css_image_discovery_count_for_test(),
+                discoveries_after_first,
+                "resource completion and an unchanged paint must reuse CSS image discovery",
+            );
             assert_eq!(snapshot.images.len(), 1);
             assert_eq!(snapshot.svg_images.len(), 3);
             assert!(snapshot.fragments.iter().any(|fragment| {
@@ -2073,6 +2359,22 @@ html,body{{margin:0;padding:0;background:white}}
                 &image.rgba[index..index + 4]
             };
             assert_eq!(pixel(5, 5), [255, 0, 0, 255]);
+
+            page_vm
+                .vm_mut()
+                .eval("document.getElementById('raster').style.backgroundPosition = '1px 0px'")?;
+            page_vm
+                .vm_mut()
+                .paint_layout_snapshot(
+                    moli_layout::PaintViewport::new(80, 120, 1.0),
+                    moli_layout::LayoutFlushReason::Screencast,
+                )?
+                .expect("style-mutated CSS image fixture must retain a layout root");
+            assert_eq!(
+                page_vm.vm().css_image_discovery_count_for_test(),
+                discoveries_after_first + 1,
+                "a style mutation must invalidate CSS image discovery",
+            );
             assert_eq!(pixel(35, 5), [255, 0, 0, 255]);
             assert_eq!(pixel(5, 15), [255, 255, 255, 255]);
             assert_eq!(pixel(5, 35), [0, 0, 255, 255]);

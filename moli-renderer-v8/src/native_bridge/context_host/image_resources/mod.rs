@@ -97,6 +97,13 @@ impl super::PendingImageLoadEvent {
 }
 
 impl super::JsContextHost {
+    pub(in crate::native_bridge::context_host) fn image_paint_generations(&self) -> (u64, u64) {
+        (
+            self.image_resources.paint_generation(),
+            self.image_resources.css.paint_generation(),
+        )
+    }
+
     pub(super) fn begin_pending_image_resource(
         &mut self,
         element: DomHandle,

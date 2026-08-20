@@ -101,4 +101,26 @@ impl DocumentStyleWorlds {
             })
             .collect()
     }
+
+    pub(super) fn observation_generations(
+        &self,
+        documents: impl IntoIterator<Item = DomHandle>,
+    ) -> Vec<(DomHandle, u64, u64, u64)> {
+        let mut documents = documents.into_iter().collect::<Vec<_>>();
+        documents.sort_by_key(|document| document.index());
+        documents.dedup();
+        documents
+            .into_iter()
+            .map(|document| {
+                let world = self.for_document(document);
+                let generation = world.document_state.generation_snapshot();
+                (
+                    document,
+                    generation.source_set_generation,
+                    generation.computed_cache_generation,
+                    generation.target_context_epoch,
+                )
+            })
+            .collect()
+    }
 }

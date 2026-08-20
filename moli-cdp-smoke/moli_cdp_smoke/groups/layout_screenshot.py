@@ -431,28 +431,7 @@ async def _run_moli_screencast(
         1.15,
         "unacknowledged frame backpressure",
     )
-    _, _, ack_seen = await _success(
-        client,
-        "Page.screencastFrameAck",
-        {"sessionId": generation},
-        session_id=session_id,
-    )
-    second_event = await _next_screencast_frame(
-        client,
-        session_id,
-        generation,
-        initial_messages=ack_seen,
-    )
-    second_jpeg, second_metadata = _decode_screencast_frame(second_event)
-    if second_metadata.get("timestamp", 0) - initial_metadata.get("timestamp", 0) < 0.9:
-        raise SmokeError("screencast emitted acknowledged frames faster than 1 FPS")
-
-    await _evaluate(
-        client,
-        session_id,
-        "document.querySelector('#cards').style.display = 'none'",
-    )
-    _, _, ack_seen = await _success(
+    await _success(
         client,
         "Page.screencastFrameAck",
         {"sessionId": generation},
@@ -462,19 +441,24 @@ async def _run_moli_screencast(
         client,
         session_id,
         generation,
-        0.75,
-        "1 FPS monotonic deadline",
+        1.25,
+        "clean visual-state poll",
+    )
+
+    await _evaluate(
+        client,
+        session_id,
+        "document.querySelector('#cards').style.display = 'none'",
     )
     mutated_event = await _next_screencast_frame(
         client,
         session_id,
         generation,
-        initial_messages=ack_seen,
     )
     mutated_jpeg, mutated_metadata = _decode_screencast_frame(mutated_event)
-    if mutated_metadata.get("timestamp", 0) - second_metadata.get("timestamp", 0) < 0.9:
+    if mutated_metadata.get("timestamp", 0) - initial_metadata.get("timestamp", 0) < 0.9:
         raise SmokeError("screencast mutation frame violated the 1 FPS deadline")
-    if mutated_jpeg == second_jpeg:
+    if mutated_jpeg == initial_jpeg:
         raise SmokeError("screencast mutation reused the previous encoded frame")
 
     await _success(
@@ -502,7 +486,79 @@ async def _run_moli_screencast(
             "encodedWidth": 400,
             "encodedHeight": 300,
             "ackBackpressure": True,
+            "cleanFrameSuppressed": True,
+            "cleanPollRequiresNoAck": True,
             "mutationChangedFrame": True,
+        },
+    )
+
+
+async def _run_moli_tree_scope_universe_capture(
+    client: RawCdpClient,
+    session_id: str,
+    results: list[dict[str, Any]],
+) -> None:
+    await _evaluate(
+        client,
+        session_id,
+        r"""
+(() => {
+  document.documentElement.style.cssText = 'margin:0;background:white';
+  document.body.style.cssText = 'margin:0;width:800px';
+  document.body.replaceChildren();
+  for (let index = 0; index < 104; index += 1) {
+    const host = document.createElement('section');
+    host.style.cssText = 'display:inline-block;width:4px;height:4px;background:rgb(20,90,160)';
+    document.body.appendChild(host);
+    const root = host.attachShadow({mode: index % 2 === 0 ? 'open' : 'closed'});
+    root.append(String(index % 10));
+    if (index % 16 === 0) {
+      const nestedHost = document.createElement('article');
+      root.appendChild(nestedHost);
+      nestedHost.attachShadow({mode: 'open'}).append('nested');
+    }
+  }
+  const frame = document.createElement('iframe');
+  frame.style.cssText = 'display:block;width:320px;height:120px;border:0';
+  document.body.appendChild(frame);
+  const child = frame.contentDocument;
+  child.documentElement.style.cssText = 'margin:0;background:rgb(240,245,250)';
+  child.body.style.cssText = 'margin:0';
+  for (let index = 0; index < 24; index += 1) {
+    const host = child.createElement('section');
+    host.style.cssText = 'display:inline-block;width:8px;height:8px';
+    child.body.appendChild(host);
+    host.attachShadow({mode: index % 2 === 0 ? 'open' : 'closed'}).append('child');
+  }
+})()
+""",
+    )
+
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    first_png, _ = await _capture(client, session_id)
+    first_elapsed_ms = round((loop.time() - started) * 1000)
+    started = loop.time()
+    second_png, _ = await _capture(client, session_id)
+    second_elapsed_ms = round((loop.time() - started) * 1000)
+    if second_png != first_png:
+        raise SmokeError("stable Shadow Root universe changed consecutive screenshot pixels")
+    decoded = decode_png(second_png)
+    assert_equal(
+        (decoded.width, decoded.height),
+        (800, 600),
+        "Shadow Root universe screenshot dimensions",
+    )
+    record(
+        results,
+        "layout_shadow_tree_scope_universe",
+        {
+            "documentShadowRoots": 111,
+            "childDocumentShadowRoots": 24,
+            "openAndClosedRoots": True,
+            "stableConsecutivePixels": True,
+            "firstCaptureMs": first_elapsed_ms,
+            "secondCaptureMs": second_elapsed_ms,
         },
     )
 
@@ -575,6 +631,7 @@ async def run_layout_screenshot_group(
         )
         if is_moli:
             await _run_moli_screencast(client, session_id, results)
+            await _run_moli_tree_scope_universe_capture(client, session_id, results)
     finally:
         if target_id is not None:
             try:

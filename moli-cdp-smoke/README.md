@@ -103,7 +103,7 @@ Covered well:
   `open()` state reset, duplicate `send()`, synchronous event order, pending
   asynchronous request cancellation, and suppression of asynchronous events and
   timers while a synchronous request owns the main thread.
-- The focused `layout-screenshot` group drives a real raw WebSocket session through target creation/attachment, fixed viewport, lifecycle-gated navigation, DevTools-style PNG capture (`quality: 100`), paint/layout mutations, page clips, `captureBeyondViewport`, and the Chromium DevTools node-screenshot chain (`DOM.getBoxModel` + `Page.getLayoutMetrics` + page clip). It also covers Moli's uncached 1 FPS JPEG screencast: initial-frame delivery, 400x300 scaling, metadata/session routing, ACK backpressure, minimum cadence, mutation freshness, stop cleanup, and a separately restarted default-Mock boundary without `--layout`. The screenshot surface sequence can also run against Chromium as a coarse reference; the fixed-1-FPS and default-Mock branches are Moli-only.
+- The focused `layout-screenshot` group drives a real raw WebSocket session through target creation/attachment, fixed viewport, lifecycle-gated navigation, DevTools-style PNG capture (`quality: 100`), paint/layout mutations, page clips, `captureBeyondViewport`, and the Chromium DevTools node-screenshot chain (`DOM.getBoxModel` + `Page.getLayoutMetrics` + page clip). Its Moli-only TreeScope fixture also captures 104 open/closed Shadow Roots, nested roots, and 24 roots in an iframe twice, requiring stable pixels and completion within the protocol timeout. The group covers Moli's generation-gated 1 FPS JPEG screencast as well: initial-frame delivery, clean-state frame suppression without ACK backpressure, 400x300 scaling, metadata/session routing, mutation freshness, stop cleanup, and a separately restarted default-Mock boundary without `--layout`. The screenshot surface sequence can also run against Chromium as a coarse reference; the TreeScope, fixed-1-FPS, and default-Mock branches are Moli-only.
 - The default raw `action-window` group holds Moli's on-demand input policy at
   the public CDP boundary. Three acknowledged `Input.dispatchMouseEvent`
   wheel commands remain delayed until one fixed one-second deadline, preserve
@@ -254,7 +254,7 @@ Runner layout:
 - `groups/document_content.py`: Playwright and raw-CDP `Page.setDocumentContent` replacement identity, parser pause/resume, child-frame, and error-atomicity workflows.
 - `groups/error_document.py`: failed main-document transport error Document identity, lifecycle, realm replacement, recovery, and multi-target isolation.
 - `groups/dom_parser_mutations.py`: cross-engine raw-CDP parser-tail mutation publication and commit/DCL DOM binding barriers.
-- `groups/layout_screenshot.py`: raw current-viewport PNG, DevTools parameter compatibility, paint/layout mutation freshness, uncached 1 FPS JPEG screencast/ACK behavior, and Moli default-Mock restart boundary.
+- `groups/layout_screenshot.py`: raw current-viewport PNG, DevTools parameter compatibility, paint/layout mutation freshness, open/closed Shadow Root and iframe TreeScope stability, generation-gated 1 FPS JPEG screencast/ACK behavior, and Moli default-Mock restart boundary.
 - `groups/action_window.py`: raw wheel admission/deadline batching, screenshot
   flush/reset, derived-effect coalescing, and exact-Document retirement.
 - `groups/pdf.py`: raw `Page.printToPDF` base64 and `ReturnAsStream` transport, `IO.read`, pagination, page ranges, orientation, PDF structure, and Chromium-shaped validation errors.

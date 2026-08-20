@@ -1473,6 +1473,21 @@ impl JsContextHost {
             .computed_cache_generation_for_document_for_test(document)
     }
 
+    #[cfg(debug_assertions)]
+    pub(crate) fn computed_style_read_invariant_state(
+        &self,
+        document: DomHandle,
+    ) -> (u64, u64, u64) {
+        let (source_set_generation, retained_style_system_generation) = self
+            .style_engine
+            .computed_style_read_invariant_state(document);
+        (
+            self.dom_host().dom_version(),
+            source_set_generation,
+            retained_style_system_generation,
+        )
+    }
+
     #[cfg(test)]
     pub(crate) fn note_stylo_computed_style_input_build_for_test(&self) {
         self.stylo_computed_style_input_builds.set(

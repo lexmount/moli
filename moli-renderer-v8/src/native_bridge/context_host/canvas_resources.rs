@@ -8,6 +8,7 @@ const MAX_RETAINED_CANVAS_PAINT_BYTES: usize = 256 * 1024 * 1024;
 pub(super) struct CanvasResourceStore {
     pixels_by_element: HashMap<DomHandle, Arc<moli_image::RgbaImage>>,
     retained_bytes: usize,
+    paint_generation: u64,
 }
 
 impl CanvasResourceStore {
@@ -31,6 +32,7 @@ impl CanvasResourceStore {
         }
         self.pixels_by_element.insert(element, Arc::new(pixels));
         self.retained_bytes = next_retained_bytes;
+        self.paint_generation = self.paint_generation.saturating_add(1);
         true
     }
 
@@ -39,6 +41,7 @@ impl CanvasResourceStore {
             return false;
         };
         self.retained_bytes = self.retained_bytes.saturating_sub(pixels.byte_len());
+        self.paint_generation = self.paint_generation.saturating_add(1);
         true
     }
 
@@ -48,6 +51,10 @@ impl CanvasResourceStore {
 
     fn elements(&self) -> impl Iterator<Item = DomHandle> + '_ {
         self.pixels_by_element.keys().copied()
+    }
+
+    const fn paint_generation(&self) -> u64 {
+        self.paint_generation
     }
 }
 
@@ -77,6 +84,10 @@ impl super::JsContextHost {
         element: DomHandle,
     ) -> Option<Arc<moli_image::RgbaImage>> {
         self.canvas_resources.get(element)
+    }
+
+    pub(in crate::native_bridge::context_host) fn canvas_paint_generation(&self) -> u64 {
+        self.canvas_resources.paint_generation()
     }
 
     pub(in crate::native_bridge::context_host) fn retire_canvas_resources_for_document(

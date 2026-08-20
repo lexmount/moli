@@ -179,7 +179,8 @@ operations that genuinely require them.
 | --- | --- |
 | Extract HTML/Markdown, query the DOM, run JS, inspect network/storage | Reads browser runtime state directly — does not trigger layout or paint |
 | Read an element's box, hit-test coordinates, send coordinate input | Runs one layout calculation and retains only the latest frozen layout tree |
-| Capture a screenshot or refresh a screencast | Rebuilds from the current DOM/style, replaces the frozen tree, renders a fresh frame, and discards the frame after use |
+| Capture a screenshot | Rebuilds from the current DOM/style, replaces the frozen tree, renders a fresh frame, and discards its paint state after use |
+| Poll a screencast | Compares generation metadata only; clean state emits no frame, while changed state rebuilds and emits one fresh frame |
 
 <p align="center">
   <a href="assets/moli_ondemand_rendering_flow.svg">
@@ -242,9 +243,10 @@ Layout is an on-demand snapshot rather than continuously maintained state. The
 first geometry request (a cold start) builds a working layout tree from the
 current DOM/style, freezes its canonical geometry into an immutable,
 DOM-independent `FrozenLayoutTree`, and retains only that latest tree. Ordinary
-geometry reads may reuse it even if the page has changed; screenshots and
-screencasts always rebuild, replace the frozen tree, and never reuse stale
-paint results.
+geometry reads may reuse it even if the page has changed. Screenshots always
+rebuild and replace the frozen tree. Each screencast subscription remembers
+only an opaque visual-state token: an unchanged token suppresses the poll,
+while a changed token triggers one fresh frame. Paint results are never reused.
 
 ## Architecture
 
@@ -263,6 +265,7 @@ integration. Every real refresh builds a temporary working tree from that
 source, optionally produces and consumes one fresh paint snapshot, freezes the
 canonical box/fragment geometry into a compact `FrozenLayoutTree`, and discards
 the working tree, style borrows, layout caches, diagnostics, and paint state.
+Screencast tokens contain generation metadata, never layout or paint data.
 Source lookup and hit-test candidates are derived from the frozen tree when
 queried. The system has no incrementally maintained layout tree, damage graph,
 retained display list, GPU compositor, or persistent window.

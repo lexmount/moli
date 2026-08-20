@@ -302,8 +302,8 @@ pub use runtime::{
     RendererSharedWorkerConsoleMessage, RendererSharedWorkerTargetEvent,
     RendererSharedWorkerTargetInfo, RendererStyleSheetHeader, RendererStyleSheetInventoryUpdate,
     RendererStyleSheetPayload, RendererSyntheticResponseBody, RendererTextSearchMatch,
-    RendererTouchPoint, RendererWindowDocumentSource, RuntimeConsoleMessageSnapshot,
-    renderer_output_transport_channel,
+    RendererTouchPoint, RendererVisualStateToken, RendererWindowDocumentSource,
+    RuntimeConsoleMessageSnapshot, renderer_output_transport_channel,
 };
 pub use service_worker_runtime::{
     SharedServiceWorkerResourceStore, new_shared_json_service_worker_resource_store,

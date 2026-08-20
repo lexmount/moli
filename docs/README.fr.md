@@ -155,7 +155,8 @@ Ce dont la plupart des tâches d'automatisation ont réellement besoin, c'est de
 | --- | --- |
 | Extraire du HTML/Markdown, interroger le DOM, exécuter du JS, inspecter le réseau ou le stockage | Lit directement l'état du moteur du navigateur, sans déclencher ni mise en page ni rendu |
 | Lire la boîte englobante d'un élément, tester des coordonnées, envoyer une entrée par coordonnées | Calcule la mise en page à la volée et ne conserve que le dernier arbre figé |
-| Prendre une capture d'écran ou actualiser un screencast | Reconstruit à partir du DOM et des styles actuels, remplace l'arbre figé, produit une nouvelle image, puis la libère aussitôt après usage |
+| Prendre une capture d'écran | Reconstruit à partir du DOM et des styles actuels, remplace l'arbre figé, produit une nouvelle image, puis libère son état de rendu |
+| Sonder un screencast | Compare uniquement les métadonnées de génération ; un état inchangé n'émet aucune image, tandis qu'un changement produit une image fraîche |
 
 <p align="center">
   <a href="../assets/moli_ondemand_rendering_flow.svg">
@@ -195,7 +196,7 @@ Dans Moli, les opérations coûteuses du navigateur ne sont jamais activées par
 | `--image`, `--font`, `--audio`, `--video`, `--media`, `--text-track` | Active une famille spécifique de ressources optionnelles |
 | `--profile-dir`, `--http-cache-dir`, `--cookie-file` | Active, au cas par cas, la persistance dont la charge de travail a besoin |
 
-Le résultat de la mise en page est un instantané produit à la demande, pas un état maintenu en continu : la première requête de géométrie (« à froid ») construit un arbre de travail temporaire à partir du DOM et des styles courants, fige sa géométrie canonique dans un `FrozenLayoutTree` immuable et indépendant du DOM, puis ne conserve que ce dernier. Les lectures de géométrie ultérieures peuvent réutiliser cet arbre figé, même si la page a changé entre-temps. Les captures d'écran et les screencasts, eux, reconstruisent et remplacent systématiquement l'arbre figé, sans jamais réutiliser un ancien résultat de rendu.
+Le résultat de la mise en page est un instantané produit à la demande, pas un état maintenu en continu : la première requête de géométrie (« à froid ») construit un arbre de travail temporaire à partir du DOM et des styles courants, fige sa géométrie canonique dans un `FrozenLayoutTree` immuable et indépendant du DOM, puis ne conserve que ce dernier. Les lectures de géométrie ultérieures peuvent réutiliser cet arbre figé, même si la page a changé entre-temps. Les captures d'écran reconstruisent toujours et remplacent l'arbre figé. Chaque abonnement de screencast ne mémorise qu'un jeton opaque d'état visuel : un jeton inchangé supprime le travail, tandis qu'un changement produit une image fraîche. Les résultats de rendu ne sont jamais réutilisés.
 
 ## Architecture
 
@@ -208,7 +209,7 @@ Moli est un noyau de navigateur autonome — pas une surcouche posée sur Chromi
 - Taffy + Parley — mise en page des boîtes et du texte
 - AnyRender/Vello CPU, `usvg` et l'écosystème d'images Rust — rendu logiciel
 
-Le document et les styles n'ont qu'une seule source de vérité : le DOM natif, intégré à Stylo. Chaque véritable rafraîchissement crée un arbre de travail temporaire, produit et consomme au besoin un nouvel instantané de rendu, fige la géométrie finale des boîtes et des fragments dans un `FrozenLayoutTree` compact, puis élimine l'arbre de travail, les références de style, les caches de mise en page, les diagnostics et l'état de rendu. Les associations aux sources et les candidats au hit-testing sont dérivés de l'arbre figé au moment des requêtes. Il n'y a ici ni arbre de mise en page maintenu de façon incrémentale, ni graphe de dommages, ni liste d'affichage persistante, ni compositeur GPU, ni fenêtre persistante.
+Le document et les styles n'ont qu'une seule source de vérité : le DOM natif, intégré à Stylo. Chaque véritable rafraîchissement crée un arbre de travail temporaire, produit et consomme au besoin un nouvel instantané de rendu, fige la géométrie finale des boîtes et des fragments dans un `FrozenLayoutTree` compact, puis élimine l'arbre de travail, les références de style, les caches de mise en page, les diagnostics et l'état de rendu. Les jetons de screencast contiennent des métadonnées de génération, jamais des données de mise en page ou de rendu. Les associations aux sources et les candidats au hit-testing sont dérivés de l'arbre figé au moment des requêtes. Il n'y a ici ni arbre de mise en page maintenu de façon incrémentale, ni graphe de dommages, ni liste d'affichage persistante, ni compositeur GPU, ni fenêtre persistante.
 
 ## Données de test
 

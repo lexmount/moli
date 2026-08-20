@@ -5,6 +5,7 @@ use std::{
 };
 
 use moli_cookie_jar::StoredCookie;
+use moli_core::page::RendererVisualStateToken;
 use moli_core::{
     RendererOutputTransportMessage, page::RendererDocumentLifecycleMilestone,
     runtime::NavigationRuntimeConfig,
@@ -134,12 +135,14 @@ struct PageScreencastSchedule {
     registration: PageScreencastRegistration,
     interval: Duration,
     next_due_at: TokioInstant,
+    known_visual_state: Option<RendererVisualStateToken>,
 }
 
 pub(crate) struct ScheduledPageScreencastFrame {
     event: BackgroundProtocolEvent,
     session_id: Option<String>,
     generation: i32,
+    visual_state: RendererVisualStateToken,
 }
 
 fn page_screencast_interval(every_nth_frame: u32) -> Duration {
@@ -497,6 +500,7 @@ impl CdpScheduler {
                 registration,
                 interval,
                 next_due_at: now,
+                known_visual_state: None,
             },
         );
     }
@@ -553,10 +557,16 @@ impl CdpScheduler {
             .page_screencasts
             .iter()
             .filter(|(_, schedule)| schedule.next_due_at <= now)
-            .map(|(session_id, schedule)| (session_id.clone(), schedule.registration.clone()))
+            .map(|(session_id, schedule)| {
+                (
+                    session_id.clone(),
+                    schedule.registration.clone(),
+                    schedule.known_visual_state.clone(),
+                )
+            })
             .collect::<Vec<_>>();
         let mut pending = Vec::with_capacity(due.len());
-        for (session_id, registration) in due {
+        for (session_id, registration, known_visual_state) in due {
             match self.conn.page_screencast_subscription_status(&registration) {
                 PageScreencastSubscriptionStatus::Inactive => {
                     if self.page_screencast_schedule_matches(&session_id, registration.generation())
@@ -567,7 +577,10 @@ impl CdpScheduler {
                 PageScreencastSubscriptionStatus::CaptureInProgress
                 | PageScreencastSubscriptionStatus::AwaitingAck => {}
                 PageScreencastSubscriptionStatus::Ready => {
-                    match self.conn.start_page_screencast_frame_capture(&registration) {
+                    match self
+                        .conn
+                        .start_page_screencast_frame_capture(&registration, known_visual_state)
+                    {
                         PageScreencastCaptureStart::Pending(capture) => pending.push(capture),
                         PageScreencastCaptureStart::Retry => {
                             if let Some(schedule) = self.page_screencasts.get_mut(&session_id)
@@ -606,11 +619,23 @@ impl CdpScheduler {
             return None;
         }
         match completion {
-            PageScreencastCaptureCompletion::Frame(event) => Some(ScheduledPageScreencastFrame {
+            PageScreencastCaptureCompletion::Frame {
+                event,
+                visual_state,
+            } => Some(ScheduledPageScreencastFrame {
                 event,
                 session_id,
                 generation,
+                visual_state,
             }),
+            PageScreencastCaptureCompletion::Unchanged => {
+                let schedule = self
+                    .page_screencasts
+                    .get_mut(&session_id)
+                    .expect("matching screencast schedule must exist");
+                schedule.next_due_at = next_page_screencast_deadline(now, schedule.interval);
+                None
+            }
             PageScreencastCaptureCompletion::Retry => {
                 let schedule = self
                     .page_screencasts
@@ -631,11 +656,13 @@ impl CdpScheduler {
         &mut self,
         session_id: &Option<String>,
         generation: i32,
+        visual_state: RendererVisualStateToken,
         now: TokioInstant,
     ) {
         if let Some(schedule) = self.page_screencasts.get_mut(session_id)
             && schedule.registration.generation() == generation
         {
+            schedule.known_visual_state = Some(visual_state);
             schedule.next_due_at = next_page_screencast_deadline(now, schedule.interval);
         }
     }

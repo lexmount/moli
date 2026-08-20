@@ -588,6 +588,7 @@ async fn screenshot_and_screencast_paint_downloaded_svg_vectors() {
             optimize_for_speed: true,
             max_width: None,
             max_height: None,
+            known_visual_state: None,
         },
     )
     .await;
@@ -694,6 +695,7 @@ async fn capture_screenshot_encodes_jpeg_and_limits_device_dimensions() {
         optimize_for_speed: false,
         max_width: Some(5),
         max_height: Some(4),
+        known_visual_state: None,
     };
     let (reply, _) = page
         .run_async_command(RendererPageCommand::CaptureScreenshot(request))
@@ -762,6 +764,7 @@ async fn print_capture_uses_print_media_controls_backgrounds_and_restores_screen
             optimize_for_speed: false,
             max_width: None,
             max_height: None,
+            known_visual_state: None,
         },
     )
     .await;
@@ -780,6 +783,7 @@ async fn print_capture_uses_print_media_controls_backgrounds_and_restores_screen
             optimize_for_speed: false,
             max_width: None,
             max_height: None,
+            known_visual_state: None,
         },
     )
     .await;
@@ -842,6 +846,7 @@ async fn capture_screenshot_clip_and_full_document_keep_the_live_layout_viewport
             optimize_for_speed: false,
             max_width: None,
             max_height: None,
+            known_visual_state: None,
         },
     )
     .await;
@@ -865,6 +870,7 @@ async fn capture_screenshot_clip_and_full_document_keep_the_live_layout_viewport
             optimize_for_speed: true,
             max_width: None,
             max_height: None,
+            known_visual_state: None,
         },
     )
     .await;
@@ -923,6 +929,7 @@ async fn bounded_viewport_clip_keeps_root_controls_while_page_clip_omits_them() 
             optimize_for_speed: false,
             max_width: None,
             max_height: None,
+            known_visual_state: None,
         },
     )
     .await;
@@ -952,6 +959,7 @@ async fn bounded_viewport_clip_keeps_root_controls_while_page_clip_omits_them() 
             optimize_for_speed: false,
             max_width: None,
             max_height: None,
+            known_visual_state: None,
         },
     )
     .await;
@@ -983,6 +991,7 @@ async fn capture_screenshot_rejects_full_document_at_the_128k_css_boundary() {
         optimize_for_speed: false,
         max_width: None,
         max_height: None,
+        known_visual_state: None,
     };
 
     let error = match page
@@ -12727,6 +12736,7 @@ addEventListener("wheel", event => {
             optimize_for_speed: true,
             max_width: None,
             max_height: None,
+            known_visual_state: None,
         },
     )
     .await;

@@ -294,7 +294,7 @@ pub(crate) use self::page_context_cancel::{
 };
 pub use self::page_screenshot::{
     RendererCaptureScreenshotRequest, RendererScreenshotClip, RendererScreenshotFormat,
-    RendererScreenshotPurpose, RendererScreenshotRegion,
+    RendererScreenshotPurpose, RendererScreenshotRegion, RendererVisualStateToken,
 };
 pub(super) use self::page_state::RendererPageEntry;
 pub use self::page_state::RendererPageRecord;

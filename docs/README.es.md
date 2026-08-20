@@ -155,7 +155,8 @@ Lo que la mayoría de las tareas de automatización de navegador necesitan de ve
 | --- | --- |
 | Extraer HTML/Markdown, consultar el DOM, ejecutar JS, inspeccionar la red o el almacenamiento | Lee el estado del runtime del navegador directamente, sin disparar layout ni pintado |
 | Leer el bounding box de un elemento, comprobar coordenadas, enviar entradas por coordenadas | Calcula el layout y se queda solo con el árbol de layout congelado más reciente |
-| Capturar una pantalla o actualizar un screencast | Reconstruye a partir del DOM y los estilos actuales, sustituye el árbol congelado, renderiza un frame nuevo y lo descarta después de usarlo |
+| Capturar una pantalla | Reconstruye a partir del DOM y los estilos actuales, sustituye el árbol congelado, renderiza un frame nuevo y descarta su estado de pintado |
+| Sondear un screencast | Compara solo metadatos de generación; si el estado no ha cambiado no emite ningún frame, y si ha cambiado genera un frame nuevo |
 
 <p align="center">
   <a href="../assets/moli_ondemand_rendering_flow.svg">
@@ -195,7 +196,7 @@ En Moli, las operaciones caras del navegador hay que activarlas explícitamente:
 | `--image`, `--font`, `--audio`, `--video`, `--media`, `--text-track` | Activa por separado una familia concreta de recursos opcionales |
 | `--profile-dir`, `--http-cache-dir`, `--cookie-file` | Activa de forma selectiva la persistencia que necesite tu carga de trabajo |
 
-El resultado del layout es una instantánea tomada bajo demanda, no un estado que se mantiene todo el tiempo: la primera petición de geometría (cold start) construye un árbol de trabajo temporal a partir del DOM y los estilos actuales, congela su geometría canónica en un `FrozenLayoutTree` inmutable e independiente del DOM, y se queda solo con ese árbol, el más reciente. Las lecturas de geometría normales pueden reutilizarlo aunque la página haya cambiado entretanto; las capturas de pantalla y los screencasts, en cambio, siempre reconstruyen y sustituyen el árbol congelado, y nunca reutilizan resultados de pintado antiguos.
+El resultado del layout es una instantánea tomada bajo demanda, no un estado que se mantiene todo el tiempo: la primera petición de geometría (cold start) construye un árbol de trabajo temporal a partir del DOM y los estilos actuales, congela su geometría canónica en un `FrozenLayoutTree` inmutable e independiente del DOM, y se queda solo con ese árbol, el más reciente. Las lecturas de geometría normales pueden reutilizarlo aunque la página haya cambiado entretanto. Las capturas de pantalla siempre reconstruyen y sustituyen el árbol congelado. Cada suscripción de screencast solo conserva un token opaco del estado visual: un token sin cambios evita el trabajo, mientras que un cambio genera un frame nuevo. Los resultados de pintado nunca se reutilizan.
 
 ## Arquitectura
 
@@ -208,7 +209,7 @@ Moli es un motor de navegador independiente, no un wrapper de Chromium. Está co
 - Taffy + Parley — layout de cajas y de texto
 - AnyRender/Vello CPU, `usvg` y el ecosistema de imágenes de Rust — renderizado por software
 
-El documento y los estilos tienen una única fuente de verdad: la integración del DOM nativo con Stylo. Cada actualización real crea un árbol de trabajo temporal, genera y consume bajo demanda una nueva instantánea de pintado, congela la geometría final de cajas y fragmentos en un `FrozenLayoutTree` compacto, y después descarta el árbol de trabajo, las referencias de estilo, las cachés de layout, los diagnósticos y el estado de pintado. Los índices de origen y los candidatos de hit-test se derivan del árbol congelado en el momento de la consulta. No hay ningún árbol de layout mantenido de forma incremental, ni damage graph, ni display list retenida, ni compositor de GPU, ni ventana persistente.
+El documento y los estilos tienen una única fuente de verdad: la integración del DOM nativo con Stylo. Cada actualización real crea un árbol de trabajo temporal, genera y consume bajo demanda una nueva instantánea de pintado, congela la geometría final de cajas y fragmentos en un `FrozenLayoutTree` compacto, y después descarta el árbol de trabajo, las referencias de estilo, las cachés de layout, los diagnósticos y el estado de pintado. Los tokens de screencast contienen metadatos de generación, nunca datos de layout o pintado. Los índices de origen y los candidatos de hit-test se derivan del árbol congelado en el momento de la consulta. No hay ningún árbol de layout mantenido de forma incremental, ni damage graph, ni display list retenida, ni compositor de GPU, ni ventana persistente.
 
 ## Datos de las pruebas
 

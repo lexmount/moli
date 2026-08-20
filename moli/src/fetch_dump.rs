@@ -178,6 +178,7 @@ async fn render_pdf_dump_async(page: &mut Page) -> Result<Vec<u8>> {
             optimize_for_speed: false,
             max_width: None,
             max_height: None,
+            known_visual_state: None,
         },
         "pdf",
     )
@@ -216,6 +217,9 @@ async fn capture_page_raster(
         }
         RendererCaptureScreenshotReply::NoDocument => {
             bail!("--dump {dump_mode} requires a loaded HTML document")
+        }
+        RendererCaptureScreenshotReply::ScreencastUnchanged => {
+            bail!("--dump {dump_mode} returned an invalid screencast-only reply")
         }
     }
 }

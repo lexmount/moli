@@ -1,4 +1,10 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 use parking_lot::Mutex;
 
@@ -47,6 +53,7 @@ struct CssImageResourceKey {
 pub(super) struct CssImageResourceStore {
     inner: Arc<Mutex<CssImageResourceStoreInner>>,
     ready_by_request: ReadyImageResourceIndex,
+    paint_generation: Arc<AtomicU64>,
     #[cfg(test)]
     completion_notify: Arc<tokio::sync::Notify>,
 }
@@ -74,6 +81,7 @@ impl CssImageResourceStore {
         Self {
             inner: Arc::new(Mutex::new(CssImageResourceStoreInner::default())),
             ready_by_request,
+            paint_generation: Arc::new(AtomicU64::new(0)),
             #[cfg(test)]
             completion_notify: Arc::new(tokio::sync::Notify::new()),
         }
@@ -176,6 +184,7 @@ impl CssImageResourceStore {
         self.ready_by_request
             .insert(identity.request_key.clone(), &resource);
         slot.state = CssImageResourceState::Ready(resource);
+        self.paint_generation.fetch_add(1, Ordering::AcqRel);
         #[cfg(test)]
         self.completion_notify.notify_waiters();
         true
@@ -193,6 +202,7 @@ impl CssImageResourceStore {
             return false;
         }
         slot.state = CssImageResourceState::Failed;
+        self.paint_generation.fetch_add(1, Ordering::AcqRel);
         #[cfg(test)]
         self.completion_notify.notify_waiters();
         true
@@ -232,9 +242,16 @@ impl CssImageResourceStore {
             .slots
             .retain(|key, _| key.document_handle != document_handle);
         let removed = before - inner.slots.len();
+        if removed != 0 {
+            self.paint_generation.fetch_add(1, Ordering::AcqRel);
+        }
         drop(inner);
         self.ready_by_request.prune_dead();
         removed
+    }
+
+    pub(super) fn paint_generation(&self) -> u64 {
+        self.paint_generation.load(Ordering::Acquire)
     }
 
     #[cfg(test)]

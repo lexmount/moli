@@ -56,6 +56,88 @@ impl JsContextHost {
         self.layout_policy
     }
 
+    fn css_image_discovery_stamp(&self) -> super::layout_state::CssImageDiscoveryStamp {
+        super::layout_state::CssImageDiscoveryStamp::new(
+            self.dom_host().dom_version(),
+            self.style_engine
+                .computed_style_observation_generations(self.active_layout_document_handles()),
+            self.style_viewport(),
+        )
+    }
+
+    pub(crate) fn active_layout_document_handles(&self) -> Vec<DomHandle> {
+        let mut documents = vec![self.document_handle()];
+        documents.extend(
+            self.child_browsing_context_handles_in_document_order()
+                .into_iter()
+                .filter(|frame| self.child_browsing_context_host_is_active(*frame))
+                .filter_map(|frame| self.child_browsing_context_document_handle(frame)),
+        );
+        documents.sort_by_key(|document| document.index());
+        documents.dedup();
+        documents
+    }
+
+    pub(crate) fn css_image_discovery_needed_for_paint(&self) -> bool {
+        let stamp = self.css_image_discovery_stamp();
+        !self
+            .document_layout_state
+            .borrow()
+            .css_image_discovery_is_current(stamp)
+    }
+
+    pub(crate) fn publish_css_image_discovery_for_paint(&mut self) {
+        let stamp = self.css_image_discovery_stamp();
+        self.document_layout_state
+            .get_mut()
+            .publish_css_image_discovery(stamp);
+    }
+
+    pub(crate) fn paint_resource_generations(
+        &self,
+    ) -> super::layout_state::PaintResourceGenerations {
+        let (html_images, css_images) = self.image_paint_generations();
+        super::layout_state::PaintResourceGenerations {
+            html_images,
+            css_images,
+            canvas: self.canvas_paint_generation(),
+        }
+    }
+
+    pub(crate) fn visual_state_generation(&self) -> u64 {
+        self.document_layout_state
+            .borrow()
+            .visual_state_generation()
+    }
+
+    pub(crate) fn visual_state_token(
+        &self,
+        document: crate::runtime::RendererDocumentLifecycleIdentity,
+        viewport: moli_layout::PaintViewport,
+    ) -> crate::runtime::RendererVisualStateToken {
+        let resources = self.paint_resource_generations();
+        crate::runtime::RendererVisualStateToken::new(
+            document,
+            self.dom_host().dom_version(),
+            self.style_engine
+                .computed_style_observation_generations(self.active_layout_document_handles()),
+            self.visual_state_generation(),
+            (
+                resources.html_images,
+                resources.css_images,
+                resources.canvas,
+            ),
+            viewport,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn css_image_discovery_count_for_test(&self) -> u64 {
+        self.document_layout_state
+            .borrow()
+            .css_image_discovery_count()
+    }
+
     pub(crate) fn layout_document_for_source(&self, source: DomHandle) -> Option<DomHandle> {
         self.dom_host().owner_document_handle(source)
     }

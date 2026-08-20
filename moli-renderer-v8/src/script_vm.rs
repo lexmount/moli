@@ -2450,6 +2450,16 @@ impl ScriptVm {
         .map_err(anyhow::Error::new)
     }
 
+    pub(super) fn visual_state_token(
+        &self,
+        document: crate::runtime::RendererDocumentLifecycleIdentity,
+        viewport: moli_layout::PaintViewport,
+    ) -> crate::runtime::RendererVisualStateToken {
+        self._context_host
+            .borrow()
+            .visual_state_token(document, viewport)
+    }
+
     fn with_fresh_layout_pass<T>(
         &mut self,
         request: moli_layout::LayoutPassRequest,
@@ -2461,9 +2471,8 @@ impl ScriptVm {
         // the guard is entered, layout performs no JS, event-loop, observer,
         // or resource completion work and owns no state beyond this call.
         self.reconcile_document_web_fonts_for_layout();
-        if request.requests_paint() {
-            self.reconcile_document_css_images_for_paint();
-        }
+        let discovered_css_images =
+            request.requests_paint() && self.reconcile_document_css_images_for_paint();
         let (document, result) = {
             let context_host = self._context_host.borrow();
             let document = context_host.document_handle();
@@ -2486,6 +2495,11 @@ impl ScriptVm {
             // the completed frame; the next refresh retries from its newer
             // sampled geometry.
             tracing::warn!(?error, "failed to admit lazy images after layout refresh");
+        }
+        if discovered_css_images {
+            self._context_host
+                .borrow_mut()
+                .publish_css_image_discovery_for_paint();
         }
         result
     }
@@ -2518,6 +2532,13 @@ impl ScriptVm {
         self._context_host
             .borrow()
             .css_image_resource_observability_for_test()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn css_image_discovery_count_for_test(&self) -> u64 {
+        self._context_host
+            .borrow()
+            .css_image_discovery_count_for_test()
     }
 
     #[cfg(test)]
@@ -2599,7 +2620,7 @@ impl ScriptVm {
         self.start_stylesheet_subresource_fetches(bound);
     }
 
-    fn reconcile_document_css_images_for_paint(&mut self) {
+    fn reconcile_document_css_images_for_paint(&mut self) -> bool {
         let image_fetch_enabled = self
             .document_runtime
             .current_document_resource_loader()
@@ -2615,17 +2636,27 @@ impl ScriptVm {
                 .layout_policy()
                 .uses_real_layout()
         {
-            return;
+            return false;
         }
         let resources = {
             let host = self._context_host.borrow();
-            host.dom_host()
-                .document_element_handle()
-                .map(|root| crate::layout_renderer::current_native_css_image_resources(&host, root))
-                .unwrap_or_default()
+            if !host.css_image_discovery_needed_for_paint() {
+                return false;
+            }
+            host.active_layout_document_handles()
+                .into_iter()
+                .filter_map(|document| {
+                    host.dom_host()
+                        .dom()
+                        .document_element_handle_for_document(document)
+                })
+                .flat_map(|root| {
+                    crate::layout_renderer::current_native_css_image_resources(&host, root)
+                })
+                .collect::<Vec<_>>()
         };
         if resources.is_empty() {
-            return;
+            return true;
         }
         let bound = {
             let mut host = self._context_host.borrow_mut();
@@ -2638,6 +2669,7 @@ impl ScriptVm {
                 .collect::<Vec<_>>()
         };
         self.start_stylesheet_subresource_fetches(bound);
+        true
     }
 
     pub(crate) fn observable_geometry_batch_for_current_document(

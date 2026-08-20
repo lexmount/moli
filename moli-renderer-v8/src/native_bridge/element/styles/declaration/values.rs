@@ -84,14 +84,22 @@ impl StyleComputationContext {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct StyloComputedStyleInputKey {
     source_document: Option<DomHandle>,
-    required_shadow_roots: Vec<(DomHandle, bool)>,
+    tree_scope_roots: Vec<DomHandle>,
+}
+
+#[cfg(debug_assertions)]
+#[derive(Clone, Copy)]
+struct ComputedStyleReadInvariant {
+    dom_version: u64,
+    source_set_generation: u64,
+    retained_style_system_generation: u64,
 }
 
 /// Prepared style inputs shared by one synchronous rendered-state observation.
 ///
 /// The scope never crosses a JavaScript callback, so DOM and stylesheet
-/// mutations cannot occur between reads. Distinct document and shadow-tree
-/// contexts still receive distinct immutable input snapshots.
+/// mutations cannot occur between reads. Each Document receives one immutable
+/// input snapshot containing its complete connected TreeScope universe.
 pub(crate) struct ComputedStyleReadScope<'a> {
     runtime: &'a JsContextHost,
     context: StyleComputationContext,
@@ -105,6 +113,8 @@ pub(crate) struct ComputedStyleReadScope<'a> {
         StyloComputedStyleInputKey,
         Rc<StyloPreparedComputedStyleInputs>,
     )>,
+    #[cfg(debug_assertions)]
+    invariants: Vec<(DomHandle, ComputedStyleReadInvariant)>,
 }
 
 impl<'a> ComputedStyleReadScope<'a> {
@@ -142,6 +152,8 @@ impl<'a> ComputedStyleReadScope<'a> {
             additional_drained_documents: Vec::new(),
             primary_input: None,
             additional_inputs: Vec::new(),
+            #[cfg(debug_assertions)]
+            invariants: Vec::new(),
         }
     }
 
@@ -165,8 +177,8 @@ impl<'a> ComputedStyleReadScope<'a> {
                 );
         }
 
-        let input_key = stylo_computed_style_input_key(self.runtime, handle);
-        let prepared_inputs = self.prepared_inputs(input_key);
+        let source_document = stylesheet_source_document_for_handle(self.runtime, handle);
+        let prepared_inputs = self.prepared_inputs(source_document);
         let stylo_style = self
             .runtime
             .computed_style_snapshot_from_stylo_with_prepared_inputs(
@@ -174,6 +186,8 @@ impl<'a> ComputedStyleReadScope<'a> {
                 prepared_inputs.as_ref(),
                 read_document,
             );
+        #[cfg(debug_assertions)]
+        self.verify_stable_style_world_after_read(source_document);
         ComputedStyleRead {
             runtime: self.runtime,
             handle,
@@ -185,21 +199,22 @@ impl<'a> ComputedStyleReadScope<'a> {
 
     fn prepared_inputs(
         &mut self,
-        input_key: StyloComputedStyleInputKey,
+        source_document: Option<DomHandle>,
     ) -> Rc<StyloPreparedComputedStyleInputs> {
         if let Some((prepared_key, inputs)) = self.primary_input.as_ref()
-            && prepared_key == &input_key
+            && prepared_key.source_document == source_document
         {
             return Rc::clone(inputs);
         }
         if let Some((_, inputs)) = self
             .additional_inputs
             .iter()
-            .find(|(prepared_key, _)| prepared_key == &input_key)
+            .find(|(prepared_key, _)| prepared_key.source_document == source_document)
         {
             return Rc::clone(inputs);
         }
 
+        let input_key = stylo_computed_style_input_key_for_document(self.runtime, source_document);
         let inputs = stylo_prepared_computed_style_inputs_for_observation_scope(
             self.runtime,
             &input_key,
@@ -211,6 +226,38 @@ impl<'a> ComputedStyleReadScope<'a> {
             self.additional_inputs.push((input_key, Rc::clone(&inputs)));
         }
         inputs
+    }
+
+    #[cfg(debug_assertions)]
+    fn verify_stable_style_world_after_read(&mut self, source_document: Option<DomHandle>) {
+        let Some(document) = source_document else {
+            return;
+        };
+        let (dom_version, source_set_generation, retained_style_system_generation) =
+            self.runtime.computed_style_read_invariant_state(document);
+        let current = ComputedStyleReadInvariant {
+            dom_version,
+            source_set_generation,
+            retained_style_system_generation,
+        };
+        let Some((_, previous)) = self
+            .invariants
+            .iter_mut()
+            .find(|(candidate, _)| *candidate == document)
+        else {
+            self.invariants.push((document, current));
+            return;
+        };
+        if previous.dom_version == current.dom_version
+            && previous.source_set_generation == current.source_set_generation
+        {
+            debug_assert_eq!(
+                current.retained_style_system_generation, previous.retained_style_system_generation,
+                "one ComputedStyleReadScope rebuilt the retained style system without a DOM or style-source mutation",
+            );
+        } else {
+            *previous = current;
+        }
     }
 }
 
@@ -1088,44 +1135,6 @@ fn document_scope_stylesheet_sources(
     sources
 }
 
-fn shadow_root_ancestors_for_part_exposure(
-    runtime: &JsContextHost,
-    handle: DomHandle,
-) -> Vec<DomHandle> {
-    if runtime.dom_host().get_attribute(handle, "part").is_none() {
-        return Vec::new();
-    }
-    let mut roots = Vec::new();
-    let mut current = runtime.dom_host().containing_shadow_root(handle);
-    while let Some(root) = current {
-        roots.push(root);
-        let Some(host) = runtime.dom_host().shadow_root_host(root) else {
-            break;
-        };
-        current = runtime.dom_host().containing_shadow_root(host);
-    }
-    roots
-}
-
-fn shadow_roots_for_assigned_slot_chain(
-    runtime: &JsContextHost,
-    handle: DomHandle,
-) -> Vec<DomHandle> {
-    let mut roots = Vec::new();
-    let mut visited = HashSet::new();
-    let mut current = runtime.dom_host().assigned_slot_for_node(handle);
-    while let Some(slot) = current {
-        if !visited.insert(slot) {
-            break;
-        }
-        if let Some(root) = runtime.dom_host().containing_shadow_root(slot) {
-            roots.push(root);
-        }
-        current = runtime.dom_host().assigned_slot_for_node(slot);
-    }
-    roots
-}
-
 fn shadow_stylesheet_sources(
     runtime: &JsContextHost,
     root: DomHandle,
@@ -1149,60 +1158,6 @@ fn shadow_stylesheet_sources(
     sources
 }
 
-fn push_stylo_computed_style_shadow_root(
-    roots: &mut Vec<(DomHandle, bool)>,
-    root: DomHandle,
-    include_empty: bool,
-) {
-    if let Some((_, existing_include_empty)) =
-        roots.iter_mut().find(|(existing, _)| *existing == root)
-    {
-        *existing_include_empty |= include_empty;
-    } else {
-        roots.push((root, include_empty));
-    }
-}
-
-fn stylo_computed_style_required_shadow_roots(
-    runtime: &JsContextHost,
-    handle: DomHandle,
-) -> Vec<(DomHandle, bool)> {
-    let mut roots = Vec::<(DomHandle, bool)>::new();
-    if let Some(root) = runtime.dom_host().containing_shadow_root(handle) {
-        push_stylo_computed_style_shadow_root(&mut roots, root, true);
-    }
-    for root in shadow_root_ancestors_for_part_exposure(runtime, handle) {
-        push_stylo_computed_style_shadow_root(&mut roots, root, true);
-    }
-    if let Some(root) = runtime.dom_host().shadow_root_handle(handle) {
-        push_stylo_computed_style_shadow_root(&mut roots, root, false);
-    }
-    for root in shadow_roots_for_assigned_slot_chain(runtime, handle) {
-        push_stylo_computed_style_shadow_root(&mut roots, root, false);
-    }
-    roots
-}
-
-fn stylo_computed_style_input_shadow_roots(
-    runtime: &JsContextHost,
-    source_document: Option<DomHandle>,
-    context: StyleComputationContext,
-    required_roots: &[(DomHandle, bool)],
-) -> Vec<(DomHandle, bool)> {
-    let mut roots = Vec::new();
-    if context.read_document.is_none()
-        && let Some(document) = source_document
-    {
-        for root in connected_shadow_roots_for_document(runtime.dom_host(), document) {
-            push_stylo_computed_style_shadow_root(&mut roots, root, false);
-        }
-    }
-    for (root, include_empty) in required_roots {
-        push_stylo_computed_style_shadow_root(&mut roots, *root, *include_empty);
-    }
-    roots
-}
-
 fn stylo_computed_style_inputs(
     runtime: &JsContextHost,
     handle: DomHandle,
@@ -1216,9 +1171,21 @@ fn stylo_computed_style_input_key(
     runtime: &JsContextHost,
     handle: DomHandle,
 ) -> StyloComputedStyleInputKey {
+    stylo_computed_style_input_key_for_document(
+        runtime,
+        stylesheet_source_document_for_handle(runtime, handle),
+    )
+}
+
+fn stylo_computed_style_input_key_for_document(
+    runtime: &JsContextHost,
+    source_document: Option<DomHandle>,
+) -> StyloComputedStyleInputKey {
     StyloComputedStyleInputKey {
-        source_document: stylesheet_source_document_for_handle(runtime, handle),
-        required_shadow_roots: stylo_computed_style_required_shadow_roots(runtime, handle),
+        source_document,
+        tree_scope_roots: source_document
+            .map(|document| connected_shadow_roots_for_document(runtime.dom_host(), document))
+            .unwrap_or_default(),
     }
 }
 
@@ -1247,11 +1214,10 @@ fn stylo_prepared_computed_style_inputs_for_observation_scope(
     let source_document = key.source_document;
     let (script_custom_property_base_url, environment) =
         stylo_computed_style_input_environment(runtime, source_document);
-    if key.required_shadow_roots.is_empty()
-        && let Some(document) = source_document
-    {
+    if let Some(document) = source_document {
         let cache_key = StyloDocumentComputedStyleInputCacheKey::new(
             context.read_document,
+            &key.tree_scope_roots,
             runtime.document_url(),
             context.viewport,
             environment,
@@ -1283,14 +1249,12 @@ fn cache_stylo_computed_style_inputs_after_observation(
     context: StyleComputationContext,
     inputs: &Rc<StyloPreparedComputedStyleInputs>,
 ) {
-    if !key.required_shadow_roots.is_empty() {
-        return;
-    }
     let Some(document) = key.source_document else {
         return;
     };
     let cache_key = StyloDocumentComputedStyleInputCacheKey::new(
         context.read_document,
+        &key.tree_scope_roots,
         runtime.document_url(),
         context.viewport,
         inputs.inputs().environment,
@@ -1339,16 +1303,8 @@ fn stylo_computed_style_inputs_with_environment(
             .map(|document| document.quirks_mode())
             .unwrap_or(style::context::QuirksMode::NoQuirks),
     };
-    for (root, include_empty) in stylo_computed_style_input_shadow_roots(
-        runtime,
-        source_document,
-        context,
-        &key.required_shadow_roots,
-    ) {
+    for root in key.tree_scope_roots.iter().copied() {
         let sources = shadow_stylesheet_sources(runtime, root, context);
-        if sources.is_empty() && !include_empty {
-            continue;
-        }
         inputs.shadow_stylesheet_sources.push((root, sources));
     }
     Rc::new(inputs)
@@ -1362,43 +1318,6 @@ fn connected_shadow_roots_for_document(host: &DomHost, document: DomHandle) -> V
         .collect::<Vec<_>>();
     roots.sort_by_key(|root| root.index());
     roots
-}
-
-#[cfg(test)]
-fn computed_style_related_shadow_roots(host: &DomHost, handle: DomHandle) -> Vec<DomHandle> {
-    let mut roots = Vec::new();
-    if host.node(handle).is_none() {
-        return roots;
-    }
-
-    if host.containing_shadow_root(handle).is_none() {
-        for binding in
-            host.snapshot_connected_shadow_root_bindings_related_to_light_tree_handle(handle)
-        {
-            push_unique_shadow_root(&mut roots, binding.root);
-        }
-    }
-
-    let mut current = Some(handle);
-    while let Some(candidate) = current {
-        if let Some(root) = host.shadow_root_handle(candidate) {
-            push_unique_shadow_root(&mut roots, root);
-        }
-        let Some(root) = host.containing_shadow_root(candidate) else {
-            break;
-        };
-        push_unique_shadow_root(&mut roots, root);
-        current = host.shadow_root_host(root);
-    }
-    roots.sort_by_key(|root| root.index());
-    roots
-}
-
-#[cfg(test)]
-fn push_unique_shadow_root(roots: &mut Vec<DomHandle>, root: DomHandle) {
-    if !roots.contains(&root) {
-        roots.push(root);
-    }
 }
 
 fn stylo_computed_style_value(
@@ -7778,9 +7697,8 @@ mod tests {
     use super::{
         KEYFRAME_NESTING_DEPTH_LIMIT, animation_shorthand_names, box_shorthand_component,
         collect_custom_functions_from_css, compress_box_shorthand_value,
-        computed_style_related_shadow_roots, connected_shadow_roots_for_document,
-        custom_function_container_rule_texts, format_css_number,
-        keyframe_has_supported_animation_values, keyframe_property_values,
+        connected_shadow_roots_for_document, custom_function_container_rule_texts,
+        format_css_number, keyframe_has_supported_animation_values, keyframe_property_values,
         normalize_computed_color_functions, normalize_css_integer_token, normalize_style_value,
         simple_var_function_parts,
     };
@@ -7814,36 +7732,6 @@ mod tests {
     }
 
     #[test]
-    fn computed_style_related_shadow_roots_excludes_sibling_roots_for_light_target() {
-        let mut host = test_host();
-        let document = host.document_handle();
-        let target = host.create_element("main");
-        let related_host = host.create_element("section");
-        let sibling_host = host.create_element("aside");
-
-        connect_for_test(&mut host, document, target);
-        connect_for_test(&mut host, document, related_host);
-        connect_for_test(&mut host, document, sibling_host);
-
-        let related_root = host
-            .attach_shadow_root(related_host, "open")
-            .expect("related host should accept shadow root");
-        let sibling_root = host
-            .attach_shadow_root(sibling_host, "open")
-            .expect("sibling host should accept shadow root");
-
-        assert_eq!(computed_style_related_shadow_roots(&host, target), vec![]);
-        assert_eq!(
-            computed_style_related_shadow_roots(&host, related_host),
-            vec![related_root]
-        );
-        assert_eq!(
-            computed_style_related_shadow_roots(&host, document),
-            vec![related_root, sibling_root]
-        );
-    }
-
-    #[test]
     fn connected_shadow_roots_for_document_excludes_child_document_roots() {
         let mut host = test_host();
         let document = host.document_handle();
@@ -7874,34 +7762,6 @@ mod tests {
             connected_shadow_roots_for_document(&host, child_document),
             vec![child_root]
         );
-    }
-
-    #[test]
-    fn computed_style_related_shadow_roots_keeps_nested_shadow_chain() {
-        let mut host = test_host();
-        let document = host.document_handle();
-        let outer_host = host.create_element("section");
-        let inner_host = host.create_element("article");
-        let target = host.create_element("span");
-        let unrelated_host = host.create_element("aside");
-
-        connect_for_test(&mut host, document, outer_host);
-        connect_for_test(&mut host, document, unrelated_host);
-        let outer_root = host
-            .attach_shadow_root(outer_host, "open")
-            .expect("outer host should accept shadow root");
-        connect_for_test(&mut host, outer_root, inner_host);
-        let inner_root = host
-            .attach_shadow_root(inner_host, "open")
-            .expect("inner host should accept shadow root");
-        connect_for_test(&mut host, inner_root, target);
-        let unrelated_root = host
-            .attach_shadow_root(unrelated_host, "open")
-            .expect("unrelated host should accept shadow root");
-
-        let roots = computed_style_related_shadow_roots(&host, target);
-        assert_eq!(roots, vec![outer_root, inner_root]);
-        assert!(!roots.contains(&unrelated_root));
     }
 
     #[test]
