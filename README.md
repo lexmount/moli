@@ -64,6 +64,21 @@ On Windows, run in PowerShell:
 irm https://github.com/lexmount/moli/releases/latest/download/moli-installer.ps1 | iex
 ```
 
+### Nix
+
+Run Moli without installing it:
+
+```sh
+nix run github:lexmount/moli -- fetch --dump markdown https://example.com
+```
+
+Build it, or enter a shell with the toolchain this repository needs:
+
+```sh
+nix build github:lexmount/moli
+nix develop github:lexmount/moli
+```
+
 ## Showcase
 
 <p align="center">
