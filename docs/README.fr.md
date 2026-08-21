@@ -268,6 +268,15 @@ Voici les limites actuellement conservées de façon délibérée :
 
 Les chemins de protocole non pris en charge renvoient toujours une erreur explicite : Moli ne fait jamais semblant qu'une action du navigateur, un événement, une observation réseau ou un résultat visuel a eu lieu.
 
+## Historique des stars
+
+Généré chaque heure à partir de la chronologie des stars par [lexmount/moli-metrics](https://github.com/lexmount/moli-metrics).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/lexmount/moli-metrics/main/assets/star-history-dark.svg">
+  <img alt="Historique des stars de lexmount/moli" src="https://raw.githubusercontent.com/lexmount/moli-metrics/main/assets/star-history.svg" width="100%">
+</picture>
+
 ## Licence
 
 Sauf mention contraire dans un fichier ou un répertoire donné, Moli est disponible, au choix, sous [licence Apache 2.0](../LICENSE-APACHE) ou sous [licence MIT](../LICENSE-MIT). Les composants et fixtures tiers sous licence distincte restent soumis à leurs propres licences et mentions.
