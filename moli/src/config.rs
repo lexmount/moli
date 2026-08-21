@@ -299,7 +299,7 @@ pub fn response_wait_criteria_from_args(
 ) -> SubresourceResponseWaitCriteria {
     SubresourceResponseWaitCriteria {
         url_contains: args.wait_response_url.clone(),
-        body_contains: args
+        body_regex: args
             .wait_response_body
             .as_ref()
             .map(|arg| arg.regex.clone()),

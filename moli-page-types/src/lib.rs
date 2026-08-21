@@ -1927,15 +1927,15 @@ fn configure_secure_subresource_response_body_spool_file_options(_options: &mut 
 #[derive(Debug, Clone, Default)]
 pub struct SubresourceResponseWaitCriteria {
     pub url_contains: Option<String>,
-    pub body_contains: Option<Regex>,
+    pub body_regex: Option<Regex>,
     pub json_path_equals: Option<SubresourceJsonPathEquals>,
 }
 
 impl PartialEq for SubresourceResponseWaitCriteria {
     fn eq(&self, other: &Self) -> bool {
         self.url_contains == other.url_contains
-            && self.body_contains.as_ref().map(Regex::as_str)
-                == other.body_contains.as_ref().map(Regex::as_str)
+            && self.body_regex.as_ref().map(Regex::as_str)
+                == other.body_regex.as_ref().map(Regex::as_str)
             && self.json_path_equals == other.json_path_equals
     }
 }
@@ -1944,9 +1944,7 @@ impl Eq for SubresourceResponseWaitCriteria {}
 
 impl SubresourceResponseWaitCriteria {
     pub fn is_empty(&self) -> bool {
-        self.url_contains.is_none()
-            && self.body_contains.is_none()
-            && self.json_path_equals.is_none()
+        self.url_contains.is_none() && self.body_regex.is_none() && self.json_path_equals.is_none()
     }
 
     /// Compatibility matcher for diagnostic surfaces that prefer best-effort
@@ -1981,18 +1979,17 @@ impl SubresourceResponseWaitCriteria {
             ..
         } = record.outcome()
         else {
-            return Ok(self.body_contains.is_none() && self.json_path_equals.is_none());
+            return Ok(self.body_regex.is_none() && self.json_path_equals.is_none());
         };
 
-        let response_body_text = if self.body_contains.is_some() || self.json_path_equals.is_some()
-        {
+        let response_body_text = if self.body_regex.is_some() || self.json_path_equals.is_some() {
             Some(response_body.try_text()?)
         } else {
             None
         };
 
-        if let Some(needle) = self.body_contains.as_ref()
-            && !needle.is_match(response_body_text.as_deref().unwrap_or_default())
+        if let Some(regex) = self.body_regex.as_ref()
+            && !regex.is_match(response_body_text.as_deref().unwrap_or_default())
         {
             return Ok(false);
         }
@@ -4078,7 +4075,7 @@ mod tests {
         );
         let criteria = SubresourceResponseWaitCriteria {
             url_contains: None,
-            body_contains: Some(Regex::new("missing").unwrap()),
+            body_regex: Some(Regex::new("missing").unwrap()),
             json_path_equals: None,
         };
         assert!(
@@ -4115,14 +4112,14 @@ mod tests {
 
         let criteria = SubresourceResponseWaitCriteria {
             url_contains: None,
-            body_contains: Some(Regex::new(r"order #\d+ ready").unwrap()),
+            body_regex: Some(Regex::new(r"order #\d+ ready").unwrap()),
             json_path_equals: None,
         };
         assert!(criteria.try_matches(&record).is_ok_and(|matches| matches));
 
         let non_matching = SubresourceResponseWaitCriteria {
             url_contains: None,
-            body_contains: Some(Regex::new(r"^order #\d{3} ready$").unwrap()),
+            body_regex: Some(Regex::new(r"^order #\d{3} ready$").unwrap()),
             json_path_equals: None,
         };
         assert!(
