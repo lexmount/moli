@@ -9,8 +9,8 @@ use std::{
 
 use moli::cli::{
     Cli, Commands, CommonArgs, DumpFormat, FetchArgs, FetchWaitUntil, LogFormat, LogLevel,
-    RequestHeaderArg, ResponseJsonPathArg, ServeArgs, StripModeChoice, StripOptions,
-    WebBotAuthProfileChoice, normalize_args_for_compat,
+    RequestHeaderArg, ResponseBodyRegexArg, ResponseJsonPathArg, ServeArgs, StripModeChoice,
+    StripOptions, WebBotAuthProfileChoice, normalize_args_for_compat,
 };
 use moli::config::AppConfig;
 use moli_browser_profile::BrowserProfilePaths;
@@ -843,13 +843,37 @@ fn parses_fetch_response_wait_flags() {
         args.wait_response_url.as_deref(),
         Some("mtop.taobao.idle.pc.detail")
     );
-    assert_eq!(args.wait_response_body.as_deref(), Some("SUCCESS"));
+    assert_eq!(
+        args.wait_response_body
+            .as_ref()
+            .map(ResponseBodyRegexArg::pattern),
+        Some("SUCCESS")
+    );
     assert_eq!(
         args.wait_response_json,
         Some(ResponseJsonPathArg {
             path: vec!["data".to_owned(), "url".to_owned()],
             expected: "/item/42".to_owned(),
         })
+    );
+}
+
+#[test]
+fn rejects_invalid_wait_response_body_regex() {
+    let error = Cli::try_parse_from(normalize_args_for_compat([
+        "moli",
+        "fetch",
+        "--wait-response-body",
+        "[",
+        "https://example.com",
+    ]))
+    .unwrap_err();
+
+    assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+    assert!(
+        error
+            .to_string()
+            .contains("invalid --wait-response-body regex")
     );
 }
 

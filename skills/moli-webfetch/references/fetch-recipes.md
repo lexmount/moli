@@ -46,7 +46,7 @@ a better completion signal:
 - `--wait-script-file <path>`: use a reusable or multiline condition. It is
   mutually exclusive with `--wait-script`.
 - `--wait-response-url <substring>`: wait for an application request by URL.
-- `--wait-response-body <substring>`: require text in that response.
+- `--wait-response-body <regex>`: require text matching the regex in that response.
 - `--wait-response-json <path=value>`: require a JSON field value. All supplied
   response criteria must match one response.
 - `--delay-ms <ms>`: use only when the site has no observable readiness signal.

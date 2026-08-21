@@ -1,6 +1,7 @@
 use std::{ffi::OsString, num::NonZeroU32};
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use regex::Regex;
 
 const FETCH_INFER_FLAGS: &[&str] = &[
     "--dump",
@@ -131,8 +132,10 @@ pub struct FetchArgs {
     #[arg(long)]
     pub wait_response_url: Option<String>,
 
-    #[arg(long)]
-    pub wait_response_body: Option<String>,
+    /// Wait for a response whose body matches this regex. An invalid regex
+    /// fails the fetch command immediately.
+    #[arg(long, value_parser = parse_response_body_regex)]
+    pub wait_response_body: Option<ResponseBodyRegexArg>,
 
     #[arg(long, value_parser = parse_response_json_path_arg)]
     pub wait_response_json: Option<ResponseJsonPathArg>,
@@ -202,6 +205,31 @@ fn parse_response_json_path_arg(raw: &str) -> Result<ResponseJsonPathArg, String
         path: segments,
         expected: raw[separator + 1..].to_owned(),
     })
+}
+
+#[derive(Debug, Clone)]
+pub struct ResponseBodyRegexArg {
+    pub regex: Regex,
+}
+
+impl ResponseBodyRegexArg {
+    pub fn pattern(&self) -> &str {
+        self.regex.as_str()
+    }
+}
+
+impl PartialEq for ResponseBodyRegexArg {
+    fn eq(&self, other: &Self) -> bool {
+        self.regex.as_str() == other.regex.as_str()
+    }
+}
+
+impl Eq for ResponseBodyRegexArg {}
+
+fn parse_response_body_regex(raw: &str) -> Result<ResponseBodyRegexArg, String> {
+    Regex::new(raw)
+        .map(|regex| ResponseBodyRegexArg { regex })
+        .map_err(|error| format!("invalid --wait-response-body regex: {error}"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

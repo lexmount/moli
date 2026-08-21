@@ -27,6 +27,7 @@ use std::{
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 
 use parking_lot::Mutex;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use url::Url;
@@ -1923,12 +1924,23 @@ fn configure_secure_subresource_response_body_spool_file_options(options: &mut O
 #[cfg(not(unix))]
 fn configure_secure_subresource_response_body_spool_file_options(_options: &mut OpenOptions) {}
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default)]
 pub struct SubresourceResponseWaitCriteria {
     pub url_contains: Option<String>,
-    pub body_contains: Option<String>,
+    pub body_contains: Option<Regex>,
     pub json_path_equals: Option<SubresourceJsonPathEquals>,
 }
+
+impl PartialEq for SubresourceResponseWaitCriteria {
+    fn eq(&self, other: &Self) -> bool {
+        self.url_contains == other.url_contains
+            && self.body_contains.as_ref().map(Regex::as_str)
+                == other.body_contains.as_ref().map(Regex::as_str)
+            && self.json_path_equals == other.json_path_equals
+    }
+}
+
+impl Eq for SubresourceResponseWaitCriteria {}
 
 impl SubresourceResponseWaitCriteria {
     pub fn is_empty(&self) -> bool {
@@ -1979,11 +1991,8 @@ impl SubresourceResponseWaitCriteria {
             None
         };
 
-        if let Some(needle) = self.body_contains.as_deref()
-            && !response_body_text
-                .as_deref()
-                .unwrap_or_default()
-                .contains(needle)
+        if let Some(needle) = self.body_contains.as_ref()
+            && !needle.is_match(response_body_text.as_deref().unwrap_or_default())
         {
             return Ok(false);
         }
@@ -4069,7 +4078,7 @@ mod tests {
         );
         let criteria = SubresourceResponseWaitCriteria {
             url_contains: None,
-            body_contains: Some("missing".to_owned()),
+            body_contains: Some(Regex::new("missing").unwrap()),
             json_path_equals: None,
         };
         assert!(
@@ -4079,6 +4088,47 @@ mod tests {
         assert!(
             !criteria.diagnostic_matches(&record),
             "diagnostic compatibility matcher should degrade unreadable body to no match"
+        );
+    }
+
+    #[test]
+    fn body_wait_criteria_matches_response_body_as_regex() {
+        let record = SubresourceNetworkRecord::success_with_body(
+            None,
+            Url::parse("https://example.test/page").unwrap(),
+            Url::parse("https://example.test/api").unwrap(),
+            "GET".to_owned(),
+            Vec::new(),
+            None,
+            SubresourceResourceType::Fetch,
+            None,
+            Vec::new(),
+            Url::parse("https://example.test/api").unwrap(),
+            200,
+            vec![("content-type".to_owned(), "text/plain".to_owned())],
+            SubresourceResponseBody::from_text_and_bytes(
+                "order #42 ready".to_owned(),
+                b"order #42 ready".to_vec(),
+            ),
+            Vec::new(),
+        );
+
+        let criteria = SubresourceResponseWaitCriteria {
+            url_contains: None,
+            body_contains: Some(Regex::new(r"order #\d+ ready").unwrap()),
+            json_path_equals: None,
+        };
+        assert!(criteria.try_matches(&record).is_ok_and(|matches| matches));
+
+        let non_matching = SubresourceResponseWaitCriteria {
+            url_contains: None,
+            body_contains: Some(Regex::new(r"^order #\d{3} ready$").unwrap()),
+            json_path_equals: None,
+        };
+        assert!(
+            non_matching
+                .try_matches(&record)
+                .is_ok_and(|matches| !matches)
         );
     }
 

@@ -15,6 +15,7 @@ moli-fetch = { path = "../moli-fetch" }
 moli-web-mime = { path = "../moli-web-mime" }
 http-auth = { version = "0.1.10", default-features = false }
 parking_lot = "0.12"
+regex = "1.12.3"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 url = "2.5.7"
