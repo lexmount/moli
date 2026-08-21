@@ -33,7 +33,7 @@ mod stylesheets;
 
 pub(in crate::native_bridge::context_host) use classic_scripts::ChildParserClassicScriptCandidate;
 pub(in crate::native_bridge::context_host) use classic_scripts::PendingChildExternalClassicDocumentScriptLoad;
-pub(crate) use request_scope::{ActiveStorageContextOwner, WebStorageScope};
+pub(crate) use request_scope::WebStorageScope;
 pub(in crate::native_bridge::context_host) use request_scope::{
     document_sandbox_policy_from_attribute, sandbox_attribute_forces_opaque_origin,
 };

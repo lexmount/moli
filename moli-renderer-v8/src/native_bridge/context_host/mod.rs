@@ -183,7 +183,6 @@ pub(crate) use child_frame_snapshots::{
     ChildBrowsingContextDocumentSnapshot, ChildBrowsingContextFrameSnapshot,
     ChildBrowsingContextSnapshot, DetachedChildBrowsingContextDocumentSnapshot,
 };
-pub(crate) use child_frames::ActiveStorageContextOwner;
 use child_frames::ChildBrowsingContextEntry;
 pub(in crate::native_bridge::context_host) use child_frames::ChildParserClassicScriptCandidate;
 pub(crate) use event_callbacks::{EventCallbackId, PreparedEventCallback};

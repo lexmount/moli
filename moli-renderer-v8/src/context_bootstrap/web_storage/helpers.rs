@@ -118,8 +118,7 @@ pub(super) fn storage_access_allows_web_storage_for_window<'s>(
             super::super::navigation_window::child_browsing_context_handle_for_runtime_owner(
                 scope, owner,
             )
-        })
-        .or_else(|| crate::native_bridge::active_child_window_handle(scope));
+        });
     let runtime = unsafe { &mut *host_ptr };
     let context = if let Some(handle) = child_handle {
         let Some(context) = runtime.storage_context_for_child_browsing_context(handle) else {
@@ -141,12 +140,9 @@ pub(super) fn current_storage_host_for_owner(
     let host_ptr = context_host_ptr_from_global_bridge(scope)?;
     let runtime = unsafe { &mut *host_ptr };
     let (origin, area_key) = match owner {
-        WebStorageOwner::ActiveDocument => {
-            let active_child_handle = crate::native_bridge::active_child_window_handle(scope);
-            runtime
-                .active_storage_context(scope, active_child_handle)
-                .into_origin_and_area_key()
-        }
+        WebStorageOwner::ActiveDocument => runtime
+            .top_document_storage_context()
+            .into_origin_and_area_key(),
         WebStorageOwner::Child(handle) => runtime
             .storage_context_for_child_browsing_context(handle)?
             .into_origin_and_area_key(),
@@ -341,43 +337,12 @@ fn queue_storage_event(
             )
         }
         WebStorageOwner::ActiveDocument => {
-            let active_child_handle = crate::native_bridge::active_child_window_handle(scope)
-                .or_else(|| {
-                    host.active_child_subresource_request_scope()
-                        .map(|(handle, _, _)| handle)
-                });
-            let storage_context = host.active_storage_context(scope, active_child_handle);
-            let source_scope = match storage_context.owner() {
-                crate::native_bridge::ActiveStorageContextOwner::TopDocument => {
-                    OwnerDispatchScope::Top
-                }
-                crate::native_bridge::ActiveStorageContextOwner::Child(handle) => {
-                    OwnerDispatchScope::Child(handle)
-                }
-                crate::native_bridge::ActiveStorageContextOwner::LightweightPopup(popup_id) => {
-                    OwnerDispatchScope::LightweightPopup(popup_id)
-                }
-            };
-            let url = match storage_context.owner() {
-                crate::native_bridge::ActiveStorageContextOwner::TopDocument => {
-                    host.document_url().to_string()
-                }
-                crate::native_bridge::ActiveStorageContextOwner::Child(handle) => host
-                    .child_browsing_context_current_url(handle)
-                    .map(|url| url.to_string())
-                    .unwrap_or_else(|| host.document_url().to_string()),
-                crate::native_bridge::ActiveStorageContextOwner::LightweightPopup(popup_id) => {
-                    let Some(document_url) = host.lightweight_popup_document_url(popup_id) else {
-                        return;
-                    };
-                    document_url.to_string()
-                }
-            };
+            let storage_context = host.top_document_storage_context();
             (
-                source_scope,
+                OwnerDispatchScope::Top,
                 storage_context.origin().to_owned(),
                 storage_context.web_storage_area_key().to_owned(),
-                url,
+                host.document_url().to_string(),
             )
         }
     };

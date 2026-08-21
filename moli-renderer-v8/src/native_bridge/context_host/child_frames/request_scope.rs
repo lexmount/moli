@@ -84,26 +84,14 @@ impl WebStorageScope {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ActiveStorageContextOwner {
-    TopDocument,
-    Child(DomHandle),
-    LightweightPopup(u64),
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ActiveStorageContext {
-    owner: ActiveStorageContextOwner,
     scope: StorageContextScope,
 }
 
 impl ActiveStorageContext {
-    fn new(owner: ActiveStorageContextOwner, scope: StorageContextScope) -> Self {
-        Self { owner, scope }
-    }
-
-    pub(crate) fn owner(&self) -> ActiveStorageContextOwner {
-        self.owner
+    fn new(scope: StorageContextScope) -> Self {
+        Self { scope }
     }
 
     pub(crate) fn origin(&self) -> &str {
@@ -459,12 +447,7 @@ impl JsContextHost {
     ) -> Option<ActiveStorageContext> {
         let top_origin = moli_url::origin_ascii_serialization(self.document_url());
         self.child_browsing_context_web_storage_scope(handle, &top_origin)
-            .map(|scope| {
-                ActiveStorageContext::new(
-                    ActiveStorageContextOwner::Child(handle),
-                    scope.into_storage_context(),
-                )
-            })
+            .map(|scope| ActiveStorageContext::new(scope.into_storage_context()))
     }
 
     pub(crate) fn storage_context_for_lightweight_popup(
@@ -472,18 +455,12 @@ impl JsContextHost {
         popup_id: u64,
     ) -> Option<ActiveStorageContext> {
         self.lightweight_popup_bound_web_storage_scope(popup_id)
-            .map(|scope| {
-                ActiveStorageContext::new(
-                    ActiveStorageContextOwner::LightweightPopup(popup_id),
-                    scope.into_storage_context(),
-                )
-            })
+            .map(|scope| ActiveStorageContext::new(scope.into_storage_context()))
     }
 
     pub(crate) fn top_document_storage_context(&mut self) -> ActiveStorageContext {
         let top_origin = moli_url::origin_ascii_serialization(self.document_url());
         ActiveStorageContext::new(
-            ActiveStorageContextOwner::TopDocument,
             self.web_storage_scope_for_top_document_origin(&top_origin)
                 .into_storage_context(),
         )

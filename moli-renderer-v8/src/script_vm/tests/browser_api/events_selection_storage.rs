@@ -6228,6 +6228,55 @@ async fn opaque_origin_frames_reject_web_storage_access() {
     );
 }
 
+#[test]
+fn top_web_storage_receiver_ignores_ambient_opaque_child_owner() {
+    let mut vm = new_storage_test_vm("https://top-web-storage-owner.test/page.html");
+    vm.eval(
+        r#"
+(() => {
+  localStorage.clear();
+  localStorage.setItem("top-key", "top-value");
+  const frame = document.createElement("iframe");
+  frame.setAttribute("sandbox", "allow-scripts");
+  frame.srcdoc = "<!doctype html><script>void localStorage;<\/script>";
+  (document.body || document.documentElement || document).appendChild(frame);
+})()
+"#,
+    )
+    .expect("top WebStorage owner setup should evaluate");
+
+    let child_handle = vm
+        ._context_host
+        .borrow()
+        .child_browsing_context_handles_in_document_order()[0];
+    assert!(
+        vm._context_host
+            .borrow()
+            .child_browsing_context_has_opaque_origin(child_handle),
+        "sandboxed child should have an opaque storage origin"
+    );
+
+    let top_context_ptr = &vm.page_default_context as *const v8::Global<v8::Context>;
+    vm.with_context_scope_by_ptr(top_context_ptr, |scope, _host_ptr| {
+        let _previous =
+            crate::native_bridge::enter_active_child_window_scope(scope, Some(child_handle));
+        Ok(())
+    })
+    .expect("ambient opaque child owner should install");
+
+    let result = vm.eval("localStorage.getItem('top-key')");
+    vm.with_context_scope_by_ptr(top_context_ptr, |scope, _host_ptr| {
+        let _previous = crate::native_bridge::enter_active_child_window_scope(scope, None);
+        Ok(())
+    })
+    .expect("ambient opaque child owner should clear");
+
+    assert_eq!(
+        result.expect("top localStorage should use the top Window receiver"),
+        "top-value"
+    );
+}
+
 #[tokio::test]
 async fn third_party_web_storage_is_partitioned_by_top_level_site() {
     let (child_origin, server) = spawn_web_storage_partition_child_server(3).await;
