@@ -267,6 +267,15 @@ Kitesurf 是远程服务，无法测量 CPU、内存和进程数，因此资源�
 
 遇到不支持的协议路径，Moli 会直接明确报错——它不会假装某个浏览器操作、事件、网络观测或者视觉结果已经发生。
 
+## Star 趋势
+
+由 [lexmount/moli-metrics](https://github.com/lexmount/moli-metrics) 每小时根据 star 时间线自动生成。
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/lexmount/moli-metrics/main/assets/star-history-dark.svg">
+  <img alt="lexmount/moli 的 Star 增长曲线" src="https://raw.githubusercontent.com/lexmount/moli-metrics/main/assets/star-history.svg" width="100%">
+</picture>
+
 ## 许可证
 
 除非文件或目录中另有说明，你可以自行选择依据 [Apache License 2.0](../LICENSE-APACHE) 或 [MIT License](../LICENSE-MIT) 来使用 Moli。采用独立许可证的第三方组件和测试夹具，仍然遵循各自的许可证和声明。

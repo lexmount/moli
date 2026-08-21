@@ -267,6 +267,15 @@ Kitesurf はリモートサービスのため、CPU、メモリ、プロセス�
 
 未対応の操作には、明確なエラーを返します。Moli は、実行していないブラウザ操作やイベント、通信状況の確認、画面出力を、実行済みであるかのように扱うことはありません。
 
+## Star の推移
+
+[lexmount/moli-metrics](https://github.com/lexmount/moli-metrics) が stargazer タイムラインから毎時自動生成しています。
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/lexmount/moli-metrics/main/assets/star-history-dark.svg">
+  <img alt="lexmount/moli の Star 推移" src="https://raw.githubusercontent.com/lexmount/moli-metrics/main/assets/star-history.svg" width="100%">
+</picture>
+
 ## ライセンス
 
 ファイルまたはディレクトリに別の記載がない限り、Moli は [Apache License 2.0](../LICENSE-APACHE) または [MIT License](../LICENSE-MIT) のいずれかを選択して利用できます。個別のライセンスが適用される第三者提供の構成要素やテスト用データについては、それぞれのライセンスと告知事項に従います。

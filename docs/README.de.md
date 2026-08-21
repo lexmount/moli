@@ -268,6 +268,15 @@ Zu den aktuell bewusst gesetzten Grenzen gehören:
 
 Nicht unterstützte Protokollpfade liefern einen eindeutigen Fehler zurück — Moli täuscht nie vor, dass eine Browseraktion, ein Ereignis, eine Netzwerkbeobachtung oder ein visuelles Ergebnis stattgefunden hätte.
 
+## Star-Verlauf
+
+Stündlich aus der Stargazer-Timeline erzeugt von [lexmount/moli-metrics](https://github.com/lexmount/moli-metrics).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/lexmount/moli-metrics/main/assets/star-history-dark.svg">
+  <img alt="Star-Verlauf von lexmount/moli" src="https://raw.githubusercontent.com/lexmount/moli-metrics/main/assets/star-history.svg" width="100%">
+</picture>
+
 ## Lizenz
 
 Sofern eine Datei oder ein Verzeichnis nichts anderes angibt, kann Moli wahlweise unter der [Apache License 2.0](../LICENSE-APACHE) oder der [MIT License](../LICENSE-MIT) genutzt werden. Separat lizenzierte Komponenten und Fixtures von Drittanbietern unterliegen weiterhin ihren jeweiligen Lizenzen und Hinweisen.

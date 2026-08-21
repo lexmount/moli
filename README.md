@@ -353,6 +353,15 @@ Its current intentional boundaries include:
 Unsupported protocol paths return explicit errors — Moli never pretends that a
 browser action, event, network observation, or visual result occurred.
 
+## Star history
+
+Generated hourly from the stargazer timeline by [lexmount/moli-metrics](https://github.com/lexmount/moli-metrics).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/lexmount/moli-metrics/main/assets/star-history-dark.svg">
+  <img alt="Star history of lexmount/moli" src="https://raw.githubusercontent.com/lexmount/moli-metrics/main/assets/star-history.svg" width="100%">
+</picture>
+
 ## License
 
 Unless a file or directory states otherwise, you may use Moli under either the
