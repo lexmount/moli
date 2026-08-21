@@ -9,7 +9,7 @@ use std::{
 
 use moli::cli::{
     Cli, Commands, CommonArgs, DumpFormat, FetchArgs, FetchWaitUntil, LogFormat, LogLevel,
-    RequestHeaderArg, ResponseBodyRegexArg, ResponseJsonPathArg, ServeArgs, StripModeChoice,
+    RequestHeaderArg, ResponseJsonPathArg, ResponseRegexArg, ServeArgs, StripModeChoice,
     StripOptions, WebBotAuthProfileChoice, normalize_args_for_compat,
 };
 use moli::config::AppConfig;
@@ -99,8 +99,11 @@ fn parses_explicit_fetch_command_with_compatibility_flags() {
             wait_script_file: None,
             delay_ms: 0,
             wait_response_url: None,
+            wait_response_url_regex: None,
             wait_response_body: None,
+            wait_response_body_regex: None,
             wait_response_json: None,
+            wait_response_json_regex: None,
             timeout: 25_000,
             common: CommonArgs {
                 insecure_disable_tls_host_verification: false,
@@ -393,8 +396,11 @@ fn infers_fetch_mode_from_bare_url() {
             wait_script_file: None,
             delay_ms: 0,
             wait_response_url: None,
+            wait_response_url_regex: None,
             wait_response_body: None,
+            wait_response_body_regex: None,
             wait_response_json: None,
+            wait_response_json_regex: None,
             timeout: 25_000,
             common: CommonArgs::default(),
             url: "https://example.com".to_owned(),
@@ -430,8 +436,11 @@ fn parses_bare_dump_with_explicit_fetch_command_and_defaults_to_html() {
             wait_script_file: None,
             delay_ms: 0,
             wait_response_url: None,
+            wait_response_url_regex: None,
             wait_response_body: None,
+            wait_response_body_regex: None,
             wait_response_json: None,
+            wait_response_json_regex: None,
             timeout: 25_000,
             common: CommonArgs::default(),
             url: "https://example.com".to_owned(),
@@ -471,8 +480,11 @@ fn parses_header_flag_with_explicit_fetch_command() {
             wait_script_file: None,
             delay_ms: 0,
             wait_response_url: None,
+            wait_response_url_regex: None,
             wait_response_body: None,
+            wait_response_body_regex: None,
             wait_response_json: None,
+            wait_response_json_regex: None,
             timeout: 25_000,
             common: CommonArgs::default(),
             url: "https://example.com".to_owned(),
@@ -847,7 +859,7 @@ fn parses_dcl_fetch_wait_until_alias() {
 }
 
 #[test]
-fn parses_fetch_response_wait_flags() {
+fn parses_fetch_literal_response_wait_flags() {
     let cli = Cli::try_parse_from(normalize_args_for_compat([
         "moli",
         "fetch",
@@ -869,12 +881,7 @@ fn parses_fetch_response_wait_flags() {
         args.wait_response_url.as_deref(),
         Some("mtop.taobao.idle.pc.detail")
     );
-    assert_eq!(
-        args.wait_response_body
-            .as_ref()
-            .map(ResponseBodyRegexArg::pattern),
-        Some("SUCCESS")
-    );
+    assert_eq!(args.wait_response_body.as_deref(), Some("SUCCESS"));
     assert_eq!(
         args.wait_response_json,
         Some(ResponseJsonPathArg {
@@ -882,25 +889,125 @@ fn parses_fetch_response_wait_flags() {
             expected: "/item/42".to_owned(),
         })
     );
+    assert!(args.wait_response_url_regex.is_none());
+    assert!(args.wait_response_body_regex.is_none());
+    assert!(args.wait_response_json_regex.is_none());
 }
 
 #[test]
-fn rejects_invalid_wait_response_body_regex() {
-    let error = Cli::try_parse_from(normalize_args_for_compat([
+fn parses_fetch_regex_response_wait_flags() {
+    let cli = Cli::try_parse_from(normalize_args_for_compat([
         "moli",
         "fetch",
-        "--wait-response-body",
-        "[",
+        "--wait-response-url-regex",
+        r"mtop\.taobao\..*\.detail",
+        "--wait-response-body-regex",
+        "SUCC[A-Z]+",
+        "--wait-response-json-regex",
+        r"data.url=^/item/\d+$",
         "https://example.com",
     ]))
-    .unwrap_err();
+    .unwrap();
 
-    assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
-    assert!(
-        error
-            .to_string()
-            .contains("invalid --wait-response-body regex")
+    let Commands::Fetch(args) = cli.command else {
+        panic!("expected fetch command");
+    };
+
+    assert_eq!(
+        args.wait_response_url_regex
+            .as_ref()
+            .map(ResponseRegexArg::pattern),
+        Some(r"mtop\.taobao\..*\.detail")
     );
+    assert_eq!(
+        args.wait_response_body_regex
+            .as_ref()
+            .map(ResponseRegexArg::pattern),
+        Some("SUCC[A-Z]+")
+    );
+    let json = args
+        .wait_response_json_regex
+        .as_ref()
+        .expect("JSON regex wait argument");
+    assert_eq!(json.path, ["data".to_owned(), "url".to_owned()]);
+    assert_eq!(json.pattern(), r"^/item/\d+$");
+    assert!(args.wait_response_url.is_none());
+    assert!(args.wait_response_body.is_none());
+    assert!(args.wait_response_json.is_none());
+}
+
+#[test]
+fn rejects_invalid_response_wait_regexes() {
+    let cases = [
+        (
+            "--wait-response-url-regex",
+            "[",
+            "invalid --wait-response-url-regex regex",
+        ),
+        (
+            "--wait-response-body-regex",
+            "[",
+            "invalid --wait-response-body-regex regex",
+        ),
+        (
+            "--wait-response-json-regex",
+            "data.url=[",
+            "invalid --wait-response-json-regex regex",
+        ),
+    ];
+
+    for (flag, value, expected) in cases {
+        let error = Cli::try_parse_from(normalize_args_for_compat([
+            "moli",
+            "fetch",
+            flag,
+            value,
+            "https://example.com",
+        ]))
+        .unwrap_err();
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+        assert!(error.to_string().contains(expected), "{error}");
+    }
+}
+
+#[test]
+fn literal_and_regex_response_wait_flags_conflict_per_dimension() {
+    let cases = [
+        (
+            "--wait-response-url",
+            "/api/items",
+            "--wait-response-url-regex",
+            "/api/.*",
+        ),
+        (
+            "--wait-response-body",
+            "ready",
+            "--wait-response-body-regex",
+            "ready|done",
+        ),
+        (
+            "--wait-response-json",
+            "data.state=ready",
+            "--wait-response-json-regex",
+            "data.state=ready|done",
+        ),
+    ];
+
+    for (literal_flag, literal, regex_flag, regex) in cases {
+        let error = Cli::try_parse_from(normalize_args_for_compat([
+            "moli",
+            "fetch",
+            literal_flag,
+            literal,
+            regex_flag,
+            regex,
+            "https://example.com",
+        ]))
+        .unwrap_err();
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
 }
 
 #[test]

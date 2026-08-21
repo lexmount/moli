@@ -91,20 +91,59 @@ pub struct FetchArgs {
     #[arg(long, default_value_t = 0)]
     pub delay_ms: u64,
 
-    #[arg(long)]
+    /// Wait for a response whose original or final URL contains this literal
+    /// substring.
+    #[arg(
+        long,
+        value_name = "SUBSTRING",
+        conflicts_with = "wait_response_url_regex"
+    )]
     pub wait_response_url: Option<String>,
 
-    /// Wait for a response whose body matches this regex. An invalid regex
-    /// fails the fetch command immediately.
+    /// Wait for a response whose original or final URL matches this regex.
     #[arg(
         long,
         value_name = "REGEX",
-        value_parser = parse_response_body_regex
+        value_parser = parse_response_url_regex,
+        conflicts_with = "wait_response_url"
     )]
-    pub wait_response_body: Option<ResponseBodyRegexArg>,
+    pub wait_response_url_regex: Option<ResponseRegexArg>,
 
-    #[arg(long, value_parser = parse_response_json_path_arg)]
+    /// Wait for a response whose body contains this literal substring.
+    #[arg(
+        long,
+        value_name = "SUBSTRING",
+        conflicts_with = "wait_response_body_regex"
+    )]
+    pub wait_response_body: Option<String>,
+
+    /// Wait for a response whose body matches this regex.
+    #[arg(
+        long,
+        value_name = "REGEX",
+        value_parser = parse_response_body_regex,
+        conflicts_with = "wait_response_body"
+    )]
+    pub wait_response_body_regex: Option<ResponseRegexArg>,
+
+    /// Wait for a response whose JSON field equals this literal value.
+    #[arg(
+        long,
+        value_name = "PATH=VALUE",
+        value_parser = parse_response_json_path_arg,
+        conflicts_with = "wait_response_json_regex"
+    )]
     pub wait_response_json: Option<ResponseJsonPathArg>,
+
+    /// Wait for a response whose JSON scalar field's textual value matches
+    /// this regex.
+    #[arg(
+        long,
+        value_name = "PATH=REGEX",
+        value_parser = parse_response_json_path_regex_arg,
+        conflicts_with = "wait_response_json"
+    )]
+    pub wait_response_json_regex: Option<ResponseJsonPathRegexArg>,
 
     /// Maximum total readiness time in milliseconds. Initial and HTTP-error
     /// replacement navigations, the selected lifecycle stage, response match,
@@ -152,8 +191,21 @@ pub struct ResponseJsonPathArg {
 }
 
 fn parse_response_json_path_arg(raw: &str) -> Result<ResponseJsonPathArg, String> {
+    let (path, expected) = split_response_json_path_arg(raw, "path=value")?;
+    Ok(ResponseJsonPathArg {
+        path,
+        expected: expected.to_owned(),
+    })
+}
+
+fn split_response_json_path_arg<'a>(
+    raw: &'a str,
+    expected_form: &str,
+) -> Result<(Vec<String>, &'a str), String> {
     let Some(separator) = raw.find('=') else {
-        return Err("response JSON wait must be in 'path=value' form".to_owned());
+        return Err(format!(
+            "response JSON wait must be in '{expected_form}' form"
+        ));
     };
     let path = raw[..separator].trim();
     if path.is_empty() {
@@ -167,18 +219,39 @@ fn parse_response_json_path_arg(raw: &str) -> Result<ResponseJsonPathArg, String
     if segments.iter().any(String::is_empty) {
         return Err("response JSON wait path must not contain empty segments".to_owned());
     }
-    Ok(ResponseJsonPathArg {
-        path: segments,
-        expected: raw[separator + 1..].to_owned(),
+    Ok((segments, &raw[separator + 1..]))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResponseJsonPathRegexArg {
+    pub path: Vec<String>,
+    regex: ResponseRegexArg,
+}
+
+impl ResponseJsonPathRegexArg {
+    pub(crate) fn regex(&self) -> &Regex {
+        self.regex.regex()
+    }
+
+    pub fn pattern(&self) -> &str {
+        self.regex.pattern()
+    }
+}
+
+fn parse_response_json_path_regex_arg(raw: &str) -> Result<ResponseJsonPathRegexArg, String> {
+    let (path, pattern) = split_response_json_path_arg(raw, "path=regex")?;
+    Ok(ResponseJsonPathRegexArg {
+        path,
+        regex: parse_response_regex(pattern, "--wait-response-json-regex")?,
     })
 }
 
 #[derive(Debug, Clone)]
-pub struct ResponseBodyRegexArg {
+pub struct ResponseRegexArg {
     regex: Regex,
 }
 
-impl ResponseBodyRegexArg {
+impl ResponseRegexArg {
     pub(crate) fn regex(&self) -> &Regex {
         &self.regex
     }
@@ -188,18 +261,26 @@ impl ResponseBodyRegexArg {
     }
 }
 
-impl PartialEq for ResponseBodyRegexArg {
+impl PartialEq for ResponseRegexArg {
     fn eq(&self, other: &Self) -> bool {
         self.regex.as_str() == other.regex.as_str()
     }
 }
 
-impl Eq for ResponseBodyRegexArg {}
+impl Eq for ResponseRegexArg {}
 
-fn parse_response_body_regex(raw: &str) -> Result<ResponseBodyRegexArg, String> {
+fn parse_response_url_regex(raw: &str) -> Result<ResponseRegexArg, String> {
+    parse_response_regex(raw, "--wait-response-url-regex")
+}
+
+fn parse_response_body_regex(raw: &str) -> Result<ResponseRegexArg, String> {
+    parse_response_regex(raw, "--wait-response-body-regex")
+}
+
+fn parse_response_regex(raw: &str, option: &str) -> Result<ResponseRegexArg, String> {
     Regex::new(raw)
-        .map(|regex| ResponseBodyRegexArg { regex })
-        .map_err(|error| format!("invalid --wait-response-body regex: {error}"))
+        .map(|regex| ResponseRegexArg { regex })
+        .map_err(|error| format!("invalid {option} regex: {error}"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -601,12 +682,17 @@ mod tests {
     }
 
     #[test]
-    fn fetch_help_labels_response_body_pattern_as_regex() {
+    fn fetch_help_labels_literal_and_regex_response_waits() {
         let help = Cli::try_parse_from(["moli", "fetch", "--help"])
             .unwrap_err()
             .to_string();
 
-        assert!(help.contains("--wait-response-body <REGEX>"));
+        assert!(help.contains("--wait-response-url <SUBSTRING>"));
+        assert!(help.contains("--wait-response-url-regex <REGEX>"));
+        assert!(help.contains("--wait-response-body <SUBSTRING>"));
+        assert!(help.contains("--wait-response-body-regex <REGEX>"));
+        assert!(help.contains("--wait-response-json <PATH=VALUE>"));
+        assert!(help.contains("--wait-response-json-regex <PATH=REGEX>"));
     }
 
     #[test]

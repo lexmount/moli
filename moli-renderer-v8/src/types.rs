@@ -55,12 +55,12 @@ pub use crate::protocol_types::{
     ScriptRunOutcome, ScriptSkipReason, ScriptSourceKind, SubresourceAuthChallenge,
     SubresourceAuthCredentials, SubresourceAuthScheme, SubresourceAuthTarget,
     SubresourceBodyFinished, SubresourceBodyFinishedResult, SubresourceDataReceived,
-    SubresourceEventSourceMessageReceived, SubresourceJsonPathEquals, SubresourceNetworkOutcome,
-    SubresourceNetworkRecord, SubresourceNetworkRequestHandle, SubresourceRequestInitiatorType,
-    SubresourceRequestStarted, SubresourceResourceType, SubresourceResponseBody,
-    SubresourceResponseBodyWriter, SubresourceResponseStarted, SubresourceResponseWaitCriteria,
-    WebSocketFrameDirection, WebSocketFrameOpcode, WebSocketLifecycleEvent, WebSocketLifecycleKind,
-    WebSocketNetworkEvent,
+    SubresourceEventSourceMessageReceived, SubresourceJsonPathEquals, SubresourceJsonPathRegex,
+    SubresourceNetworkOutcome, SubresourceNetworkRecord, SubresourceNetworkRequestHandle,
+    SubresourceRequestInitiatorType, SubresourceRequestStarted, SubresourceResourceType,
+    SubresourceResponseBody, SubresourceResponseBodyWriter, SubresourceResponseStarted,
+    SubresourceResponseWaitCriteria, WebSocketFrameDirection, WebSocketFrameOpcode,
+    WebSocketLifecycleEvent, WebSocketLifecycleKind, WebSocketNetworkEvent,
 };
 
 pub(super) enum PendingSubresourceContinuation {

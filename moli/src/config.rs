@@ -3,7 +3,7 @@ use cidr::AnyIpCidr;
 use moli_browser_profile::BrowserProfilePaths;
 use moli_core::{
     LayoutPolicy, OptionalResourceFetchMask,
-    page::{SubresourceJsonPathEquals, SubresourceResponseWaitCriteria},
+    page::{SubresourceJsonPathEquals, SubresourceJsonPathRegex, SubresourceResponseWaitCriteria},
     runtime::BrowserConfig,
 };
 use moli_fetch::{FetchConfig, WebBotAuthProfile, WebBotAuthSigner};
@@ -299,8 +299,13 @@ pub fn response_wait_criteria_from_args(
 ) -> SubresourceResponseWaitCriteria {
     SubresourceResponseWaitCriteria {
         url_contains: args.wait_response_url.clone(),
+        url_regex: args
+            .wait_response_url_regex
+            .as_ref()
+            .map(|arg| arg.regex().clone()),
+        body_contains: args.wait_response_body.clone(),
         body_regex: args
-            .wait_response_body
+            .wait_response_body_regex
             .as_ref()
             .map(|arg| arg.regex().clone()),
         json_path_equals: args
@@ -310,5 +315,11 @@ pub fn response_wait_criteria_from_args(
                 path: json.path.clone(),
                 expected: json.expected.clone(),
             }),
+        json_path_regex: args.wait_response_json_regex.as_ref().map(|json| {
+            SubresourceJsonPathRegex {
+                path: json.path.clone(),
+                regex: json.regex().clone(),
+            }
+        }),
     }
 }

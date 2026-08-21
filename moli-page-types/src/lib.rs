@@ -1927,13 +1927,16 @@ fn configure_secure_subresource_response_body_spool_file_options(_options: &mut 
 #[derive(Debug, Clone, Default)]
 pub struct SubresourceResponseWaitCriteria {
     pub url_contains: Option<String>,
+    pub url_regex: Option<Regex>,
+    pub body_contains: Option<String>,
     pub body_regex: Option<Regex>,
     pub json_path_equals: Option<SubresourceJsonPathEquals>,
+    pub json_path_regex: Option<SubresourceJsonPathRegex>,
 }
 
 impl SubresourceResponseWaitCriteria {
     pub fn is_empty(&self) -> bool {
-        self.url_contains.is_none() && self.body_regex.is_none() && self.json_path_equals.is_none()
+        self.url_contains.is_none() && self.url_regex.is_none() && !self.requires_response_body()
     }
 
     /// Compatibility matcher for diagnostic surfaces that prefer best-effort
@@ -1962,20 +1965,40 @@ impl SubresourceResponseWaitCriteria {
             return Ok(false);
         }
 
+        if let Some(regex) = self.url_regex.as_ref()
+            && !regex.is_match(record.url().as_str())
+            && !matches!(
+                record.outcome(),
+                SubresourceNetworkOutcome::Success { final_url, .. }
+                    if regex.is_match(final_url.as_str())
+            )
+        {
+            return Ok(false);
+        }
+
         let SubresourceNetworkOutcome::Success {
             response_headers,
             response_body,
             ..
         } = record.outcome()
         else {
-            return Ok(self.body_regex.is_none() && self.json_path_equals.is_none());
+            return Ok(!self.requires_response_body());
         };
 
-        let response_body_text = if self.body_regex.is_some() || self.json_path_equals.is_some() {
+        let response_body_text = if self.requires_response_body() {
             Some(response_body.try_text()?)
         } else {
             None
         };
+
+        if let Some(needle) = self.body_contains.as_deref()
+            && !response_body_text
+                .as_deref()
+                .unwrap_or_default()
+                .contains(needle)
+        {
+            return Ok(false);
+        }
 
         if let Some(regex) = self.body_regex.as_ref()
             && !regex.is_match(response_body_text.as_deref().unwrap_or_default())
@@ -1993,7 +2016,24 @@ impl SubresourceResponseWaitCriteria {
             return Ok(false);
         }
 
+        if let Some(expectation) = self.json_path_regex.as_ref()
+            && !json_path_matches_regex(
+                response_headers,
+                response_body_text.as_deref().unwrap_or_default(),
+                expectation,
+            )
+        {
+            return Ok(false);
+        }
+
         Ok(true)
+    }
+
+    fn requires_response_body(&self) -> bool {
+        self.body_contains.is_some()
+            || self.body_regex.is_some()
+            || self.json_path_equals.is_some()
+            || self.json_path_regex.is_some()
     }
 }
 
@@ -2003,10 +2043,37 @@ pub struct SubresourceJsonPathEquals {
     pub expected: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct SubresourceJsonPathRegex {
+    pub path: Vec<String>,
+    pub regex: Regex,
+}
+
 fn json_path_equals(
     headers: &[(String, String)],
     body: &str,
     expectation: &SubresourceJsonPathEquals,
+) -> bool {
+    json_path_satisfies(headers, body, &expectation.path, |value| {
+        json_value_equals_string(value, &expectation.expected)
+    })
+}
+
+fn json_path_matches_regex(
+    headers: &[(String, String)],
+    body: &str,
+    expectation: &SubresourceJsonPathRegex,
+) -> bool {
+    json_path_satisfies(headers, body, &expectation.path, |value| {
+        json_value_matches_regex(value, &expectation.regex)
+    })
+}
+
+fn json_path_satisfies(
+    headers: &[(String, String)],
+    body: &str,
+    path: &[String],
+    predicate: impl FnOnce(&Value) -> bool,
 ) -> bool {
     let Some(content_type) = header_value(headers, "content-type") else {
         return false;
@@ -2018,10 +2085,10 @@ fn json_path_equals(
     let Ok(parsed) = serde_json::from_str::<Value>(body) else {
         return false;
     };
-    let Some(value) = json_path_value(&parsed, &expectation.path) else {
+    let Some(value) = json_path_value(&parsed, path) else {
         return false;
     };
-    json_value_equals_string(value, &expectation.expected)
+    predicate(value)
 }
 
 fn json_path_value<'a>(mut value: &'a Value, path: &[String]) -> Option<&'a Value> {
@@ -2042,6 +2109,16 @@ fn json_value_equals_string(value: &Value, expected: &str) -> bool {
         Value::Number(actual) => actual.to_string() == expected,
         Value::Null => expected == "null",
         Value::Array(_) | Value::Object(_) => *value == expected,
+    }
+}
+
+fn json_value_matches_regex(value: &Value, regex: &Regex) -> bool {
+    match value {
+        Value::String(actual) => regex.is_match(actual),
+        Value::Bool(actual) => regex.is_match(if *actual { "true" } else { "false" }),
+        Value::Number(actual) => regex.is_match(&actual.to_string()),
+        Value::Null => regex.is_match("null"),
+        Value::Array(_) | Value::Object(_) => false,
     }
 }
 
@@ -4063,9 +4140,8 @@ mod tests {
             Vec::new(),
         );
         let criteria = SubresourceResponseWaitCriteria {
-            url_contains: None,
             body_regex: Some(Regex::new("missing").unwrap()),
-            json_path_equals: None,
+            ..SubresourceResponseWaitCriteria::default()
         };
         assert!(
             criteria.try_matches(&record).is_err(),
@@ -4078,7 +4154,45 @@ mod tests {
     }
 
     #[test]
-    fn body_wait_criteria_matches_response_body_as_regex() {
+    fn url_wait_criteria_matches_original_and_final_urls_as_regex() {
+        let record = SubresourceNetworkRecord::success(
+            None,
+            Url::parse("https://example.test/page").unwrap(),
+            Url::parse("https://api.example.test/v1/orders/42").unwrap(),
+            "GET".to_owned(),
+            Vec::new(),
+            None,
+            SubresourceResourceType::Fetch,
+            None,
+            Vec::new(),
+            Url::parse("https://api.example.test/v2/orders/42").unwrap(),
+            200,
+            Vec::new(),
+            String::new(),
+            Vec::new(),
+        );
+
+        for regex in [r"/v1/orders/\d+$", r"/v2/orders/\d+$"] {
+            let criteria = SubresourceResponseWaitCriteria {
+                url_regex: Some(Regex::new(regex).unwrap()),
+                ..SubresourceResponseWaitCriteria::default()
+            };
+            assert!(criteria.try_matches(&record).is_ok_and(|matches| matches));
+        }
+
+        let non_matching = SubresourceResponseWaitCriteria {
+            url_regex: Some(Regex::new(r"/v3/orders/\d+$").unwrap()),
+            ..SubresourceResponseWaitCriteria::default()
+        };
+        assert!(
+            non_matching
+                .try_matches(&record)
+                .is_ok_and(|matches| !matches)
+        );
+    }
+
+    #[test]
+    fn body_wait_criteria_supports_literal_and_regex_matching() {
         let record = SubresourceNetworkRecord::success_with_body(
             None,
             Url::parse("https://example.test/page").unwrap(),
@@ -4099,17 +4213,31 @@ mod tests {
             Vec::new(),
         );
 
+        let literal = SubresourceResponseWaitCriteria {
+            body_contains: Some("order #42 ready".to_owned()),
+            ..SubresourceResponseWaitCriteria::default()
+        };
+        assert!(literal.try_matches(&record).is_ok_and(|matches| matches));
+
+        let regex_syntax_is_literal = SubresourceResponseWaitCriteria {
+            body_contains: Some(r"order #\d+ ready".to_owned()),
+            ..SubresourceResponseWaitCriteria::default()
+        };
+        assert!(
+            regex_syntax_is_literal
+                .try_matches(&record)
+                .is_ok_and(|matches| !matches)
+        );
+
         let criteria = SubresourceResponseWaitCriteria {
-            url_contains: None,
             body_regex: Some(Regex::new(r"order #\d+ ready").unwrap()),
-            json_path_equals: None,
+            ..SubresourceResponseWaitCriteria::default()
         };
         assert!(criteria.try_matches(&record).is_ok_and(|matches| matches));
 
         let non_matching = SubresourceResponseWaitCriteria {
-            url_contains: None,
             body_regex: Some(Regex::new(r"^order #\d{3} ready$").unwrap()),
-            json_path_equals: None,
+            ..SubresourceResponseWaitCriteria::default()
         };
         assert!(
             non_matching
@@ -4119,7 +4247,7 @@ mod tests {
     }
 
     #[test]
-    fn json_path_wait_criteria_uses_shared_json_mime_parser() {
+    fn json_path_wait_criteria_supports_equals_and_regex_with_shared_mime_parser() {
         let expectation = SubresourceJsonPathEquals {
             path: vec!["ok".to_owned()],
             expected: "true".to_owned(),
@@ -4144,6 +4272,24 @@ mod tests {
             &[("content-type".to_owned(), "text/json".to_owned())],
             r#"{"ok":true}"#,
             &expectation,
+        ));
+
+        let regex_expectation = SubresourceJsonPathRegex {
+            path: vec!["data".to_owned(), "url".to_owned()],
+            regex: Regex::new(r"^/item/\d+$").unwrap(),
+        };
+        assert!(json_path_matches_regex(
+            &[(
+                "content-type".to_owned(),
+                "application/json; charset=utf-8".to_owned(),
+            )],
+            r#"{"data":{"url":"/item/42"}}"#,
+            &regex_expectation,
+        ));
+        assert!(!json_path_matches_regex(
+            &[("content-type".to_owned(), "application/json".to_owned())],
+            r#"{"data":{"url":"/orders/42"}}"#,
+            &regex_expectation,
         ));
     }
 

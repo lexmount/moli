@@ -45,10 +45,14 @@ a better completion signal:
   truthy.
 - `--wait-script-file <path>`: use a reusable or multiline condition. It is
   mutually exclusive with `--wait-script`.
-- `--wait-response-url <substring>`: wait for an application request by URL.
-- `--wait-response-body <regex>`: require text matching the regex in that response.
-- `--wait-response-json <path=value>`: require a JSON field value. All supplied
-  response criteria must match one response.
+- `--wait-response-url <substring>`: wait for an application request whose URL
+  contains literal text; use `--wait-response-url-regex <regex>` for a pattern.
+- `--wait-response-body <substring>`: require literal text in that response;
+  use `--wait-response-body-regex <regex>` for a pattern.
+- `--wait-response-json <path=value>`: require an exact JSON field value; use
+  `--wait-response-json-regex <path=regex>` for a patterned scalar value. All
+  supplied response criteria must match one response. Literal and regex forms
+  of the same criterion are mutually exclusive.
 - `--delay-ms <ms>`: use only when the site has no observable readiness signal.
 - `--timeout <ms>`: bound navigation and explicit waits; the default is 10000.
 
@@ -63,8 +67,8 @@ moli fetch \
 moli fetch \
   --dump json \
   --trace-network \
-  --wait-response-url "/api/search" \
-  --wait-response-json "data.ready=true" \
+  --wait-response-url-regex "/api/(search|results)$" \
+  --wait-response-json-regex "data.requestId=^req-[0-9]+$" \
   "https://example.com/search"
 ```
 

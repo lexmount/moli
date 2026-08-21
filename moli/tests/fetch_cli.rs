@@ -1641,7 +1641,7 @@ fn cli_dump_json_trace_network_includes_subresource_summary() -> Result<()> {
 }
 
 #[test]
-fn cli_wait_response_matches_url_body_and_json_without_networkidle() -> Result<()> {
+fn cli_wait_response_regexes_match_url_body_and_json_without_networkidle() -> Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-delayed-json-fetch");
@@ -1654,12 +1654,12 @@ fn cli_wait_response_matches_url_body_and_json_without_networkidle() -> Result<(
         "*",
         "--wait-until",
         "load",
-        "--wait-response-url",
-        "/wait-until-json-data",
-        "--wait-response-body",
+        "--wait-response-url-regex",
+        r"/wait-until-(json|xml)-data$",
+        "--wait-response-body-regex",
         "SUCC[A-Z]+",
-        "--wait-response-json",
-        "data.url=/item/42",
+        "--wait-response-json-regex",
+        r"data.url=^/item/\d+$",
         "--dump",
         "json",
         "--trace-network",
@@ -1729,7 +1729,7 @@ fn cli_readiness_plan_combines_early_response_selector_and_script() -> Result<()
             "--wait-response-url",
             "/wait-until-json-data",
             "--wait-response-body",
-            "SUCCESS",
+            r#""ret":["SUCCESS"]"#,
             "--wait-response-json",
             "data.url=/item/42",
             "--wait-selector",
