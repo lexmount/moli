@@ -42,7 +42,6 @@ where
             LayoutBoxKind::AnonymousBlock,
             wrapper_style,
             None,
-            None,
         );
         wrapper.inline_formatting_context = true;
         let wrapper_id = world.allocate(wrapper);
@@ -57,7 +56,6 @@ where
             LayoutBoxKind::Text,
             text_style,
             Some(Arc::from(text)),
-            None,
         ));
         world.boxes[text_id.index()].parent = Some(wrapper_id);
         world.boxes[wrapper_id.index()].children.push(text_id);

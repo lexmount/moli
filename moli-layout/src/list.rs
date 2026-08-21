@@ -138,7 +138,6 @@ where
         LayoutBoxKind::Text,
         text_style,
         Some(Arc::from(text)),
-        None,
     );
     let text_id = world.allocate(text_box);
     world.boxes[text_id.index()].parent = Some(marker);
