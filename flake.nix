@@ -13,12 +13,21 @@
         "x86_64-linux"
       ];
       forEachSystem = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
+
+      # A clean checkout exposes `self.rev`, a dirty one exposes only
+      # `self.dirtyRev` — which Nix formats as `<commit>-dirty` — and a source
+      # that is not a git tree exposes neither. The CDP revision contract in
+      # `moli-protocol/src/version.rs` accepts a bare 40- or 64-digit hex hash
+      # only, so drop the suffix and fall back to git's all-zero "no such
+      # commit" sentinel rather than a word that cannot parse as a hash.
+      nullRev = "0000000000000000000000000000000000000000";
+      revision = nixpkgs.lib.removeSuffix "-dirty" (self.rev or self.dirtyRev or nullRev);
     in
     {
       packages = forEachSystem (pkgs: rec {
         moli = pkgs.callPackage ./nix/package.nix {
           src = self;
-          revision = self.rev or self.dirtyRev or "unknown";
+          inherit revision;
         };
         default = moli;
       });
