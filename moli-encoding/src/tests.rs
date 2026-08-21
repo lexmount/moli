@@ -447,3 +447,48 @@ fn url_query_encoder_leaves_utf8_and_queryless_inputs_borrowed() {
         Cow::Borrowed(_)
     ));
 }
+
+#[test]
+fn meta_declared_utf16_document_decodes_as_utf8() {
+    let (text, encoding) = decode_html_document(
+        br#"<!DOCTYPE html><meta charset="utf-16"><p>Hello, world!</p>"#,
+        &[],
+    );
+
+    assert_eq!(encoding, "UTF-8");
+    assert!(text.contains("Hello, world!"), "decoded as {text:?}");
+}
+
+/// `encoding_rs` has no UTF-16 encoder — the Encoding Standard replaces it
+/// with UTF-8 for output — so UTF-16LE input has to be built by hand.
+fn utf16le_bytes(input: &str) -> Vec<u8> {
+    input
+        .encode_utf16()
+        .flat_map(|unit| unit.to_le_bytes())
+        .collect()
+}
+
+#[test]
+fn meta_declared_utf16_does_not_override_a_bom() {
+    let mut input = vec![0xFF, 0xFE];
+    input.extend_from_slice(&utf16le_bytes("<meta charset=\"utf-16\">hi"));
+
+    let (text, encoding) = decode_html_document(&input, &[]);
+
+    assert_eq!(encoding, "UTF-16LE");
+    assert!(text.ends_with("hi"), "decoded as {text:?}");
+}
+
+#[test]
+fn transport_utf16_still_wins_over_the_meta_rewrite() {
+    let headers = vec![(
+        "Content-Type".to_owned(),
+        "text/html; charset=utf-16le".to_owned(),
+    )];
+    let input = utf16le_bytes("<meta charset=\"utf-16\">hi");
+
+    let (text, encoding) = decode_html_document(&input, &headers);
+
+    assert_eq!(encoding, "UTF-16LE");
+    assert!(text.ends_with("hi"), "decoded as {text:?}");
+}

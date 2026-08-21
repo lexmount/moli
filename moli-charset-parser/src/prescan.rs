@@ -186,7 +186,27 @@ fn html_token_attr_value(tag: &Tag, name: &str) -> Option<String> {
 }
 
 fn encoding_for_label(label: String) -> Option<&'static Encoding> {
-    Encoding::for_label(label.trim().as_bytes())
+    Encoding::for_label(label.trim().as_bytes()).map(prescan_charset_override)
+}
+
+/// Applies the two charset rewrites the prescan performs before returning a
+/// label it found on a `meta` element.
+///
+/// A prescan only ever reaches a `meta` element through ASCII-compatible
+/// bytes, so a document that declares a UTF-16 encoding there has necessarily
+/// mislabeled itself, and the standard decodes it as UTF-8 instead.
+/// `x-user-defined` is likewise rewritten to windows-1252, leaving its
+/// private-use mapping to apply only when the transport layer asked for it.
+///
+/// <https://html.spec.whatwg.org/multipage/parsing.html#prescan-a-byte-stream-to-determine-its-encoding>
+fn prescan_charset_override(encoding: &'static Encoding) -> &'static Encoding {
+    if encoding == encoding_rs::UTF_16BE || encoding == encoding_rs::UTF_16LE {
+        encoding_rs::UTF_8
+    } else if encoding == encoding_rs::X_USER_DEFINED {
+        encoding_rs::WINDOWS_1252
+    } else {
+        encoding
+    }
 }
 
 fn charset_from_content_type(value: &str) -> Option<String> {

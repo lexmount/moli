@@ -135,3 +135,62 @@ fn finish_reports_not_found() {
     );
     assert_eq!(parser.finish(), HtmlMetaCharsetScanResult::NotFound);
 }
+
+#[test]
+fn meta_declared_utf16_is_rewritten_to_utf8() {
+    for label in ["utf-16", "utf-16le", "utf-16be", "UTF-16BE", "  utf-16  "] {
+        let input = format!(r#"<meta charset="{label}">"#);
+        assert_eq!(
+            sniff_html_meta_charset(input.as_bytes()).map(Encoding::name),
+            Some("UTF-8"),
+            "charset={label}"
+        );
+    }
+}
+
+#[test]
+fn meta_declared_x_user_defined_is_rewritten_to_windows1252() {
+    assert_eq!(
+        sniff_html_meta_charset(br#"<meta charset="x-user-defined">"#).map(Encoding::name),
+        Some("windows-1252")
+    );
+}
+
+#[test]
+fn content_type_pragma_charset_is_rewritten_too() {
+    assert_eq!(
+        sniff_html_meta_charset(
+            br#"<meta http-equiv="content-type" content="text/html; charset=utf-16">"#
+        )
+        .map(Encoding::name),
+        Some("UTF-8")
+    );
+    assert_eq!(
+        sniff_html_meta_charset(
+            br#"<meta http-equiv="content-type" content="text/html; charset=x-user-defined">"#
+        )
+        .map(Encoding::name),
+        Some("windows-1252")
+    );
+}
+
+#[test]
+fn other_meta_charset_labels_are_left_alone() {
+    for (label, expected) in [
+        ("utf-8", "UTF-8"),
+        ("gbk", "GBK"),
+        ("shift_jis", "Shift_JIS"),
+        ("iso-8859-1", "windows-1252"),
+    ] {
+        let input = format!(r#"<meta charset="{label}">"#);
+        assert_eq!(
+            sniff_html_meta_charset(input.as_bytes()).map(Encoding::name),
+            Some(expected),
+            "charset={label}"
+        );
+    }
+
+    // A label outside the Encoding Standard is still no match at all, rather
+    // than being rewritten to one of the two replacements above.
+    assert_eq!(sniff_html_meta_charset(br#"<meta charset="utf-32">"#), None);
+}
