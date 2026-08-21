@@ -1931,17 +1931,6 @@ pub struct SubresourceResponseWaitCriteria {
     pub json_path_equals: Option<SubresourceJsonPathEquals>,
 }
 
-impl PartialEq for SubresourceResponseWaitCriteria {
-    fn eq(&self, other: &Self) -> bool {
-        self.url_contains == other.url_contains
-            && self.body_regex.as_ref().map(Regex::as_str)
-                == other.body_regex.as_ref().map(Regex::as_str)
-            && self.json_path_equals == other.json_path_equals
-    }
-}
-
-impl Eq for SubresourceResponseWaitCriteria {}
-
 impl SubresourceResponseWaitCriteria {
     pub fn is_empty(&self) -> bool {
         self.url_contains.is_none() && self.body_regex.is_none() && self.json_path_equals.is_none()
