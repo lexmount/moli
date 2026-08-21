@@ -96,7 +96,11 @@ pub struct FetchArgs {
 
     /// Wait for a response whose body matches this regex. An invalid regex
     /// fails the fetch command immediately.
-    #[arg(long, value_parser = parse_response_body_regex)]
+    #[arg(
+        long,
+        value_name = "REGEX",
+        value_parser = parse_response_body_regex
+    )]
     pub wait_response_body: Option<ResponseBodyRegexArg>,
 
     #[arg(long, value_parser = parse_response_json_path_arg)]
@@ -171,10 +175,14 @@ fn parse_response_json_path_arg(raw: &str) -> Result<ResponseJsonPathArg, String
 
 #[derive(Debug, Clone)]
 pub struct ResponseBodyRegexArg {
-    pub regex: Regex,
+    regex: Regex,
 }
 
 impl ResponseBodyRegexArg {
+    pub(crate) fn regex(&self) -> &Regex {
+        &self.regex
+    }
+
     pub fn pattern(&self) -> &str {
         self.regex.as_str()
     }
@@ -590,6 +598,15 @@ mod tests {
         assert!(!help.contains("--redirect-time"));
         assert!(help.contains("Maximum total readiness time in milliseconds"));
         assert!(help.contains("response match, selector, and script waits share one absolute"));
+    }
+
+    #[test]
+    fn fetch_help_labels_response_body_pattern_as_regex() {
+        let help = Cli::try_parse_from(["moli", "fetch", "--help"])
+            .unwrap_err()
+            .to_string();
+
+        assert!(help.contains("--wait-response-body <REGEX>"));
     }
 
     #[test]

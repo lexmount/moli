@@ -302,7 +302,7 @@ pub fn response_wait_criteria_from_args(
         body_regex: args
             .wait_response_body
             .as_ref()
-            .map(|arg| arg.regex.clone()),
+            .map(|arg| arg.regex().clone()),
         json_path_equals: args
             .wait_response_json
             .as_ref()
