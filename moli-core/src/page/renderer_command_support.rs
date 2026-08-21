@@ -11,13 +11,14 @@ use super::protocol_support::{
 };
 use super::{CompletedPageCommand, Page, PendingPageCommand};
 use crate::renderer::{
-    RendererAutofillTriggerOutcome, RendererAutofillTriggerRequest, RendererCaptureScreenshotReply,
-    RendererCaptureScreenshotRequest, RendererDocumentChildNodeSnapshotEvents,
-    RendererDocumentFrontendNodeIdsResolution, RendererDocumentHitTestResult,
-    RendererDocumentNodeAttributesResolution, RendererDocumentNodeClientRect,
-    RendererDocumentNodeGeometry, RendererDocumentNodePropertyResolution,
-    RendererDocumentNodeReference, RendererDocumentNodeTextResolution,
-    RendererDocumentQuerySelectorResolution,
+    RendererAutofillTriggerOutcome, RendererAutofillTriggerRequest,
+    RendererCaptureScreencastFrameReply, RendererCaptureScreencastFrameRequest,
+    RendererCaptureScreenshotReply, RendererCaptureScreenshotRequest,
+    RendererDocumentChildNodeSnapshotEvents, RendererDocumentFrontendNodeIdsResolution,
+    RendererDocumentHitTestResult, RendererDocumentNodeAttributesResolution,
+    RendererDocumentNodeClientRect, RendererDocumentNodeGeometry,
+    RendererDocumentNodePropertyResolution, RendererDocumentNodeReference,
+    RendererDocumentNodeTextResolution, RendererDocumentQuerySelectorResolution,
     RendererDocumentQuerySelectorWithChildNodeSnapshotEvents, RendererDomAttributeMutation,
     RendererDomAttributeMutationOutcome, RendererDomBidiNodeBindingResolution,
     RendererDomBidiNodeSharedIdResolution, RendererDomEdit, RendererDomEditOutcome,
@@ -1512,6 +1513,30 @@ impl Page {
             "capture screenshot page command",
             "a capture screenshot reply",
             RendererPageReply::CaptureScreenshot(result) => Ok(result),
+        )
+    }
+
+    pub fn start_capture_screencast_frame(
+        &self,
+        request: RendererCaptureScreencastFrameRequest,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::CaptureScreencastFrame(request))
+    }
+
+    pub fn finish_capture_screencast_frame(
+        &mut self,
+        completion: CompletedPageCommand,
+    ) -> Result<RendererCaptureScreencastFrameReply> {
+        anyhow::ensure!(
+            completion.renderer_agent_attachment_id() == self.renderer_agent_attachment_id(),
+            "capture screencast frame completed for a stale renderer attachment"
+        );
+        let reply = self.finish_page_command(completion);
+        expect_page_reply!(
+            reply,
+            "capture screencast frame page command",
+            "a capture screencast frame reply",
+            RendererPageReply::CaptureScreencastFrame(result) => Ok(result),
         )
     }
 

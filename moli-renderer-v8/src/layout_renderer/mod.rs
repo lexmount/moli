@@ -6,9 +6,8 @@ use std::collections::HashMap;
 
 use moli_layout::{
     DocumentLayoutServices, EmbeddedFrameRenderer, LayoutPassRequest, LayoutPassResult,
-    LayoutSource, LayoutViewport, build_layout_pass_with_embedded_frames,
+    LayoutViewport, build_layout_pass_with_embedded_frames,
 };
-use style::values::generics::image::GenericImage;
 
 use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
 
@@ -32,77 +31,6 @@ pub(crate) fn current_native_stylesheet_web_font_resources(
         }
     }
     resources.into_values().collect()
-}
-
-/// Resolves the direct `url()` layers visible to the next paint pass.
-///
-/// Initial stylesheet discovery starts most requests earlier. This computed
-/// walk closes the gap for inline styles, CSSOM mutations, and pseudo styles
-/// while using the exact absolute URLs produced by Stylo.
-pub(crate) fn current_native_css_image_resources(
-    runtime: &JsContextHost,
-    root: DomHandle,
-) -> Vec<crate::css_resource_urls::StylesheetLoadBlockingResource> {
-    let source = source_view::NativeLayoutSourceView::new(runtime, root);
-    let mut reads = crate::native_bridge::element::ComputedStyleReadScope::new(runtime);
-    let mut urls = std::collections::BTreeMap::new();
-    let mut stack = vec![root];
-    let mut seen = std::collections::HashSet::new();
-    while let Some(node) = stack.pop() {
-        if !seen.insert(node) {
-            continue;
-        }
-        let children = source.flat_children(node).collect::<Vec<_>>();
-        stack.extend(children.into_iter().rev());
-        if source.node_kind(node) != moli_layout::LayoutSourceKind::Element {
-            continue;
-        }
-
-        let read = reads.read(node);
-        if let Some(computed) = read.computed_values() {
-            collect_computed_css_image_urls(computed.as_ref(), &mut urls);
-        }
-        for pseudo in ["marker", "before", "after"] {
-            if let Some(computed) = read.pseudo_computed_values(pseudo) {
-                collect_computed_css_image_urls(computed.as_ref(), &mut urls);
-            }
-        }
-    }
-    urls.into_values()
-        .map(crate::css_resource_urls::StylesheetLoadBlockingResource::image)
-        .collect()
-}
-
-fn collect_computed_css_image_urls(
-    computed: &style::properties::ComputedValues,
-    output: &mut std::collections::BTreeMap<String, url::Url>,
-) {
-    let images = computed
-        .get_background()
-        .background_image
-        .0
-        .iter()
-        .chain(computed.get_svg().mask_image.0.iter());
-    for image in images {
-        let GenericImage::Url(computed_url) = image else {
-            continue;
-        };
-        let Some(url) = computed_url.url() else {
-            continue;
-        };
-        if !matches!(url.scheme(), "http" | "https" | "data" | "blob") {
-            continue;
-        }
-        // Blink removes fragments for the shared fetch but retains them on
-        // StyleFetchedImage for SVG view/element selection. We defer those
-        // views until that second semantic layer exists.
-        if url.fragment().is_some() {
-            continue;
-        }
-        output
-            .entry(url.as_str().to_owned())
-            .or_insert_with(|| url.as_ref().clone());
-    }
 }
 
 pub(crate) fn build_native_layout_pass(
@@ -214,8 +142,12 @@ impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
         );
         self.embedded_document_services.insert(document, services);
         let output = result?;
-        let (tree, paint) = output.into_tree_and_paint_snapshot();
-        Ok(Some(moli_layout::EmbeddedFrameSnapshot::new(tree, paint)))
+        let (tree, paint, css_image_references) = output.into_embedded_parts();
+        Ok(Some(moli_layout::EmbeddedFrameSnapshot::new(
+            tree,
+            paint,
+            css_image_references,
+        )))
     }
 }
 

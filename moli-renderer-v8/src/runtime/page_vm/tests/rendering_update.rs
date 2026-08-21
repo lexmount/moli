@@ -11,12 +11,10 @@ use crate::script_vm::MainDocumentLifecycleBody;
 
 fn viewport_screencast_request(
     known_visual_state: Option<crate::runtime::RendererVisualStateToken>,
-) -> crate::runtime::RendererCaptureScreenshotRequest {
-    crate::runtime::RendererCaptureScreenshotRequest {
-        purpose: crate::runtime::RendererScreenshotPurpose::Screencast,
+) -> crate::runtime::RendererCaptureScreencastFrameRequest {
+    crate::runtime::RendererCaptureScreencastFrameRequest {
         format: crate::runtime::RendererScreenshotFormat::Png,
         quality: 100,
-        region: crate::runtime::RendererScreenshotRegion::Viewport,
         optimize_for_speed: true,
         max_width: None,
         max_height: None,
@@ -464,24 +462,22 @@ child.adoptedStyleSheets = [globalThis.__childScreencastSheet];
         )?;
 
         let passes_before = page_vm.vm().layout_pass_observability_for_test().1;
-        let crate::runtime::RendererCaptureScreenshotReply::Captured(first) =
-            page_vm.capture_screenshot(viewport_screencast_request(None))?
+        let crate::runtime::RendererCaptureScreencastFrameReply::Captured(first) =
+            page_vm.capture_screencast_frame(viewport_screencast_request(None))?
         else {
             panic!("first child-style screencast demand must capture a frame");
         };
-        let first_raster = moli_image::decode_png(&first.bytes)?;
+        let first_raster = moli_image::decode_png(&first.image.bytes)?;
         assert_eq!(&first_raster.rgba[0..4], [255, 0, 0, 255]);
-        let first_visual_state = first
-            .visual_state
-            .expect("a screencast frame must publish visual-state metadata");
+        let first_visual_state = first.visual_state;
         let passes_after_first = page_vm.vm().layout_pass_observability_for_test().1;
         assert_eq!(passes_after_first, passes_before + 1);
 
         assert_eq!(
-            page_vm.capture_screenshot(viewport_screencast_request(Some(
+            page_vm.capture_screencast_frame(viewport_screencast_request(Some(
                 first_visual_state.clone(),
             )))?,
-            crate::runtime::RendererCaptureScreenshotReply::ScreencastUnchanged,
+            crate::runtime::RendererCaptureScreencastFrameReply::Unchanged,
         );
         assert_eq!(
             page_vm.vm().layout_pass_observability_for_test().1,
@@ -492,8 +488,8 @@ child.adoptedStyleSheets = [globalThis.__childScreencastSheet];
         page_vm
             .vm_mut()
             .eval("globalThis.__childScreencastSheet.replaceSync('body { background: blue; }')")?;
-        let crate::runtime::RendererCaptureScreenshotReply::Captured(refreshed) = page_vm
-            .capture_screenshot(viewport_screencast_request(Some(
+        let crate::runtime::RendererCaptureScreencastFrameReply::Captured(refreshed) = page_vm
+            .capture_screencast_frame(viewport_screencast_request(Some(
                 first_visual_state.clone(),
             )))?
         else {
@@ -504,8 +500,8 @@ child.adoptedStyleSheets = [globalThis.__childScreencastSheet];
             passes_after_first + 1,
             "a child-only stylesheet generation must invalidate the session token",
         );
-        assert_ne!(refreshed.visual_state.as_ref(), Some(&first_visual_state));
-        let refreshed_raster = moli_image::decode_png(&refreshed.bytes)?;
+        assert_ne!(refreshed.visual_state, first_visual_state);
+        let refreshed_raster = moli_image::decode_png(&refreshed.image.bytes)?;
         assert_eq!(&refreshed_raster.rgba[0..4], [0, 0, 255, 255]);
         Ok::<_, anyhow::Error>(())
     })
@@ -551,17 +547,21 @@ context.fillRect(0, 0, 40, 100);
 "#,
         )?;
 
-        let crate::runtime::RendererCaptureScreenshotReply::Captured(first) =
-            page_vm.capture_screenshot(viewport_screencast_request(None))?
+        let crate::runtime::RendererCaptureScreencastFrameReply::Captured(first) =
+            page_vm.capture_screencast_frame(viewport_screencast_request(None))?
         else {
             panic!("initial canvas screencast demand must capture a frame");
         };
-        let first_state = first.visual_state.expect("initial visual-state token");
-        assert_eq!(&moli_image::decode_png(&first.bytes)?.rgba[0..4], [255, 0, 0, 255]);
+        let first_state = first.visual_state;
+        assert_eq!(
+            &moli_image::decode_png(&first.image.bytes)?.rgba[0..4],
+            [255, 0, 0, 255]
+        );
 
         assert_eq!(
-            page_vm.capture_screenshot(viewport_screencast_request(Some(first_state.clone())))?,
-            crate::runtime::RendererCaptureScreenshotReply::ScreencastUnchanged,
+            page_vm
+                .capture_screencast_frame(viewport_screencast_request(Some(first_state.clone())))?,
+            crate::runtime::RendererCaptureScreencastFrameReply::Unchanged,
         );
 
         // Canvas pixel writes do not mutate the DOM or stylesheet worlds. The
@@ -569,40 +569,34 @@ context.fillRect(0, 0, 40, 100);
         page_vm.vm_mut().eval(
             "const c=document.getElementById('surface').getContext('2d');c.fillStyle='#0000ff';c.fillRect(0,0,40,100);'painted'",
         )?;
-        let crate::runtime::RendererCaptureScreenshotReply::Captured(canvas_frame) = page_vm
-            .capture_screenshot(viewport_screencast_request(Some(first_state.clone())))?
+        let crate::runtime::RendererCaptureScreencastFrameReply::Captured(canvas_frame) = page_vm
+            .capture_screencast_frame(viewport_screencast_request(Some(first_state.clone())))?
         else {
             panic!("canvas mutation must capture a fresh screencast frame");
         };
-        let canvas_state = canvas_frame
-            .visual_state
-            .expect("canvas frame visual-state token");
+        let canvas_state = canvas_frame.visual_state;
         assert_ne!(canvas_state, first_state);
         assert_eq!(
-            &moli_image::decode_png(&canvas_frame.bytes)?.rgba[0..4],
+            &moli_image::decode_png(&canvas_frame.image.bytes)?.rgba[0..4],
             [0, 0, 255, 255]
         );
 
         page_vm.vm_mut().eval("scrollTo(0, 30); scrollY")?;
-        let crate::runtime::RendererCaptureScreenshotReply::Captured(scrolled) = page_vm
-            .capture_screenshot(viewport_screencast_request(Some(canvas_state.clone())))?
+        let crate::runtime::RendererCaptureScreencastFrameReply::Captured(scrolled) = page_vm
+            .capture_screencast_frame(viewport_screencast_request(Some(canvas_state.clone())))?
         else {
             panic!("scroll mutation must capture a fresh screencast frame");
         };
-        let scrolled_state = scrolled
-            .visual_state
-            .expect("scrolled frame visual-state token");
+        let scrolled_state = scrolled.visual_state;
         assert_ne!(scrolled_state, canvas_state);
 
         let passes_before_screenshot = page_vm.vm().layout_pass_observability_for_test().1;
-        let mut screenshot = crate::runtime::RendererCaptureScreenshotRequest::viewport_png();
-        screenshot.known_visual_state = Some(scrolled_state);
         let crate::runtime::RendererCaptureScreenshotReply::Captured(screenshot) =
-            page_vm.capture_screenshot(screenshot)?
+            page_vm.capture_screenshot(crate::runtime::RendererCaptureScreenshotRequest::viewport_png())?
         else {
             panic!("ordinary screenshots must ignore screencast token suppression");
         };
-        assert!(screenshot.visual_state.is_none());
+        assert_eq!(screenshot.mime_type, "image/png");
         assert_eq!(
             page_vm.vm().layout_pass_observability_for_test().1,
             passes_before_screenshot + 1,
@@ -611,6 +605,62 @@ context.fillRect(0, 0, 40, 100);
     })
     .await
     .expect("screencast visual generations fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn async_resource_publication_during_screencast_capture_forces_a_followup_frame() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/screencast-resource-race.html")?,
+        );
+        page_vm
+            .vm_mut()
+            .eval("document.documentElement.style.cssText='margin:0;background:red';'ready'")?;
+
+        let generation = page_vm.vm().visual_resource_generation_handle_for_test();
+        let rendezvous = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let worker_rendezvous = rendezvous.clone();
+        let completion = std::thread::spawn(move || {
+            worker_rendezvous.wait();
+            generation.bump();
+            worker_rendezvous.wait();
+        });
+
+        let crate::runtime::RendererCaptureScreencastFrameReply::Captured(raced) = page_vm
+            .capture_screencast_frame_with_before_layout_hook(
+                viewport_screencast_request(None),
+                || {
+                    rendezvous.wait();
+                    rendezvous.wait();
+                },
+            )?
+        else {
+            panic!("the initial screencast poll must capture a frame");
+        };
+        completion
+            .join()
+            .expect("the asynchronous resource publisher must finish");
+
+        let crate::runtime::RendererCaptureScreencastFrameReply::Captured(followup) = page_vm
+            .capture_screencast_frame(viewport_screencast_request(Some(raced.visual_state)))?
+        else {
+            panic!("a resource publication racing the prior paint must force one followup frame");
+        };
+        assert_eq!(
+            page_vm.capture_screencast_frame(viewport_screencast_request(Some(
+                followup.visual_state,
+            )))?,
+            crate::runtime::RendererCaptureScreencastFrameReply::Unchanged,
+            "the followup frame must close the resource-generation race",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("screencast resource-race fixture should run");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -2153,10 +2203,12 @@ document.body.innerHTML = '<div id=negative class=case></div><div id=overflow cl
 }
 
 #[tokio::test]
-async fn child_document_cssom_invalidates_generation_gated_image_discovery() {
+async fn child_document_layout_discovers_cssom_image_with_child_resource_owner() {
     run_page_vm_async_test(async move {
         let image_url =
             "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+3MxZ5wAAAABJRU5ErkJggg==";
+        let hidden_image_url =
+            "data:image/webp;base64,UklGRhwAAABXRUJQVlA4TA8AAAAvAUAAAAcQ/Y/+ByKi/wEA";
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         loader.set_optional_resource_fetch_mask(
@@ -2175,7 +2227,7 @@ async fn child_document_cssom_invalidates_generation_gated_image_discovery() {
 const frame = document.createElement('iframe');
 document.body.appendChild(frame);
 const child = frame.contentDocument;
-child.body.innerHTML = '<div id=target style="width:20px;height:20px"></div>';
+child.body.innerHTML = '<div id=target style="width:20px;height:20px"></div><div id=hidden></div>';
 globalThis.__childImageSheet = new frame.contentWindow.CSSStyleSheet();
 globalThis.__childImageSheet.replaceSync('#target { background: red; }');
 child.adoptedStyleSheets = [globalThis.__childImageSheet];
@@ -2188,30 +2240,20 @@ child.adoptedStyleSheets = [globalThis.__childImageSheet];
             .vm_mut()
             .screenshot_layout_snapshot(viewport)?
             .expect("initial child document paint");
-        let after_first = page_vm.vm().css_image_discovery_count_for_test();
         page_vm
             .vm_mut()
             .screenshot_layout_snapshot(viewport)?
             .expect("clean child document paint");
-        assert_eq!(
-            page_vm.vm().css_image_discovery_count_for_test(),
-            after_first,
-            "a clean child style world must reuse its discovery result",
-        );
 
         page_vm.vm_mut().eval(&format!(
-            "globalThis.__childImageSheet.replaceSync('#target {{ background-image: url({}); }}')",
+            "globalThis.__childImageSheet.replaceSync('#target {{ background-image: url({}); }} #hidden {{ display:none; background-image:url({}); }}')",
             serde_json::to_string(image_url)?,
+            serde_json::to_string(hidden_image_url)?,
         ))?;
         page_vm
             .vm_mut()
             .screenshot_layout_snapshot(viewport)?
             .expect("mutated child document paint");
-        assert_eq!(
-            page_vm.vm().css_image_discovery_count_for_test(),
-            after_first + 1,
-            "a child-only CSSOM generation must invalidate root paint discovery",
-        );
         assert!(
             page_vm
                 .vm()
@@ -2219,7 +2261,16 @@ child.adoptedStyleSheets = [globalThis.__childImageSheet];
                 .4
                 .iter()
                 .any(|url| url == image_url),
-            "computed discovery must walk the child Document root",
+            "the recursive child layout must bind its computed URL to the child Document",
+        );
+        assert!(
+            !page_vm
+                .vm()
+                .css_image_resource_observability_for_test()
+                .4
+                .iter()
+                .any(|url| url == hidden_image_url),
+            "a display:none subtree must not fetch a CSS image merely because it exists in the DOM",
         );
         Ok::<_, anyhow::Error>(())
     })
@@ -2228,7 +2279,7 @@ child.adoptedStyleSheets = [globalThis.__childImageSheet];
 }
 
 #[tokio::test]
-async fn css_image_discovery_is_generation_gated_across_fresh_paint_passes() {
+async fn css_image_discovery_runs_inside_each_fresh_paint_layout() {
     run_page_vm_async_test(async move {
         // A lossless 2x2 red WebP. Keep the HTTP fixture encoded so this
         // product path exercises metadata probing and bounded WebP decode.
@@ -2262,6 +2313,12 @@ async fn css_image_discovery_is_generation_gated_across_fresh_paint_passes() {
                 br#"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect x="20" width="20" height="20" fill="white"/></svg>"#,
             )
         );
+            let pseudo_url = format!(
+                "data:image/svg+xml;base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(
+                    br#"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><rect width="2" height="2" fill="green"/></svg>"#,
+                )
+            );
             let css = format!(
                 r#"
 html,body{{margin:0;padding:0;background:white}}
@@ -2271,10 +2328,12 @@ html,body{{margin:0;padding:0;background:white}}
 #masked{{top:60px;background:red;mask-image:url("{mask_url}");mask-size:40px 20px;mask-repeat:no-repeat}}
 #inline-line{{position:absolute;left:0;top:90px;font:20px/20px sans-serif}}
 #inline-vector{{padding:0 10px;color:transparent;background-image:url("{vector_url}");background-size:20px 20px;background-repeat:repeat-x}}
+#pseudo{{position:absolute;left:50px;top:0;width:20px;height:20px}}
+#pseudo::before{{content:"";display:block;width:20px;height:20px;background-image:url("{pseudo_url}");background-size:20px 20px}}
 "#
             );
             page_vm.vm_mut().eval(&format!(
-                "document.head.innerHTML='<style id=fixture></style>';document.getElementById('fixture').textContent={};document.body.innerHTML='<div id=raster class=case></div><div id=vector class=case></div><div id=masked class=case></div><div id=inline-line><span id=inline-vector>X</span></div>';'installed'",
+                "document.head.innerHTML='<style id=fixture></style>';document.getElementById('fixture').textContent={};document.body.innerHTML='<div id=raster class=case></div><div id=vector class=case></div><div id=masked class=case></div><div id=inline-line><span id=inline-vector>X</span></div><div id=pseudo></div>';'installed'",
                 serde_json::to_string(&css)?,
             ))?;
             page_vm.vm_mut().sync_live_document_style_sources();
@@ -2282,7 +2341,6 @@ html,body{{margin:0;padding:0;background:white}}
             // The first paint demand discovers computed CSSOM URLs and queues
             // the bounded decoders. CSS images have no DOM load-event task; a
             // later screencast/screenshot samples immutable ready resources.
-            let discoveries_before = page_vm.vm().css_image_discovery_count_for_test();
             let passes_before = page_vm.vm().layout_pass_observability_for_test().1;
             page_vm
                 .vm_mut()
@@ -2291,11 +2349,9 @@ html,body{{margin:0;padding:0;background:white}}
                     moli_layout::LayoutFlushReason::Screencast,
                 )?
                 .expect("CSS image fixture must retain a layout root");
-            let discoveries_after_first = page_vm.vm().css_image_discovery_count_for_test();
-            assert_eq!(discoveries_after_first, discoveries_before + 1);
             let passes_after_first = page_vm.vm().layout_pass_observability_for_test().1;
             assert_eq!(passes_after_first, passes_before + 1);
-            let urls = [&raster_url, &vector_url, &mask_url];
+            let urls = [&raster_url, &vector_url, &mask_url, &pseudo_url];
             let completion_notify = page_vm.vm().css_image_completion_notify_for_test();
             let all_ready = tokio::time::timeout(std::time::Duration::from_secs(3), async {
                 loop {
@@ -2333,13 +2389,8 @@ html,body{{margin:0;padding:0;background:white}}
                 passes_after_first + 1,
                 "each explicit paint demand must still execute a fresh layout",
             );
-            assert_eq!(
-                page_vm.vm().css_image_discovery_count_for_test(),
-                discoveries_after_first,
-                "resource completion and an unchanged paint must reuse CSS image discovery",
-            );
             assert_eq!(snapshot.images.len(), 1);
-            assert_eq!(snapshot.svg_images.len(), 3);
+            assert_eq!(snapshot.svg_images.len(), 4);
             assert!(snapshot.fragments.iter().any(|fragment| {
                 matches!(fragment, moli_layout::PaintFragment::Image(_))
             }));
@@ -2359,10 +2410,13 @@ html,body{{margin:0;padding:0;background:white}}
                 &image.rgba[index..index + 4]
             };
             assert_eq!(pixel(5, 5), [255, 0, 0, 255]);
+            assert_eq!(pixel(55, 5), [0, 128, 0, 255]);
 
             page_vm
                 .vm_mut()
                 .eval("document.getElementById('raster').style.backgroundPosition = '1px 0px'")?;
+            let resources_before_style_only_paint =
+                page_vm.vm().css_image_resource_observability_for_test();
             page_vm
                 .vm_mut()
                 .paint_layout_snapshot(
@@ -2371,9 +2425,9 @@ html,body{{margin:0;padding:0;background:white}}
                 )?
                 .expect("style-mutated CSS image fixture must retain a layout root");
             assert_eq!(
-                page_vm.vm().css_image_discovery_count_for_test(),
-                discoveries_after_first + 1,
-                "a style mutation must invalidate CSS image discovery",
+                page_vm.vm().css_image_resource_observability_for_test(),
+                resources_before_style_only_paint,
+                "layout-local discovery must deduplicate already admitted Document/URL resources",
             );
             assert_eq!(pixel(35, 5), [255, 0, 0, 255]);
             assert_eq!(pixel(5, 15), [255, 255, 255, 255]);

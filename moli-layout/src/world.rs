@@ -4,8 +4,8 @@ use style::Atom;
 use taffy::{Cache, Layout, Point, Style};
 
 use crate::{
-    LayoutElementSemantics, LayoutError, LayoutPoint, LayoutPseudo, ReplacedMetrics,
-    ResolvedLayoutStyle, inline::InlineFormattingContext,
+    LayoutCssImageReference, LayoutElementSemantics, LayoutError, LayoutPoint, LayoutPseudo,
+    ReplacedMetrics, ResolvedLayoutStyle, inline::InlineFormattingContext,
 };
 
 /// Dense identifier scoped to exactly one [`LayoutWorld`].
@@ -347,6 +347,7 @@ where
     pub(crate) display_contents_mapping: HashMap<N, Vec<LayoutBoxId>>,
     pub(crate) root: LayoutBoxId,
     pub(crate) viewport_layout: ViewportLayoutState,
+    pub(crate) css_image_references: Vec<LayoutCssImageReference<N>>,
 }
 
 impl<N> LayoutWorld<N>
@@ -360,6 +361,7 @@ where
             display_contents_mapping: HashMap::new(),
             root: LayoutBoxId::from_index(0),
             viewport_layout: ViewportLayoutState::default(),
+            css_image_references: Vec::new(),
         }
     }
 

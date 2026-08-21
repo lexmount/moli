@@ -861,6 +861,9 @@ impl PageVm {
             RendererPageCommand::CaptureScreenshot(request) => self
                 .capture_screenshot(request)
                 .map(RendererPageReply::CaptureScreenshot),
+            RendererPageCommand::CaptureScreencastFrame(request) => self
+                .capture_screencast_frame(request)
+                .map(RendererPageReply::CaptureScreencastFrame),
             RendererPageCommand::BlobBytesForUuid { uuid } => Ok(
                 RendererPageReply::OptionalBlobBytes(self.vm().blob_bytes_for_uuid(&uuid)),
             ),
@@ -1406,9 +1409,11 @@ fn renderer_page_command_action_barrier(
         }
         RendererPageCommand::CaptureScreenshot(request) => Some(match request.purpose {
             RendererScreenshotPurpose::Screenshot => moli_action_window::ActionBarrier::Screenshot,
-            RendererScreenshotPurpose::Screencast => moli_action_window::ActionBarrier::Screencast,
             RendererScreenshotPurpose::Print { .. } => moli_action_window::ActionBarrier::Explicit,
         }),
+        RendererPageCommand::CaptureScreencastFrame(_) => {
+            Some(moli_action_window::ActionBarrier::Screencast)
+        }
         _ => Some(moli_action_window::ActionBarrier::Explicit),
     }
 }

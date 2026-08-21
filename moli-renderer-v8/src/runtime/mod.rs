@@ -293,8 +293,9 @@ pub(crate) use self::page_context_cancel::{
     RendererPageContextCancelSender, renderer_page_context_cancel_channel,
 };
 pub use self::page_screenshot::{
-    RendererCaptureScreenshotRequest, RendererScreenshotClip, RendererScreenshotFormat,
-    RendererScreenshotPurpose, RendererScreenshotRegion, RendererVisualStateToken,
+    RendererCaptureScreencastFrameRequest, RendererCaptureScreenshotRequest,
+    RendererScreenshotClip, RendererScreenshotFormat, RendererScreenshotPurpose,
+    RendererScreenshotRegion, RendererVisualStateToken,
 };
 pub(super) use self::page_state::RendererPageEntry;
 pub use self::page_state::RendererPageRecord;
@@ -305,17 +306,18 @@ pub use self::page_surface::RendererRuntimeInspectorMessageResponseOrder;
 pub use self::page_surface::{
     DevToolsSessionKey, RendererAccessibilityPayloadsForObjectId, RendererActivityDiagnostics,
     RendererAgentAttachmentId, RendererAutofillAddressField, RendererAutofillCreditCard,
-    RendererAutofillTriggerOutcome, RendererAutofillTriggerRequest, RendererCaptureScreenshotReply,
-    RendererCapturedScreenshot, RendererCommandTurnCompletion, RendererCommandTurnOutput,
-    RendererCountEntry, RendererDedicatedWorkerTargetEvent, RendererDedicatedWorkerTargetInfo,
-    RendererDevToolsAgentToken, RendererDocumentBoxModel, RendererDocumentChildNodeSnapshotEvent,
-    RendererDocumentChildNodeSnapshotEvents, RendererDocumentChildNodeSnapshots,
-    RendererDocumentFrontendNodeIdsResolution, RendererDocumentHitTestResult,
-    RendererDocumentIsolateAccountingDiagnostics, RendererDocumentNodeAttributesResolution,
-    RendererDocumentNodeClientRect, RendererDocumentNodeGeometry,
-    RendererDocumentNodePropertyResolution, RendererDocumentNodeReference,
-    RendererDocumentNodeTextResolution, RendererDocumentQuerySelectorNode,
-    RendererDocumentQuerySelectorResolution,
+    RendererAutofillTriggerOutcome, RendererAutofillTriggerRequest,
+    RendererCaptureScreencastFrameReply, RendererCaptureScreenshotReply,
+    RendererCapturedScreencastFrame, RendererCapturedScreenshot, RendererCommandTurnCompletion,
+    RendererCommandTurnOutput, RendererCountEntry, RendererDedicatedWorkerTargetEvent,
+    RendererDedicatedWorkerTargetInfo, RendererDevToolsAgentToken, RendererDocumentBoxModel,
+    RendererDocumentChildNodeSnapshotEvent, RendererDocumentChildNodeSnapshotEvents,
+    RendererDocumentChildNodeSnapshots, RendererDocumentFrontendNodeIdsResolution,
+    RendererDocumentHitTestResult, RendererDocumentIsolateAccountingDiagnostics,
+    RendererDocumentNodeAttributesResolution, RendererDocumentNodeClientRect,
+    RendererDocumentNodeGeometry, RendererDocumentNodePropertyResolution,
+    RendererDocumentNodeReference, RendererDocumentNodeTextResolution,
+    RendererDocumentQuerySelectorNode, RendererDocumentQuerySelectorResolution,
     RendererDocumentQuerySelectorWithChildNodeSnapshotEvents,
     RendererDocumentSourcedSameDocumentNavigation,
     RendererDocumentSourcedTopLevelLocationNavigation, RendererDomAttributeMutation,

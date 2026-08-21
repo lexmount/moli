@@ -36,6 +36,10 @@ where
     projection.assign_clip_and_paint_order();
 
     let content_size = projection.document_content_size();
+    let mut css_image_references = world.css_image_references.clone();
+    for (_, snapshot) in embedded_frames.values_mut() {
+        css_image_references.append(&mut snapshot.css_image_references);
+    }
     let mut embedded_paint = embedded_frames
         .iter_mut()
         .filter_map(|(id, (_, snapshot))| snapshot.paint.take().map(|paint| (*id, paint)))
@@ -97,6 +101,7 @@ where
         diagnostics,
         metrics,
         paint_snapshot,
+        css_image_references,
     ))
 }
 

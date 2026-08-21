@@ -41,6 +41,8 @@ where
     styles: &'a mut R,
     active_sources: HashSet<S::NodeId>,
     seen_sources: HashMap<S::NodeId, String>,
+    seen_css_images: HashSet<(S::NodeId, String)>,
+    css_image_references: Vec<crate::LayoutCssImageReference<S::NodeId>>,
 }
 
 impl<'a, S, R> BoxBuilder<'a, S, R>
@@ -54,6 +56,8 @@ where
             styles,
             active_sources: HashSet::new(),
             seen_sources: HashMap::new(),
+            seen_css_images: HashSet::new(),
+            css_image_references: Vec::new(),
         }
     }
 
@@ -133,6 +137,7 @@ where
 
         world.compact_reachable();
         world.validate_invariants()?;
+        world.css_image_references = self.css_image_references;
         Ok(world)
     }
 
@@ -264,7 +269,7 @@ where
     }
 
     fn principal_box(
-        &self,
+        &mut self,
         source_node: S::NodeId,
         source_label: String,
         semantics: LayoutElementSemantics,
@@ -286,7 +291,12 @@ where
             metrics,
         );
         layout_box.replaced_image = self.source.replaced_image(source_node, &style);
-        layout_box.css_images = self.css_image_resources(&style);
+        if !matches!(
+            style.display(),
+            LayoutDisplay::None | LayoutDisplay::Contents
+        ) {
+            layout_box.css_images = self.css_image_resources(source_node, &style);
+        }
         layout_box.scroll_offset = self.source.scroll_offset(source_node);
         layout_box
     }
@@ -362,7 +372,7 @@ where
             None,
             None,
         );
-        layout_box.css_images = self.css_image_resources(&style);
+        layout_box.css_images = self.css_image_resources(owner, &style);
         if style.has_unsupported_generated_content() {
             push_diagnostic(
                 &mut layout_box.capability_diagnostics,
@@ -519,7 +529,7 @@ where
     }
 
     fn allocate_inline_continuation(
-        &self,
+        &mut self,
         world: &mut LayoutWorld<S::NodeId>,
         owner: S::NodeId,
         style: &ResolvedLayoutStyle,
@@ -538,33 +548,56 @@ where
             None,
             None,
         );
-        continuation.css_images = self.css_image_resources(style);
+        continuation.css_images = self.css_image_resources(owner, style);
         world.allocate(continuation)
     }
 
     fn css_image_resources(
-        &self,
+        &mut self,
+        source: S::NodeId,
         style: &ResolvedLayoutStyle,
     ) -> crate::source::LayoutCssImageResources {
         let Some(computed) = style.stylo_computed_values() else {
             return crate::source::LayoutCssImageResources::default();
         };
-        let sample = |image: &style::values::computed::Image| match image {
-            GenericImage::Url(url) => url
-                .url()
-                .and_then(|url| self.source.css_image_resource(url.as_str())),
-            _ => None,
+        let background = computed
+            .get_background()
+            .background_image
+            .0
+            .iter()
+            .map(|image| self.css_image_resource(source, image))
+            .collect();
+        let mask = computed
+            .get_svg()
+            .mask_image
+            .0
+            .iter()
+            .map(|image| self.css_image_resource(source, image))
+            .collect();
+        crate::source::LayoutCssImageResources { background, mask }
+    }
+
+    fn css_image_resource(
+        &mut self,
+        source: S::NodeId,
+        image: &style::values::computed::Image,
+    ) -> Option<crate::LayoutImageResource> {
+        let GenericImage::Url(computed_url) = image else {
+            return None;
         };
-        crate::source::LayoutCssImageResources {
-            background: computed
-                .get_background()
-                .background_image
-                .0
-                .iter()
-                .map(sample)
-                .collect(),
-            mask: computed.get_svg().mask_image.0.iter().map(sample).collect(),
+        let url = computed_url.url()?;
+        if !matches!(url.scheme(), "http" | "https" | "data" | "blob") || url.fragment().is_some() {
+            return None;
         }
+        let resolved_url = url.as_str().to_owned();
+        if self.seen_css_images.insert((source, resolved_url.clone())) {
+            self.css_image_references
+                .push(crate::LayoutCssImageReference {
+                    source,
+                    resolved_url,
+                });
+        }
+        self.source.css_image_resource(url.as_str())
     }
 
     fn normalize_flow_children(

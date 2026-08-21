@@ -84,7 +84,8 @@ pub use moli_renderer_v8::network::{
 pub use moli_renderer_v8::{
     DevToolsSessionKey, RendererActivityDiagnostics, RendererAgentAttachmentId,
     RendererAutofillAddressField, RendererAutofillCreditCard, RendererAutofillTriggerOutcome,
-    RendererAutofillTriggerRequest, RendererCaptureScreenshotReply,
+    RendererAutofillTriggerRequest, RendererCaptureScreencastFrameReply,
+    RendererCaptureScreencastFrameRequest, RendererCaptureScreenshotReply,
     RendererCaptureScreenshotRequest, RendererCommandTurnCompletion, RendererCommandTurnOutput,
     RendererDedicatedWorkerTargetEvent, RendererDedicatedWorkerTargetInfo,
     RendererDevToolsAgentToken, RendererDocumentHitTestResult,

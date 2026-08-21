@@ -152,6 +152,7 @@ mod text_track_default_modes;
 mod traversal_state;
 mod user_interaction_tasks;
 mod view_transition_updates;
+pub(crate) mod visual_resource_generation;
 mod webcrypto_tasks;
 mod websockets;
 mod window_document_tasks;

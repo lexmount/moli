@@ -19,6 +19,7 @@ where
 {
     pub tree: FrozenLayoutTree<N>,
     pub paint: Option<PaintSnapshot>,
+    pub css_image_references: Vec<crate::LayoutCssImageReference<N>>,
 }
 
 impl<N> EmbeddedFrameSnapshot<N>
@@ -26,8 +27,16 @@ where
     N: Copy + std::fmt::Debug + Eq + std::hash::Hash,
 {
     #[must_use]
-    pub const fn new(tree: FrozenLayoutTree<N>, paint: Option<PaintSnapshot>) -> Self {
-        Self { tree, paint }
+    pub const fn new(
+        tree: FrozenLayoutTree<N>,
+        paint: Option<PaintSnapshot>,
+        css_image_references: Vec<crate::LayoutCssImageReference<N>>,
+    ) -> Self {
+        Self {
+            tree,
+            paint,
+            css_image_references,
+        }
     }
 }
 

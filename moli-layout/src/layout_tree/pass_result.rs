@@ -9,6 +9,16 @@ use super::{
     tree::{FrozenLayoutTree, LayoutTreeRetentionMetrics},
 };
 
+/// One direct computed CSS image URL observed while constructing a box.
+///
+/// The source node keeps the owning `Document` recoverable at the renderer
+/// boundary without teaching this crate about browsing contexts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LayoutCssImageReference<N> {
+    pub source: N,
+    pub resolved_url: String,
+}
+
 /// Why a full, synchronous layout pass was forced.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LayoutFlushReason {
@@ -46,6 +56,7 @@ where
     pub diagnostics: Vec<PaintDiagnostic>,
     pub metrics: LayoutPassMetrics,
     paint_snapshot: Option<PaintSnapshot>,
+    css_image_references: Vec<LayoutCssImageReference<N>>,
 }
 
 impl<N> Deref for LayoutPassResult<N>
@@ -67,6 +78,10 @@ where
         self.paint_snapshot.as_ref()
     }
 
+    pub fn css_image_references(&self) -> &[LayoutCssImageReference<N>] {
+        &self.css_image_references
+    }
+
     pub fn take_paint_snapshot(&mut self) -> Result<PaintSnapshot, LayoutError> {
         self.paint_snapshot
             .take()
@@ -83,11 +98,16 @@ where
         self.tree
     }
 
-    /// Consumes one pass into the sole retainable tree plus optional one-shot
-    /// paint input. Embedded-frame composition uses this to nest the child tree
-    /// into its parent while separately consuming paint into the parent frame.
-    pub fn into_tree_and_paint_snapshot(self) -> (FrozenLayoutTree<N>, Option<PaintSnapshot>) {
-        (self.tree, self.paint_snapshot)
+    /// Consumes all products needed to compose an embedded frame into its
+    /// parent pass, including resource discovery metadata from that child.
+    pub fn into_embedded_parts(
+        self,
+    ) -> (
+        FrozenLayoutTree<N>,
+        Option<PaintSnapshot>,
+        Vec<LayoutCssImageReference<N>>,
+    ) {
+        (self.tree, self.paint_snapshot, self.css_image_references)
     }
 
     pub fn retention_metrics(&self) -> LayoutTreeRetentionMetrics {
@@ -112,12 +132,14 @@ where
         diagnostics: Vec<PaintDiagnostic>,
         metrics: LayoutPassMetrics,
         paint_snapshot: Option<PaintSnapshot>,
+        css_image_references: Vec<LayoutCssImageReference<N>>,
     ) -> Self {
         Self {
             tree,
             diagnostics,
             metrics,
             paint_snapshot,
+            css_image_references,
         }
     }
 }

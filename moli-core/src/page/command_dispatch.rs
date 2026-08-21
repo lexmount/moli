@@ -366,6 +366,7 @@ impl Page {
             RendererPageReply::CookieFacadeSnapshot(_) => "a cookie facade snapshot reply",
             RendererPageReply::LayoutMetrics(_) => "a layout metrics reply",
             RendererPageReply::CaptureScreenshot(_) => "a capture screenshot reply",
+            RendererPageReply::CaptureScreencastFrame(_) => "a capture screencast frame reply",
             RendererPageReply::Unit => "a unit reply",
         }
     }

@@ -22,6 +22,7 @@ pub(super) struct NativeLayoutSourceView<'a> {
 }
 
 impl<'a> NativeLayoutSourceView<'a> {
+    #[cfg(test)]
     pub(super) fn new(runtime: &'a JsContextHost, root: DomHandle) -> Self {
         Self::with_paint_resources(runtime, root, false)
     }

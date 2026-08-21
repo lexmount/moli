@@ -97,11 +97,15 @@ impl super::PendingImageLoadEvent {
 }
 
 impl super::JsContextHost {
-    pub(in crate::native_bridge::context_host) fn image_paint_generations(&self) -> (u64, u64) {
-        (
-            self.image_resources.paint_generation(),
-            self.image_resources.css.paint_generation(),
-        )
+    pub(in crate::native_bridge::context_host) fn visual_resource_generation(&self) -> u64 {
+        self.image_resources.visual_generation()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn visual_resource_generation_handle_for_test(
+        &self,
+    ) -> super::visual_resource_generation::VisualResourceGeneration {
+        self.image_resources.visual_generation_handle_for_test()
     }
 
     pub(super) fn begin_pending_image_resource(
@@ -214,6 +218,32 @@ impl super::JsContextHost {
         self.image_resources
             .css
             .admit(document_handle, binding.owner(), resolved_url)
+    }
+
+    pub(crate) fn stylesheet_css_image_is_current(
+        &self,
+        document_handle: DomHandle,
+        resolved_url: &str,
+    ) -> bool {
+        let owner = if document_handle == self.document_handle() {
+            self.current_main_document_task_owner()
+        } else {
+            self.child_browsing_context_host_for_document_handle(document_handle)
+                .and_then(|child_handle| self.frame_owner_current_child_snapshot(child_handle))
+                .filter(|snapshot| snapshot.document_handle == document_handle)
+                .map(|snapshot| {
+                    FrameDocumentTaskOwner::new(
+                        snapshot.scheduler_lane_id,
+                        snapshot.local_window_id,
+                        snapshot.document_id,
+                    )
+                })
+        };
+        owner.is_some_and(|owner| {
+            self.image_resources
+                .css
+                .contains_current(document_handle, owner, resolved_url)
+        })
     }
 
     pub(crate) fn complete_stylesheet_css_image_response(

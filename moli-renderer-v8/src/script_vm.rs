@@ -2460,6 +2460,15 @@ impl ScriptVm {
             .visual_state_token(document, viewport)
     }
 
+    #[cfg(test)]
+    pub(crate) fn visual_resource_generation_handle_for_test(
+        &self,
+    ) -> crate::native_bridge::visual_resource_generation::VisualResourceGeneration {
+        self._context_host
+            .borrow()
+            .visual_resource_generation_handle_for_test()
+    }
+
     fn with_fresh_layout_pass<T>(
         &mut self,
         request: moli_layout::LayoutPassRequest,
@@ -2467,19 +2476,33 @@ impl ScriptVm {
             &mut moli_layout::LayoutPassResult<DomHandle>,
         ) -> Result<T, moli_layout::LayoutError>,
     ) -> Result<Option<T>, moli_layout::LayoutError> {
-        // Font/CSS source reconciliation is a pre-pass lifecycle step. Once
-        // the guard is entered, layout performs no JS, event-loop, observer,
-        // or resource completion work and owns no state beyond this call.
+        // Font-source reconciliation is a pre-pass lifecycle step. CSS image
+        // URLs come back from the actual box-construction traversal below.
+        // Once the guard is entered, layout performs no JS, event-loop,
+        // observer, or resource completion work and owns no state beyond this
+        // call.
         self.reconcile_document_web_fonts_for_layout();
-        let discovered_css_images =
-            request.requests_paint() && self.reconcile_document_css_images_for_paint();
+        let requests_paint = request.requests_paint();
         let (document, result) = {
             let context_host = self._context_host.borrow();
             let document = context_host.document_handle();
             let result =
-                context_host.with_fresh_layout_pass_for_document(document, request, consume);
+                context_host.with_fresh_layout_pass_for_document(document, request, |pass| {
+                    let css_images = if requests_paint {
+                        pass.css_image_references().to_vec()
+                    } else {
+                        Vec::new()
+                    };
+                    consume(pass).map(|value| (value, css_images))
+                });
             (document, result)
         };
+        let (result, css_images) = match result {
+            Ok(Some((value, css_images))) => (Ok(Some(value)), css_images),
+            Ok(None) => (Ok(None), Vec::new()),
+            Err(error) => (Err(error), Vec::new()),
+        };
+        self.start_css_images_discovered_by_layout(css_images);
         if matches!(&result, Ok(Some(_)))
             && let Err(error) = self.with_default_context_scope(|scope, runtime_ptr| {
                 crate::native_bridge::element::queue_revealed_lazy_image_loads(
@@ -2495,11 +2518,6 @@ impl ScriptVm {
             // the completed frame; the next refresh retries from its newer
             // sampled geometry.
             tracing::warn!(?error, "failed to admit lazy images after layout refresh");
-        }
-        if discovered_css_images {
-            self._context_host
-                .borrow_mut()
-                .publish_css_image_discovery_for_paint();
         }
         result
     }
@@ -2532,13 +2550,6 @@ impl ScriptVm {
         self._context_host
             .borrow()
             .css_image_resource_observability_for_test()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn css_image_discovery_count_for_test(&self) -> u64 {
-        self._context_host
-            .borrow()
-            .css_image_discovery_count_for_test()
     }
 
     #[cfg(test)]
@@ -2620,7 +2631,13 @@ impl ScriptVm {
         self.start_stylesheet_subresource_fetches(bound);
     }
 
-    fn reconcile_document_css_images_for_paint(&mut self) -> bool {
+    fn start_css_images_discovered_by_layout(
+        &mut self,
+        references: Vec<moli_layout::LayoutCssImageReference<DomHandle>>,
+    ) {
+        if references.is_empty() {
+            return;
+        }
         let image_fetch_enabled = self
             .document_runtime
             .current_document_resource_loader()
@@ -2629,47 +2646,35 @@ impl ScriptVm {
                     .request_client()
                     .optional_resource_fetch_enabled(crate::types::SubresourceResourceType::Image)
             });
-        if !image_fetch_enabled
-            || !self
-                ._context_host
-                .borrow()
-                .layout_policy()
-                .uses_real_layout()
-        {
-            return false;
+        if !image_fetch_enabled {
+            return;
         }
-        let resources = {
-            let host = self._context_host.borrow();
-            if !host.css_image_discovery_needed_for_paint() {
-                return false;
-            }
-            host.active_layout_document_handles()
-                .into_iter()
-                .filter_map(|document| {
-                    host.dom_host()
-                        .dom()
-                        .document_element_handle_for_document(document)
-                })
-                .flat_map(|root| {
-                    crate::layout_renderer::current_native_css_image_resources(&host, root)
-                })
-                .collect::<Vec<_>>()
-        };
-        if resources.is_empty() {
-            return true;
-        }
+        let mut seen = std::collections::HashSet::new();
         let bound = {
             let mut host = self._context_host.borrow_mut();
-            resources
+            references
                 .into_iter()
-                .filter_map(|resource| {
-                    host.accept_current_main_stylesheet_subresource_load_delay()
-                        .map(|binding| (binding, resource))
+                .filter_map(|reference| {
+                    let document = host.layout_document_for_source(reference.source)?;
+                    if !seen.insert((document, reference.resolved_url.clone())) {
+                        return None;
+                    }
+                    if host.stylesheet_css_image_is_current(document, &reference.resolved_url) {
+                        return None;
+                    }
+                    let request_url = url::Url::parse(&reference.resolved_url).ok()?;
+                    let binding = host
+                        .accept_current_stylesheet_subresource_load_delay_for_document(document)?;
+                    Some((
+                        binding,
+                        crate::css_resource_urls::StylesheetLoadBlockingResource::image(
+                            request_url,
+                        ),
+                    ))
                 })
                 .collect::<Vec<_>>()
         };
         self.start_stylesheet_subresource_fetches(bound);
-        true
     }
 
     pub(crate) fn observable_geometry_batch_for_current_document(

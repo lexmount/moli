@@ -1,10 +1,4 @@
-use std::{
-    collections::HashMap,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-};
+use std::{collections::HashMap, sync::Arc};
 
 use parking_lot::Mutex;
 
@@ -18,6 +12,7 @@ use super::{
 use crate::{
     document_runtime::DomHandle,
     frame_owner_model::FrameDocumentTaskOwner,
+    native_bridge::context_host::visual_resource_generation::VisualResourceGeneration,
     types::{ImageRequestCorsMode, ImageRequestKey},
 };
 
@@ -53,7 +48,7 @@ struct CssImageResourceKey {
 pub(super) struct CssImageResourceStore {
     inner: Arc<Mutex<CssImageResourceStoreInner>>,
     ready_by_request: ReadyImageResourceIndex,
-    paint_generation: Arc<AtomicU64>,
+    visual_generation: VisualResourceGeneration,
     #[cfg(test)]
     completion_notify: Arc<tokio::sync::Notify>,
 }
@@ -77,11 +72,14 @@ enum CssImageResourceState {
 }
 
 impl CssImageResourceStore {
-    pub(super) fn new(ready_by_request: ReadyImageResourceIndex) -> Self {
+    pub(super) fn new(
+        ready_by_request: ReadyImageResourceIndex,
+        visual_generation: VisualResourceGeneration,
+    ) -> Self {
         Self {
             inner: Arc::new(Mutex::new(CssImageResourceStoreInner::default())),
             ready_by_request,
-            paint_generation: Arc::new(AtomicU64::new(0)),
+            visual_generation,
             #[cfg(test)]
             completion_notify: Arc::new(tokio::sync::Notify::new()),
         }
@@ -135,10 +133,32 @@ impl CssImageResourceStore {
             },
         );
         if reused {
+            self.visual_generation.bump();
             CssImageResourceAdmission::Reused
         } else {
             CssImageResourceAdmission::Fetch(identity)
         }
+    }
+
+    pub(super) fn contains_current(
+        &self,
+        document_handle: DomHandle,
+        document_owner: FrameDocumentTaskOwner,
+        resolved_url: &str,
+    ) -> bool {
+        let request_key = ImageRequestKey::with_density(
+            resolved_url.to_owned(),
+            ImageRequestCorsMode::NoCors,
+            1.0,
+        );
+        self.inner
+            .lock()
+            .slots
+            .get(&CssImageResourceKey {
+                document_handle,
+                request_key,
+            })
+            .is_some_and(|slot| slot.identity.document_owner == document_owner)
     }
 
     pub(super) fn mark_decode_queued(
@@ -184,7 +204,7 @@ impl CssImageResourceStore {
         self.ready_by_request
             .insert(identity.request_key.clone(), &resource);
         slot.state = CssImageResourceState::Ready(resource);
-        self.paint_generation.fetch_add(1, Ordering::AcqRel);
+        self.visual_generation.bump();
         #[cfg(test)]
         self.completion_notify.notify_waiters();
         true
@@ -202,7 +222,7 @@ impl CssImageResourceStore {
             return false;
         }
         slot.state = CssImageResourceState::Failed;
-        self.paint_generation.fetch_add(1, Ordering::AcqRel);
+        self.visual_generation.bump();
         #[cfg(test)]
         self.completion_notify.notify_waiters();
         true
@@ -243,15 +263,11 @@ impl CssImageResourceStore {
             .retain(|key, _| key.document_handle != document_handle);
         let removed = before - inner.slots.len();
         if removed != 0 {
-            self.paint_generation.fetch_add(1, Ordering::AcqRel);
+            self.visual_generation.bump();
         }
         drop(inner);
         self.ready_by_request.prune_dead();
         removed
-    }
-
-    pub(super) fn paint_generation(&self) -> u64 {
-        self.paint_generation.load(Ordering::Acquire)
     }
 
     #[cfg(test)]
@@ -319,9 +335,38 @@ mod tests {
     }
 
     #[test]
+    fn worker_completion_publishes_through_the_shared_visual_generation() {
+        let generation = VisualResourceGeneration::default();
+        let store =
+            CssImageResourceStore::new(ReadyImageResourceIndex::default(), generation.clone());
+        let descriptor = ImageResponseDescriptor::raster(moli_image::RasterImageMetadata {
+            format: moli_image::RasterImageFormat::Png,
+            width: 1,
+            height: 1,
+        });
+        let CssImageResourceAdmission::Fetch(identity) = store.admit(
+            DomHandle::new(10),
+            owner(1),
+            "https://example.test/async.png".to_owned(),
+        ) else {
+            panic!("a new CSS image must create a fetch identity");
+        };
+        assert!(store.mark_decode_queued(&identity, descriptor));
+        let before = generation.current();
+        let worker_store = store.clone();
+        let completed =
+            std::thread::spawn(move || worker_store.complete_decode(&identity, ready_red_pixel()))
+                .join()
+                .expect("CSS decoder worker must finish");
+        assert!(completed);
+        assert_eq!(generation.current(), before + 1);
+    }
+
+    #[test]
     fn exact_document_request_identity_rejects_stale_decode_and_shares_ready_content() {
         let ready_index = ReadyImageResourceIndex::default();
-        let store = CssImageResourceStore::new(ready_index.clone());
+        let store =
+            CssImageResourceStore::new(ready_index.clone(), VisualResourceGeneration::default());
         let first_document = DomHandle::new(10);
         let second_document = DomHandle::new(20);
         let url = "https://example.test/shared.png";

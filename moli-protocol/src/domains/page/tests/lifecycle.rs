@@ -1,4 +1,5 @@
 use super::*;
+use crate::CdpConnection;
 use crate::domains::page::{
     PageScreencastCaptureCompletion, PageScreencastCaptureStart, PageScreencastSubscriptionStatus,
 };
@@ -3863,6 +3864,161 @@ async fn screencast_capture_materializes_jpeg_frame_and_ack_budget() {
                 registration.generation(),
             ),
         Some(false),
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn screencast_visual_state_is_independent_for_two_sessions_on_one_page() {
+    let mut ctx = TestContext::new();
+    load_bc_with_session(
+        &mut ctx,
+        "BID-screencast-two-sessions",
+        "TID-screencast-two-sessions",
+        "SID-screencast-primary",
+        "about:blank",
+    );
+    assert!(
+        ctx.conn
+            .browser_context
+            .as_mut()
+            .expect("browser context")
+            .assign_auxiliary_session_to_target(
+                "TID-screencast-two-sessions",
+                "SID-screencast-aux".to_owned(),
+            )
+    );
+    ensure_initial_document_for_session(&mut ctx, Some("SID-screencast-primary")).await;
+
+    let start = |conn: &mut CdpConnection, session_id: &str, command_id: u64| {
+        let raw = json!({
+            "id": command_id,
+            "method": "Page.startScreencast",
+            "sessionId": session_id,
+            "params": { "format": "png" }
+        })
+        .to_string();
+        let CdpCommandTaskStep::Complete(outcome) = conn.start_command_dispatch(&raw) else {
+            panic!("Page.startScreencast must complete synchronously");
+        };
+        let (_, scheduler_events) = outcome.into_parts();
+        let [CdpSchedulerEvent::PageScreencastStarted { registration }] =
+            <[_; 1]>::try_from(scheduler_events).expect("one screencast registration per session")
+        else {
+            unreachable!("array pattern fixes the scheduler event kind")
+        };
+        registration
+    };
+    let primary = start(&mut ctx.conn, "SID-screencast-primary", 552);
+    let auxiliary = start(&mut ctx.conn, "SID-screencast-aux", 553);
+
+    let PageScreencastCaptureStart::Pending(primary_capture) =
+        ctx.conn.start_page_screencast_frame_capture(&primary, None)
+    else {
+        panic!("primary session must start its first frame");
+    };
+    let PageScreencastCaptureStart::Pending(auxiliary_capture) = ctx
+        .conn
+        .start_page_screencast_frame_capture(&auxiliary, None)
+    else {
+        panic!("auxiliary session must start its first frame independently");
+    };
+    let PageScreencastCaptureCompletion::Frame {
+        event: primary_event,
+        visual_state: primary_state,
+    } = ctx
+        .conn
+        .complete_page_screencast_frame_capture(primary_capture.wait().await)
+    else {
+        panic!("primary first capture must emit a frame");
+    };
+    let PageScreencastCaptureCompletion::Frame {
+        event: auxiliary_event,
+        visual_state: auxiliary_state,
+    } = ctx
+        .conn
+        .complete_page_screencast_frame_capture(auxiliary_capture.wait().await)
+    else {
+        panic!("auxiliary first capture must emit a frame");
+    };
+    assert_eq!(
+        primary_event.into_parts().0["sessionId"],
+        json!("SID-screencast-primary")
+    );
+    assert_eq!(
+        auxiliary_event.into_parts().0["sessionId"],
+        json!("SID-screencast-aux")
+    );
+    assert_eq!(
+        ctx.conn
+            .acknowledge_page_screencast_frame_for_session_owner(
+                Some("SID-screencast-primary"),
+                primary.generation(),
+            ),
+        Some(true)
+    );
+    assert_eq!(
+        ctx.conn
+            .acknowledge_page_screencast_frame_for_session_owner(
+                Some("SID-screencast-aux"),
+                auxiliary.generation(),
+            ),
+        Some(true)
+    );
+
+    ctx.process_async(json!({
+        "id": 554,
+        "method": "Runtime.evaluate",
+        "sessionId": "SID-screencast-primary",
+        "params": {
+            "expression": "document.body.style.background = 'rgb(1, 2, 3)'; 'mutated'",
+            "returnByValue": true
+        }
+    }))
+    .await;
+
+    let PageScreencastCaptureStart::Pending(primary_refresh) = ctx
+        .conn
+        .start_page_screencast_frame_capture(&primary, Some(primary_state))
+    else {
+        panic!("primary session must observe the mutation");
+    };
+    assert!(matches!(
+        ctx.conn
+            .complete_page_screencast_frame_capture(primary_refresh.wait().await),
+        PageScreencastCaptureCompletion::Frame { .. }
+    ));
+    assert_eq!(
+        ctx.conn
+            .acknowledge_page_screencast_frame_for_session_owner(
+                Some("SID-screencast-primary"),
+                primary.generation(),
+            ),
+        Some(true)
+    );
+
+    let PageScreencastCaptureStart::Pending(auxiliary_refresh) = ctx
+        .conn
+        .start_page_screencast_frame_capture(&auxiliary, Some(auxiliary_state))
+    else {
+        panic!("auxiliary session must retain its own pre-mutation state");
+    };
+    let PageScreencastCaptureCompletion::Frame { event, .. } = ctx
+        .conn
+        .complete_page_screencast_frame_capture(auxiliary_refresh.wait().await)
+    else {
+        panic!("auxiliary session must receive the mutation after the primary session did");
+    };
+    assert_eq!(
+        event.into_parts().0["sessionId"],
+        json!("SID-screencast-aux")
+    );
+    assert_eq!(
+        ctx.conn
+            .acknowledge_page_screencast_frame_for_session_owner(
+                Some("SID-screencast-aux"),
+                auxiliary.generation(),
+            ),
+        Some(true)
     );
 }
 

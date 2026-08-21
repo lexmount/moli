@@ -4241,6 +4241,7 @@ pub enum RendererPageCommand {
     SerializeHtml,
     LayoutMetrics,
     CaptureScreenshot(RendererCaptureScreenshotRequest),
+    CaptureScreencastFrame(RendererCaptureScreencastFrameRequest),
     BlobBytesForUuid {
         uuid: String,
     },
@@ -4834,6 +4835,7 @@ impl RendererPageCommand {
             Self::SerializeHtml => Some("SerializeHtml"),
             Self::LayoutMetrics => Some("LayoutMetrics"),
             Self::CaptureScreenshot(_) => Some("CaptureScreenshot"),
+            Self::CaptureScreencastFrame(_) => Some("CaptureScreencastFrame"),
             Self::ScrollBackendNodeIntoViewIfNeeded { .. } => {
                 Some("ScrollBackendNodeIntoViewIfNeeded")
             }
@@ -5133,13 +5135,25 @@ pub struct RendererCapturedScreenshot {
     pub width: u32,
     pub height: u32,
     pub bytes: Arc<[u8]>,
-    pub visual_state: Option<RendererVisualStateToken>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RendererCaptureScreenshotReply {
     Captured(RendererCapturedScreenshot),
-    ScreencastUnchanged,
+    LayoutDisabled,
+    NoDocument,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RendererCapturedScreencastFrame {
+    pub image: RendererCapturedScreenshot,
+    pub visual_state: RendererVisualStateToken,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RendererCaptureScreencastFrameReply {
+    Captured(RendererCapturedScreencastFrame),
+    Unchanged,
     LayoutDisabled,
     NoDocument,
 }
@@ -5217,6 +5231,7 @@ pub enum RendererPageReply {
     CookieFacadeSnapshot(Box<RendererPageCookieFacadeSnapshotReply>),
     LayoutMetrics(RendererLayoutMetrics),
     CaptureScreenshot(RendererCaptureScreenshotReply),
+    CaptureScreencastFrame(RendererCaptureScreencastFrameReply),
     Unit,
 }
 

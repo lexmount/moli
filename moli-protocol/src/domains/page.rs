@@ -18,7 +18,8 @@ use chromiumoxide_cdp::cdp::browser_protocol::page::{
 use moli_core::page::{
     ChildFrameDocumentNetworkActivitySnapshot, ChildFrameDocumentOpenedSnapshot,
     ChildFrameNavigationSnapshot, ChildFrameTreeEventSnapshot, ChildFrameTreeSnapshot,
-    CompletedPageCommand, Page, PendingPageCommand, RendererCaptureScreenshotReply,
+    CompletedPageCommand, Page, PendingPageCommand, RendererCaptureScreencastFrameReply,
+    RendererCaptureScreencastFrameRequest, RendererCaptureScreenshotReply,
     RendererCaptureScreenshotRequest, RendererDocumentLifecycleEvent,
     RendererDocumentLifecycleIdentity, RendererDocumentLifecycleMilestone,
     RendererDocumentLifecycleWaitOutcome, RendererDocumentLifecycleWaiter,
@@ -1903,21 +1904,19 @@ impl CdpConnection {
             return PageScreencastCaptureStart::Stale;
         };
         let viewport = current_viewport_surface(conn, session_id_ref);
-        let request = RendererCaptureScreenshotRequest {
-            purpose: RendererScreenshotPurpose::Screencast,
+        let request = RendererCaptureScreencastFrameRequest {
             format: match config.format() {
                 PageScreencastFormat::Png => RendererScreenshotFormat::Png,
                 PageScreencastFormat::Jpeg => RendererScreenshotFormat::Jpeg,
             },
             quality: config.quality(),
-            region: moli_core::page::RendererScreenshotRegion::Viewport,
             optimize_for_speed: true,
             max_width: config.max_width(),
             max_height: config.max_height(),
             known_visual_state,
         };
         let pending = match conn.loaded_page_mut_for_protocol_access(session_id_ref) {
-            Ok(page) => match page.start_capture_screenshot_with_request(request) {
+            Ok(page) => match page.start_capture_screencast_frame(request) {
                 Ok(pending) => pending,
                 Err(error) => {
                     tracing::debug!(?error, "failed to start screencast frame capture");
@@ -1965,7 +1964,7 @@ impl CdpConnection {
             return PageScreencastCaptureCompletion::Stale;
         }
 
-        let image = match completed {
+        let frame = match completed {
             Ok(completion) => {
                 let page = match conn.loaded_page_mut_for_protocol_access(session_id_ref) {
                     Ok(page) => page,
@@ -1978,9 +1977,9 @@ impl CdpConnection {
                         return PageScreencastCaptureCompletion::Retry;
                     }
                 };
-                match page.finish_capture_screenshot(*completion) {
-                    Ok(RendererCaptureScreenshotReply::Captured(image)) => image,
-                    Ok(RendererCaptureScreenshotReply::ScreencastUnchanged) => {
+                match page.finish_capture_screencast_frame(*completion) {
+                    Ok(RendererCaptureScreencastFrameReply::Captured(frame)) => frame,
+                    Ok(RendererCaptureScreencastFrameReply::Unchanged) => {
                         if conn.complete_page_screencast_capture_for_session_owner(
                             session_id_ref,
                             generation,
@@ -1992,8 +1991,8 @@ impl CdpConnection {
                         return PageScreencastCaptureCompletion::Unchanged;
                     }
                     Ok(
-                        RendererCaptureScreenshotReply::LayoutDisabled
-                        | RendererCaptureScreenshotReply::NoDocument,
+                        RendererCaptureScreencastFrameReply::LayoutDisabled
+                        | RendererCaptureScreencastFrameReply::NoDocument,
                     )
                     | Err(_) => {
                         let _ = conn.complete_page_screencast_capture_for_session_owner(
@@ -2015,19 +2014,7 @@ impl CdpConnection {
             }
         };
 
-        let Some(visual_state) = image.visual_state else {
-            tracing::debug!(
-                generation,
-                ?session_id,
-                "screencast capture returned a frame without visual-state metadata"
-            );
-            let _ = conn.complete_page_screencast_capture_for_session_owner(
-                session_id_ref,
-                generation,
-                false,
-            );
-            return PageScreencastCaptureCompletion::Retry;
-        };
+        let visual_state = frame.visual_state;
         if conn.complete_page_screencast_capture_for_session_owner(session_id_ref, generation, true)
             != Some(true)
         {
@@ -2048,7 +2035,7 @@ impl CdpConnection {
         PageScreencastCaptureCompletion::Frame {
             event: BackgroundProtocolEvent::page_screencast_frame(
                 session_id_ref,
-                BASE64_STANDARD.encode(&image.bytes),
+                BASE64_STANDARD.encode(&frame.image.bytes),
                 metadata,
                 generation,
             ),
@@ -6735,7 +6722,6 @@ fn start_devtools_capture_screenshot_command(
         optimize_for_speed: command.optimize_for_speed,
         max_width: None,
         max_height: None,
-        known_visual_state: None,
     };
     match page.start_capture_screenshot_with_request(request) {
         Ok(pending) => PageCommandTaskStep::Pending(PendingPageCommandDispatch {
@@ -6799,7 +6785,6 @@ fn start_devtools_print_to_pdf_command(
         optimize_for_speed: false,
         max_width: None,
         max_height: None,
-        known_visual_state: None,
     };
     match page.start_capture_screenshot_with_request(request) {
         Ok(pending) => PageCommandTaskStep::Pending(PendingPageCommandDispatch {
@@ -7823,12 +7808,6 @@ async fn complete_pending_page_command_inner(
                 Ok(RendererCaptureScreenshotReply::NoDocument) => {
                     CommandOutputPlan::error(-32000, "NoDocumentLoaded")
                 }
-                Ok(RendererCaptureScreenshotReply::ScreencastUnchanged) => {
-                    CommandOutputPlan::error(
-                        -32000,
-                        "Screenshot capture returned an invalid screencast-only reply",
-                    )
-                }
                 Err(error) => CommandOutputPlan::error(
                     -32000,
                     format!("Failed to capture page screenshot: {error}"),
@@ -7869,12 +7848,6 @@ async fn complete_pending_page_command_inner(
                     return PageCommandTaskStep::Complete(CommandOutputPlan::error(
                         -32000,
                         "NoDocumentLoaded",
-                    ));
-                }
-                Ok(RendererCaptureScreenshotReply::ScreencastUnchanged) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000,
-                        "PDF capture returned an invalid screencast-only reply",
                     ));
                 }
                 Err(error) => {

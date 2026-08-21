@@ -16,6 +16,26 @@ impl StylesheetSubresourceLoadDelaySettlement {
 }
 
 impl JsContextHost {
+    pub(crate) fn accept_current_stylesheet_subresource_load_delay_for_document(
+        &mut self,
+        document: DomHandle,
+    ) -> Option<StylesheetSubresourceLoadDelayBinding> {
+        if document == self.document_handle() {
+            return self.accept_current_main_stylesheet_subresource_load_delay();
+        }
+        let child_handle = self.child_browsing_context_host_for_document_handle(document)?;
+        let snapshot = self.frame_owner_current_child_snapshot(child_handle)?;
+        if snapshot.document_handle != document {
+            return None;
+        }
+        let owner = FrameDocumentTaskOwner::new(
+            snapshot.scheduler_lane_id,
+            snapshot.local_window_id,
+            snapshot.document_id,
+        );
+        self.accept_current_child_stylesheet_subresource_load_delay(child_handle, owner)
+    }
+
     pub(crate) fn accept_current_main_stylesheet_subresource_load_delay(
         &mut self,
     ) -> Option<StylesheetSubresourceLoadDelayBinding> {

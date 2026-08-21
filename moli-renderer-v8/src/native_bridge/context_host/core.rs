@@ -192,6 +192,8 @@ impl JsContextHost {
                 .set_current_main_service_worker_client_id(Some(service_worker_client_id,)),
             "main service worker client projection requires a current owner"
         );
+        let visual_resource_generation =
+            super::visual_resource_generation::VisualResourceGeneration::default();
         let mut host = Self {
             runtime: runtime as *mut DocumentRuntime,
             layout_policy: moli_page_types::LayoutPolicy::default(),
@@ -309,8 +311,12 @@ impl JsContextHost {
             pending_pointer_capture_targets: HashMap::new(),
             pointer_capture_targets: HashMap::new(),
             lazy_media_load_candidates: HashSet::new(),
-            canvas_resources: super::canvas_resources::CanvasResourceStore::default(),
-            image_resources: super::image_resources::ImageResourceStore::default(),
+            canvas_resources: super::canvas_resources::CanvasResourceStore::new(
+                visual_resource_generation.clone(),
+            ),
+            image_resources: super::image_resources::ImageResourceStore::new(
+                visual_resource_generation,
+            ),
             next_image_decode_id: 1,
             pending_image_decode_requests: HashMap::new(),
             resource_timing_buffers: SharedResourceTimingBufferRegistry::new(),

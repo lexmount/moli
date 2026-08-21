@@ -13,6 +13,7 @@ use super::{
     preload::{ScannedImagePreloadStore, SharedScannedImagePreloadLoad},
 };
 use crate::document_runtime::DomHandle;
+use crate::native_bridge::context_host::visual_resource_generation::VisualResourceGeneration;
 use crate::types::ImageRequestKey;
 
 #[derive(Clone)]
@@ -29,7 +30,7 @@ pub(in crate::native_bridge::context_host) struct ImageResourceStore {
     pub(super) css: CssImageResourceStore,
     pub(super) scanned: ScannedImagePreloadStore,
     pub(super) decode: ImageDecodeCoordinator,
-    paint_generation: u64,
+    visual_generation: VisualResourceGeneration,
 }
 
 struct ImageResourceSlot {
@@ -97,20 +98,26 @@ impl ReadyImageResourceIndex {
 
 impl Default for ImageResourceStore {
     fn default() -> Self {
-        let ready_by_request = ReadyImageResourceIndex::default();
-        let decode = ImageDecodeCoordinator::default();
-        Self {
-            slots: HashMap::new(),
-            css: CssImageResourceStore::new(ready_by_request.clone()),
-            scanned: ScannedImagePreloadStore::new(ready_by_request.clone(), decode.clone()),
-            ready_by_request,
-            decode,
-            paint_generation: 0,
-        }
+        Self::new(VisualResourceGeneration::default())
     }
 }
 
 impl ImageResourceStore {
+    pub(in crate::native_bridge::context_host) fn new(
+        visual_generation: VisualResourceGeneration,
+    ) -> Self {
+        let ready_by_request = ReadyImageResourceIndex::default();
+        let decode = ImageDecodeCoordinator::default();
+        Self {
+            slots: HashMap::new(),
+            css: CssImageResourceStore::new(ready_by_request.clone(), visual_generation.clone()),
+            scanned: ScannedImagePreloadStore::new(ready_by_request.clone(), decode.clone()),
+            ready_by_request,
+            decode,
+            visual_generation,
+        }
+    }
+
     pub(super) fn begin(&mut self, identity: ImageResourceRequestIdentity) {
         let ready = self.ready_by_request.get(&identity.request_key);
         self.slots.insert(
@@ -121,7 +128,7 @@ impl ImageResourceStore {
                 scanned_preload: None,
             },
         );
-        self.paint_generation = self.paint_generation.saturating_add(1);
+        self.visual_generation.bump();
     }
 
     pub(super) fn identity(&self, element: DomHandle) -> Option<&ImageResourceRequestIdentity> {
@@ -213,7 +220,7 @@ impl ImageResourceStore {
             ImageResourceState::Pending => {
                 slot.state = ImageResourceState::Ready(resource);
                 slot.scanned_preload = None;
-                self.paint_generation = self.paint_generation.saturating_add(1);
+                self.visual_generation.bump();
                 true
             }
             ImageResourceState::DecodeQueued(_) | ImageResourceState::Failed => false,
@@ -245,7 +252,7 @@ impl ImageResourceStore {
             .insert(identity.request_key.clone(), &resource);
         slot.state = ImageResourceState::Ready(resource);
         slot.scanned_preload = None;
-        self.paint_generation = self.paint_generation.saturating_add(1);
+        self.visual_generation.bump();
         true
     }
 
@@ -258,7 +265,7 @@ impl ImageResourceStore {
         }
         slot.state = ImageResourceState::Failed;
         slot.scanned_preload = None;
-        self.paint_generation = self.paint_generation.saturating_add(1);
+        self.visual_generation.bump();
         true
     }
 
@@ -297,7 +304,7 @@ impl ImageResourceStore {
     pub(super) fn retire_element(&mut self, element: DomHandle) -> bool {
         let removed = self.slots.remove(&element).is_some();
         if removed {
-            self.paint_generation = self.paint_generation.saturating_add(1);
+            self.visual_generation.bump();
         }
         self.prune_dead_ready_requests();
         removed
@@ -310,7 +317,7 @@ impl ImageResourceStore {
         self.prune_dead_ready_requests();
         let removed = before - self.slots.len();
         if removed != 0 {
-            self.paint_generation = self.paint_generation.saturating_add(1);
+            self.visual_generation.bump();
         }
         removed
     }
@@ -319,8 +326,13 @@ impl ImageResourceStore {
         self.ready_by_request.prune_dead();
     }
 
-    pub(super) const fn paint_generation(&self) -> u64 {
-        self.paint_generation
+    pub(super) fn visual_generation(&self) -> u64 {
+        self.visual_generation.current()
+    }
+
+    #[cfg(test)]
+    pub(super) fn visual_generation_handle_for_test(&self) -> VisualResourceGeneration {
+        self.visual_generation.clone()
     }
 }
 

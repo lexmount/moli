@@ -4,8 +4,8 @@ use moli_page_types::LayoutPolicy;
 use std::sync::Arc;
 
 use super::{
-    PageVm, RendererCaptureScreenshotReply, RendererCapturedScreenshot,
-    RendererDocumentLifecycleIdentity,
+    PageVm, RendererCaptureScreencastFrameReply, RendererCaptureScreenshotReply,
+    RendererCapturedScreencastFrame, RendererCapturedScreenshot, RendererDocumentLifecycleIdentity,
 };
 
 /// Opaque identity for the renderer state that can affect one viewport frame.
@@ -21,9 +21,7 @@ struct RendererVisualState {
     dom_generation: u64,
     style_generations: Vec<(u32, u64, u64, u64)>,
     interaction_generation: u64,
-    html_image_generation: u64,
-    css_image_generation: u64,
-    canvas_generation: u64,
+    resource_generation: u64,
     viewport_width: u32,
     viewport_height: u32,
     device_pixel_ratio_bits: u32,
@@ -35,7 +33,7 @@ impl RendererVisualStateToken {
         dom_generation: u64,
         style_generations: Vec<(crate::document_runtime::DomHandle, u64, u64, u64)>,
         interaction_generation: u64,
-        resource_generations: (u64, u64, u64),
+        resource_generation: u64,
         viewport: PaintViewport,
     ) -> Self {
         Self(Arc::new(RendererVisualState {
@@ -48,23 +46,19 @@ impl RendererVisualStateToken {
                 })
                 .collect(),
             interaction_generation,
-            html_image_generation: resource_generations.0,
-            css_image_generation: resource_generations.1,
-            canvas_generation: resource_generations.2,
+            resource_generation,
             viewport_width: viewport.css_width,
             viewport_height: viewport.css_height,
             device_pixel_ratio_bits: viewport.device_pixel_ratio.to_bits(),
         }))
     }
 
-    fn has_same_paint_resources(&self, other: &Self) -> bool {
-        self.0.html_image_generation == other.0.html_image_generation
-            && self.0.css_image_generation == other.0.css_image_generation
-            && self.0.canvas_generation == other.0.canvas_generation
+    fn has_same_resource_generation(&self, other: &Self) -> bool {
+        self.0.resource_generation == other.0.resource_generation
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RendererScreenshotFormat {
     Png,
     Jpeg,
@@ -73,7 +67,6 @@ pub enum RendererScreenshotFormat {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RendererScreenshotPurpose {
     Screenshot,
-    Screencast,
     Print { print_background: bool },
 }
 
@@ -108,8 +101,18 @@ pub struct RendererCaptureScreenshotRequest {
     pub optimize_for_speed: bool,
     pub max_width: Option<u32>,
     pub max_height: Option<u32>,
-    /// Last frame state observed by this screencast subscription. Ordinary
-    /// screenshots leave this empty and always execute a fresh paint pass.
+}
+
+/// One viewport screencast poll. Unlike an explicit screenshot, the caller
+/// may supply the last emitted visual state and receive `Unchanged` without a
+/// layout or paint pass.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RendererCaptureScreencastFrameRequest {
+    pub format: RendererScreenshotFormat,
+    pub quality: u8,
+    pub optimize_for_speed: bool,
+    pub max_width: Option<u32>,
+    pub max_height: Option<u32>,
     pub known_visual_state: Option<RendererVisualStateToken>,
 }
 
@@ -123,27 +126,23 @@ impl RendererCaptureScreenshotRequest {
             optimize_for_speed: false,
             max_width: None,
             max_height: None,
-            known_visual_state: None,
         }
     }
 }
 
 impl PageVm {
-    /// Captures the current committed document at one renderer-owner command
-    /// turn. The pass-local world, Stylo values, and Taffy cache do not escape;
-    /// the owned geometry projection is published as the Document's latest
-    /// observable layout snapshot. Screencast polling can be suppressed by an
-    /// unchanged generation token, but every emitted frame is painted fresh.
+    /// Captures an explicit screenshot or print raster. These demands always
+    /// execute a fresh paint pass and never carry screencast state.
     pub(super) fn capture_screenshot(
         &mut self,
         request: RendererCaptureScreenshotRequest,
     ) -> anyhow::Result<RendererCaptureScreenshotReply> {
         let barrier = match request.purpose {
             RendererScreenshotPurpose::Screenshot => moli_action_window::ActionBarrier::Screenshot,
-            RendererScreenshotPurpose::Screencast => moli_action_window::ActionBarrier::Screencast,
             RendererScreenshotPurpose::Print { .. } => moli_action_window::ActionBarrier::Explicit,
         };
         self.flush_page_action_window(barrier)?;
+        let paint_capture = request.paint_capture_request()?;
         let restore_media = if matches!(request.purpose, RendererScreenshotPurpose::Print { .. })
             && self.emulated_media.media.is_none()
         {
@@ -155,21 +154,46 @@ impl PageVm {
         } else {
             None
         };
-        let result = self.capture_screenshot_inner(request);
+        let result = self.capture_image(
+            request.format,
+            request.quality,
+            request.optimize_for_speed,
+            paint_capture,
+            moli_layout::LayoutFlushReason::Screenshot,
+        );
         if let Some(previous) = restore_media {
             self.set_emulated_media(&previous);
         }
-        result
+        result.map(RendererImageCaptureOutcome::into_screenshot_reply)
     }
 
-    fn capture_screenshot_inner(
+    /// Polls one screencast subscription. Only this request accepts a known
+    /// visual state and only this reply can report `Unchanged`.
+    pub(super) fn capture_screencast_frame(
         &mut self,
-        request: RendererCaptureScreenshotRequest,
-    ) -> anyhow::Result<RendererCaptureScreenshotReply> {
-        if self.layout_policy == LayoutPolicy::Mock {
-            return Ok(RendererCaptureScreenshotReply::LayoutDisabled);
-        }
+        request: RendererCaptureScreencastFrameRequest,
+    ) -> anyhow::Result<RendererCaptureScreencastFrameReply> {
+        self.capture_screencast_frame_with_before_layout(request, || {})
+    }
 
+    #[cfg(test)]
+    pub(super) fn capture_screencast_frame_with_before_layout_hook(
+        &mut self,
+        request: RendererCaptureScreencastFrameRequest,
+        before_layout: impl FnOnce(),
+    ) -> anyhow::Result<RendererCaptureScreencastFrameReply> {
+        self.capture_screencast_frame_with_before_layout(request, before_layout)
+    }
+
+    fn capture_screencast_frame_with_before_layout(
+        &mut self,
+        request: RendererCaptureScreencastFrameRequest,
+        before_layout: impl FnOnce(),
+    ) -> anyhow::Result<RendererCaptureScreencastFrameReply> {
+        self.flush_page_action_window(moli_action_window::ActionBarrier::Screencast)?;
+        if self.layout_policy == LayoutPolicy::Mock {
+            return Ok(RendererCaptureScreencastFrameReply::LayoutDisabled);
+        }
         let surface = self
             .viewport_surface
             .unwrap_or_else(default_viewport_surface);
@@ -178,73 +202,128 @@ impl PageVm {
             surface.inner_height,
             surface.device_pixel_ratio as f32,
         );
-        let paint_capture = request.paint_capture_request()?;
-        let visual_state_before = matches!(request.purpose, RendererScreenshotPurpose::Screencast)
-            .then(|| {
-                self.vm()
-                    .visual_state_token(self.document_lifecycle.identity(), viewport)
-            });
-        if visual_state_before.is_some()
-            && visual_state_before.as_ref() == request.known_visual_state.as_ref()
-        {
-            return Ok(RendererCaptureScreenshotReply::ScreencastUnchanged);
+        let visual_state_before = self
+            .vm()
+            .visual_state_token(self.document_lifecycle.identity(), viewport);
+        if request.known_visual_state.as_ref() == Some(&visual_state_before) {
+            return Ok(RendererCaptureScreencastFrameReply::Unchanged);
         }
-        let layout_reason = match request.purpose {
-            RendererScreenshotPurpose::Screenshot | RendererScreenshotPurpose::Print { .. } => {
-                moli_layout::LayoutFlushReason::Screenshot
-            }
-            RendererScreenshotPurpose::Screencast => moli_layout::LayoutFlushReason::Screencast,
+        before_layout();
+        let paint_capture = PaintCaptureRequest {
+            region: moli_layout::PaintCaptureRegion::Viewport,
+            include_backgrounds: true,
+            include_viewport_controls: true,
+            max_width: request.max_width,
+            max_height: request.max_height,
         };
-        let Some(snapshot) = self.vm_mut().paint_layout_snapshot_with_capture(
-            viewport,
-            layout_reason,
+        let image = match self.capture_image(
+            request.format,
+            request.quality,
+            request.optimize_for_speed,
             paint_capture,
-        )?
-        else {
-            return Ok(RendererCaptureScreenshotReply::NoDocument);
-        };
-        let visual_state = visual_state_before.map(|before| {
-            let after = self
-                .vm()
-                .visual_state_token(self.document_lifecycle.identity(), viewport);
-            // Resource decoders can publish from another task while layout is
-            // sampling immutable resources. Keep the older token in that
-            // race so the next poll cannot mistake a potentially stale frame
-            // for the newly completed resource state. Other generation
-            // changes here are renderer-internal world preparation and are
-            // represented by the completed fresh frame.
-            if before.has_same_paint_resources(&after) {
-                after
-            } else {
-                before
+            moli_layout::LayoutFlushReason::Screencast,
+        )? {
+            RendererImageCaptureOutcome::Captured(image) => image,
+            RendererImageCaptureOutcome::LayoutDisabled => {
+                return Ok(RendererCaptureScreencastFrameReply::LayoutDisabled);
             }
-        });
+            RendererImageCaptureOutcome::NoDocument => {
+                return Ok(RendererCaptureScreencastFrameReply::NoDocument);
+            }
+        };
+        let visual_state_after = self
+            .vm()
+            .visual_state_token(self.document_lifecycle.identity(), viewport);
+        let visual_state =
+            visual_state_for_captured_screencast_frame(visual_state_before, visual_state_after);
+        Ok(RendererCaptureScreencastFrameReply::Captured(
+            RendererCapturedScreencastFrame {
+                image,
+                visual_state,
+            },
+        ))
+    }
+
+    fn capture_image(
+        &mut self,
+        format: RendererScreenshotFormat,
+        quality: u8,
+        optimize_for_speed: bool,
+        paint_capture: PaintCaptureRequest,
+        reason: moli_layout::LayoutFlushReason,
+    ) -> anyhow::Result<RendererImageCaptureOutcome> {
+        if self.layout_policy == LayoutPolicy::Mock {
+            return Ok(RendererImageCaptureOutcome::LayoutDisabled);
+        }
+        let surface = self
+            .viewport_surface
+            .unwrap_or_else(default_viewport_surface);
+        let viewport = PaintViewport::new(
+            surface.inner_width,
+            surface.inner_height,
+            surface.device_pixel_ratio as f32,
+        );
+        let Some(snapshot) =
+            self.vm_mut()
+                .paint_layout_snapshot_with_capture(viewport, reason, paint_capture)?
+        else {
+            return Ok(RendererImageCaptureOutcome::NoDocument);
+        };
 
         let raster = moli_paint::raster_snapshot(&snapshot)?;
-        let (mime_type, width, height, bytes) = match request.format {
+        let (mime_type, width, height, bytes) = match format {
             RendererScreenshotFormat::Png => {
                 let encoded = moli_image::encode_png_with_options(
                     &raster,
-                    moli_image::PngEncodeOptions {
-                        optimize_for_speed: request.optimize_for_speed,
-                    },
+                    moli_image::PngEncodeOptions { optimize_for_speed },
                 )?;
                 ("image/png", encoded.width, encoded.height, encoded.bytes)
             }
             RendererScreenshotFormat::Jpeg => {
-                let encoded = moli_image::encode_jpeg(&raster, request.quality)?;
+                let encoded = moli_image::encode_jpeg(&raster, quality)?;
                 ("image/jpeg", encoded.width, encoded.height, encoded.bytes)
             }
         };
-        Ok(RendererCaptureScreenshotReply::Captured(
+        Ok(RendererImageCaptureOutcome::Captured(
             RendererCapturedScreenshot {
                 mime_type: mime_type.to_owned(),
                 width,
                 height,
                 bytes: bytes.into(),
-                visual_state,
             },
         ))
+    }
+}
+
+enum RendererImageCaptureOutcome {
+    Captured(RendererCapturedScreenshot),
+    LayoutDisabled,
+    NoDocument,
+}
+
+impl RendererImageCaptureOutcome {
+    fn into_screenshot_reply(self) -> RendererCaptureScreenshotReply {
+        match self {
+            Self::Captured(image) => RendererCaptureScreenshotReply::Captured(image),
+            Self::LayoutDisabled => RendererCaptureScreenshotReply::LayoutDisabled,
+            Self::NoDocument => RendererCaptureScreenshotReply::NoDocument,
+        }
+    }
+}
+
+fn visual_state_for_captured_screencast_frame(
+    before: RendererVisualStateToken,
+    after: RendererVisualStateToken,
+) -> RendererVisualStateToken {
+    // Resource decoders can publish from another task while layout samples
+    // immutable resources. Keep the older token in that race so the next poll
+    // cannot mistake a potentially stale frame for the new resource state.
+    // Other changes are renderer-internal world preparation represented by
+    // the completed fresh frame.
+    if before.has_same_resource_generation(&after) {
+        after
+    } else {
+        before
     }
 }
 
@@ -274,9 +353,7 @@ impl RendererCaptureScreenshotRequest {
             region,
             include_backgrounds: match self.purpose {
                 RendererScreenshotPurpose::Print { print_background } => print_background,
-                RendererScreenshotPurpose::Screenshot | RendererScreenshotPurpose::Screencast => {
-                    true
-                }
+                RendererScreenshotPurpose::Screenshot => true,
             },
             include_viewport_controls,
             max_width: self.max_width,

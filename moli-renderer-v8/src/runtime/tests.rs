@@ -578,13 +578,11 @@ async fn screenshot_and_screencast_paint_downloaded_svg_vectors() {
         [0, 255, 0, 255]
     );
 
-    let screencast = capture_screenshot_with_request(
+    let screencast = capture_screencast_frame_with_request(
         &page,
-        super::RendererCaptureScreenshotRequest {
-            purpose: super::RendererScreenshotPurpose::Screencast,
+        super::RendererCaptureScreencastFrameRequest {
             format: super::RendererScreenshotFormat::Png,
             quality: 100,
-            region: super::RendererScreenshotRegion::Viewport,
             optimize_for_speed: true,
             max_width: None,
             max_height: None,
@@ -592,9 +590,12 @@ async fn screenshot_and_screencast_paint_downloaded_svg_vectors() {
         },
     )
     .await;
-    assert_eq!(decoded_png_pixel(&screencast.bytes, 2, 5), [255, 0, 0, 255]);
     assert_eq!(
-        decoded_png_pixel(&screencast.bytes, 17, 5),
+        decoded_png_pixel(&screencast.image.bytes, 2, 5),
+        [255, 0, 0, 255]
+    );
+    assert_eq!(
+        decoded_png_pixel(&screencast.image.bytes, 17, 5),
         [0, 255, 0, 255]
     );
 }
@@ -695,7 +696,6 @@ async fn capture_screenshot_encodes_jpeg_and_limits_device_dimensions() {
         optimize_for_speed: false,
         max_width: Some(5),
         max_height: Some(4),
-        known_visual_state: None,
     };
     let (reply, _) = page
         .run_async_command(RendererPageCommand::CaptureScreenshot(request))
@@ -764,7 +764,6 @@ async fn print_capture_uses_print_media_controls_backgrounds_and_restores_screen
             optimize_for_speed: false,
             max_width: None,
             max_height: None,
-            known_visual_state: None,
         },
     )
     .await;
@@ -783,7 +782,6 @@ async fn print_capture_uses_print_media_controls_backgrounds_and_restores_screen
             optimize_for_speed: false,
             max_width: None,
             max_height: None,
-            known_visual_state: None,
         },
     )
     .await;
@@ -846,7 +844,6 @@ async fn capture_screenshot_clip_and_full_document_keep_the_live_layout_viewport
             optimize_for_speed: false,
             max_width: None,
             max_height: None,
-            known_visual_state: None,
         },
     )
     .await;
@@ -870,7 +867,6 @@ async fn capture_screenshot_clip_and_full_document_keep_the_live_layout_viewport
             optimize_for_speed: true,
             max_width: None,
             max_height: None,
-            known_visual_state: None,
         },
     )
     .await;
@@ -929,7 +925,6 @@ async fn bounded_viewport_clip_keeps_root_controls_while_page_clip_omits_them() 
             optimize_for_speed: false,
             max_width: None,
             max_height: None,
-            known_visual_state: None,
         },
     )
     .await;
@@ -959,7 +954,6 @@ async fn bounded_viewport_clip_keeps_root_controls_while_page_clip_omits_them() 
             optimize_for_speed: false,
             max_width: None,
             max_height: None,
-            known_visual_state: None,
         },
     )
     .await;
@@ -991,7 +985,6 @@ async fn capture_screenshot_rejects_full_document_at_the_128k_css_boundary() {
         optimize_for_speed: false,
         max_width: None,
         max_height: None,
-        known_visual_state: None,
     };
 
     let error = match page
@@ -1159,6 +1152,22 @@ async fn capture_screenshot_with_request(
             image
         }
         _ => panic!("expected captured screenshot reply"),
+    }
+}
+
+async fn capture_screencast_frame_with_request(
+    page: &RendererPageHandle,
+    request: super::RendererCaptureScreencastFrameRequest,
+) -> super::RendererCapturedScreencastFrame {
+    let (reply, _) = page
+        .run_async_command(RendererPageCommand::CaptureScreencastFrame(request))
+        .await
+        .expect("renderer page should capture a screencast frame");
+    match reply {
+        RendererPageReply::CaptureScreencastFrame(
+            super::RendererCaptureScreencastFrameReply::Captured(frame),
+        ) => frame,
+        _ => panic!("expected captured screencast frame reply"),
     }
 }
 
@@ -12726,13 +12735,11 @@ addEventListener("wheel", event => {
             .await
             .handled
     );
-    let screencast = capture_screenshot_with_request(
+    let screencast = capture_screencast_frame_with_request(
         &page,
-        super::RendererCaptureScreenshotRequest {
-            purpose: super::RendererScreenshotPurpose::Screencast,
+        super::RendererCaptureScreencastFrameRequest {
             format: super::RendererScreenshotFormat::Png,
             quality: 100,
-            region: super::RendererScreenshotRegion::Viewport,
             optimize_for_speed: true,
             max_width: None,
             max_height: None,
@@ -12741,7 +12748,7 @@ addEventListener("wheel", event => {
     )
     .await;
     assert_eq!(
-        decoded_png_pixel(&screencast.bytes, 10, 10),
+        decoded_png_pixel(&screencast.image.bytes, 10, 10),
         [0, 255, 0, 255]
     );
 
