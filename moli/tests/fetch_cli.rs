@@ -1657,7 +1657,7 @@ fn cli_wait_response_matches_url_body_and_json_without_networkidle() -> Result<(
         "--wait-response-url",
         "/wait-until-json-data",
         "--wait-response-body",
-        "SUCCESS",
+        "SUCC[A-Z]+",
         "--wait-response-json",
         "data.url=/item/42",
         "--dump",
