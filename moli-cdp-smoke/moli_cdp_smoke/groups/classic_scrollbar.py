@@ -11,6 +11,7 @@ async def run_classic_scrollbar_group(state: SmokeState) -> None:
     cdp = state.cdp
     websocket_url = await discover_websocket_url(state.endpoint)
     is_moli = websocket_url.endswith("/devtools/browser/moli-browser")
+    await page.set_viewport_size({"width": 800, "height": 700})
     await page.set_content(
         """
         <!doctype html>
@@ -82,6 +83,11 @@ async def run_classic_scrollbar_group(state: SmokeState) -> None:
     )
 
     image = decode_png(await page.screenshot())
+    assert_equal(
+        (image.width, image.height),
+        (800, 700),
+        "classic scrollbar smoke owns its screenshot viewport",
+    )
     assert_equal(image.pixel(192, 8), (255, 0, 0, 255), "custom up-arrow paint")
     assert_equal(image.pixel(190, 30), (255, 0, 0, 255), "custom vertical thumb paint")
     assert_equal(image.pixel(190, 60), (0, 0, 255, 255), "custom vertical track paint")
