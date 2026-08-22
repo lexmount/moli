@@ -57,6 +57,7 @@ mod owner_maintenance;
 mod page;
 mod page_commands;
 mod page_context_cancel;
+mod page_creation_progress;
 mod page_css;
 pub(crate) mod page_dom;
 mod page_dom_snapshot;
@@ -80,6 +81,8 @@ pub(crate) use self::script_preloads::{
     BufferedScriptPreloadKey, BufferedScriptPreloadRequest, DocumentScriptPreloadStore,
     IncrementalBufferedScriptPreloadScanner,
 };
+
+pub use self::page_creation_progress::{RendererPageCreationPhase, RendererPageCreationProgress};
 
 pub(crate) use self::browser_context_runtime::RendererOutputTransportSenderSlot;
 pub(in crate::runtime) use self::document_lifecycle_turn::PendingDocumentLifecycleTurn;

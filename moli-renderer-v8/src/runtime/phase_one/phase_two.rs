@@ -17,6 +17,7 @@ impl ConcurrentParseTimeRuntime {
             &self.page_vm.local_executor,
             "parse-time phase transition handoff",
         );
+        self.publish_target_lifecycle_phase();
         let (stranded_parse_time_document_script_events, stranded_parse_time_lifecycle_work) =
             self.retire_main_parser_continuation();
         self.page_vm

@@ -376,6 +376,7 @@ fn parse_status_line(line: &str) -> Option<u16> {
 pub struct NetworkFetchFailureContext {
     observation_journal: NetworkObservationJournal,
     network_error_text: &'static str,
+    reason: String,
     request_context: Option<NetworkFetchFailureRequestContext>,
 }
 
@@ -437,9 +438,11 @@ impl NetworkFetchFailureContext {
         observation_journal: NetworkObservationJournal,
     ) -> anyhow::Error {
         let network_error_text = crate::error::browser_network_error_text(&source);
+        let reason = source.to_string();
         source.context(Self {
             observation_journal,
             network_error_text,
+            reason,
             request_context: None,
         })
     }
@@ -450,9 +453,11 @@ impl NetworkFetchFailureContext {
         request_context: NetworkFetchFailureRequestContext,
     ) -> anyhow::Error {
         let network_error_text = crate::error::browser_network_error_text(&source);
+        let reason = source.to_string();
         source.context(Self {
             observation_journal,
             network_error_text,
+            reason,
             request_context: Some(request_context),
         })
     }
@@ -463,6 +468,12 @@ impl NetworkFetchFailureContext {
 
     pub fn network_error_text(&self) -> &'static str {
         self.network_error_text
+    }
+
+    /// Returns the single human-readable transport or policy reason captured
+    /// before this machine-readable context was attached.
+    pub fn reason(&self) -> &str {
+        &self.reason
     }
 
     pub fn request_context(&self) -> Option<&NetworkFetchFailureRequestContext> {
@@ -604,6 +615,12 @@ mod tests {
         );
         assert_eq!(report.matches("transport failure sentinel").count(), 1);
         assert!(error.downcast_ref::<NetworkFetchFailureContext>().is_some());
+        assert_eq!(
+            error
+                .downcast_ref::<NetworkFetchFailureContext>()
+                .map(NetworkFetchFailureContext::reason),
+            Some("transport failure sentinel")
+        );
         assert!(error.downcast_ref::<std::io::Error>().is_some());
     }
 
@@ -612,6 +629,7 @@ mod tests {
         let failure = NetworkFetchFailureContext {
             observation_journal: NetworkObservationJournal::default(),
             network_error_text: "net::ERR_FAILED",
+            reason: "transport rejected secret values".to_owned(),
             request_context: Some(NetworkFetchFailureRequestContext::new(
                 Url::parse("https://example.test/").expect("test URL should parse"),
                 "POST".to_owned(),
@@ -625,6 +643,10 @@ mod tests {
 
         assert!(!report.contains("secret request body"), "{report}");
         assert!(!report.contains("secret token"), "{report}");
+        assert!(
+            !report.contains("transport rejected secret values"),
+            "{report}"
+        );
         assert!(report.contains("has_request_body: true"), "{report}");
         assert!(report.contains("request_header_count: 1"), "{report}");
     }

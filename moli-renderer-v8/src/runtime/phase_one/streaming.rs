@@ -341,6 +341,10 @@ impl ConcurrentParseTimeRuntime {
         boundary: CommittedNavigationBootstrapBoundary,
     ) -> Result<StreamingNavigationPageCreationResult> {
         debug_assert!(!response_headers_indicate_download(&response_headers));
+        let runtime_hooks = match raw_body.page_creation_progress() {
+            Some(progress) => runtime_hooks.with_page_creation_progress(progress),
+            None => runtime_hooks,
+        };
         let mut env = env.clone();
         env.document_content_security_policies = if env.bypass_content_security_policy {
             Vec::new()
@@ -568,6 +572,7 @@ const EXTERNAL_RAW_DOCUMENT_BODY_BUFFERED_CHUNKS: usize = 8;
 pub struct ExternalRawDocumentBodyStream {
     body_chunks: mpsc::Receiver<Vec<u8>>,
     completion: Option<oneshot::Receiver<Result<()>>>,
+    page_creation_progress: Option<crate::runtime::RendererPageCreationProgress>,
 }
 
 impl ExternalRawDocumentBodyStream {
@@ -581,6 +586,23 @@ impl ExternalRawDocumentBodyStream {
         (body_tx, Self::new(body_chunks, completion))
     }
 
+    /// Creates a bounded stream whose renderer progress remains observable by
+    /// the browser-side navigation deadline.
+    pub fn channel_with_page_creation_progress(
+        completion: oneshot::Receiver<Result<()>>,
+        page_creation_progress: crate::runtime::RendererPageCreationProgress,
+    ) -> (mpsc::Sender<Vec<u8>>, Self) {
+        let (body_tx, body_chunks) = mpsc::channel(EXTERNAL_RAW_DOCUMENT_BODY_BUFFERED_CHUNKS);
+        (
+            body_tx,
+            Self {
+                body_chunks,
+                completion: Some(completion),
+                page_creation_progress: Some(page_creation_progress),
+            },
+        )
+    }
+
     pub fn new(
         body_chunks: mpsc::Receiver<Vec<u8>>,
         completion: oneshot::Receiver<Result<()>>,
@@ -588,6 +610,7 @@ impl ExternalRawDocumentBodyStream {
         Self {
             body_chunks,
             completion: Some(completion),
+            page_creation_progress: None,
         }
     }
 
@@ -602,6 +625,10 @@ impl ExternalRawDocumentBodyStream {
 
     fn body_chunk_stream_is_exhausted(&self) -> bool {
         self.body_chunks.is_closed() && self.body_chunks.is_empty()
+    }
+
+    fn page_creation_progress(&self) -> Option<crate::runtime::RendererPageCreationProgress> {
+        self.page_creation_progress.clone()
     }
 }
 

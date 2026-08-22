@@ -31,7 +31,7 @@ use std::{
 };
 use strip_ansi_escapes::strip;
 use support::FixtureServer;
-use tokio::{net::TcpListener, task::JoinHandle};
+use tokio::{io::AsyncReadExt, net::TcpListener, task::JoinHandle};
 use tracing_subscriber::fmt::MakeWriter;
 
 struct Output {
@@ -169,7 +169,7 @@ where
     let result = runtime.block_on(app::run_cli_with_config(cli, config, &mut stdout));
     if let Err(error) = &result {
         let mut stderr = stderr.lock();
-        writeln!(&mut *stderr, "{error:?}")?;
+        app::write_error_report(&mut *stderr, error)?;
     }
     let stderr = stderr.lock().clone();
     Ok(Output {
@@ -243,6 +243,11 @@ const PDF_FIXTURE_BODY: &[u8] =
     b"%PDF-1.7\n% moli raw document fixture\n1 0 obj\n<<>>\nendobj\n%%EOF\n";
 
 struct BinaryDocumentFixtureServer {
+    base_url: String,
+    task: JoinHandle<()>,
+}
+
+struct BlockingStylesheetTimeoutFixtureServer {
     base_url: String,
     task: JoinHandle<()>,
 }
@@ -463,6 +468,52 @@ impl BinaryDocumentFixtureServer {
     }
 }
 
+impl BlockingStylesheetTimeoutFixtureServer {
+    async fn spawn() -> Result<Self> {
+        async fn page() -> Html<&'static str> {
+            Html(
+                r#"<!doctype html>
+<html>
+  <head>
+    <link rel="stylesheet" href="/slow.css">
+    <script>document.documentElement.dataset.parserResumed = "true";</script>
+  </head>
+  <body></body>
+</html>"#,
+            )
+        }
+
+        async fn slow_css() -> impl IntoResponse {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            ([("content-type", "text/css; charset=utf-8")], "html {}")
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let app = Router::new()
+            .route("/", get(page))
+            .route("/slow.css", get(slow_css));
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("blocking stylesheet timeout fixture should serve");
+        });
+        Ok(Self {
+            base_url: format!("http://{addr}"),
+            task,
+        })
+    }
+
+    fn url(&self) -> String {
+        format!("{}/", self.base_url)
+    }
+
+    async fn shutdown(self) {
+        self.task.abort();
+        let _ = self.task.await;
+    }
+}
+
 impl CacheableFixtureServer {
     async fn spawn() -> Result<Self> {
         async fn cacheable(
@@ -540,6 +591,19 @@ fn assert_cli_dump_html_callback_error_contract(output: &Output, expected_messag
         !stderr.contains("backtrace:"),
         "stderr start: {stderr} stderr end"
     );
+}
+
+fn assert_single_fetch_failure_reason(stderr: &str, url: &str, reason: &str) {
+    assert!(
+        stderr.contains(&format!("Error: failed to fetch `{url}`")),
+        "stderr={stderr}"
+    );
+    assert!(
+        stderr.contains(&format!("Reason: {reason}")),
+        "stderr={stderr}"
+    );
+    assert_eq!(stderr.matches("Reason:").count(), 1, "stderr={stderr}");
+    assert!(!stderr.contains("Caused by:"), "stderr={stderr}");
 }
 
 fn assert_cli_dump_html_debug_callback_error_contract(output: &Output, expected_message: &str) {
@@ -944,6 +1008,26 @@ fn cli_fetch_attachment_dump_html_bypasses_dcl_page_lifecycle() -> Result<()> {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(output.stdout, PDF_FIXTURE_BODY);
+    Ok(())
+}
+
+#[test]
+fn cli_fetch_raw_document_with_page_wait_uses_fetch_failure_report() -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let server = runtime.block_on(BinaryDocumentFixtureServer::spawn())?;
+    let url = server.url("/inline.pdf");
+    let output = run_fetch_cli_with_dump_and_args(&url, "html", &["--wait-script", "true"])?;
+    runtime.block_on(server.shutdown());
+
+    let stdout = clean_output(&output.stdout);
+    let stderr = clean_output(&output.stderr);
+    assert!(!output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stdout.is_empty(), "stdout={stdout}");
+    assert_single_fetch_failure_reason(
+        &stderr,
+        &url,
+        "raw non-HTML document fetch does not support page wait options",
+    );
     Ok(())
 }
 
@@ -2738,7 +2822,7 @@ fn cli_load_uses_one_timeout_across_403_replacement_navigation() -> Result<()> {
     let stderr = clean_output(&output.stderr);
     assert!(stdout.is_empty(), "stdout={stdout}");
     assert!(
-        stderr.contains("allow-http-error wait_until Load timed out after 250 ms"),
+        stderr.contains("fetch readiness timed out after 250 ms while waiting for load"),
         "stderr={stderr}"
     );
     Ok(())
@@ -3446,6 +3530,54 @@ fn cli_dump_json_keeps_transport_failures_as_process_errors() -> Result<()> {
 }
 
 #[test]
+fn cli_timeout_reports_waiting_for_response_headers_as_one_reason() -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let listener = runtime.block_on(TcpListener::bind("127.0.0.1:0"))?;
+    let addr = listener.local_addr()?;
+    let hanging_server = runtime.spawn(async move {
+        let (mut stream, _) = listener
+            .accept()
+            .await
+            .expect("header timeout fixture should accept");
+        let mut request = [0_u8; 1024];
+        let _ = stream.read(&mut request).await;
+        std::future::pending::<()>().await;
+    });
+    let url = format!("http://{addr}/headers-never-arrive");
+
+    let output = run_moli([
+        "moli",
+        "fetch",
+        "--log-level",
+        "error",
+        "--http-no-proxy",
+        "*",
+        "--http-timeout",
+        "5000",
+        "--wait-until",
+        "domcontentloaded",
+        "--timeout",
+        "300",
+        "--dump",
+        "html",
+        &url,
+    ])?;
+    hanging_server.abort();
+    let _ = runtime.block_on(hanging_server);
+
+    let stdout = clean_output(&output.stdout);
+    let stderr = clean_output(&output.stderr);
+    assert!(!output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stdout.is_empty(), "stdout={stdout}");
+    assert_single_fetch_failure_reason(
+        &stderr,
+        &url,
+        "fetch readiness timed out after 300 ms while waiting for response headers",
+    );
+    Ok(())
+}
+
+#[test]
 fn cli_streaming_page_creation_timeout_exits_cleanly_for_every_wait_mode() -> Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
@@ -3491,6 +3623,11 @@ fn cli_streaming_page_creation_timeout_exits_cleanly_for_every_wait_mode() -> Re
             stderr.contains("timed out after 400 ms"),
             "wait_until={wait_until} stderr={stderr}"
         );
+        assert_single_fetch_failure_reason(
+            &stderr,
+            &url,
+            "fetch readiness timed out after 400 ms while streaming main body",
+        );
         assert!(
             !stderr.contains("resident renderer page entry must retain an active PageVm"),
             "wait_until={wait_until} leaked the renderer teardown invariant: stderr={stderr}"
@@ -3530,6 +3667,42 @@ fn cli_meta_refresh_shutdown_exits_without_renderer_abort() -> Result<()> {
     assert!(
         !stderr.contains("PageVm must retain a live ScriptVm until drop"),
         "renderer teardown invariant leaked to the CLI: stderr={stderr}"
+    );
+    Ok(())
+}
+
+#[test]
+fn cli_timeout_reports_parser_blocking_stylesheet_as_one_reason() -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let server = runtime.block_on(BlockingStylesheetTimeoutFixtureServer::spawn())?;
+    let url = server.url();
+    let output = run_moli([
+        "moli",
+        "fetch",
+        "--log-level",
+        "error",
+        "--http-no-proxy",
+        "*",
+        "--http-timeout",
+        "5000",
+        "--wait-until",
+        "domcontentloaded",
+        "--timeout",
+        "500",
+        "--dump",
+        "html",
+        &url,
+    ])?;
+    runtime.block_on(server.shutdown());
+
+    let stdout = clean_output(&output.stdout);
+    let stderr = clean_output(&output.stderr);
+    assert!(!output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stdout.is_empty(), "stdout={stdout}");
+    assert_single_fetch_failure_reason(
+        &stderr,
+        &url,
+        "fetch readiness timed out after 500 ms while waiting for parser-blocking stylesheet",
     );
     Ok(())
 }

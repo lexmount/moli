@@ -3,7 +3,7 @@
 mod readiness;
 mod redirect_navigation;
 
-use std::{io::Write, sync::Arc};
+use std::{fmt, io::Write, sync::Arc};
 
 use crate::{
     cli::{Cli, Commands, normalize_args_for_compat},
@@ -49,8 +49,7 @@ pub async fn run_cli_with_config<W: Write>(
                     .await
                     .map_err(|error| with_fetch_context(error, &args.url))?;
             }
-            let browser = Browser::new(config.browser.clone())
-                .context("failed to initialize browser runtime")?;
+            let browser = Browser::new(config.browser.clone())?;
             load_cookie_state(&browser, &config)?;
             let readiness =
                 ReadinessPlan::from_fetch_args(&args, config.fetch.response_wait.clone())?;
@@ -68,16 +67,20 @@ pub async fn run_cli_with_config<W: Write>(
                 FetchedDocument::Raw(raw_document) => {
                     if readiness.has_page_waits() || args.delay_ms > 0 {
                         finalize_fetch_browser(browser);
-                        return Err(anyhow!(
-                            "raw non-HTML document fetch does not support page wait options"
+                        return Err(with_fetch_context(
+                            anyhow!(
+                                "raw non-HTML document fetch does not support page wait options"
+                            ),
+                            &args.url,
                         ));
                     }
                     let rendered =
                         fetch_dump::render_raw_document_dump(&raw_document, &config.fetch)
-                            .context("failed to render raw fetch output")?;
+                            .map_err(|error| with_fetch_context(error, &args.url))?;
                     stdout
                         .write_all(&rendered)
-                        .context("failed to write raw fetch output")?;
+                        .context("failed to write raw fetch output")
+                        .map_err(|error| with_fetch_context(error, &args.url))?;
                     let _ = stdout.flush();
                     finalize_fetch_browser(browser);
                     return Ok(());
@@ -99,15 +102,17 @@ pub async fn run_cli_with_config<W: Write>(
                 browser
                     .wait_for_page_delay(&mut page, std::time::Duration::from_millis(args.delay_ms))
                     .await
-                    .context("failed while waiting for page delay")?;
+                    .context("failed while waiting for page delay")
+                    .map_err(|error| with_fetch_context(error, &args.url))?;
             }
 
             let rendered = fetch_dump::render_page_output_async(&mut page, &config.fetch)
                 .await
-                .context("failed to render fetch output")?;
+                .map_err(|error| with_fetch_context(error, &args.url))?;
             stdout
                 .write_all(&rendered)
-                .context("failed to write fetch output")?;
+                .context("failed to write fetch output")
+                .map_err(|error| with_fetch_context(error, &args.url))?;
             let _ = stdout.flush();
             if let Err(error) = page.close_async().await {
                 tracing::warn!(error = %error, "failed to close fetched page before browser shutdown");
@@ -146,14 +151,66 @@ fn build_fetch_request(url: &str, config: &AppConfig) -> Result<Request> {
     Ok(request)
 }
 
-fn with_fetch_context(error: anyhow::Error, url: &str) -> anyhow::Error {
-    // Network failures already carry a URL-aware typed context. Adding the
-    // same CLI context again would print two "failed to fetch" chain entries.
-    if error.is::<NetworkFetchFailureContext>() {
-        error
-    } else {
-        error.context(anyhow!("failed to fetch `{url}`"))
+struct CliFetchFailureContext {
+    url: String,
+    reason: String,
+}
+
+impl fmt::Display for CliFetchFailureContext {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "failed to fetch `{}`", self.url)
     }
+}
+
+impl fmt::Debug for CliFetchFailureContext {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CliFetchFailureContext")
+            .field("url", &self.url)
+            .field("has_reason", &!self.reason.is_empty())
+            .finish()
+    }
+}
+
+fn with_fetch_context(error: anyhow::Error, url: &str) -> anyhow::Error {
+    if error.is::<CliFetchFailureContext>() {
+        return error;
+    }
+    let reason = error
+        .downcast_ref::<NetworkFetchFailureContext>()
+        .map(|failure| failure.reason().to_owned())
+        .unwrap_or_else(|| error.to_string());
+    with_fetch_context_reason(error, url, reason)
+}
+
+fn with_fetch_context_reason(
+    error: anyhow::Error,
+    url: &str,
+    reason: impl Into<String>,
+) -> anyhow::Error {
+    error.context(CliFetchFailureContext {
+        url: url.to_owned(),
+        reason: reason.into(),
+    })
+}
+
+/// Writes the stable, concise command-line error presentation.
+///
+/// Fetch errors carry their selected user-facing reason in a typed outer
+/// context and deliberately render only that two-line presentation. Other CLI
+/// failures retain their anyhow context chain so startup and configuration
+/// diagnostics do not lose their actionable inner cause.
+pub fn write_error_report<W: Write>(writer: &mut W, error: &anyhow::Error) -> std::io::Result<()> {
+    if let Some(fetch) = error.downcast_ref::<CliFetchFailureContext>() {
+        writeln!(writer, "Error: {fetch}")?;
+        writeln!(writer, "Reason: {}", one_line_reason(&fetch.reason))?;
+        return Ok(());
+    }
+    writeln!(writer, "Error: {error:#}")
+}
+
+fn one_line_reason(reason: &str) -> String {
+    reason.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn load_cookie_state(browser: &Browser, config: &AppConfig) -> Result<()> {
@@ -177,4 +234,39 @@ fn finalize_fetch_browser(browser: Browser) {
     // OpenSSL global cleanup with libcurl transfers still in progress.
     // Browser::drop owns profile cookie writeback when --profile-dir is set.
     drop(browser);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{with_fetch_context, write_error_report};
+
+    #[test]
+    fn fetch_report_has_one_reason_line_without_rendering_the_source_chain() {
+        let error = with_fetch_context(
+            anyhow::anyhow!("first failure line\nsecond failure line"),
+            "https://example.test/",
+        );
+        let mut report = Vec::new();
+
+        write_error_report(&mut report, &error).expect("report should write");
+        let report = String::from_utf8(report).expect("report should be UTF-8");
+
+        assert_eq!(
+            report,
+            "Error: failed to fetch `https://example.test/`\nReason: first failure line second failure line\n"
+        );
+        assert!(!report.contains("Caused by:"));
+    }
+
+    #[test]
+    fn non_fetch_report_retains_the_anyhow_context_chain() {
+        let error = anyhow::anyhow!("inner cause").context("outer context");
+        let mut report = Vec::new();
+
+        write_error_report(&mut report, &error).expect("report should write");
+        let report = String::from_utf8(report).expect("report should be UTF-8");
+
+        assert!(report.contains("outer context"));
+        assert!(report.contains("inner cause"));
+    }
 }

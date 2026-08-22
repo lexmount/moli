@@ -1114,6 +1114,7 @@ pub(crate) struct PageVmEnvConfig {
 #[derive(Clone)]
 pub(crate) struct PageVmRuntimeHooks {
     owner_wake: Option<RendererOwnerWakeSender>,
+    page_creation_progress: Option<super::RendererPageCreationProgress>,
     javascript_dialog_runtime: RendererJavaScriptDialogRuntime,
     resource_task_runner: Option<crate::network::RendererResourceTaskRunner>,
     pub(crate) browser_context_runtime: super::RendererBrowserContextRuntime,
@@ -1175,6 +1176,7 @@ impl PageVmRuntimeHooks {
         Self::bind_standalone_browser_context_owner_for_test(&browser_context_runtime);
         Self {
             owner_wake: None,
+            page_creation_progress: None,
             javascript_dialog_runtime: RendererJavaScriptDialogRuntime::default(),
             resource_task_runner: None,
             browser_context_runtime,
@@ -1246,6 +1248,7 @@ impl PageVmRuntimeHooks {
         Self {
             javascript_dialog_runtime: RendererJavaScriptDialogRuntime::default(),
             owner_wake: Some(owner_wake),
+            page_creation_progress: None,
             resource_task_runner: Some(residence.resource_task_runner()),
             browser_context_runtime,
             renderer_document_isolate_mode:
@@ -1284,6 +1287,7 @@ impl PageVmRuntimeHooks {
         Self {
             javascript_dialog_runtime: RendererJavaScriptDialogRuntime::default(),
             owner_wake: Some(owner_wake),
+            page_creation_progress: None,
             resource_task_runner: Some(
                 crate::network::RendererResourceTaskRunner::from_current_tokio()
                     .expect("renderer owner must install its resource task runner"),
@@ -1301,6 +1305,20 @@ impl PageVmRuntimeHooks {
             _standalone_browser_context_owner: None,
             #[cfg(test)]
             _standalone_request_client_owner: None,
+        }
+    }
+
+    pub(crate) fn with_page_creation_progress(
+        mut self,
+        page_creation_progress: super::RendererPageCreationProgress,
+    ) -> Self {
+        self.page_creation_progress = Some(page_creation_progress);
+        self
+    }
+
+    pub(crate) fn set_page_creation_phase(&self, phase: super::RendererPageCreationPhase) {
+        if let Some(progress) = &self.page_creation_progress {
+            progress.set_phase(phase);
         }
     }
 

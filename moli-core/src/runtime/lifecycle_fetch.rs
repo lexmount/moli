@@ -5,11 +5,12 @@
 //! lifecycle decision cannot reset or extend the caller's timeout budget.
 
 use super::{
-    Browser, FetchDeadline, FetchedDocument, RenderedDomWaitUntil, RendererLifecycleDecider,
-    RendererLifecycleDecision, RendererLifecycleSnapshot, RendererReplyBoundary,
+    Browser, FetchDeadline, FetchedDocument, RawDocumentDisposition, RenderedDomWaitUntil,
+    RendererLifecycleDecider, RendererLifecycleDecision, RendererLifecycleSnapshot,
+    RendererReplyBoundary,
 };
-use anyhow::{Result, anyhow};
-use moli_fetch::{NetworkFetchFailureContext, Request};
+use anyhow::Result;
+use moli_fetch::Request;
 use std::time::Duration;
 
 impl Browser {
@@ -65,19 +66,8 @@ impl Browser {
             deadline,
             RendererReplyBoundary::Stage,
             Some(decider),
+            RawDocumentDisposition::Materialize,
         )
         .await
-        .map_err(|error| {
-            // This typed context already supplies the caller-facing fetch
-            // message. Keep it outermost instead of obscuring it with a
-            // lifecycle layer that adds no actionable network information.
-            if error.is::<NetworkFetchFailureContext>() {
-                error
-            } else {
-                error.context(anyhow!(
-                    "failed while applying the {wait_until:?} lifecycle-target decision or following its successor navigation"
-                ))
-            }
-        })
     }
 }

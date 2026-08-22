@@ -28,6 +28,10 @@ pub(in crate::runtime) struct PendingStreamingPhaseOneContinuation {
 }
 
 impl PendingStreamingPhaseOneContinuation {
+    pub(super) fn publish_pending_page_creation_phase(&self) {
+        self.runtime.publish_pending_page_creation_phase();
+    }
+
     pub(super) fn bridge(
         runtime: ConcurrentParseTimeRuntime,
         raw_body: RawDocumentBodySource,
@@ -71,6 +75,7 @@ impl PendingStreamingPhaseOneContinuation {
     }
 
     pub(in crate::runtime) async fn resume(self) -> Result<PendingPhaseOneResumeOutcome> {
+        self.runtime.publish_processing_main_document_phase();
         let Self {
             runtime,
             mut input,

@@ -98,8 +98,7 @@ impl StoragePartitionState {
     pub fn open(profile_dir: Option<&Path>) -> Result<Self> {
         let profile = profile_dir
             .map(BrowserProfile::open)
-            .transpose()
-            .context("failed to open browser profile")?
+            .transpose()?
             .map(Arc::new);
         Self::from_profile(profile)
     }

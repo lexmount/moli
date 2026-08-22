@@ -5,11 +5,12 @@
 //! protocol server.
 
 use anyhow::Result;
+use std::process::ExitCode;
 
 #[cfg(all(feature = "jemalloc", not(target_os = "windows")))]
 mod allocator;
 
-fn main() -> Result<()> {
+fn run() -> Result<()> {
     moli_process_signal::install_immediate_exit_handlers()?;
     let runtime_thread_budget = moli::runtime_thread_budget::tokio_runtime_thread_budget();
     tokio::runtime::Builder::new_multi_thread()
@@ -18,4 +19,15 @@ fn main() -> Result<()> {
         .enable_all()
         .build()?
         .block_on(moli::app::run_from_env())
+}
+
+fn main() -> ExitCode {
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            let stderr = std::io::stderr();
+            let _ = moli::app::write_error_report(&mut stderr.lock(), &error);
+            ExitCode::FAILURE
+        }
+    }
 }

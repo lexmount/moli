@@ -73,6 +73,7 @@ impl PendingPhaseOneResidence {
         runtime: Box<ConcurrentParseTimeRuntime>,
         started: Instant,
     ) -> Self {
+        runtime.publish_pending_page_creation_phase();
         Self::ParserBlockingSourceLoad { runtime, started }
     }
 
@@ -80,12 +81,14 @@ impl PendingPhaseOneResidence {
         runtime: Box<ConcurrentParseTimeRuntime>,
         started: Instant,
     ) -> Self {
+        runtime.publish_pending_page_creation_phase();
         Self::ClosedInputPageWork { runtime, started }
     }
 
     pub(in crate::runtime) fn open_streaming(
         continuation: Box<PendingStreamingPhaseOneContinuation>,
     ) -> Self {
+        continuation.publish_pending_page_creation_phase();
         Self::OpenStreaming(continuation)
     }
 
@@ -134,6 +137,7 @@ impl PendingPhaseOneResidence {
         match self {
             Self::ParserBlockingSourceLoad { runtime, started }
             | Self::ClosedInputPageWork { runtime, started } => {
+                runtime.publish_processing_main_document_phase();
                 let outcome = (*runtime)
                     .continue_creation_from_phase_one_runtime(started)
                     .await?;

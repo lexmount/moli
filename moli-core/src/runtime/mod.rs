@@ -12,7 +12,7 @@ use crate::{
     selector::QueryEngine,
 };
 use anyhow::Result;
-use anyhow::{Context, anyhow, bail};
+use anyhow::{Context, anyhow};
 use moli_cookie_jar::StoredCookie;
 use moli_fetch::{
     FetchCancelHandle, RawResponse, Request, StreamingRawResponse, ensure_http_status_success,
@@ -35,7 +35,7 @@ use url::Url;
 pub use crate::renderer::ExternalRawDocumentBodyStream;
 pub use crate::renderer::PageVmInitStage;
 pub use crate::renderer::RendererReplyBoundary;
-pub use fetch_deadline::FetchDeadline;
+pub use fetch_deadline::{FetchDeadline, FetchReadinessTimeout, FetchTimeoutPhase};
 pub use moli_renderer_v8::{
     DetachedParserScriptFetchContinuation, RendererBrowserContextRuntime,
     RendererBrowserContextRuntimeOwner, RendererBrowserContextRuntimeOwnerAccess,
@@ -51,6 +51,16 @@ pub use navigation_engine::{
 };
 
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RawDocumentDisposition {
+    Materialize,
+    RejectForPageApi,
+}
+
+fn raw_document_page_api_error() -> anyhow::Error {
+    anyhow!("raw non-HTML document cannot be returned through the Page fetch API")
+}
 
 fn is_fetch_readiness_timeout(error: &anyhow::Error, wait_until: RenderedDomWaitUntil) -> bool {
     let expected = match wait_until {
@@ -153,6 +163,13 @@ impl RenderedDomWaitUntil {
 
     fn has_best_effort_page_wait(self) -> bool {
         matches!(self, Self::NetworkIdle | Self::DomStable)
+    }
+}
+
+fn fetch_timeout_phase_for_stage(stage: PageVmInitStage) -> FetchTimeoutPhase {
+    match stage {
+        PageVmInitStage::DomContentLoaded => FetchTimeoutPhase::WaitingForDomContentLoaded,
+        PageVmInitStage::Load => FetchTimeoutPhase::WaitingForLoad,
     }
 }
 
@@ -354,48 +371,21 @@ impl Browser {
         deadline: FetchDeadline,
         allow_http_error: bool,
     ) -> Result<Page> {
-        let raw_url = request.url.as_str().to_owned();
-        let stage = wait_until.base_stage();
-        debug!(
-            url = %raw_url,
-            wait_until = ?wait_until,
-            timeout_ms = deadline.timeout().as_millis(),
-            stage = ?stage,
-            "starting fetch_with_wait_until deadline"
-        );
-
-        // Materialization only reaches the concrete DCL/Load base stage. The
-        // selected stability observation is a separate Page operation so it
-        // can consume the remaining budget and soften only its own timeout.
-        let mut page = match tokio::time::timeout_at(
-            deadline.at(),
-            self.fetch_allow_http_error_internal(request, stage),
-        )
-        .await
+        let mut page = match self
+            .fetch_document_to_base_stage(
+                request,
+                wait_until,
+                deadline,
+                RendererReplyBoundary::Stage,
+                None,
+                RawDocumentDisposition::RejectForPageApi,
+            )
+            .await?
         {
-            // Preserve transport and policy errors from the fetch itself. The
-            // outer deadline should add an error only when it actually wins.
-            Ok(result) => result?,
-            Err(_) => {
-                warn!(
-                    url = %raw_url,
-                    wait_until = ?wait_until,
-                    timeout_ms = deadline.timeout().as_millis(),
-                    stage = ?stage,
-                    allow_http_error,
-                    "fetch_with_wait_until timed out"
-                );
-                if allow_http_error {
-                    bail!(
-                        "fetch allow-http-error wait_until {wait_until:?} timed out after {} ms for `{raw_url}`",
-                        deadline.timeout().as_millis()
-                    );
-                }
-                bail!(
-                    "fetch wait_until {wait_until:?} timed out after {} ms for `{raw_url}`",
-                    deadline.timeout().as_millis()
-                );
-            }
+            FetchedDocument::Page(page) => page,
+            FetchedDocument::Raw(_) => unreachable!(
+                "the Page fetch path rejects raw documents before body materialization"
+            ),
         };
 
         self.wait_for_page_readiness_with_deadline(&mut page, wait_until, deadline)
@@ -434,6 +424,7 @@ impl Browser {
                 deadline,
                 RendererReplyBoundary::Stage,
                 None,
+                RawDocumentDisposition::Materialize,
             )
             .await?;
 
@@ -457,6 +448,7 @@ impl Browser {
         deadline: FetchDeadline,
         reply_boundary: RendererReplyBoundary,
         lifecycle_decider: Option<RendererLifecycleDecider>,
+        raw_document_disposition: RawDocumentDisposition,
     ) -> Result<FetchedDocument> {
         let timeout = deadline.timeout();
         let stage = wait_until.base_stage();
@@ -483,6 +475,7 @@ impl Browser {
                     timeout,
                     stage,
                     outer_deadline,
+                    || fetch_timeout_phase_for_stage(stage),
                     self.materialize_static_html_page(
                         &raw_url,
                         requested_url,
@@ -507,6 +500,7 @@ impl Browser {
                 timeout,
                 stage,
                 outer_deadline,
+                || FetchTimeoutPhase::WaitingForResponseHeaders,
                 self.fetch_service_worker_main_resource_for_navigation(
                     &request,
                     &navigation_loader,
@@ -519,15 +513,20 @@ impl Browser {
         } = service_worker_fetch;
         if let Some(response) = response {
             navigation_loader.note_service_worker_response_ready()?;
-            let document_fetch_context_seed =
-                navigation_loader.commit(response.final_url.clone())?;
             if response_headers_indicate_raw_document(&response.headers) {
+                if raw_document_disposition == RawDocumentDisposition::RejectForPageApi {
+                    return Err(raw_document_page_api_error());
+                }
                 let raw_response =
                     RawResponse::from_head_and_body(response.head(), response.clone_body_bytes());
                 return Ok(FetchedDocument::Raw(Box::new(RawDocument::from_response(
                     raw_response,
                 ))));
             }
+            let document_fetch_context_seed =
+                navigation_loader.commit(response.final_url.clone())?;
+            let page_creation_progress = moli_renderer_v8::RendererPageCreationProgress::new();
+            let timeout_progress = page_creation_progress.clone();
             return self
                 .fetch_document_wait_timeout(
                     &raw_url,
@@ -535,7 +534,8 @@ impl Browser {
                     timeout,
                     stage,
                     outer_deadline,
-                    self.materialize_streaming_raw_response_page(
+                    move || FetchTimeoutPhase::from_renderer_phase(timeout_progress.phase()),
+                    self.materialize_streaming_raw_response_page_with_page_creation_progress(
                         &raw_url,
                         requested_url,
                         stage,
@@ -544,6 +544,7 @@ impl Browser {
                         streaming_raw_response_from_navigation_response(response)?,
                         document_fetch_context_seed,
                         reserved_client,
+                        page_creation_progress,
                     ),
                 )
                 .await
@@ -556,28 +557,42 @@ impl Browser {
                 timeout,
                 stage,
                 outer_deadline,
+                || FetchTimeoutPhase::WaitingForResponseHeaders,
                 navigation_loader.fetch_raw_stream(request),
             )
             .await?;
         if response_headers_indicate_raw_document(&response.headers) {
-            // `wait_until` is a DOM lifecycle deadline. Binary/download-like main
-            // resources do not have DCL/load milestones, so only the initial
-            // document response acquisition is gated above. The body dump is plain
-            // network output and should not be reported as a DCL timeout.
+            if raw_document_disposition == RawDocumentDisposition::RejectForPageApi {
+                return Err(raw_document_page_api_error());
+            }
+            // Binary/download-like main resources have no DOM lifecycle
+            // milestones, but materializing a RawDocument still consumes the
+            // caller-owned absolute fetch-readiness budget.
             return self
-                .materialize_streaming_raw_response_raw_document(&raw_url, response)
+                .fetch_document_wait_timeout(
+                    &raw_url,
+                    wait_until,
+                    timeout,
+                    stage,
+                    outer_deadline,
+                    || FetchTimeoutPhase::StreamingMainBody,
+                    self.materialize_streaming_raw_response_raw_document(response),
+                )
                 .await
                 .map(|raw| FetchedDocument::Raw(Box::new(raw)));
         }
 
         let document_fetch_context_seed = navigation_loader.commit(response.final_url.clone())?;
+        let page_creation_progress = moli_renderer_v8::RendererPageCreationProgress::new();
+        let timeout_progress = page_creation_progress.clone();
         self.fetch_document_wait_timeout(
             &raw_url,
             wait_until,
             timeout,
             stage,
             outer_deadline,
-            self.materialize_streaming_raw_response_page(
+            move || FetchTimeoutPhase::from_renderer_phase(timeout_progress.phase()),
+            self.materialize_streaming_raw_response_page_with_page_creation_progress(
                 &raw_url,
                 requested_url,
                 stage,
@@ -586,6 +601,7 @@ impl Browser {
                 response,
                 document_fetch_context_seed,
                 reserved_client,
+                page_creation_progress,
             ),
         )
         .await
@@ -658,7 +674,7 @@ impl Browser {
         let remaining = deadline.remaining();
         deadline
             .wait(
-                "waiting for a selector",
+                FetchTimeoutPhase::WaitingForSelector,
                 page.wait_for_selector(&loader, selector, remaining),
             )
             .await
@@ -686,7 +702,7 @@ impl Browser {
         let remaining = deadline.remaining();
         deadline
             .wait(
-                "waiting for a script to become truthy",
+                FetchTimeoutPhase::WaitingForScript,
                 page.wait_for_script_truthy(&loader, expression, remaining),
             )
             .await
@@ -713,7 +729,7 @@ impl Browser {
         let remaining = deadline.remaining();
         deadline
             .wait(
-                "waiting for a subresource response",
+                FetchTimeoutPhase::WaitingForSubresourceResponse,
                 page.wait_for_subresource_response(&loader, criteria, remaining),
             )
             .await
@@ -970,7 +986,7 @@ impl Browser {
         let document_fetch_context_seed = navigation_loader.commit(response.final_url.clone())?;
         if response_headers_indicate_raw_document(&response.headers) {
             return self
-                .materialize_streaming_raw_response_raw_document(&raw_url, response)
+                .materialize_streaming_raw_response_raw_document(response)
                 .await
                 .map(|raw| FetchedDocument::Raw(Box::new(raw)));
         }
@@ -999,23 +1015,29 @@ impl Browser {
             .await
     }
 
-    async fn fetch_document_wait_timeout<T, F>(
+    async fn fetch_document_wait_timeout<T, F, P>(
         &self,
         raw_url: &str,
         wait_until: RenderedDomWaitUntil,
         timeout: Duration,
         stage: PageVmInitStage,
         deadline: tokio::time::Instant,
+        timeout_phase: P,
         future: F,
     ) -> Result<T>
     where
         F: std::future::Future<Output = Result<T>>,
+        P: FnOnce() -> FetchTimeoutPhase,
     {
         match tokio::time::timeout_at(deadline, future).await {
             Ok(result) => result,
-            Err(_) => {
-                Err(self.fetch_document_wait_timeout_error(raw_url, wait_until, timeout, stage))
-            }
+            Err(_) => Err(self.fetch_document_wait_timeout_error(
+                raw_url,
+                wait_until,
+                timeout,
+                stage,
+                timeout_phase(),
+            )),
         }
     }
 
@@ -1025,18 +1047,17 @@ impl Browser {
         wait_until: RenderedDomWaitUntil,
         timeout: Duration,
         stage: PageVmInitStage,
+        phase: FetchTimeoutPhase,
     ) -> anyhow::Error {
         warn!(
             url = %raw_url,
             wait_until = ?wait_until,
             timeout_ms = timeout.as_millis(),
             stage = ?stage,
+            timeout_phase = %phase,
             "fetch_document_allow_http_error_with_wait_until timed out"
         );
-        anyhow!(
-            "fetch document allow-http-error wait_until {wait_until:?} timed out after {} ms for `{raw_url}`",
-            timeout.as_millis()
-        )
+        anyhow::Error::new(FetchReadinessTimeout::new(timeout, phase))
     }
 
     async fn materialize_static_html_page(
@@ -1100,8 +1121,7 @@ impl Browser {
         create_page_request.storage_bucket_store = Some(self.partition.storage_bucket_store());
         let reply = renderer_owner
             .dispatch_command(RendererOwnerCommand::CreateHtmlPage(create_page_request))
-            .await
-            .with_context(|| anyhow!("failed to execute scripts for page `{raw_url}`"))?;
+            .await?;
         let page = materialize_page_created_reply(&renderer_owner, reply)?;
         info!(
             page_id = page.page_id(),
@@ -1122,6 +1142,32 @@ impl Browser {
         response: StreamingRawResponse,
         document_fetch_context_seed: DocumentFetchContextSeed,
         reserved_service_worker_client: Option<RendererReservedServiceWorkerClient>,
+    ) -> Result<Page> {
+        self.materialize_streaming_raw_response_page_with_page_creation_progress(
+            raw_url,
+            requested_url,
+            stage,
+            reply_boundary,
+            lifecycle_decider,
+            response,
+            document_fetch_context_seed,
+            reserved_service_worker_client,
+            moli_renderer_v8::RendererPageCreationProgress::new(),
+        )
+        .await
+    }
+
+    async fn materialize_streaming_raw_response_page_with_page_creation_progress(
+        &self,
+        raw_url: &str,
+        requested_url: Url,
+        stage: PageVmInitStage,
+        reply_boundary: RendererReplyBoundary,
+        lifecycle_decider: Option<RendererLifecycleDecider>,
+        response: StreamingRawResponse,
+        document_fetch_context_seed: DocumentFetchContextSeed,
+        reserved_service_worker_client: Option<RendererReservedServiceWorkerClient>,
+        page_creation_progress: moli_renderer_v8::RendererPageCreationProgress,
     ) -> Result<Page> {
         let started = Instant::now();
         debug!(
@@ -1146,7 +1192,11 @@ impl Browser {
         let response_headers = response.headers.clone();
         let redirected = response.redirected;
         let redirect_count = response.redirect_chain.len();
-        let raw_body = external_raw_document_body_from_streaming_response(response);
+        let raw_body =
+            external_raw_document_body_from_streaming_response_with_page_creation_progress(
+                response,
+                page_creation_progress,
+            );
         let document_start_scripts = self
             .config
             .document_start_scripts()
@@ -1210,8 +1260,7 @@ impl Browser {
                 None,
                 lifecycle_decider,
             )
-            .await
-            .with_context(|| anyhow!("failed to execute scripts for page `{raw_url}`"))?;
+            .await?;
         if pending_download.is_some() {
             return Err(anyhow!(
                 "raw streaming page creation produced a pending download for `{raw_url}`"
@@ -1233,16 +1282,12 @@ impl Browser {
 
     async fn materialize_streaming_raw_response_raw_document(
         &self,
-        raw_url: &str,
         response: StreamingRawResponse,
     ) -> Result<RawDocument> {
         let started = Instant::now();
         let final_url = response.final_url.clone();
         let status = response.status;
-        let raw_response = response
-            .into_materialized_raw_response()
-            .await
-            .with_context(|| anyhow!("failed to read raw document body for `{raw_url}`"))?;
+        let raw_response = response.into_materialized_raw_response().await?;
         info!(
             url = %final_url,
             status,
@@ -1258,18 +1303,42 @@ impl Browser {
     }
 }
 
-fn external_raw_document_body_from_streaming_response(
+fn external_raw_document_body_from_streaming_response_with_page_creation_progress(
     response: StreamingRawResponse,
+    page_creation_progress: moli_renderer_v8::RendererPageCreationProgress,
 ) -> ExternalRawDocumentBodyStream {
-    external_raw_document_body_from_streaming_response_with_body_eof_observer(response, None)
+    external_raw_document_body_from_streaming_response_with_observer_and_progress(
+        response,
+        None,
+        Some(page_creation_progress),
+    )
 }
 
+#[cfg(test)]
 fn external_raw_document_body_from_streaming_response_with_body_eof_observer(
+    response: StreamingRawResponse,
+    body_eof_observer: Option<oneshot::Sender<()>>,
+) -> ExternalRawDocumentBodyStream {
+    external_raw_document_body_from_streaming_response_with_observer_and_progress(
+        response,
+        body_eof_observer,
+        None,
+    )
+}
+
+fn external_raw_document_body_from_streaming_response_with_observer_and_progress(
     mut response: StreamingRawResponse,
     mut body_eof_observer: Option<oneshot::Sender<()>>,
+    page_creation_progress: Option<moli_renderer_v8::RendererPageCreationProgress>,
 ) -> ExternalRawDocumentBodyStream {
     let (completion_tx, completion_rx) = oneshot::channel();
-    let (body_tx, body_stream) = ExternalRawDocumentBodyStream::channel(completion_rx);
+    let (body_tx, body_stream) = match page_creation_progress {
+        Some(progress) => ExternalRawDocumentBodyStream::channel_with_page_creation_progress(
+            completion_rx,
+            progress,
+        ),
+        None => ExternalRawDocumentBodyStream::channel(completion_rx),
+    };
     tokio::spawn(async move {
         let result = async {
             loop {

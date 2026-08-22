@@ -84,6 +84,46 @@ pub(in crate::runtime) struct ConcurrentParseTimeRuntime {
 }
 
 impl ConcurrentParseTimeRuntime {
+    pub(in crate::runtime) fn publish_processing_main_document_phase(&self) {
+        self.page_vm.runtime_hooks.set_page_creation_phase(
+            crate::runtime::RendererPageCreationPhase::ProcessingMainDocument,
+        );
+    }
+
+    pub(in crate::runtime) fn publish_pending_page_creation_phase(&self) {
+        let phase = match self.pending_parsing_blocking_wait {
+            PendingParsingBlockingWait::PageTaskBlockingStylesheet => {
+                crate::runtime::RendererPageCreationPhase::WaitingForParserBlockingStylesheet
+            }
+            PendingParsingBlockingWait::LegacyDocumentProcessing
+            | PendingParsingBlockingWait::PageNetworkingDocumentWriteExternalScript => {
+                crate::runtime::RendererPageCreationPhase::WaitingForParserBlockingScript
+            }
+            PendingParsingBlockingWait::None
+                if self.has_unready_pending_parser_blocking_source_load() =>
+            {
+                crate::runtime::RendererPageCreationPhase::WaitingForParserBlockingScript
+            }
+            PendingParsingBlockingWait::None if !self.state.input_closed => {
+                crate::runtime::RendererPageCreationPhase::StreamingMainBody
+            }
+            PendingParsingBlockingWait::None => {
+                crate::runtime::RendererPageCreationPhase::ProcessingMainDocument
+            }
+        };
+        self.page_vm.runtime_hooks.set_page_creation_phase(phase);
+    }
+
+    pub(super) fn publish_target_lifecycle_phase(&self) {
+        let phase = match self.stage {
+            PageVmInitStage::DomContentLoaded => {
+                crate::runtime::RendererPageCreationPhase::WaitingForDomContentLoaded
+            }
+            PageVmInitStage::Load => crate::runtime::RendererPageCreationPhase::WaitingForLoad,
+        };
+        self.page_vm.runtime_hooks.set_page_creation_phase(phase);
+    }
+
     pub(in crate::runtime) fn page_vm(&self) -> &PageVm {
         &self.page_vm
     }

@@ -1,7 +1,96 @@
 //! One absolute timeout budget shared by every fetch-readiness phase.
 
-use anyhow::{Context, Result, anyhow, bail};
-use std::{future::Future, time::Duration};
+use anyhow::{Context, Result, anyhow};
+use std::{fmt, future::Future, time::Duration};
+
+/// The concrete operation consuming the shared fetch-readiness deadline.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FetchTimeoutPhase {
+    WaitingForResponseHeaders,
+    StreamingMainBody,
+    ProcessingMainDocument,
+    WaitingForParserBlockingScript,
+    WaitingForParserBlockingStylesheet,
+    WaitingForDomContentLoaded,
+    WaitingForLoad,
+    WaitingForSubresourceResponse,
+    WaitingForSelector,
+    WaitingForScript,
+}
+
+impl FetchTimeoutPhase {
+    pub(super) fn from_renderer_phase(phase: moli_renderer_v8::RendererPageCreationPhase) -> Self {
+        match phase {
+            moli_renderer_v8::RendererPageCreationPhase::StreamingMainBody => {
+                Self::StreamingMainBody
+            }
+            moli_renderer_v8::RendererPageCreationPhase::ProcessingMainDocument => {
+                Self::ProcessingMainDocument
+            }
+            moli_renderer_v8::RendererPageCreationPhase::WaitingForParserBlockingScript => {
+                Self::WaitingForParserBlockingScript
+            }
+            moli_renderer_v8::RendererPageCreationPhase::WaitingForParserBlockingStylesheet => {
+                Self::WaitingForParserBlockingStylesheet
+            }
+            moli_renderer_v8::RendererPageCreationPhase::WaitingForDomContentLoaded => {
+                Self::WaitingForDomContentLoaded
+            }
+            moli_renderer_v8::RendererPageCreationPhase::WaitingForLoad => Self::WaitingForLoad,
+        }
+    }
+}
+
+impl fmt::Display for FetchTimeoutPhase {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::WaitingForResponseHeaders => "waiting for response headers",
+            Self::StreamingMainBody => "streaming main body",
+            Self::ProcessingMainDocument => "processing main document",
+            Self::WaitingForParserBlockingScript => "waiting for parser-blocking script",
+            Self::WaitingForParserBlockingStylesheet => "waiting for parser-blocking stylesheet",
+            Self::WaitingForDomContentLoaded => "waiting for DOMContentLoaded",
+            Self::WaitingForLoad => "waiting for load",
+            Self::WaitingForSubresourceResponse => "waiting for a subresource response",
+            Self::WaitingForSelector => "waiting for a selector",
+            Self::WaitingForScript => "waiting for a script to become truthy",
+        })
+    }
+}
+
+/// A deadline failure that retains the operation active when the budget won.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FetchReadinessTimeout {
+    timeout: Duration,
+    phase: FetchTimeoutPhase,
+}
+
+impl FetchReadinessTimeout {
+    pub fn new(timeout: Duration, phase: FetchTimeoutPhase) -> Self {
+        Self { timeout, phase }
+    }
+
+    pub fn timeout(self) -> Duration {
+        self.timeout
+    }
+
+    pub fn phase(self) -> FetchTimeoutPhase {
+        self.phase
+    }
+}
+
+impl fmt::Display for FetchReadinessTimeout {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "fetch readiness timed out after {} ms while {}",
+            self.timeout.as_millis(),
+            self.phase
+        )
+    }
+}
+
+impl std::error::Error for FetchReadinessTimeout {}
 
 /// An absolute deadline for a complete fetch-readiness plan.
 ///
@@ -44,23 +133,23 @@ impl FetchDeadline {
         self.at
     }
 
-    pub(super) async fn wait<T, F>(self, phase: &'static str, future: F) -> Result<T>
+    pub(super) async fn wait<T, F>(self, phase: FetchTimeoutPhase, future: F) -> Result<T>
     where
         F: Future<Output = Result<T>>,
     {
         match tokio::time::timeout_at(self.at, future).await {
             Ok(result) => result,
-            Err(_) => bail!(
-                "fetch readiness timed out after {} ms while {phase}",
-                self.timeout.as_millis()
-            ),
+            Err(_) => Err(anyhow::Error::new(FetchReadinessTimeout::new(
+                self.timeout,
+                phase,
+            ))),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::FetchDeadline;
+    use super::{FetchDeadline, FetchReadinessTimeout, FetchTimeoutPhase};
     use anyhow::Result;
     use std::time::Duration;
 
@@ -84,7 +173,7 @@ mod tests {
     async fn wait_reports_total_budget_and_active_phase() -> Result<()> {
         let deadline = FetchDeadline::new(Duration::from_millis(25))?;
         let error = deadline
-            .wait("waiting for a selector", async {
+            .wait(FetchTimeoutPhase::WaitingForSelector, async {
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 Ok(())
             })
@@ -94,6 +183,12 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "fetch readiness timed out after 25 ms while waiting for a selector"
+        );
+        assert_eq!(
+            error
+                .downcast_ref::<FetchReadinessTimeout>()
+                .map(|timeout| timeout.phase()),
+            Some(FetchTimeoutPhase::WaitingForSelector)
         );
         Ok(())
     }

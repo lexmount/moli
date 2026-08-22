@@ -20,12 +20,7 @@ impl BrowserProfile {
     }
 
     pub fn open_paths(paths: BrowserProfilePaths) -> Result<Self> {
-        let profile_lock = BrowserProfileLock::acquire(&paths).with_context(|| {
-            anyhow!(
-                "failed to acquire browser profile lock `{}`",
-                paths.lock_path.display()
-            )
-        })?;
+        let profile_lock = BrowserProfileLock::acquire(&paths)?;
         let manifest = ensure_profile_manifest(&paths).with_context(|| {
             anyhow!(
                 "failed to initialize browser profile manifest `{}`",
