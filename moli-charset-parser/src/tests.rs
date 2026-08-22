@@ -194,3 +194,103 @@ fn other_meta_charset_labels_are_left_alone() {
     // than being rewritten to one of the two replacements above.
     assert_eq!(sniff_html_meta_charset(br#"<meta charset="utf-32">"#), None);
 }
+
+#[test]
+fn content_type_charset_is_extracted_by_keyword_not_by_mime_parameter() {
+    // The algorithm searches for the keyword; it does not require a media
+    // type, and it does not parse MIME parameters.
+    assert_eq!(
+        sniff_html_meta_charset(br#"<meta http-equiv="content-type" content="charset=utf-8">"#)
+            .map(Encoding::name),
+        Some("UTF-8")
+    );
+    // The keyword is matched literally, including inside a longer word.
+    assert_eq!(
+        sniff_html_meta_charset(
+            br#"<meta http-equiv="content-type" content="text/html; xcharset=utf-8">"#
+        )
+        .map(Encoding::name),
+        Some("UTF-8")
+    );
+    // Whitespace is allowed on either side of the equals sign.
+    assert_eq!(
+        sniff_html_meta_charset(
+            br#"<meta http-equiv="content-type" content="text/html; charset = gbk">"#
+        )
+        .map(Encoding::name),
+        Some("GBK")
+    );
+}
+
+#[test]
+fn unquoted_content_type_charset_ends_at_whitespace_or_semicolon() {
+    assert_eq!(
+        sniff_html_meta_charset(
+            br#"<meta http-equiv="content-type" content="text/html; charset=utf-8 profile=x">"#
+        )
+        .map(Encoding::name),
+        Some("UTF-8")
+    );
+    assert_eq!(
+        sniff_html_meta_charset(
+            br#"<meta http-equiv="content-type" content="text/html; charset=utf-8;q=1">"#
+        )
+        .map(Encoding::name),
+        Some("UTF-8")
+    );
+}
+
+#[test]
+fn content_type_charset_requires_matching_quotes() {
+    for quoted in [
+        &br#"<meta http-equiv="content-type" content="text/html; charset='utf-8'">"#[..],
+        &br#"<meta http-equiv="content-type" content='text/html; charset="utf-8"'>"#[..],
+    ] {
+        assert_eq!(
+            sniff_html_meta_charset(quoted).map(Encoding::name),
+            Some("UTF-8")
+        );
+    }
+    // Opened but never closed contributes nothing, rather than being read to
+    // the end of the value.
+    assert_eq!(
+        sniff_html_meta_charset(
+            br#"<meta http-equiv="content-type" content='text/html; charset="utf-8'>"#
+        ),
+        None
+    );
+    // Opened with one quote and closed with the other is equally unmatched.
+    assert_eq!(
+        sniff_html_meta_charset(
+            br#"<meta http-equiv="content-type" content="text/html; charset=&quot;utf-8'">"#
+        ),
+        None
+    );
+}
+
+#[test]
+fn content_type_charset_search_resumes_after_a_bare_keyword() {
+    assert_eq!(
+        sniff_html_meta_charset(
+            br#"<meta http-equiv="content-type" content="charset; charset=gbk">"#
+        )
+        .map(Encoding::name),
+        Some("GBK")
+    );
+    assert_eq!(
+        sniff_html_meta_charset(br#"<meta http-equiv="content-type" content="charset">"#),
+        None
+    );
+}
+
+#[test]
+fn empty_content_type_charset_ends_the_extraction() {
+    // The algorithm returns the empty label it found; it does not keep
+    // searching the same value for a second assignment.
+    assert_eq!(
+        sniff_html_meta_charset(
+            br#"<meta http-equiv="content-type" content="text/html; charset=; charset=gbk">"#
+        ),
+        None
+    );
+}

@@ -209,24 +209,68 @@ fn prescan_charset_override(encoding: &'static Encoding) -> &'static Encoding {
     }
 }
 
+const CHARSET_KEYWORD: &[u8] = b"charset";
+
+/// Extracts a character encoding label from a `meta` element's `content`
+/// attribute.
+///
+/// This is the HTML Standard's own algorithm rather than a MIME parameter
+/// parse: it searches for the literal `charset` anywhere in the value, so a
+/// `content` attribute carrying no media type still yields its label, and it
+/// terminates an unquoted label at the first ASCII whitespace or `;`. A label
+/// opened with a quote must be closed by the same quote, otherwise the
+/// attribute contributes nothing.
+///
+/// <https://html.spec.whatwg.org/multipage/parsing.html#algorithm-for-extracting-a-character-encoding-from-a-meta-element>
 fn charset_from_content_type(value: &str) -> Option<String> {
-    for parameter in value.split(';').skip(1) {
-        let parameter = parameter.trim();
-        let Some((name, value)) = parameter.split_once('=') else {
-            continue;
-        };
-        if !name.trim().eq_ignore_ascii_case("charset") {
+    let bytes = value.as_bytes();
+    let mut position = 0;
+
+    loop {
+        let offset = bytes[position..]
+            .windows(CHARSET_KEYWORD.len())
+            .position(|window| window.eq_ignore_ascii_case(CHARSET_KEYWORD))?;
+        let keyword_end = position + offset + CHARSET_KEYWORD.len();
+        let separator = keyword_end + leading_ascii_whitespace(&bytes[keyword_end..]);
+
+        if bytes.get(separator) != Some(&b'=') {
+            // The keyword was not a label assignment, so resume the search
+            // just past it rather than rescanning the same match forever.
+            position = separator.max(keyword_end);
             continue;
         }
-        let value = value
-            .trim()
-            .trim_matches(|ch| ch == '"' || ch == '\'')
-            .trim();
-        if !value.is_empty() {
-            return Some(value.to_owned());
+
+        let label_start = separator + 1;
+        let label_start = label_start + leading_ascii_whitespace(&bytes[label_start..]);
+        return charset_label_at(value, label_start).map(str::to_owned);
+    }
+}
+
+fn charset_label_at(value: &str, start: usize) -> Option<&str> {
+    let bytes = value.as_bytes();
+    match bytes.get(start) {
+        Some(&quote) if quote == b'"' || quote == b'\'' => {
+            let quoted_start = start + 1;
+            let quoted_len = bytes[quoted_start..]
+                .iter()
+                .position(|byte| *byte == quote)?;
+            Some(&value[quoted_start..quoted_start + quoted_len])
+        }
+        _ => {
+            let end = bytes[start..]
+                .iter()
+                .position(|byte| byte.is_ascii_whitespace() || *byte == b';')
+                .map_or(bytes.len(), |offset| start + offset);
+            Some(&value[start..end])
         }
     }
-    None
+}
+
+fn leading_ascii_whitespace(bytes: &[u8]) -> usize {
+    bytes
+        .iter()
+        .take_while(|byte| byte.is_ascii_whitespace())
+        .count()
 }
 
 fn byte_prescan_input_as_latin1(bytes: &[u8]) -> String {
