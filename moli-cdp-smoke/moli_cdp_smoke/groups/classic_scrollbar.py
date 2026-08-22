@@ -774,6 +774,86 @@ async def _run_viewport_policy_and_numeric_gutter_workflow(
         """
         <!doctype html>
         <style>
+          html, body { margin: 0; }
+          .case {
+            margin: 0;
+            overflow: scroll;
+            scrollbar-gutter: stable both-edges;
+          }
+          .case > div { width: 100%; height: 100%; }
+          #border {
+            box-sizing: border-box;
+            width: 200px; height: 100px;
+            padding: 10px; border: 5px solid;
+          }
+          #content {
+            box-sizing: content-box;
+            width: 200px; height: 100px;
+            padding: 10px; border: 5px solid;
+          }
+          .auto {
+            box-sizing: border-box;
+            width: 200px; height: auto;
+            min-height: 80px; max-height: 120px;
+          }
+          #auto-small > div { width: 400px; height: 20px; }
+          #auto-mid > div { width: 400px; height: 90px; }
+          #auto-large > div { width: 400px; height: 150px; }
+          #ratio {
+            box-sizing: border-box;
+            width: 200px; height: auto;
+            aspect-ratio: 2;
+          }
+          #vertical {
+            box-sizing: border-box;
+            width: 200px; height: 100px;
+            writing-mode: vertical-rl;
+          }
+        </style>
+        <div id="border" class="case"><div></div></div>
+        <div id="content" class="case"><div></div></div>
+        <div id="auto-small" class="case auto"><div></div></div>
+        <div id="auto-mid" class="case auto"><div></div></div>
+        <div id="auto-large" class="case auto"><div></div></div>
+        <div id="ratio" class="case"><div></div></div>
+        <div id="vertical" class="case"><div></div></div>
+        """,
+        wait_until="domcontentloaded",
+    )
+    resolved_edge_insets = await page.evaluate(
+        """() => [
+          "border", "content", "auto-small", "auto-mid", "auto-large", "ratio", "vertical"
+        ].map(id => {
+          const scroller = document.getElementById(id);
+          const child = scroller.firstElementChild;
+          const outer = scroller.getBoundingClientRect();
+          const inner = child.getBoundingClientRect();
+          return [
+            scroller.offsetWidth, scroller.offsetHeight,
+            scroller.clientWidth, scroller.clientHeight,
+            scroller.clientLeft, scroller.clientTop,
+            inner.x - outer.x, inner.y - outer.y, inner.width, inner.height,
+          ];
+        })"""
+    )
+    assert_equal(
+        resolved_edge_insets,
+        [
+            [200, 100, 160, 75, 20, 5, 30, 15, 140, 55],
+            [230, 130, 190, 105, 20, 5, 30, 15, 170, 85],
+            [200, 80, 170, 65, 15, 0, 15, 0, 400, 20],
+            [200, 105, 170, 90, 15, 0, 15, 0, 400, 90],
+            [200, 120, 170, 105, 15, 0, 15, 0, 400, 150],
+            [200, 100, 170, 85, 15, 0, 15, 0, 170, 85],
+            [200, 100, 185, 70, 0, 15, 0, 15, 185, 70],
+        ],
+        "physical scrollbar insets participate in box sizing, intrinsic sizing, aspect ratio, and vertical writing mode",
+    )
+
+    await page.set_content(
+        """
+        <!doctype html>
+        <style>
           html { margin: 0; overflow: visible; }
           body { margin: 0; overflow: hidden; }
           main { height: 1200px; }
@@ -910,6 +990,7 @@ async def _run_viewport_policy_and_numeric_gutter_workflow(
         {
             "engine": "moli" if is_moli else "chromium",
             "bothEdges": both_edges,
+            "resolvedEdgeInsets": resolved_edge_insets,
             "bodyHidden": [hidden_before, hidden_wheel, hidden_script],
             "bodyAuto": [auto_width, auto_wheel],
             "bodyClip": [clip_width, clip_wheel],

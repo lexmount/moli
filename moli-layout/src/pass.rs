@@ -330,43 +330,6 @@ fn compute_world_layout_with_scrollbars<N>(
             break;
         }
     }
-    offset_leading_scrollbar_gutter_children(world);
-}
-
-/// Taffy's scalar scrollbar reservation shrinks the available inline size but
-/// always leaves its origin at zero. Move direct numeric children into a
-/// physical leading gutter (RTL classic bars and `both-edges`) after the final
-/// layout, preserving all of Taffy's percentage and flex/grid sizing work.
-fn offset_leading_scrollbar_gutter_children<N>(world: &mut crate::LayoutWorld<N>)
-where
-    N: Copy + std::fmt::Debug + Eq + std::hash::Hash,
-{
-    let root = world.root;
-    let offsets = world
-        .boxes
-        .iter()
-        .map(|layout_box| {
-            layout_box.layout_parent.map_or(0.0, |parent| {
-                if parent == root {
-                    // The synthetic initial containing block already places
-                    // the root and its descendants after a root leading
-                    // gutter.
-                    0.0
-                } else if world.is_viewport_defining_body(parent) {
-                    // This body's overflow/gutter has transferred to the
-                    // viewport and must not shift its own children.
-                    0.0
-                } else {
-                    world.boxes[parent.index()]
-                        .style
-                        .scrollbar_leading_gutter_thickness(LayoutScrollbarAxis::Vertical, false)
-                }
-            })
-        })
-        .collect::<Vec<_>>();
-    for (layout_box, offset) in world.boxes.iter_mut().zip(offsets) {
-        layout_box.final_layout.location.x += offset;
-    }
 }
 
 fn css_viewport_dimension(value: f32) -> u32 {

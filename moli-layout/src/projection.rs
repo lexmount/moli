@@ -318,6 +318,14 @@ where
         }
     }
 
+    fn places_vertical_scrollbar_on_left(&self, id: LayoutBoxId) -> bool {
+        id != self.world.root
+            && !self.world.is_viewport_defining_body(id)
+            && self.world.boxes[id.index()]
+                .style
+                .places_vertical_scrollbar_on_left(false)
+    }
+
     fn establishes_scroll_container(&self, id: LayoutBoxId) -> bool {
         if id == self.world.root {
             self.world
@@ -419,6 +427,8 @@ where
                 self.scrollbar_leading_gutter_thickness(box_id, LayoutScrollbarAxis::Vertical);
             let horizontal_gutter =
                 self.scrollbar_gutter_thickness(box_id, LayoutScrollbarAxis::Horizontal);
+            let horizontal_leading_gutter =
+                self.scrollbar_leading_gutter_thickness(box_id, LayoutScrollbarAxis::Horizontal);
             let mut content_box = inset_rect(
                 padding_box,
                 layout.padding.top,
@@ -430,6 +440,7 @@ where
                 content_box.width = (content_box.width - vertical_gutter).max(0.0);
                 content_box.height = (content_box.height - horizontal_gutter).max(0.0);
                 content_box.x += vertical_leading_gutter;
+                content_box.y += horizontal_leading_gutter;
             }
             let margin_box = outset_rect(
                 border_box,
@@ -459,6 +470,7 @@ where
                 vertical_gutter,
                 vertical_leading_gutter,
                 horizontal_gutter,
+                horizontal_leading_gutter,
             );
             // Scrollable overflow starts at the padding-derived scrollport. A
             // box's own border is visual geometry, not reachable descendant
@@ -494,7 +506,13 @@ where
                         } else {
                             vertical_leading_gutter
                         },
-                    layout.border.top + layout.padding.top,
+                    layout.border.top
+                        + layout.padding.top
+                        + if is_root {
+                            0.0
+                        } else {
+                            horizontal_leading_gutter
+                        },
                 );
                 for line in &context.fragments.lines {
                     overflow = overflow.union(offset_rect(line.rect, origin));
@@ -606,9 +624,10 @@ where
                 self.scrollbar_leading_gutter_thickness(id, LayoutScrollbarAxis::Vertical);
             let horizontal_gutter =
                 self.scrollbar_gutter_thickness(id, LayoutScrollbarAxis::Horizontal);
+            let horizontal_leading_gutter =
+                self.scrollbar_leading_gutter_thickness(id, LayoutScrollbarAxis::Horizontal);
             let scrollbar_thickness = self.scrollbar_control_thickness(id);
-            let rtl =
-                self.world.boxes[index].style.direction() == crate::style::InlineDirection::Rtl;
+            let vertical_scrollbar_on_left = self.places_vertical_scrollbar_on_left(id);
             let local_scrollport = scrollport_for_box(
                 is_root,
                 self.viewport,
@@ -616,11 +635,12 @@ where
                 vertical_gutter,
                 vertical_leading_gutter,
                 horizontal_gutter,
+                horizontal_leading_gutter,
             );
             let scrollport = if is_root {
                 LayoutRect::new(
                     vertical_leading_gutter,
-                    0.0,
+                    horizontal_leading_gutter,
                     local_scrollport.width,
                     local_scrollport.height,
                 )
@@ -673,7 +693,7 @@ where
                         scrollport.x,
                         scrollport.bottom(),
                         scrollport.width,
-                        horizontal_gutter,
+                        scrollbar_thickness,
                     );
                     LayoutScrollbarGeometry::new(
                         LayoutScrollbarAxis::Horizontal,
@@ -693,7 +713,7 @@ where
                     vertical_range > f32::EPSILON,
                 )
                 .then(|| {
-                    let x = if rtl && !is_root {
+                    let x = if vertical_scrollbar_on_left {
                         scrollport.x - scrollbar_thickness
                     } else {
                         scrollport.right()
@@ -713,14 +733,14 @@ where
                 .filter(|bar| bar.frame.width > 0.0 && bar.frame.height > 0.0);
             let scrollbar_corner = (vertical_gutter > 0.0 && horizontal_gutter > 0.0).then(|| {
                 LayoutRect::new(
-                    if rtl && !is_root {
+                    if vertical_scrollbar_on_left {
                         scrollport.x - scrollbar_thickness
                     } else {
                         scrollport.right()
                     },
                     scrollport.bottom(),
                     scrollbar_thickness,
-                    horizontal_gutter,
+                    scrollbar_thickness,
                 )
             });
             self.scroll_extents.push(LayoutScrollExtent {
@@ -809,16 +829,26 @@ where
                 continue;
             };
             let layout = layout_box.final_layout;
-            let vertical_leading_gutter = if index == self.world.root.index() {
-                0.0
-            } else {
-                layout_box
-                    .style
-                    .scrollbar_leading_gutter_thickness(LayoutScrollbarAxis::Vertical, false)
-            };
+            let box_id = LayoutBoxId::from_index(index);
+            let vertical_leading_gutter =
+                if box_id == self.world.root || self.world.is_viewport_defining_body(box_id) {
+                    0.0
+                } else {
+                    layout_box
+                        .style
+                        .scrollbar_leading_gutter_thickness(LayoutScrollbarAxis::Vertical, false)
+                };
+            let horizontal_leading_gutter =
+                if box_id == self.world.root || self.world.is_viewport_defining_body(box_id) {
+                    0.0
+                } else {
+                    layout_box
+                        .style
+                        .scrollbar_leading_gutter_thickness(LayoutScrollbarAxis::Horizontal, false)
+                };
             let content_origin = LayoutPoint::new(
                 layout.border.left + layout.padding.left + vertical_leading_gutter,
-                layout.border.top + layout.padding.top,
+                layout.border.top + layout.padding.top + horizontal_leading_gutter,
             );
             for line in &context.fragments.lines {
                 let fragment = self.push_fragment(LayoutFragment {
@@ -1359,6 +1389,7 @@ fn scrollport_for_box(
     vertical_gutter: f32,
     vertical_leading_gutter: f32,
     horizontal_gutter: f32,
+    horizontal_leading_gutter: f32,
 ) -> LayoutRect {
     if is_root {
         return LayoutRect::new(
@@ -1372,6 +1403,7 @@ fn scrollport_for_box(
     scrollport.width = (scrollport.width - vertical_gutter).max(0.0);
     scrollport.height = (scrollport.height - horizontal_gutter).max(0.0);
     scrollport.x += vertical_leading_gutter;
+    scrollport.y += horizontal_leading_gutter;
     scrollport
 }
 
@@ -1394,9 +1426,17 @@ where
                 .style
                 .scrollbar_leading_gutter_thickness(LayoutScrollbarAxis::Vertical, false)
         };
+    let horizontal_leading_gutter =
+        if owner_id == world.root || world.is_viewport_defining_body(owner_id) {
+            0.0
+        } else {
+            owner
+                .style
+                .scrollbar_leading_gutter_thickness(LayoutScrollbarAxis::Horizontal, false)
+        };
     let content_origin = LayoutPoint::new(
         owner_layout.border.left + owner_layout.padding.left + vertical_leading_gutter,
-        owner_layout.border.top + owner_layout.padding.top,
+        owner_layout.border.top + owner_layout.padding.top + horizontal_leading_gutter,
     );
     let containing_width = (owner_layout.size.width
         - owner_layout.border.left

@@ -1466,6 +1466,94 @@ fn stable_both_edges_horizontal_bar_sizes_percentage_children_in_numeric_layout(
 }
 
 #[test]
+fn physical_scrollbar_insets_cover_box_intrinsic_ratio_and_vertical_writing_layout() {
+    let mut vm = new_storage_test_vm("https://physical-scrollbar-insets.test/");
+    vm.eval(
+        r#"
+        (() => {
+          if (!document.documentElement) {
+            document.appendChild(document.createElement("html"));
+          }
+          if (!document.body) {
+            document.documentElement.appendChild(document.createElement("body"));
+          }
+          document.documentElement.style.margin = "0";
+          document.body.style.margin = "0";
+          document.body.innerHTML = `
+            <style>
+              .case {
+                margin: 0;
+                overflow: scroll;
+                scrollbar-gutter: stable both-edges;
+              }
+              .case > div { width: 100%; height: 100%; }
+              #border {
+                box-sizing: border-box;
+                width: 200px; height: 100px;
+                padding: 10px; border: 5px solid;
+              }
+              #content {
+                box-sizing: content-box;
+                width: 200px; height: 100px;
+                padding: 10px; border: 5px solid;
+              }
+              .auto {
+                box-sizing: border-box;
+                width: 200px; height: auto;
+                min-height: 80px; max-height: 120px;
+              }
+              #auto-small > div { width: 400px; height: 20px; }
+              #auto-mid > div { width: 400px; height: 90px; }
+              #auto-large > div { width: 400px; height: 150px; }
+              #ratio {
+                box-sizing: border-box;
+                width: 200px; height: auto;
+                aspect-ratio: 2;
+              }
+              #vertical {
+                box-sizing: border-box;
+                width: 200px; height: 100px;
+                writing-mode: vertical-rl;
+              }
+            </style>
+            <div id="border" class="case"><div></div></div>
+            <div id="content" class="case"><div></div></div>
+            <div id="auto-small" class="case auto"><div></div></div>
+            <div id="auto-mid" class="case auto"><div></div></div>
+            <div id="auto-large" class="case auto"><div></div></div>
+            <div id="ratio" class="case"><div></div></div>
+            <div id="vertical" class="case"><div></div></div>`;
+        })()
+        "#,
+    )
+    .expect("physical scrollbar inset fixture should initialize");
+    refresh_layout_for_test(&mut vm);
+
+    assert_eq!(
+        vm.eval(
+            r#"
+            JSON.stringify([
+              "border", "content", "auto-small", "auto-mid", "auto-large", "ratio", "vertical"
+            ].map(id => {
+              const scroller = document.getElementById(id);
+              const child = scroller.firstElementChild;
+              const outer = scroller.getBoundingClientRect();
+              const inner = child.getBoundingClientRect();
+              return [
+                scroller.offsetWidth, scroller.offsetHeight,
+                scroller.clientWidth, scroller.clientHeight,
+                scroller.clientLeft, scroller.clientTop,
+                inner.x - outer.x, inner.y - outer.y, inner.width, inner.height,
+              ];
+            }))
+            "#,
+        )
+        .expect("physical scrollbar inset metrics should evaluate"),
+        "[[200,100,160,75,20,5,30,15,140,55],[230,130,190,105,20,5,30,15,170,85],[200,80,170,65,15,0,15,0,400,20],[200,105,170,90,15,0,15,0,400,90],[200,120,170,105,15,0,15,0,400,150],[200,100,170,85,15,0,15,0,170,85],[200,100,185,70,0,15,0,15,185,70]]"
+    );
+}
+
+#[test]
 fn nested_and_sibling_scrollbar_drags_stay_bound_to_the_pressed_scroller() {
     let mut vm = new_storage_test_vm("https://nested-classic-scrollbar-input.test/");
     vm.eval(

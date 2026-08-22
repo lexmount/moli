@@ -9,12 +9,12 @@ use taffy::{
     LayoutOutput, LayoutPartialTree, Line, MaybeMath, MaybeResolve, NodeId, Point, ResolveOrZero,
     RoundTree, RunMode, Size, SizingMode, SizingPurpose, Style, TraversePartialTree, TraverseTree,
     compute_block_layout, compute_cached_layout, compute_flexbox_layout, compute_grid_layout,
-    compute_hidden_layout, compute_leaf_layout, compute_root_layout, round_layout,
+    compute_hidden_layout, compute_leaf_layout_with_scrollbar_insets, compute_root_layout,
+    round_layout,
 };
 
 use crate::{
-    LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic, LayoutScrollbarAxis, LayoutWorld,
-    PaintRect, PaintViewport,
+    LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic, LayoutWorld, PaintRect, PaintViewport,
     form::form_control_context,
     inline::{
         InlineFormattingContext, InlineFragments, InlineLinePlacement, InlineObjectRole,
@@ -49,15 +49,7 @@ where
     world.viewport_layout.cache.clear();
     world.viewport_layout.unrounded_layout = Layout::with_order(0);
     world.viewport_layout.final_layout = Layout::with_order(0);
-    let vertical_gutter = world
-        .viewport_scroll_policy
-        .scrollbar_gutter_thickness(LayoutScrollbarAxis::Vertical);
-    let vertical_leading_gutter = world
-        .viewport_scroll_policy
-        .scrollbar_leading_gutter_thickness(LayoutScrollbarAxis::Vertical);
-    let horizontal_gutter = world
-        .viewport_scroll_policy
-        .scrollbar_gutter_thickness(LayoutScrollbarAxis::Horizontal);
+    let viewport_scrollbar_insets = world.viewport_scroll_policy.scrollbar_layout_insets();
     world.viewport_layout.style = Style {
         display: Display::Block,
         box_sizing: BoxSizing::BorderBox,
@@ -79,12 +71,10 @@ where
         // Padding would be wrong here because an absolute/fixed containing
         // block is its padding box and would still extend underneath the bars.
         border: taffy::Rect {
-            left: taffy::LengthPercentage::length(vertical_leading_gutter),
-            right: taffy::LengthPercentage::length(
-                (vertical_gutter - vertical_leading_gutter).max(0.0),
-            ),
-            top: taffy::LengthPercentage::length(0.0),
-            bottom: taffy::LengthPercentage::length(horizontal_gutter),
+            left: taffy::LengthPercentage::length(viewport_scrollbar_insets.left),
+            right: taffy::LengthPercentage::length(viewport_scrollbar_insets.right),
+            top: taffy::LengthPercentage::length(viewport_scrollbar_insets.top),
+            bottom: taffy::LengthPercentage::length(viewport_scrollbar_insets.bottom),
         },
         ..Style::default()
     };
@@ -1124,22 +1114,12 @@ fn layout_inline_absolute_child<N>(
             bottom.map(|bottom| area_height - final_size.height - bottom - resolved_margin.bottom)
         })
         .unwrap_or(static_position.y + resolved_margin.top);
+    let scrollbar_size = world.get_scrollbar_insets(child.to_taffy()).sum_axes();
     world.boxes[child.index()].unrounded_layout = Layout {
         order: 0,
         size: final_size,
         content_size: output.content_size,
-        scrollbar_size: Size {
-            width: if style.overflow.y == taffy::Overflow::Scroll {
-                style.scrollbar_width
-            } else {
-                0.0
-            },
-            height: if style.overflow.x == taffy::Overflow::Scroll {
-                style.scrollbar_width
-            } else {
-                0.0
-            },
-        },
+        scrollbar_size,
         location: Point {
             x: area.origin.x + x - numeric_parent_origin.x,
             y: area.origin.y + y - numeric_parent_origin.y,
@@ -1220,6 +1200,23 @@ where
             &self.boxes[LayoutBoxId::from_taffy(node_id).index()]
                 .style
                 .taffy
+        }
+    }
+
+    fn get_scrollbar_insets(&self, node_id: NodeId) -> taffy::Rect<f32> {
+        if self.is_viewport_taffy_node(node_id) {
+            // The synthetic viewport expresses its gutters as non-painted
+            // borders so fixed positioning shares the reduced initial
+            // containing block. Do not reserve them again as scrollbars.
+            return taffy::Rect::ZERO;
+        }
+        let id = LayoutBoxId::from_taffy(node_id);
+        if id == self.root || self.is_viewport_defining_body(id) {
+            // Root gutters belong to the synthetic viewport. A defining
+            // body's authored overflow has transferred to that same policy.
+            taffy::Rect::ZERO
+        } else {
+            self.boxes[id.index()].style.scrollbar_layout_insets(false)
         }
     }
 
@@ -1441,47 +1438,7 @@ where
         inputs: LayoutInput,
         block_context: Option<&mut BlockContext<'_>>,
     ) -> LayoutOutput {
-        let id = LayoutBoxId::from_taffy(node_id);
-        let horizontal_reservation = if id == self.root || self.boxes[id.index()].is_replaced() {
-            0.0
-        } else {
-            self.boxes[id.index()]
-                .style
-                .horizontal_scrollbar_layout_compensation()
-        };
-        if horizontal_reservation <= 0.0 {
-            return self.compute_child_layout_for_box(node_id, inputs, block_context);
-        }
-
-        // Taffy exposes one scalar scrollbar width for both axes. A
-        // `stable both-edges` box needs that scalar to reserve two vertical
-        // gutters, leaving no way to describe the single horizontal gutter.
-        // Adapt the container's numeric block-size input here: descendants,
-        // percentages, flex/grid tracks and intrinsic calculations all see
-        // the reduced scrollport, while the returned outer border-box keeps
-        // the size selected by the parent. The root uses the synthetic
-        // viewport's axis-specific borders and never enters this adapter.
-        let outer_known_height = inputs.known_dimensions.height;
-        let inputs = LayoutInput {
-            known_dimensions: inputs.known_dimensions.map_height(|height| {
-                height.map(|height| (height - horizontal_reservation).max(0.0))
-            }),
-            definite_dimensions: inputs.definite_dimensions.map_height(|height| {
-                height.map(|height| (height - horizontal_reservation).max(0.0))
-            }),
-            available_space: inputs.available_space.map_height(|height| match height {
-                AvailableSpace::Definite(height) => {
-                    AvailableSpace::Definite((height - horizontal_reservation).max(0.0))
-                }
-                AvailableSpace::MinContent => AvailableSpace::MinContent,
-                AvailableSpace::MaxContent => AvailableSpace::MaxContent,
-            }),
-            ..inputs
-        };
-        let mut output = self.compute_child_layout_for_box(node_id, inputs, block_context);
-        output.size.height =
-            outer_known_height.unwrap_or(output.size.height + horizontal_reservation);
-        output
+        self.compute_child_layout_for_box(node_id, inputs, block_context)
     }
 
     fn compute_child_layout_for_box(
@@ -1630,9 +1587,11 @@ where
             };
         }
 
-        compute_leaf_layout(
+        let scrollbar_insets = self.get_scrollbar_insets(id.to_taffy());
+        compute_leaf_layout_with_scrollbar_insets(
             inputs,
             &style,
+            scrollbar_insets,
             resolve_stylo_calc_value,
             |known_dimensions, available_space| {
                 if let Some(text) = text.as_deref() {
@@ -1659,6 +1618,7 @@ where
         inputs: LayoutInput,
         block_context: Option<&mut BlockContext<'_>>,
     ) -> LayoutOutput {
+        let scrollbar_insets = self.get_scrollbar_insets(id.to_taffy());
         let style = self.boxes[id.index()].style.taffy.clone();
         let is_floated = box_is_effectively_floated(self, id);
         // Both Taffy's block-float parent and Moli's IFC float parent
@@ -1685,9 +1645,10 @@ where
             .take()
             .unwrap_or_else(empty_inline_context);
         let mut measurement = None;
-        let mut output = compute_leaf_layout(
+        let mut output = compute_leaf_layout_with_scrollbar_insets(
             leaf_inputs,
             &style,
+            scrollbar_insets,
             resolve_stylo_calc_value,
             |known_dimensions, available_space| {
                 let result = self.measure_inline_context(
@@ -1713,15 +1674,22 @@ where
             let border = style
                 .border
                 .resolve_or_zero(inputs.parent_size.width, resolve_stylo_calc_value);
-            let content_box_height =
-                (output.size.height - padding.top - padding.bottom - border.top - border.bottom)
-                    .max(0.0);
+            let content_box_height = (output.size.height
+                - padding.top
+                - padding.bottom
+                - border.top
+                - border.bottom
+                - scrollbar_insets.top
+                - scrollbar_insets.bottom)
+                .max(0.0);
             let content_box_size = Size {
                 width: (output.size.width
                     - padding.left
                     - padding.right
                     - border.left
-                    - border.right)
+                    - border.right
+                    - scrollbar_insets.left
+                    - scrollbar_insets.right)
                     .max(0.0),
                 height: content_box_height,
             };
@@ -1738,10 +1706,10 @@ where
             );
             output.first_baselines.y = measurement
                 .first_baseline
-                .map(|baseline| baseline + padding.top + border.top);
+                .map(|baseline| baseline + padding.top + border.top + scrollbar_insets.top);
             output.last_baselines.y = measurement
                 .last_baseline
-                .map(|baseline| baseline + padding.top + border.top);
+                .map(|baseline| baseline + padding.top + border.top + scrollbar_insets.top);
             if measurement.line_placements.iter().any(|line| !line.phantom) {
                 output.margins_can_collapse_through = false;
             }
@@ -1750,8 +1718,8 @@ where
                     &inline_context,
                     &measurement,
                     Point {
-                        x: padding.left + border.left,
-                        y: padding.top + border.top,
+                        x: padding.left + border.left + scrollbar_insets.left,
+                        y: padding.top + border.top + scrollbar_insets.top,
                     },
                     content_box_size,
                     self.boxes[id.index()].style.direction(),
@@ -2339,6 +2307,7 @@ where
         order: usize,
         parent_width: Option<f32>,
     ) {
+        let scrollbar_size = self.get_scrollbar_insets(child.to_taffy()).sum_axes();
         let style = &self.boxes[child.index()].style.taffy;
         let padding = style
             .padding
@@ -2349,19 +2318,6 @@ where
         let margin = style
             .margin
             .resolve_or_zero(parent_width, resolve_stylo_calc_value);
-        let scrollbar_size = Size {
-            width: if style.overflow.y == taffy::Overflow::Scroll {
-                style.scrollbar_width
-            } else {
-                0.0
-            },
-            height: if style.overflow.x == taffy::Overflow::Scroll {
-                style.scrollbar_width
-            } else {
-                0.0
-            },
-        };
-
         self.boxes[child.index()].unrounded_layout = Layout {
             order: u32::try_from(order).unwrap_or(u32::MAX),
             location,

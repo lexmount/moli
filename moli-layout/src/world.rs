@@ -281,6 +281,7 @@ pub(crate) struct ViewportScrollPolicy {
     scrollbar_width: LayoutScrollbarWidth,
     scrollbar_gutter: LayoutScrollbarGutter,
     scrollbar_colors: Option<LayoutScrollbarColors>,
+    horizontal_writing_mode: bool,
     revealed_scrollbar_x: bool,
     revealed_scrollbar_y: bool,
 }
@@ -293,6 +294,7 @@ impl Default for ViewportScrollPolicy {
             scrollbar_width: LayoutScrollbarWidth::Auto,
             scrollbar_gutter: LayoutScrollbarGutter::Auto,
             scrollbar_colors: None,
+            horizontal_writing_mode: true,
             revealed_scrollbar_x: false,
             revealed_scrollbar_y: false,
         }
@@ -306,6 +308,7 @@ impl ViewportScrollPolicy {
         scrollbar_width: LayoutScrollbarWidth,
         scrollbar_gutter: LayoutScrollbarGutter,
         scrollbar_colors: Option<LayoutScrollbarColors>,
+        horizontal_writing_mode: bool,
     ) -> Self {
         Self {
             defining_box,
@@ -313,6 +316,7 @@ impl ViewportScrollPolicy {
             scrollbar_width,
             scrollbar_gutter,
             scrollbar_colors,
+            horizontal_writing_mode,
             revealed_scrollbar_x: false,
             revealed_scrollbar_y: false,
         }
@@ -397,42 +401,54 @@ impl ViewportScrollPolicy {
     }
 
     pub(crate) fn scrollbar_gutter_thickness(self, axis: LayoutScrollbarAxis) -> f32 {
-        if self.scrollbar_width == LayoutScrollbarWidth::None {
-            return 0.0;
-        }
-        let revealed = match axis {
-            LayoutScrollbarAxis::Horizontal => self.revealed_scrollbar_x,
-            LayoutScrollbarAxis::Vertical => self.revealed_scrollbar_y,
-        };
-        let stable_vertical = axis == LayoutScrollbarAxis::Vertical
-            && self.scrollbar_gutter != LayoutScrollbarGutter::Auto
-            && self.effective_overflow[1].creates_scroll_container();
-        if !revealed && !stable_vertical {
-            return 0.0;
-        }
-        let thickness = self.scrollbar_width.thickness();
-        if axis == LayoutScrollbarAxis::Vertical && self.reserves_both_edge_vertical_gutter() {
-            thickness * 2.0
-        } else {
-            thickness
+        let insets = self.scrollbar_layout_insets();
+        match axis {
+            LayoutScrollbarAxis::Horizontal => insets.top + insets.bottom,
+            LayoutScrollbarAxis::Vertical => insets.left + insets.right,
         }
     }
 
     pub(crate) fn scrollbar_leading_gutter_thickness(self, axis: LayoutScrollbarAxis) -> f32 {
-        if axis == LayoutScrollbarAxis::Vertical
-            && self.scrollbar_gutter_thickness(axis) > 0.0
-            && self.reserves_both_edge_vertical_gutter()
-        {
-            self.scrollbar_width.thickness()
-        } else {
-            0.0
+        let insets = self.scrollbar_layout_insets();
+        match axis {
+            LayoutScrollbarAxis::Horizontal => insets.top,
+            LayoutScrollbarAxis::Vertical => insets.left,
         }
     }
 
-    fn reserves_both_edge_vertical_gutter(self) -> bool {
-        self.scrollbar_gutter == LayoutScrollbarGutter::StableBothEdges
-            && self.effective_overflow[1].creates_scroll_container()
-            && self.scrollbar_width != LayoutScrollbarWidth::None
+    pub(crate) fn scrollbar_layout_insets(self) -> taffy::Rect<f32> {
+        if self.scrollbar_width == LayoutScrollbarWidth::None {
+            return taffy::Rect::ZERO;
+        }
+        let thickness = self.scrollbar_width.thickness();
+        let mut insets = taffy::Rect::ZERO;
+
+        if self.revealed_scrollbar_x {
+            insets.bottom = thickness;
+        }
+        // Chromium keeps the viewport's vertical scrollbar on the physical
+        // right, including RTL and vertical writing modes.
+        if self.revealed_scrollbar_y {
+            insets.right = thickness;
+        }
+
+        if self.scrollbar_gutter != LayoutScrollbarGutter::Auto {
+            if self.horizontal_writing_mode && self.effective_overflow[1].creates_scroll_container()
+            {
+                insets.right = thickness;
+                if self.scrollbar_gutter == LayoutScrollbarGutter::StableBothEdges {
+                    insets.left = thickness;
+                }
+            } else if !self.horizontal_writing_mode
+                && self.effective_overflow[0].creates_scroll_container()
+            {
+                insets.bottom = thickness;
+                if self.scrollbar_gutter == LayoutScrollbarGutter::StableBothEdges {
+                    insets.top = thickness;
+                }
+            }
+        }
+        insets
     }
 }
 

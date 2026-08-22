@@ -171,11 +171,14 @@ Covered well:
   block/flex/grid `stable both-edges` numeric sizing, default-visible root
   stable gutters, body hidden/auto/clip viewport overflow propagation,
   `overflow-body-propagation-003`'s `display:contents` exclusion, and an overlay
-  that occludes a lower painted scrollbar. It also verifies Moli's consume-only
-  scrollbar corner and screenshot-triggered layout freshness.
+  that occludes a lower painted scrollbar. The numeric matrix additionally
+  covers padding/border with both box-sizing modes, auto/min/max block sizing,
+  aspect-ratio, and physical top/bottom gutters in `vertical-rl`. It also
+  verifies Moli's consume-only scrollbar corner and screenshot-triggered layout freshness.
   The final workflow was calibrated on 2026-08-22 against the headed Xvfb
   build `~/chromium/src/out/Default/chrome` (`Chrome/147.0.7709.0`) and then
-  passed unchanged against Moli. Chromium/Xvfb routes raw-CDP clicks on its
+  extended with the physical-inset matrix on 2026-08-23 against that same
+  executable before passing unchanged against Moli. Chromium/Xvfb routes raw-CDP clicks on its
   native scrollbar corner through DOM input, so only that control-consumption
   assertion remains Moli-specific.
 - Chromium-calibrated transformed-iframe input routing through raw CDP: exact

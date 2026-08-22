@@ -10,7 +10,7 @@ use style::{
     color::ColorSpace,
     computed_values::{
         content_visibility::T as StyloContentVisibility, isolation::T as StyloIsolation,
-        mix_blend_mode::T as StyloMixBlendMode,
+        mix_blend_mode::T as StyloMixBlendMode, writing_mode::T as StyloWritingMode,
     },
     properties::ComputedValues,
     properties::generated::longhands::position::computed_value::T as StyloPosition,
@@ -469,6 +469,7 @@ pub struct ResolvedLayoutStyle {
     text_transform: InlineTextTransform,
     text_align: parley::Alignment,
     direction: InlineDirection,
+    horizontal_writing_mode: bool,
     unicode_bidi: InlineUnicodeBidi,
     vertical_align: InlineVerticalAlign,
     text_projection_deferred: bool,
@@ -523,6 +524,7 @@ impl std::fmt::Debug for ResolvedLayoutStyle {
             .field("text_transform", &self.text_transform)
             .field("text_align", &self.text_align)
             .field("direction", &self.direction)
+            .field("horizontal_writing_mode", &self.horizontal_writing_mode)
             .field("unicode_bidi", &self.unicode_bidi)
             .field("vertical_align", &self.vertical_align)
             .field("text_projection_deferred", &self.text_projection_deferred)
@@ -613,6 +615,8 @@ impl ResolvedLayoutStyle {
             StyloDirection::Ltr => InlineDirection::Ltr,
             StyloDirection::Rtl => InlineDirection::Rtl,
         };
+        let horizontal_writing_mode =
+            computed.clone_writing_mode() == StyloWritingMode::HorizontalTb;
         let unicode_bidi = match computed.clone_unicode_bidi() {
             StyloUnicodeBidi::Normal => InlineUnicodeBidi::Normal,
             StyloUnicodeBidi::Embed => InlineUnicodeBidi::Embed,
@@ -837,6 +841,7 @@ impl ResolvedLayoutStyle {
             text_transform,
             text_align,
             direction,
+            horizontal_writing_mode,
             unicode_bidi,
             vertical_align,
             text_projection_deferred,
@@ -912,6 +917,7 @@ impl ResolvedLayoutStyle {
             text_transform: InlineTextTransform::None,
             text_align: parley::Alignment::Start,
             direction: InlineDirection::Ltr,
+            horizontal_writing_mode: true,
             unicode_bidi: InlineUnicodeBidi::Normal,
             vertical_align: InlineVerticalAlign::default(),
             text_projection_deferred: false,
@@ -1675,27 +1681,22 @@ impl ResolvedLayoutStyle {
     pub(crate) fn prepare_scrollbar_layout(&mut self, is_root: bool) {
         self.revealed_scrollbar_x = self.overflow_x == LayoutOverflowMode::Scroll;
         self.revealed_scrollbar_y = self.overflow_y == LayoutOverflowMode::Scroll;
-        let both_edge_gutter = self.reserves_both_edge_vertical_gutter();
-        self.taffy.scrollbar_width =
-            self.scrollbar_width.thickness() * if both_edge_gutter { 2.0 } else { 1.0 };
+        // Moli resolves CSS scrollbar policy to physical edge insets through
+        // `LayoutPartialTree::get_scrollbar_insets`. Keep Taffy's legacy
+        // scalar disabled so no algorithm reserves the same gutter twice.
+        self.taffy.scrollbar_width = 0.0;
         self.taffy.overflow.x =
             self.initial_taffy_overflow(LayoutScrollbarAxis::Horizontal, is_root);
         self.taffy.overflow.y = self.initial_taffy_overflow(LayoutScrollbarAxis::Vertical, is_root);
-        // Taffy's scrollbar width is scalar. For `both-edges` it represents
-        // the two vertical gutters together, so it must not also be used as a
-        // double-height horizontal scrollbar. Moli's Taffy adapter supplies
-        // the missing single horizontal reservation to numeric child layout.
-        if both_edge_gutter && self.revealed_scrollbar_x {
-            self.taffy.overflow.x = taffy::Overflow::Hidden;
-        }
-        // In horizontal writing modes a stable gutter is reserved on the
-        // inline end whenever vertical overflow could create a scrollbar.
         if !is_root
-            && !matches!(self.scrollbar_gutter, LayoutScrollbarGutter::Auto)
-            && self.overflow_y.creates_scroll_container()
+            && self.scrollbar_gutter != LayoutScrollbarGutter::Auto
             && self.scrollbar_width != LayoutScrollbarWidth::None
         {
-            self.taffy.overflow.y = taffy::Overflow::Scroll;
+            if self.horizontal_writing_mode && self.overflow_y.creates_scroll_container() {
+                self.taffy.overflow.y = taffy::Overflow::Scroll;
+            } else if !self.horizontal_writing_mode && self.overflow_x.creates_scroll_container() {
+                self.taffy.overflow.x = taffy::Overflow::Scroll;
+            }
         }
     }
 
@@ -1745,9 +1746,7 @@ impl ResolvedLayoutStyle {
             return false;
         }
         *revealed = true;
-        if !(is_root
-            || axis == LayoutScrollbarAxis::Horizontal && self.reserves_both_edge_vertical_gutter())
-        {
+        if !is_root {
             match axis {
                 LayoutScrollbarAxis::Horizontal => {
                     self.taffy.overflow.x = taffy::Overflow::Scroll;
@@ -1794,39 +1793,11 @@ impl ResolvedLayoutStyle {
         self.scrollbar_width.thickness()
     }
 
-    /// Extra block-axis reservation that Taffy's scalar scrollbar width
-    /// cannot express. Under `stable both-edges` the scalar is already used
-    /// for two vertical gutters, so Moli runs the container's numeric layout
-    /// against a block size reduced by the real horizontal control and then
-    /// restores the outer box size.
-    pub(crate) fn horizontal_scrollbar_layout_compensation(&self) -> f32 {
-        if self.reserves_both_edge_vertical_gutter() && self.revealed_scrollbar_x {
-            self.scrollbar_width.thickness()
-        } else {
-            0.0
-        }
-    }
-
     pub(crate) fn scrollbar_gutter_thickness(&self, axis: LayoutScrollbarAxis) -> f32 {
-        if self.scrollbar_width == LayoutScrollbarWidth::None {
-            return 0.0;
-        }
-        let revealed = match axis {
-            LayoutScrollbarAxis::Horizontal => self.revealed_scrollbar_x,
-            LayoutScrollbarAxis::Vertical => self.revealed_scrollbar_y,
-        };
-        let stable_vertical = axis == LayoutScrollbarAxis::Vertical
-            && !matches!(self.scrollbar_gutter, LayoutScrollbarGutter::Auto)
-            && self.overflow_y.creates_scroll_container();
-        if revealed || stable_vertical {
-            let thickness = self.scrollbar_width.thickness();
-            if axis == LayoutScrollbarAxis::Vertical && self.reserves_both_edge_vertical_gutter() {
-                thickness * 2.0
-            } else {
-                thickness
-            }
-        } else {
-            0.0
+        let insets = self.scrollbar_layout_insets(false);
+        match axis {
+            LayoutScrollbarAxis::Horizontal => insets.top + insets.bottom,
+            LayoutScrollbarAxis::Vertical => insets.left + insets.right,
         }
     }
 
@@ -1838,25 +1809,64 @@ impl ResolvedLayoutStyle {
         axis: LayoutScrollbarAxis,
         is_root: bool,
     ) -> f32 {
-        if axis != LayoutScrollbarAxis::Vertical || self.scrollbar_gutter_thickness(axis) == 0.0 {
-            return 0.0;
-        }
-        // Chromium keeps the viewport scrollbar on the physical right even
-        // when the root element is RTL. `both-edges` still reserves its
-        // matching gutter on the physical left.
-        if self.reserves_both_edge_vertical_gutter()
-            || (!is_root && self.direction == InlineDirection::Rtl)
-        {
-            self.scrollbar_width.thickness()
-        } else {
-            0.0
+        let insets = self.scrollbar_layout_insets(is_root);
+        match axis {
+            LayoutScrollbarAxis::Horizontal => insets.top,
+            LayoutScrollbarAxis::Vertical => insets.left,
         }
     }
 
-    fn reserves_both_edge_vertical_gutter(&self) -> bool {
-        self.scrollbar_gutter == LayoutScrollbarGutter::StableBothEdges
-            && self.overflow_y.creates_scroll_container()
-            && self.scrollbar_width != LayoutScrollbarWidth::None
+    /// Physical gutter contract consumed by Taffy's numeric algorithms.
+    ///
+    /// CSS relation, writing mode, direction and dynamic scrollbar feedback
+    /// are resolved here once; Taffy deliberately sees only four edge sizes.
+    pub(crate) fn scrollbar_layout_insets(&self, is_root: bool) -> taffy::Rect<f32> {
+        if self.scrollbar_width == LayoutScrollbarWidth::None {
+            return taffy::Rect::ZERO;
+        }
+        let thickness = self.scrollbar_width.thickness();
+        let mut insets = taffy::Rect::ZERO;
+
+        if self.revealed_scrollbar_x {
+            insets.bottom = thickness;
+        }
+        if self.revealed_scrollbar_y {
+            if self.places_vertical_scrollbar_on_left(is_root) {
+                insets.left = thickness;
+            } else {
+                insets.right = thickness;
+            }
+        }
+
+        if self.scrollbar_gutter != LayoutScrollbarGutter::Auto {
+            if self.horizontal_writing_mode && self.overflow_y.creates_scroll_container() {
+                if self.places_vertical_scrollbar_on_left(is_root) {
+                    insets.left = thickness;
+                    if self.scrollbar_gutter == LayoutScrollbarGutter::StableBothEdges {
+                        insets.right = thickness;
+                    }
+                } else {
+                    insets.right = thickness;
+                    if self.scrollbar_gutter == LayoutScrollbarGutter::StableBothEdges {
+                        insets.left = thickness;
+                    }
+                }
+            } else if !self.horizontal_writing_mode && self.overflow_x.creates_scroll_container() {
+                insets.bottom = thickness;
+                if self.scrollbar_gutter == LayoutScrollbarGutter::StableBothEdges {
+                    insets.top = thickness;
+                }
+            }
+        }
+        insets
+    }
+
+    pub(crate) fn places_vertical_scrollbar_on_left(&self, is_root: bool) -> bool {
+        !is_root && self.horizontal_writing_mode && self.direction == InlineDirection::Rtl
+    }
+
+    pub(crate) const fn uses_horizontal_writing_mode(&self) -> bool {
+        self.horizontal_writing_mode
     }
 
     pub(crate) fn text_leaf_from(parent: &Self) -> Self {
@@ -1879,6 +1889,7 @@ impl ResolvedLayoutStyle {
             text_transform: parent.text_transform,
             text_align: parent.text_align,
             direction: parent.direction,
+            horizontal_writing_mode: parent.horizontal_writing_mode,
             unicode_bidi: InlineUnicodeBidi::Normal,
             vertical_align: parent.vertical_align,
             text_projection_deferred: parent.text_projection_deferred,
@@ -1944,6 +1955,7 @@ impl ResolvedLayoutStyle {
             text_transform: parent.text_transform,
             text_align: parent.text_align,
             direction: parent.direction,
+            horizontal_writing_mode: parent.horizontal_writing_mode,
             unicode_bidi: InlineUnicodeBidi::Normal,
             vertical_align: parent.vertical_align,
             text_projection_deferred: parent.text_projection_deferred,
