@@ -1080,6 +1080,131 @@ document.head.append(retired);
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn stale_linked_import_completion_does_not_repopulate_replacement_graph() {
+    run_page_vm_async_test(async move {
+        let (base_url, server) = spawn_path_response_http_server(vec![
+            (
+                "/stale-root.css",
+                "HTTP/1.1 200 OK",
+                "@import './stale-child.css';".to_owned(),
+                Duration::ZERO,
+            ),
+            (
+                "/stale-child.css",
+                "HTTP/1.1 200 OK",
+                ".retired-import { color: red; }".to_owned(),
+                Duration::from_millis(100),
+            ),
+        ])
+        .await;
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let document_url = Url::parse(&format!("{base_url}/page.html"))?;
+        let (mut page_vm, _resource_source, mut wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        page_vm.vm_mut().eval(&format!(
+            r#"
+globalThis.__staleLinkedImportEvents = [];
+const retired = document.createElement("link");
+retired.rel = "stylesheet";
+retired.href = "{base_url}/stale-root.css";
+retired.addEventListener("load", () => __staleLinkedImportEvents.push("load"));
+retired.addEventListener("error", () => __staleLinkedImportEvents.push("error"));
+document.head.append(retired);
+"queued"
+"#,
+        ))?;
+        page_vm
+            .vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+        wait_for_stylesheet_source(&mut wake_rx, RendererOwnerWakeSource::NetworkingTask).await;
+        assert!(
+            page_vm
+                .run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::StylesheetCompletion,
+                    &loader,
+                )
+                .await?,
+            "the root stylesheet terminal should start its linked import graph"
+        );
+        assert_eq!(
+            page_vm
+                .vm()
+                .document_runtime
+                .linked_stylesheet_import_graph_count_for_test(),
+            1,
+            "Document A should retain its in-flight linked import graph"
+        );
+        let _ = page_vm.vm_mut().take_network_output();
+
+        wait_for_stylesheet_source(&mut wake_rx, RendererOwnerWakeSource::NetworkingTask).await;
+        let stale_task = page_vm
+            .take_stylesheet_networking_body_task_for_test()
+            .expect("the delayed linked import terminal should remain selectable");
+
+        page_vm.vm_mut().eval(
+            "document.open(); document.write('<!doctype html><p>replacement</p>'); document.close();",
+        )?;
+        assert_eq!(
+            page_vm
+                .vm()
+                .document_runtime
+                .linked_stylesheet_import_graph_count_for_test(),
+            0,
+            "document.open() should install an empty stylesheet graph state for Document B"
+        );
+        assert!(!page_vm.vm().document_runtime.has_pending_style_loads());
+
+        let outcome = page_vm.apply_selected_page_stylesheet_networking_turn(stale_task)?;
+        assert_eq!(
+            outcome.action.target_effect,
+            PageStylesheetNetworkingTargetEffect::RecordedForStaleOwner
+        );
+        assert_eq!(
+            page_vm
+                .vm()
+                .document_runtime
+                .linked_stylesheet_import_graph_count_for_test(),
+            0,
+            "Document A's terminal must not create an entry in Document B's graph map"
+        );
+        assert!(!page_vm.vm().document_runtime.has_pending_style_loads());
+        assert!(
+            !page_vm.has_ready_dom_manipulation_task_for_test(),
+            "the stale graph must not publish a link event into Document B"
+        );
+        assert_eq!(
+            page_vm.vm_mut().eval("__staleLinkedImportEvents.join(',')")?,
+            ""
+        );
+
+        let (records, _, _) = split_network_output_items(page_vm.vm_mut().take_network_output());
+        assert_eq!(records.len(), 1, "the child fetch remains observable");
+        let stale_child_url = Url::parse(&format!("{base_url}/stale-child.css"))?;
+        assert_eq!(
+            records[0].url(),
+            &stale_child_url,
+            "historical network accounting should retain the stale import request"
+        );
+        assert_eq!(
+            page_vm.pending_subresource_request_count(),
+            0,
+            "a stale import terminal must not derive work in Document B"
+        );
+        page_vm
+            .finish_selected_page_networking_task(
+                PageNetworkingTurnAction::StylesheetCompletion(outcome.action),
+                &loader,
+            )
+            .await?;
+        server.await.expect("stale linked import fixture server");
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("stale linked import completion test should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn connected_style_body_settles_its_lease_but_leaves_reactions_for_task_completion() {
     run_page_vm_async_test(async move {
         let loader =

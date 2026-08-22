@@ -451,12 +451,23 @@ impl DocumentRuntime {
     pub(crate) fn apply_linked_stylesheet_import_graph_completion(
         &mut self,
         completion: LinkedStylesheetImportGraphCompletion,
+        authority: StylesheetImportCompletionAuthority,
     ) {
         let LinkedStylesheetImportGraphCompletion {
             fetch,
             graph,
             mut network_results,
         } = completion;
+        if authority == StylesheetImportCompletionAuthority::HistoricalOnly {
+            for result in &mut network_results {
+                result.import_roots.clear();
+                result.source_owners.clear();
+            }
+            self.stylesheet_lifecycle
+                .ready_connected_load_network_results
+                .extend(network_results);
+            return;
+        }
         let roots = self
             .linked_stylesheet_import_roots(&fetch)
             .into_iter()
@@ -478,6 +489,14 @@ impl DocumentRuntime {
             .ready_connected_load_network_results
             .extend(network_results);
         self.note_stylesheet_import_graph_completion(&fetch, graph);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn linked_stylesheet_import_graph_count_for_test(&self) -> usize {
+        self.stylesheet_lifecycle
+            .linked_stylesheet_import_graphs
+            .entries
+            .len()
     }
 }
 

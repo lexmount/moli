@@ -18,10 +18,9 @@ impl DocumentRuntime {
         let Some(task) = task else {
             return false;
         };
-        // Consume stale tasks too. Production records their network result but
-        // the exact owner checks prevent them from installing stylesheet state
-        // into a replacement Document; leaving the old task at the test source
-        // head would model neither behavior.
+        // This standalone fixture has no Page-level exact-owner arbiter, so
+        // completions are applied with current-owner authority. PageVm tests
+        // cover stale task handling through the production owner boundary.
         match task.into_completion() {
             crate::page_task_queue::RendererPageStylesheetCompletion::Blocking(completion) => {
                 self.apply_blocking_stylesheet_completion(completion);
@@ -30,10 +29,16 @@ impl DocumentRuntime {
                 self.apply_connected_style_load_completion(completion);
             }
             crate::page_task_queue::RendererPageStylesheetCompletion::LinkedImport(completion) => {
-                self.apply_linked_stylesheet_import_graph_completion(completion);
+                self.apply_linked_stylesheet_import_graph_completion(
+                    completion,
+                    StylesheetImportCompletionAuthority::CurrentDocument,
+                );
             }
             crate::page_task_queue::RendererPageStylesheetCompletion::LiveImport(completion) => {
-                self.apply_live_stylesheet_import_load_completion(completion, true);
+                self.apply_live_stylesheet_import_load_completion(
+                    completion,
+                    StylesheetImportCompletionAuthority::CurrentDocument,
+                );
             }
         }
         true

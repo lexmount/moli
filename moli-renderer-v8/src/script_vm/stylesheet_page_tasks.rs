@@ -1,5 +1,6 @@
 use super::ScriptVm;
 use crate::{
+    document_runtime::StylesheetImportCompletionAuthority,
     page_task_queue::{
         PageConnectedStyleEventTargetEffect, PageConnectedStyleLoadDelayEffect,
         PageStylesheetNetworkingTargetEffect, RendererPageConnectedStyleEventTask,
@@ -32,6 +33,11 @@ impl ScriptVm {
     ) -> PageStylesheetNetworkingTargetEffect {
         let owner = task.owner();
         let current = self.stylesheet_task_owner_is_current(root_document, owner);
+        let import_authority = if current {
+            StylesheetImportCompletionAuthority::CurrentDocument
+        } else {
+            StylesheetImportCompletionAuthority::HistoricalOnly
+        };
         match task.into_completion() {
             RendererPageStylesheetCompletion::Blocking(completion) => self
                 .document_runtime
@@ -41,10 +47,10 @@ impl ScriptVm {
                 .apply_connected_style_load_completion(completion),
             RendererPageStylesheetCompletion::LinkedImport(completion) => self
                 .document_runtime
-                .apply_linked_stylesheet_import_graph_completion(completion),
+                .apply_linked_stylesheet_import_graph_completion(completion, import_authority),
             RendererPageStylesheetCompletion::LiveImport(completion) => self
                 .document_runtime
-                .apply_live_stylesheet_import_load_completion(completion, current),
+                .apply_live_stylesheet_import_load_completion(completion, import_authority),
         }
         self.record_ready_stylesheet_network_results();
         if current {

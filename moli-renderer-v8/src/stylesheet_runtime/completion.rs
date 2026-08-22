@@ -21,13 +21,19 @@ pub(crate) struct LiveStylesheetImportLoadCompletion {
     pub(in crate::document_runtime) network_results: Vec<ConnectedLoadNetworkResult>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum StylesheetImportCompletionAuthority {
+    CurrentDocument,
+    HistoricalOnly,
+}
+
 impl DocumentRuntime {
     pub(crate) fn apply_live_stylesheet_import_load_completion(
         &mut self,
         mut completion: LiveStylesheetImportLoadCompletion,
-        install_authority: bool,
+        authority: StylesheetImportCompletionAuthority,
     ) {
-        if !install_authority {
+        if authority == StylesheetImportCompletionAuthority::HistoricalOnly {
             for result in &mut completion.network_results {
                 result.import_roots.clear();
                 result.source_owners.clear();
