@@ -59,6 +59,21 @@ class CdpDclDumpResult:
     final_url: str | None
 
 
+@dataclass(frozen=True)
+class _NavigationResult:
+    frame_id: str | None
+    loader_id: str | None
+    is_download: bool
+
+
+@dataclass(frozen=True)
+class _MainDocumentObservation:
+    headers_only: bool
+    response_status: int | None
+    response_mime_type: str | None
+    final_url: str | None
+
+
 def _chrome_command(binary: Path, port: int, profile_dir: Path) -> list[str]:
     return [
         str(binary),
@@ -315,7 +330,8 @@ async def _recv_until_dcl_or_binary_main_resource(
     expected_loader_id: str | None,
     deadline: float,
     seen: list[dict[str, Any]],
-) -> tuple[str | None, int | None, str | None, str | None]:
+    download_navigation: bool = False,
+) -> _MainDocumentObservation:
     response_status: int | None = None
     response_mime_type: str | None = None
     response_url: str | None = None
@@ -332,19 +348,26 @@ async def _recv_until_dcl_or_binary_main_resource(
             response_status = _response_status(response)
             response_mime_type = _response_mime_type(response)
             response_url = _response_url(response)
-        binary_mime_type = _binary_main_resource_mime_type_from_response(response)
-        if binary_mime_type is not None:
-            return (
-                binary_mime_type,
-                response_status,
-                response_mime_type,
-                response_url,
+        if response is not None and (
+            download_navigation
+            or _binary_main_resource_mime_type_from_response(response) is not None
+        ):
+            return _MainDocumentObservation(
+                headers_only=True,
+                response_status=response_status,
+                response_mime_type=response_mime_type,
+                final_url=response_url,
             )
-    if any(
+    if not download_navigation and any(
         _is_dcl_event(message, session_id, frame_id, expected_loader_id)
         for message in seen
     ):
-        return None, response_status, response_mime_type, response_url
+        return _MainDocumentObservation(
+            headers_only=False,
+            response_status=response_status,
+            response_mime_type=response_mime_type,
+            final_url=response_url,
+        )
     while True:
         remaining = deadline - time.perf_counter()
         if remaining <= 0:
@@ -361,33 +384,47 @@ async def _recv_until_dcl_or_binary_main_resource(
             response_status = _response_status(response)
             response_mime_type = _response_mime_type(response)
             response_url = _response_url(response)
-        binary_mime_type = _binary_main_resource_mime_type_from_response(response)
-        if binary_mime_type is not None:
-            return (
-                binary_mime_type,
-                response_status,
-                response_mime_type,
-                response_url,
+        if response is not None and (
+            download_navigation
+            or _binary_main_resource_mime_type_from_response(response) is not None
+        ):
+            return _MainDocumentObservation(
+                headers_only=True,
+                response_status=response_status,
+                response_mime_type=response_mime_type,
+                final_url=response_url,
             )
-        if _is_dcl_event(message, session_id, frame_id, expected_loader_id):
-            return None, response_status, response_mime_type, response_url
+        if not download_navigation and _is_dcl_event(
+            message,
+            session_id,
+            frame_id,
+            expected_loader_id,
+        ):
+            return _MainDocumentObservation(
+                headers_only=False,
+                response_status=response_status,
+                response_mime_type=response_mime_type,
+                final_url=response_url,
+            )
 
 
-def _navigation_frame_and_loader(
+def _parse_navigation_result(
     navigate_response: dict[str, Any],
     url: str,
-) -> tuple[str | None, str | None]:
+) -> _NavigationResult:
     result = navigate_response.get("result")
     if not isinstance(result, dict):
         result = {}
+    is_download = result.get("isDownload") is True
     error_text = result.get("errorText")
-    if isinstance(error_text, str) and error_text:
+    if isinstance(error_text, str) and error_text and not is_download:
         raise RawCdpError(f"Page.navigate failed for `{url}`: {error_text}")
     frame_id = result.get("frameId")
     loader_id = result.get("loaderId")
-    return (
-        str(frame_id) if frame_id is not None else None,
-        str(loader_id) if loader_id is not None else None,
+    return _NavigationResult(
+        frame_id=str(frame_id) if frame_id is not None else None,
+        loader_id=str(loader_id) if loader_id is not None else None,
+        is_download=is_download,
     )
 
 
@@ -446,7 +483,7 @@ async def _dump_dcl_html(
             stage="Page.navigate",
             late_error_grace_seconds=CDP_LATE_ERROR_GRACE_SECONDS,
         )
-        frame_id, expected_loader_id = _navigation_frame_and_loader(
+        navigation = _parse_navigation_result(
             navigate_response,
             url,
         )
@@ -454,27 +491,26 @@ async def _dump_dcl_html(
             main_document = await _recv_until_dcl_or_binary_main_resource(
                 client,
                 session_id=session_id,
-                frame_id=frame_id,
-                expected_loader_id=expected_loader_id,
+                frame_id=navigation.frame_id,
+                expected_loader_id=navigation.loader_id,
                 deadline=deadline,
                 seen=seen,
+                download_navigation=navigation.is_download,
             )
-            (
-                binary_mime_type,
-                response_status,
-                response_mime_type,
-                final_url,
-            ) = main_document
         except TimeoutError as error:
             raise CdpDclDumpTimeoutError("DCL", error) from error
-        if binary_mime_type is not None:
+        if main_document.headers_only:
             return CdpDclDumpResult(
                 body="",
-                response_status=response_status,
-                response_mime_type=binary_mime_type,
+                response_status=main_document.response_status,
+                response_mime_type=main_document.response_mime_type,
                 main_document_body_capture="response-headers-only",
-                final_url=final_url,
+                final_url=main_document.final_url,
             )
+
+        response_status = main_document.response_status
+        response_mime_type = main_document.response_mime_type
+        final_url = main_document.final_url
 
         settle_id = await client.send(
             "Runtime.evaluate",

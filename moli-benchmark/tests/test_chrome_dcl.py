@@ -17,7 +17,7 @@ from moli_benchmark.chrome_dcl import (
     _POST_DCL_SETTLE_EXPRESSION,
     _binary_main_resource_mime_type_from_message,
     _chrome_command,
-    _navigation_frame_and_loader,
+    _parse_navigation_result,
     _recv_command_response,
     _recv_until_dcl_or_binary_main_resource,
     run_chrome_dcl_dump,
@@ -226,7 +226,7 @@ class ChromeDclTests(unittest.TestCase):
 
     def test_navigation_result_surfaces_error_text_before_dcl_wait(self) -> None:
         with self.assertRaises(RawCdpError) as raised:
-            _navigation_frame_and_loader(
+            _parse_navigation_result(
                 {
                     "result": {
                         "frameId": "FRAME-1",
@@ -243,13 +243,45 @@ class ChromeDclTests(unittest.TestCase):
         )
 
     def test_navigation_result_exposes_frame_and_loader_identity(self) -> None:
-        self.assertEqual(
-            _navigation_frame_and_loader(
-                {"result": {"frameId": "FRAME-1", "loaderId": "LOADER-1"}},
-                "https://example.test/",
-            ),
-            ("FRAME-1", "LOADER-1"),
+        navigation = _parse_navigation_result(
+            {"result": {"frameId": "FRAME-1", "loaderId": "LOADER-1"}},
+            "https://example.test/",
         )
+
+        self.assertEqual(navigation.frame_id, "FRAME-1")
+        self.assertEqual(navigation.loader_id, "LOADER-1")
+        self.assertFalse(navigation.is_download)
+
+    def test_download_navigation_keeps_abort_as_headers_only_evidence(self) -> None:
+        async def run() -> None:
+            navigation = _parse_navigation_result(
+                {
+                    "result": {
+                        "frameId": "FRAME-1",
+                        "loaderId": "LOADER-1",
+                        "errorText": "net::ERR_ABORTED",
+                        "isDownload": True,
+                    }
+                },
+                "https://example.test/archive.zip",
+            )
+
+            observation = await _recv_until_dcl_or_binary_main_resource(
+                mock.Mock(),
+                session_id="SID-1",
+                frame_id=navigation.frame_id,
+                expected_loader_id=navigation.loader_id,
+                deadline=time.perf_counter() + 1.0,
+                seen=[_document_response_message("application/zip")],
+                download_navigation=navigation.is_download,
+            )
+
+            self.assertTrue(observation.headers_only)
+            self.assertEqual(observation.response_status, 200)
+            self.assertEqual(observation.response_mime_type, "application/zip")
+            self.assertEqual(observation.final_url, "https://example.test/final")
+
+        asyncio.run(run())
 
     def test_binary_main_document_response_returns_mime_evidence(self) -> None:
         mime_type = _binary_main_resource_mime_type_from_message(
@@ -297,11 +329,10 @@ class ChromeDclTests(unittest.TestCase):
                     _dcl_lifecycle_message(),
                 ],
             )
-            binary_mime_type, response_status, response_mime_type, final_url = observation
-            self.assertEqual(binary_mime_type, "application/pdf")
-            self.assertEqual(response_status, 200)
-            self.assertEqual(response_mime_type, "application/pdf")
-            self.assertEqual(final_url, "https://example.test/final")
+            self.assertTrue(observation.headers_only)
+            self.assertEqual(observation.response_status, 200)
+            self.assertEqual(observation.response_mime_type, "application/pdf")
+            self.assertEqual(observation.final_url, "https://example.test/final")
 
         asyncio.run(run())
 
@@ -315,11 +346,10 @@ class ChromeDclTests(unittest.TestCase):
                 deadline=time.perf_counter() + 1.0,
                 seen=[_dcl_lifecycle_message()],
             )
-            binary_mime_type, response_status, response_mime_type, final_url = observation
-            self.assertIsNone(binary_mime_type)
-            self.assertIsNone(response_status)
-            self.assertIsNone(response_mime_type)
-            self.assertIsNone(final_url)
+            self.assertFalse(observation.headers_only)
+            self.assertIsNone(observation.response_status)
+            self.assertIsNone(observation.response_mime_type)
+            self.assertIsNone(observation.final_url)
 
         asyncio.run(run())
 
@@ -356,10 +386,10 @@ class ChromeDclTests(unittest.TestCase):
                 ],
             )
 
-            self.assertEqual(
-                observation,
-                (None, 200, "text/html", "https://example.test/final"),
-            )
+            self.assertFalse(observation.headers_only)
+            self.assertEqual(observation.response_status, 200)
+            self.assertEqual(observation.response_mime_type, "text/html")
+            self.assertEqual(observation.final_url, "https://example.test/final")
             self.assertEqual(client.messages, [])
 
         asyncio.run(run())
@@ -377,11 +407,10 @@ class ChromeDclTests(unittest.TestCase):
                     _dcl_lifecycle_message(),
                 ],
             )
-            binary_mime_type, response_status, response_mime_type, final_url = observation
-            self.assertIsNone(binary_mime_type)
-            self.assertEqual(response_status, 502)
-            self.assertEqual(response_mime_type, "text/html")
-            self.assertEqual(final_url, "https://example.test/final")
+            self.assertFalse(observation.headers_only)
+            self.assertEqual(observation.response_status, 502)
+            self.assertEqual(observation.response_mime_type, "text/html")
+            self.assertEqual(observation.final_url, "https://example.test/final")
 
         asyncio.run(run())
 
@@ -403,11 +432,10 @@ class ChromeDclTests(unittest.TestCase):
                     _dcl_lifecycle_message(),
                 ],
             )
-            binary_mime_type, response_status, response_mime_type, final_url = observation
-            self.assertIsNone(binary_mime_type)
-            self.assertEqual(response_status, 400)
-            self.assertEqual(response_mime_type, "text/html")
-            self.assertEqual(final_url, "https://example.test/final")
+            self.assertFalse(observation.headers_only)
+            self.assertEqual(observation.response_status, 400)
+            self.assertEqual(observation.response_mime_type, "text/html")
+            self.assertEqual(observation.final_url, "https://example.test/final")
 
         asyncio.run(run())
 
@@ -430,11 +458,10 @@ class ChromeDclTests(unittest.TestCase):
                     _dcl_lifecycle_message(),
                 ],
             )
-            binary_mime_type, response_status, response_mime_type, final_url = observation
-            self.assertIsNone(binary_mime_type)
-            self.assertIsNone(response_status)
-            self.assertIsNone(response_mime_type)
-            self.assertIsNone(final_url)
+            self.assertFalse(observation.headers_only)
+            self.assertIsNone(observation.response_status)
+            self.assertIsNone(observation.response_mime_type)
+            self.assertIsNone(observation.final_url)
 
         asyncio.run(run())
 
@@ -463,11 +490,10 @@ class ChromeDclTests(unittest.TestCase):
                     _dcl_lifecycle_message(),
                 ],
             )
-            binary_mime_type, response_status, response_mime_type, final_url = observation
-            self.assertIsNone(binary_mime_type)
-            self.assertEqual(response_status, 200)
-            self.assertEqual(response_mime_type, "text/html")
-            self.assertEqual(final_url, "https://example.test/final")
+            self.assertFalse(observation.headers_only)
+            self.assertEqual(observation.response_status, 200)
+            self.assertEqual(observation.response_mime_type, "text/html")
+            self.assertEqual(observation.final_url, "https://example.test/final")
 
         asyncio.run(run())
 
