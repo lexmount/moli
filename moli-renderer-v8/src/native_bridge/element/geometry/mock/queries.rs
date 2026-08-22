@@ -87,6 +87,7 @@ pub(crate) fn answer_queries(
                     .map(|source| LayoutHit {
                         source,
                         fragment: None,
+                        paint_order: None,
                         local_point: *point,
                         is_text: false,
                         local_content_box: None,
@@ -103,6 +104,7 @@ pub(crate) fn answer_queries(
                         vec![LayoutHit {
                             source,
                             fragment: None,
+                            paint_order: None,
                             local_point: *point,
                             is_text: false,
                             local_content_box: None,

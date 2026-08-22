@@ -11,6 +11,22 @@ use super::{
     tree::FrozenLayoutTree,
 };
 
+/// One point-resolved surface in the exact front-to-back paint stack.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LayoutPaintedSurfaceHit<N> {
+    Dom(LayoutHit<N>),
+    Control(crate::LayoutControlSurfaceHit<N>),
+}
+
+impl<N: Copy> LayoutPaintedSurfaceHit<N> {
+    pub fn paint_order(self) -> u32 {
+        match self {
+            Self::Dom(hit) => hit.paint_order.unwrap_or(0),
+            Self::Control(hit) => hit.paint_order(),
+        }
+    }
+}
+
 /// One front-to-back hit-test candidate.
 #[derive(Clone, Debug, PartialEq)]
 struct LayoutHitTestEntry<N> {
@@ -32,6 +48,9 @@ pub struct LayoutHit<N> {
     /// providers can return a source-only hit without manufacturing a
     /// tree-local fragment identity.
     pub fragment: Option<LayoutFragmentId>,
+    /// Exact paint ordinal for a real frozen-tree fragment. Explicit mock
+    /// providers may return a source-only hit without one.
+    pub paint_order: Option<u32>,
     pub local_point: LayoutPoint,
     pub is_text: bool,
     /// The exact physical content box in the hit fragment's own coordinate
@@ -101,34 +120,76 @@ where
         hits
     }
 
-    /// Resolves a native classic-scrollbar control before ordinary DOM hit
-    /// testing. Scrollbar controls are user-agent chrome and do not dispatch a
-    /// pointer/mouse target into the scrolled content.
+    /// Resolves every DOM or UA-control surface under one point in exact
+    /// front-to-back paint order. Consumers can skip stale DOM sources without
+    /// accidentally promoting a geometrically lower scrollbar over a live
+    /// overlay.
+    pub fn painted_surface_hits(
+        &self,
+        viewport_point: LayoutPoint,
+        ignore_pointer_events_none: bool,
+    ) -> Vec<LayoutPaintedSurfaceHit<N>> {
+        let mut hits = self
+            .hit_test_entries()
+            .into_iter()
+            .filter_map(|entry| {
+                self.hit_for_entry(&entry, viewport_point, ignore_pointer_events_none)
+                    .map(LayoutPaintedSurfaceHit::Dom)
+            })
+            .chain(
+                self.control_surface_hits(viewport_point)
+                    .into_iter()
+                    .map(LayoutPaintedSurfaceHit::Control),
+            )
+            .collect::<Vec<_>>();
+        hits.sort_by_key(|hit| std::cmp::Reverse(hit.paint_order()));
+        hits
+    }
+
+    /// Returns the topmost painted UA control without comparing it to DOM
+    /// fragments. Input dispatch should normally use [`Self::painted_surface_hits`].
+    pub fn control_surface_hit_test(
+        &self,
+        viewport_point: LayoutPoint,
+    ) -> Option<crate::LayoutControlSurfaceHit<N>> {
+        self.control_surface_hits(viewport_point)
+            .into_iter()
+            .max_by_key(|hit| hit.paint_order())
+    }
+
+    /// Compatibility query for the topmost scrollbar among UA controls only.
+    ///
+    /// This does not resolve DOM occlusion. Input dispatch must use
+    /// [`Self::painted_surface_hits`] so a later-painted DOM fragment can win
+    /// over a scrollbar.
     pub fn scrollbar_hit_test(
         &self,
         viewport_point: LayoutPoint,
     ) -> Option<crate::LayoutScrollbarHit<N>> {
-        let mut candidates = self
-            .boxes
-            .iter()
-            .enumerate()
-            .filter_map(|(index, layout_box)| {
-                if !layout_box.visible || !layout_box.pointer_events {
-                    return None;
-                }
-                let source = layout_box.geometry_source.or(layout_box.hit_source)?;
-                let paint_order = layout_box
-                    .fragments
-                    .iter()
-                    .filter_map(|id| self.fragment(*id)?.paint_order)
-                    .max()
-                    .unwrap_or(0);
-                Some((std::cmp::Reverse(paint_order), index, source))
+        self.control_surface_hits(viewport_point)
+            .into_iter()
+            .filter_map(|hit| match hit {
+                crate::LayoutControlSurfaceHit::Scrollbar(hit) => Some(hit),
+                crate::LayoutControlSurfaceHit::ScrollbarCorner(_) => None,
             })
-            .collect::<Vec<_>>();
-        candidates.sort_by_key(|candidate| candidate.0);
+            .max_by_key(|hit| hit.paint_order)
+    }
 
-        for (_, index, source) in candidates {
+    fn control_surface_hits(
+        &self,
+        viewport_point: LayoutPoint,
+    ) -> Vec<crate::LayoutControlSurfaceHit<N>> {
+        let mut hits = Vec::new();
+        for (index, layout_box) in self.boxes.iter().enumerate() {
+            if !layout_box.visible || !layout_box.pointer_events {
+                continue;
+            }
+            let Some(paint_order) = layout_box.control_paint_order else {
+                continue;
+            };
+            let Some(source) = layout_box.geometry_source.or(layout_box.hit_source) else {
+                continue;
+            };
             let layout_box = &self.boxes[index];
             let is_root = layout_box.id == self.root_box;
             if !is_root && !self.point_passes_clip_chain(viewport_point, layout_box.clip_chain) {
@@ -143,6 +204,20 @@ where
                 continue;
             };
             let local_point = viewport_to_local.map_point(viewport_point);
+            if let Some(rect) = layout_box.scroll_extent.scrollbar_corner
+                && rect.contains(local_point)
+            {
+                hits.push(crate::LayoutControlSurfaceHit::ScrollbarCorner(
+                    crate::LayoutScrollbarCornerHit {
+                        source,
+                        rect,
+                        local_point,
+                        viewport_to_local,
+                        paint_order,
+                    },
+                ));
+                continue;
+            }
             for scrollbar in [
                 layout_box.scroll_extent.vertical_scrollbar,
                 layout_box.scroll_extent.horizontal_scrollbar,
@@ -153,16 +228,20 @@ where
                 let Some(part) = scrollbar.part_at(local_point) else {
                     continue;
                 };
-                return Some(crate::LayoutScrollbarHit {
-                    source,
-                    scrollbar,
-                    part,
-                    local_point,
-                    viewport_to_local,
-                });
+                hits.push(crate::LayoutControlSurfaceHit::Scrollbar(
+                    crate::LayoutScrollbarHit {
+                        source,
+                        scrollbar,
+                        part,
+                        local_point,
+                        viewport_to_local,
+                        paint_order,
+                    },
+                ));
+                break;
             }
         }
-        None
+        hits
     }
 
     pub fn caret_position(&self, viewport_point: LayoutPoint) -> Option<LayoutCaretPosition<N>> {
@@ -386,6 +465,7 @@ where
         entry.local_rect.contains(local_point).then_some(LayoutHit {
             source: entry.source,
             fragment: Some(entry.fragment),
+            paint_order: Some(entry.paint_order),
             local_point,
             is_text: entry.is_text,
             local_content_box,

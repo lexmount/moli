@@ -5,7 +5,9 @@ use taffy::{Cache, Layout, Point, Style};
 
 use crate::{
     LayoutCssImageReference, LayoutElementSemantics, LayoutError, LayoutPoint, LayoutPseudo,
+    LayoutScrollbarAxis, LayoutScrollbarColors, LayoutScrollbarGutter, LayoutScrollbarWidth,
     ReplacedMetrics, ResolvedLayoutStyle, inline::InlineFormattingContext,
+    style::LayoutOverflowMode,
 };
 
 /// Dense identifier scoped to exactly one [`LayoutWorld`].
@@ -258,6 +260,182 @@ pub(crate) struct ViewportLayoutState {
     pub(crate) final_layout: Layout,
 }
 
+/// CSS box whose overflow supplies the viewport scrolling mechanism.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ViewportDefiningBox {
+    #[default]
+    Root,
+    Body(LayoutBoxId),
+}
+
+/// Independent style for the viewport scrolling mechanism.
+///
+/// Box construction copies overflow from the selected root/body box, while
+/// scrollbar appearance continues to come from the root. The selected body's
+/// authored style remains untouched; its exact box identity tells later
+/// phases that those overflow properties have already transferred here.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ViewportScrollPolicy {
+    pub(crate) defining_box: ViewportDefiningBox,
+    pub(crate) effective_overflow: [LayoutOverflowMode; 2],
+    scrollbar_width: LayoutScrollbarWidth,
+    scrollbar_gutter: LayoutScrollbarGutter,
+    scrollbar_colors: Option<LayoutScrollbarColors>,
+    revealed_scrollbar_x: bool,
+    revealed_scrollbar_y: bool,
+}
+
+impl Default for ViewportScrollPolicy {
+    fn default() -> Self {
+        Self {
+            defining_box: ViewportDefiningBox::Root,
+            effective_overflow: [LayoutOverflowMode::Auto; 2],
+            scrollbar_width: LayoutScrollbarWidth::Auto,
+            scrollbar_gutter: LayoutScrollbarGutter::Auto,
+            scrollbar_colors: None,
+            revealed_scrollbar_x: false,
+            revealed_scrollbar_y: false,
+        }
+    }
+}
+
+impl ViewportScrollPolicy {
+    pub(crate) const fn new(
+        defining_box: ViewportDefiningBox,
+        effective_overflow: [LayoutOverflowMode; 2],
+        scrollbar_width: LayoutScrollbarWidth,
+        scrollbar_gutter: LayoutScrollbarGutter,
+        scrollbar_colors: Option<LayoutScrollbarColors>,
+    ) -> Self {
+        Self {
+            defining_box,
+            effective_overflow,
+            scrollbar_width,
+            scrollbar_gutter,
+            scrollbar_colors,
+            revealed_scrollbar_x: false,
+            revealed_scrollbar_y: false,
+        }
+    }
+
+    pub(crate) const fn defining_body(self) -> Option<LayoutBoxId> {
+        match self.defining_box {
+            ViewportDefiningBox::Root => None,
+            ViewportDefiningBox::Body(body) => Some(body),
+        }
+    }
+
+    pub(crate) fn prepare_scrollbar_layout(&mut self) {
+        self.revealed_scrollbar_x = self.effective_overflow[0] == LayoutOverflowMode::Scroll;
+        self.revealed_scrollbar_y = self.effective_overflow[1] == LayoutOverflowMode::Scroll;
+    }
+
+    pub(crate) fn reveal_auto_scrollbar(
+        &mut self,
+        axis: LayoutScrollbarAxis,
+        overflowing: bool,
+    ) -> bool {
+        if !overflowing
+            || self.scrollbar_width == LayoutScrollbarWidth::None
+            || self.overflow_mode(axis) != LayoutOverflowMode::Auto
+        {
+            return false;
+        }
+        let revealed = match axis {
+            LayoutScrollbarAxis::Horizontal => &mut self.revealed_scrollbar_x,
+            LayoutScrollbarAxis::Vertical => &mut self.revealed_scrollbar_y,
+        };
+        if *revealed {
+            return false;
+        }
+        *revealed = true;
+        true
+    }
+
+    pub(crate) const fn overflow_mode(self, axis: LayoutScrollbarAxis) -> LayoutOverflowMode {
+        match axis {
+            LayoutScrollbarAxis::Horizontal => self.effective_overflow[0],
+            LayoutScrollbarAxis::Vertical => self.effective_overflow[1],
+        }
+    }
+
+    pub(crate) fn establishes_scroll_container(self) -> bool {
+        self.effective_overflow
+            .into_iter()
+            .any(LayoutOverflowMode::creates_scroll_container)
+    }
+
+    pub(crate) fn allows_user_scroll(self, axis: LayoutScrollbarAxis) -> bool {
+        self.overflow_mode(axis).allows_user_scroll()
+    }
+
+    pub(crate) fn clips_overflow(self) -> bool {
+        self.effective_overflow
+            .into_iter()
+            .any(|mode| mode != LayoutOverflowMode::Visible)
+    }
+
+    pub(crate) fn has_scrollbar(self, axis: LayoutScrollbarAxis, overflowing: bool) -> bool {
+        if self.scrollbar_width == LayoutScrollbarWidth::None {
+            return false;
+        }
+        match self.overflow_mode(axis) {
+            LayoutOverflowMode::Scroll => true,
+            LayoutOverflowMode::Auto => overflowing,
+            LayoutOverflowMode::Visible | LayoutOverflowMode::Clip | LayoutOverflowMode::Hidden => {
+                false
+            }
+        }
+    }
+
+    pub(crate) const fn scrollbar_control_thickness(self) -> f32 {
+        self.scrollbar_width.thickness()
+    }
+
+    pub(crate) const fn scrollbar_colors(self) -> Option<LayoutScrollbarColors> {
+        self.scrollbar_colors
+    }
+
+    pub(crate) fn scrollbar_gutter_thickness(self, axis: LayoutScrollbarAxis) -> f32 {
+        if self.scrollbar_width == LayoutScrollbarWidth::None {
+            return 0.0;
+        }
+        let revealed = match axis {
+            LayoutScrollbarAxis::Horizontal => self.revealed_scrollbar_x,
+            LayoutScrollbarAxis::Vertical => self.revealed_scrollbar_y,
+        };
+        let stable_vertical = axis == LayoutScrollbarAxis::Vertical
+            && self.scrollbar_gutter != LayoutScrollbarGutter::Auto
+            && self.effective_overflow[1].creates_scroll_container();
+        if !revealed && !stable_vertical {
+            return 0.0;
+        }
+        let thickness = self.scrollbar_width.thickness();
+        if axis == LayoutScrollbarAxis::Vertical && self.reserves_both_edge_vertical_gutter() {
+            thickness * 2.0
+        } else {
+            thickness
+        }
+    }
+
+    pub(crate) fn scrollbar_leading_gutter_thickness(self, axis: LayoutScrollbarAxis) -> f32 {
+        if axis == LayoutScrollbarAxis::Vertical
+            && self.scrollbar_gutter_thickness(axis) > 0.0
+            && self.reserves_both_edge_vertical_gutter()
+        {
+            self.scrollbar_width.thickness()
+        } else {
+            0.0
+        }
+    }
+
+    fn reserves_both_edge_vertical_gutter(self) -> bool {
+        self.scrollbar_gutter == LayoutScrollbarGutter::StableBothEdges
+            && self.effective_overflow[1].creates_scroll_container()
+            && self.scrollbar_width != LayoutScrollbarWidth::None
+    }
+}
+
 impl Default for ViewportLayoutState {
     fn default() -> Self {
         Self {
@@ -346,6 +524,7 @@ where
     pub(crate) source_mapping: HashMap<N, LayoutBoxId>,
     pub(crate) display_contents_mapping: HashMap<N, Vec<LayoutBoxId>>,
     pub(crate) root: LayoutBoxId,
+    pub(crate) viewport_scroll_policy: ViewportScrollPolicy,
     pub(crate) viewport_layout: ViewportLayoutState,
     pub(crate) css_image_references: Vec<LayoutCssImageReference<N>>,
 }
@@ -360,6 +539,7 @@ where
             source_mapping: HashMap::new(),
             display_contents_mapping: HashMap::new(),
             root: LayoutBoxId::from_index(0),
+            viewport_scroll_policy: ViewportScrollPolicy::default(),
             viewport_layout: ViewportLayoutState::default(),
             css_image_references: Vec::new(),
         }
@@ -367,6 +547,10 @@ where
 
     pub fn root(&self) -> LayoutBoxId {
         self.root
+    }
+
+    pub(crate) fn is_viewport_defining_body(&self, id: LayoutBoxId) -> bool {
+        self.viewport_scroll_policy.defining_body() == Some(id)
     }
 
     pub fn len(&self) -> usize {
@@ -525,6 +709,23 @@ where
         }
         if let Some(index) = reachable.iter().position(|reachable| !reachable) {
             return Err(LayoutError::InvalidBoxReference { index });
+        }
+        if let Some(body) = self.viewport_scroll_policy.defining_body() {
+            let Some(body_box) = self.box_by_id(body) else {
+                return Err(LayoutError::InvalidBoxReference {
+                    index: body.index(),
+                });
+            };
+            if body == self.root
+                || !body_box
+                    .element_semantics()
+                    .is_some_and(|element| element.is_html_element("body"))
+            {
+                return Err(LayoutError::source_contract(
+                    &body_box.source_label,
+                    "viewport-defining body identity must name a principal HTML body box",
+                ));
+            }
         }
         for (index, layout_box) in self.boxes.iter().enumerate() {
             let id = LayoutBoxId::from_index(index);

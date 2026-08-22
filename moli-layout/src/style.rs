@@ -160,12 +160,24 @@ impl LayoutOverflowMode {
         }
     }
 
-    const fn creates_scroll_container(self) -> bool {
+    pub(crate) const fn creates_scroll_container(self) -> bool {
         matches!(self, Self::Hidden | Self::Auto | Self::Scroll)
     }
 
-    const fn allows_user_scroll(self) -> bool {
+    pub(crate) const fn allows_user_scroll(self) -> bool {
         matches!(self, Self::Auto | Self::Scroll)
+    }
+
+    /// Overflow values propagated to a viewport use a different used-value
+    /// mapping from an ordinary element. `visible` becomes the viewport's
+    /// ordinary automatic scrolling behavior, while `clip` becomes `hidden`
+    /// so script scrolling remains available without user scrolling or UI.
+    pub(crate) const fn for_viewport(self) -> Self {
+        match self {
+            Self::Visible => Self::Auto,
+            Self::Clip => Self::Hidden,
+            Self::Hidden | Self::Auto | Self::Scroll => self,
+        }
     }
 }
 
@@ -1610,6 +1622,56 @@ impl ResolvedLayoutStyle {
         self.overflow_y.allows_user_scroll()
     }
 
+    pub(crate) const fn overflow_modes(&self) -> [LayoutOverflowMode; 2] {
+        [self.overflow_x, self.overflow_y]
+    }
+
+    pub(crate) fn overflow_is_visible_along_both_axes(&self) -> bool {
+        self.overflow_modes()
+            .into_iter()
+            .all(|mode| mode == LayoutOverflowMode::Visible)
+    }
+
+    pub(crate) fn applies_any_viewport_containment(&self) -> bool {
+        let Some(computed) = self.computed.as_ref() else {
+            return false;
+        };
+        !computed.clone_contain().is_empty()
+            || computed.clone_container_type().is_size_container_type()
+            || computed.clone_content_visibility() != StyloContentVisibility::Visible
+    }
+
+    pub(crate) const fn viewport_scrollbar_width(&self) -> LayoutScrollbarWidth {
+        self.scrollbar_width
+    }
+
+    pub(crate) const fn viewport_scrollbar_gutter(&self) -> LayoutScrollbarGutter {
+        self.scrollbar_gutter
+    }
+
+    /// Keeps the document element's numeric root formatting context while its
+    /// scrollbar policy is represented by the synthetic viewport. Using
+    /// `Visible` here would let the body's block margins collapse through the
+    /// root even though the root box establishes an independent formatting
+    /// context.
+    pub(crate) fn prepare_viewport_root_layout(&mut self) {
+        self.revealed_scrollbar_x = false;
+        self.revealed_scrollbar_y = false;
+        self.taffy.scrollbar_width = 0.0;
+        self.taffy.overflow.x = taffy::Overflow::Hidden;
+        self.taffy.overflow.y = taffy::Overflow::Hidden;
+    }
+
+    /// Removes the numeric effect of overflow transferred from the defining
+    /// body to the viewport without changing that body's authored style.
+    pub(crate) fn prepare_viewport_defining_body_layout(&mut self) {
+        self.revealed_scrollbar_x = false;
+        self.revealed_scrollbar_y = false;
+        self.taffy.scrollbar_width = 0.0;
+        self.taffy.overflow.x = taffy::Overflow::Visible;
+        self.taffy.overflow.y = taffy::Overflow::Visible;
+    }
+
     pub(crate) fn prepare_scrollbar_layout(&mut self, is_root: bool) {
         self.revealed_scrollbar_x = self.overflow_x == LayoutOverflowMode::Scroll;
         self.revealed_scrollbar_y = self.overflow_y == LayoutOverflowMode::Scroll;
@@ -1621,9 +1683,8 @@ impl ResolvedLayoutStyle {
         self.taffy.overflow.y = self.initial_taffy_overflow(LayoutScrollbarAxis::Vertical, is_root);
         // Taffy's scrollbar width is scalar. For `both-edges` it represents
         // the two vertical gutters together, so it must not also be used as a
-        // double-height horizontal scrollbar. Horizontal reservation remains
-        // part of Moli's projection feedback below, as it already is for the
-        // root scrolling element.
+        // double-height horizontal scrollbar. Moli's Taffy adapter supplies
+        // the missing single horizontal reservation to numeric child layout.
         if both_edge_gutter && self.revealed_scrollbar_x {
             self.taffy.overflow.x = taffy::Overflow::Hidden;
         }
@@ -1731,6 +1792,19 @@ impl ResolvedLayoutStyle {
 
     pub(crate) fn scrollbar_control_thickness(&self) -> f32 {
         self.scrollbar_width.thickness()
+    }
+
+    /// Extra block-axis reservation that Taffy's scalar scrollbar width
+    /// cannot express. Under `stable both-edges` the scalar is already used
+    /// for two vertical gutters, so Moli runs the container's numeric layout
+    /// against a block size reduced by the real horizontal control and then
+    /// restores the outer box size.
+    pub(crate) fn horizontal_scrollbar_layout_compensation(&self) -> f32 {
+        if self.reserves_both_edge_vertical_gutter() && self.revealed_scrollbar_x {
+            self.scrollbar_width.thickness()
+        } else {
+            0.0
+        }
     }
 
     pub(crate) fn scrollbar_gutter_thickness(&self, axis: LayoutScrollbarAxis) -> f32 {

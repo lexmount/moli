@@ -25,6 +25,8 @@ pub struct FrozenLayoutBox<N> {
     pub geometry_source: Option<N>,
     pub principal_source: Option<N>,
     pub hit_source: Option<N>,
+    /// Paint ordinal of this box's scrollbar/corner surface, if any.
+    pub(crate) control_paint_order: Option<u32>,
 }
 
 /// One child browsing context owned by the same latest frozen snapshot as its

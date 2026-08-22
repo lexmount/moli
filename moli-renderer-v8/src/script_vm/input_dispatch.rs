@@ -489,8 +489,18 @@ impl ScriptVm {
             false,
             matches!(event_name, "mousedown" | "mouseup" | "mousemove"),
         )?;
-        if let Some(scrollbar) = surface_hit.scrollbar {
-            return self.dispatch_native_scrollbar_hit(scrollbar, event_name, button);
+        if let Some(control) = surface_hit.control {
+            return match control {
+                moli_layout::LayoutControlSurfaceHit::Scrollbar(scrollbar) => {
+                    self.dispatch_native_scrollbar_hit(scrollbar, event_name, button)
+                }
+                moli_layout::LayoutControlSurfaceHit::ScrollbarCorner(_) => {
+                    // The painted corner is user-agent chrome. It owns no
+                    // scroll action, but must consume input rather than leak
+                    // pointer/mouse events into the DOM underneath it.
+                    Ok(input_dispatch_outcome(true))
+                }
+            };
         }
         let hit = surface_hit.input;
         let hit_handle = hit.map(|hit| hit.handle);

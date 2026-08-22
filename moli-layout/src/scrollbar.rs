@@ -78,6 +78,35 @@ pub struct LayoutScrollbarHit<N> {
     pub part: LayoutScrollbarPart,
     pub local_point: LayoutPoint,
     pub viewport_to_local: LayoutTransform2D,
+    /// Exact ordinal of the `BoxOutline` paint event that emitted this UA
+    /// control. It shares the same order space as ordinary DOM fragments.
+    pub paint_order: u32,
+}
+
+/// Consume-only input hit for the painted intersection of two classic bars.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LayoutScrollbarCornerHit<N> {
+    pub source: N,
+    pub rect: LayoutRect,
+    pub local_point: LayoutPoint,
+    pub viewport_to_local: LayoutTransform2D,
+    pub paint_order: u32,
+}
+
+/// A non-DOM control surface emitted by the normal CSS paint stack.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LayoutControlSurfaceHit<N> {
+    Scrollbar(LayoutScrollbarHit<N>),
+    ScrollbarCorner(LayoutScrollbarCornerHit<N>),
+}
+
+impl<N> LayoutControlSurfaceHit<N> {
+    pub fn paint_order(self) -> u32 {
+        match self {
+            Self::Scrollbar(hit) => hit.paint_order,
+            Self::ScrollbarCorner(hit) => hit.paint_order,
+        }
+    }
 }
 
 /// One scrollbar in its owning box's local coordinate space.

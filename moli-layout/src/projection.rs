@@ -214,6 +214,7 @@ where
     pub(crate) coordinate_spaces: Vec<ProjectedCoordinateSpace>,
     pub(crate) clip_chain: Vec<LayoutClipNode>,
     paint_order_count: usize,
+    control_paint_orders: Vec<Option<u32>>,
     pub(crate) diagnostics: Vec<PaintDiagnostic>,
     resolved_transforms: Vec<ResolvedLayoutTransform>,
     scrollable_overflow: Vec<LayoutRect>,
@@ -258,6 +259,7 @@ where
             coordinate_spaces: Vec::with_capacity(count + 1),
             clip_chain: Vec::new(),
             paint_order_count: 0,
+            control_paint_orders: vec![None; count],
             diagnostics: Vec::new(),
             resolved_transforms: vec![ResolvedLayoutTransform::IDENTITY; count],
             scrollable_overflow: vec![LayoutRect::ZERO; count],
@@ -267,6 +269,117 @@ where
             background_clips: vec![None; count],
             content_clips: vec![None; count],
             paint_events: Vec::new(),
+        }
+    }
+
+    fn scrollbar_gutter_thickness(&self, id: LayoutBoxId, axis: LayoutScrollbarAxis) -> f32 {
+        if id == self.world.root {
+            self.world
+                .viewport_scroll_policy
+                .scrollbar_gutter_thickness(axis)
+        } else if self.world.is_viewport_defining_body(id) {
+            0.0
+        } else {
+            self.world.boxes[id.index()]
+                .style
+                .scrollbar_gutter_thickness(axis)
+        }
+    }
+
+    fn scrollbar_leading_gutter_thickness(
+        &self,
+        id: LayoutBoxId,
+        axis: LayoutScrollbarAxis,
+    ) -> f32 {
+        if id == self.world.root {
+            self.world
+                .viewport_scroll_policy
+                .scrollbar_leading_gutter_thickness(axis)
+        } else if self.world.is_viewport_defining_body(id) {
+            0.0
+        } else {
+            self.world.boxes[id.index()]
+                .style
+                .scrollbar_leading_gutter_thickness(axis, false)
+        }
+    }
+
+    fn scrollbar_control_thickness(&self, id: LayoutBoxId) -> f32 {
+        if id == self.world.root {
+            self.world
+                .viewport_scroll_policy
+                .scrollbar_control_thickness()
+        } else if self.world.is_viewport_defining_body(id) {
+            0.0
+        } else {
+            self.world.boxes[id.index()]
+                .style
+                .scrollbar_control_thickness()
+        }
+    }
+
+    fn establishes_scroll_container(&self, id: LayoutBoxId) -> bool {
+        if id == self.world.root {
+            self.world
+                .viewport_scroll_policy
+                .establishes_scroll_container()
+        } else if self.world.is_viewport_defining_body(id) {
+            false
+        } else {
+            self.world.boxes[id.index()]
+                .style
+                .establishes_scroll_container()
+        }
+    }
+
+    fn allows_user_scroll(&self, id: LayoutBoxId, axis: LayoutScrollbarAxis) -> bool {
+        if id == self.world.root {
+            self.world.viewport_scroll_policy.allows_user_scroll(axis)
+        } else if self.world.is_viewport_defining_body(id) {
+            false
+        } else {
+            match axis {
+                LayoutScrollbarAxis::Horizontal => {
+                    self.world.boxes[id.index()].style.allows_user_scroll_x()
+                }
+                LayoutScrollbarAxis::Vertical => {
+                    self.world.boxes[id.index()].style.allows_user_scroll_y()
+                }
+            }
+        }
+    }
+
+    fn clips_overflow(&self, id: LayoutBoxId) -> bool {
+        if id == self.world.root {
+            self.world.viewport_scroll_policy.clips_overflow()
+        } else if self.world.is_viewport_defining_body(id) {
+            false
+        } else {
+            self.world.boxes[id.index()].style.clips_overflow()
+        }
+    }
+
+    fn has_scrollbar(&self, id: LayoutBoxId, axis: LayoutScrollbarAxis, overflowing: bool) -> bool {
+        if id == self.world.root {
+            self.world
+                .viewport_scroll_policy
+                .has_scrollbar(axis, overflowing)
+        } else if self.world.is_viewport_defining_body(id) {
+            false
+        } else {
+            self.world.boxes[id.index()]
+                .style
+                .has_scrollbar(axis, false, overflowing)
+        }
+    }
+
+    fn scrollbar_colors(&self, id: LayoutBoxId) -> Option<crate::LayoutScrollbarColors> {
+        if id == self.world.root {
+            self.world.viewport_scroll_policy.scrollbar_colors()
+        } else if self.world.is_viewport_defining_body(id) {
+            None
+        } else {
+            self.world.boxes[id.index()].style.scrollbar_colors()
         }
     }
 
@@ -283,8 +396,9 @@ where
                     PaintDiagnosticSeverity::Warning,
                 ));
             }
+            let box_id = LayoutBoxId::from_index(index);
             let id = LayoutOutputBoxId::from_index(index);
-            let is_root = index == self.world.root.index();
+            let is_root = box_id == self.world.root;
             let layout = layout_box.final_layout;
             let border_box = LayoutRect::new(
                 0.0,
@@ -299,15 +413,12 @@ where
                 layout.border.bottom,
                 layout.border.left,
             );
-            let vertical_gutter = layout_box
-                .style
-                .scrollbar_gutter_thickness(LayoutScrollbarAxis::Vertical);
-            let vertical_leading_gutter = layout_box
-                .style
-                .scrollbar_leading_gutter_thickness(LayoutScrollbarAxis::Vertical, is_root);
-            let horizontal_gutter = layout_box
-                .style
-                .scrollbar_gutter_thickness(LayoutScrollbarAxis::Horizontal);
+            let vertical_gutter =
+                self.scrollbar_gutter_thickness(box_id, LayoutScrollbarAxis::Vertical);
+            let vertical_leading_gutter =
+                self.scrollbar_leading_gutter_thickness(box_id, LayoutScrollbarAxis::Vertical);
+            let horizontal_gutter =
+                self.scrollbar_gutter_thickness(box_id, LayoutScrollbarAxis::Horizontal);
             let mut content_box = inset_rect(
                 padding_box,
                 layout.padding.top,
@@ -463,7 +574,7 @@ where
                 continue;
             }
             let child_geometry = &self.boxes[index];
-            let visual_overflow = if self.world.boxes[index].style.clips_overflow() {
+            let visual_overflow = if self.clips_overflow(LayoutBoxId::from_index(index)) {
                 child_geometry.border_box
             } else {
                 self.scrollable_overflow[index]
@@ -485,19 +596,17 @@ where
         }
 
         for index in 0..self.world.boxes.len() {
+            let id = LayoutBoxId::from_index(index);
             let geometry = &self.boxes[index];
             let overflow = self.scrollable_overflow[index];
-            let is_root = index == self.world.root.index();
-            let vertical_gutter = self.world.boxes[index]
-                .style
-                .scrollbar_gutter_thickness(LayoutScrollbarAxis::Vertical);
-            let vertical_leading_gutter = self.world.boxes[index]
-                .style
-                .scrollbar_leading_gutter_thickness(LayoutScrollbarAxis::Vertical, is_root);
-            let horizontal_gutter = self.world.boxes[index]
-                .style
-                .scrollbar_gutter_thickness(LayoutScrollbarAxis::Horizontal);
-            let scrollbar_thickness = self.world.boxes[index].style.scrollbar_control_thickness();
+            let is_root = id == self.world.root;
+            let vertical_gutter =
+                self.scrollbar_gutter_thickness(id, LayoutScrollbarAxis::Vertical);
+            let vertical_leading_gutter =
+                self.scrollbar_leading_gutter_thickness(id, LayoutScrollbarAxis::Vertical);
+            let horizontal_gutter =
+                self.scrollbar_gutter_thickness(id, LayoutScrollbarAxis::Horizontal);
+            let scrollbar_thickness = self.scrollbar_control_thickness(id);
             let rtl =
                 self.world.boxes[index].style.direction() == crate::style::InlineDirection::Rtl;
             let local_scrollport = scrollport_for_box(
@@ -528,8 +637,7 @@ where
             );
             let horizontal_range = (scroll_size.width - scrollport.width).max(0.0);
             let vertical_range = (scroll_size.height - scrollport.height).max(0.0);
-            let is_scroll_container =
-                is_root || self.world.boxes[index].style.establishes_scroll_container();
+            let is_scroll_container = self.establishes_scroll_container(id);
             let requested = finite_point(self.world.boxes[index].scroll_offset);
             let (minimum_offset, maximum_offset) = if is_scroll_container {
                 if self.world.boxes[index].style.direction() == crate::style::InlineDirection::Rtl {
@@ -554,11 +662,10 @@ where
             } else {
                 LayoutPoint::ZERO
             };
-            let horizontal_scrollbar = self.world.boxes[index]
-                .style
+            let horizontal_scrollbar = self
                 .has_scrollbar(
+                    id,
                     LayoutScrollbarAxis::Horizontal,
-                    is_root,
                     horizontal_range > f32::EPSILON,
                 )
                 .then(|| {
@@ -579,11 +686,10 @@ where
                     )
                 })
                 .filter(|bar| bar.frame.width > 0.0 && bar.frame.height > 0.0);
-            let vertical_scrollbar = self.world.boxes[index]
-                .style
+            let vertical_scrollbar = self
                 .has_scrollbar(
+                    id,
                     LayoutScrollbarAxis::Vertical,
-                    is_root,
                     vertical_range > f32::EPSILON,
                 )
                 .then(|| {
@@ -625,27 +731,13 @@ where
                 minimum_offset,
                 maximum_offset,
                 is_scroll_container,
-                allows_user_scroll_x: self.world.boxes[index].style.allows_user_scroll_x()
-                    || (is_root
-                        && matches!(
-                            self.world.boxes[index]
-                                .style
-                                .overflow_mode(LayoutScrollbarAxis::Horizontal),
-                            crate::style::LayoutOverflowMode::Visible
-                        )),
-                allows_user_scroll_y: self.world.boxes[index].style.allows_user_scroll_y()
-                    || (is_root
-                        && matches!(
-                            self.world.boxes[index]
-                                .style
-                                .overflow_mode(LayoutScrollbarAxis::Vertical),
-                            crate::style::LayoutOverflowMode::Visible
-                        )),
-                clips_overflow: self.world.boxes[index].style.clips_overflow(),
+                allows_user_scroll_x: self.allows_user_scroll(id, LayoutScrollbarAxis::Horizontal),
+                allows_user_scroll_y: self.allows_user_scroll(id, LayoutScrollbarAxis::Vertical),
+                clips_overflow: self.clips_overflow(id),
                 horizontal_scrollbar,
                 vertical_scrollbar,
                 scrollbar_corner,
-                scrollbar_colors: self.world.boxes[index].style.scrollbar_colors(),
+                scrollbar_colors: self.scrollbar_colors(id),
             });
         }
         self.viewport_scroll = self.scroll_extents[self.world.root.index()].applied_offset;
@@ -820,10 +912,19 @@ where
                         self.assign_fragment_paint_metadata(fragment, self.content_clips[index]);
                     }
                 }
+                PaintOrderEvent::BoxOutline(id) => {
+                    let index = id.index();
+                    let extent = &self.scroll_extents[index];
+                    if extent.horizontal_scrollbar.is_some()
+                        || extent.vertical_scrollbar.is_some()
+                        || extent.scrollbar_corner.is_some()
+                    {
+                        self.control_paint_orders[index] = Some(self.next_paint_order());
+                    }
+                }
                 PaintOrderEvent::BoxOutsetShadow(_)
                 | PaintOrderEvent::PushStackingContext(_)
                 | PaintOrderEvent::TableCollapsedBorders(_)
-                | PaintOrderEvent::BoxOutline(_)
                 | PaintOrderEvent::PopStackingContext(_) => {}
             }
         }
@@ -858,17 +959,19 @@ where
         self.boxes[index].clip_chain = box_clip;
         self.background_clips[index] = box_clip;
 
-        let child_clip =
-            if id != self.world.root && self.world.boxes[index].clips_descendant_paint() {
-                Some(self.push_clip(
-                    box_clip,
-                    Some(LayoutOutputBoxId::from_index(index)),
-                    self.boxes[index].coordinate_space,
-                    self.scroll_extents[index].scrollport,
-                ))
-            } else {
-                box_clip
-            };
+        let child_clip = if id != self.world.root
+            && !self.world.is_viewport_defining_body(id)
+            && self.world.boxes[index].clips_descendant_paint()
+        {
+            Some(self.push_clip(
+                box_clip,
+                Some(LayoutOutputBoxId::from_index(index)),
+                self.boxes[index].coordinate_space,
+                self.scroll_extents[index].scrollport,
+            ))
+        } else {
+            box_clip
+        };
         self.content_clips[index] = child_clip;
         for child in self.world.boxes[index].children.clone() {
             self.assign_box_clip_metadata(child, child_clip, viewport_clip);
@@ -880,18 +983,23 @@ where
         fragment_id: LayoutFragmentId,
         clip_chain: Option<LayoutClipChainId>,
     ) {
-        let order = u32::try_from(self.paint_order_count)
-            .expect("one frozen layout tree exceeded the u32 paint-order limit");
         match self.fragments[fragment_id.index()].kind {
             LayoutFragmentKind::Box { .. }
             | LayoutFragmentKind::InlineBox { .. }
             | LayoutFragmentKind::Text { .. } => {}
             LayoutFragmentKind::Line { .. } => return,
         }
+        let order = self.next_paint_order();
         let fragment = &mut self.fragments[fragment_id.index()];
         fragment.clip_chain = clip_chain;
         fragment.paint_order = Some(order);
+    }
+
+    fn next_paint_order(&mut self) -> u32 {
+        let order = u32::try_from(self.paint_order_count)
+            .expect("one frozen layout tree exceeded the u32 paint-order limit");
         self.paint_order_count = self.paint_order_count.saturating_add(1);
+        order
     }
 
     fn push_clip(
@@ -954,10 +1062,17 @@ where
             .zip(self.principal_sources)
             .zip(self.hit_sources)
             .zip(self.scroll_extents)
+            .zip(self.control_paint_orders)
             .zip(coordinate_spaces.map(FrozenCoordinateSpace::from))
             .map(
                 |(
-                    ((((geometry, geometry_source), principal_source), hit_source), scroll_extent),
+                    (
+                        (
+                            (((geometry, geometry_source), principal_source), hit_source),
+                            scroll_extent,
+                        ),
+                        control_paint_order,
+                    ),
                     coordinate_space,
                 )| FrozenLayoutBox {
                     geometry,
@@ -966,6 +1081,7 @@ where
                     geometry_source,
                     principal_source,
                     hit_source,
+                    control_paint_order,
                 },
             )
             .collect();
@@ -1268,14 +1384,16 @@ where
     N: Copy + Debug + Eq + Hash,
 {
     let owner = &world.boxes[owner_index];
+    let owner_id = LayoutBoxId::from_index(owner_index);
     let owner_layout = owner.final_layout;
-    let vertical_leading_gutter = if owner_index == world.root.index() {
-        0.0
-    } else {
-        owner
-            .style
-            .scrollbar_leading_gutter_thickness(LayoutScrollbarAxis::Vertical, false)
-    };
+    let vertical_leading_gutter =
+        if owner_id == world.root || world.is_viewport_defining_body(owner_id) {
+            0.0
+        } else {
+            owner
+                .style
+                .scrollbar_leading_gutter_thickness(LayoutScrollbarAxis::Vertical, false)
+        };
     let content_origin = LayoutPoint::new(
         owner_layout.border.left + owner_layout.padding.left + vertical_leading_gutter,
         owner_layout.border.top + owner_layout.padding.top,
@@ -1285,7 +1403,7 @@ where
         - owner_layout.border.right
         - owner_layout.padding.left
         - owner_layout.padding.right)
-        - if owner_index == world.root.index() {
+        - if owner_id == world.root || world.is_viewport_defining_body(owner_id) {
             0.0
         } else {
             owner

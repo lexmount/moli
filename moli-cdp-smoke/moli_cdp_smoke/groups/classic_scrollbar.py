@@ -184,6 +184,8 @@ async def run_classic_scrollbar_group(state: SmokeState) -> None:
     )
     await _run_multi_scroller_drag_workflow(state, is_moli)
     await _run_root_scrollbar_workflow(state, is_moli)
+    await _run_painted_surface_workflow(state, is_moli)
+    await _run_viewport_policy_and_numeric_gutter_workflow(state, is_moli)
 
 
 async def _run_multi_scroller_drag_workflow(state: SmokeState, is_moli: bool) -> None:
@@ -611,5 +613,309 @@ async def _run_root_scrollbar_workflow(state: SmokeState, is_moli: bool) -> None
             "stableEmpty": stable_empty,
             "stableOverflow": stable_overflow,
             "rtlScrollbarSide": "right",
+        },
+    )
+
+
+async def _run_painted_surface_workflow(state: SmokeState, is_moli: bool) -> None:
+    page = state.page
+    cdp = state.cdp
+    await page.set_viewport_size({"width": 800, "height": 600})
+    await page.set_content(
+        """
+        <!doctype html>
+        <style>
+          html, body { margin: 0; }
+          #scroller {
+            position: absolute; left: 20px; top: 20px;
+            width: 200px; height: 100px; overflow: scroll;
+          }
+          #large { width: 400px; height: 300px; }
+          #overlay {
+            position: absolute; left: 200px; top: 20px;
+            width: 40px; height: 100px; z-index: 10;
+          }
+        </style>
+        <div id="scroller"><div id="large"></div></div>
+        <div id="overlay"></div>
+        <script>
+          window.__paintedSurfaceEvents = [];
+          for (const name of [
+            "pointerdown", "mousedown", "pointerup", "mouseup", "click"
+          ]) {
+            document.addEventListener(name, event => {
+              __paintedSurfaceEvents.push(`${name}:${event.target.id || event.target.localName}`);
+            }, true);
+          }
+        </script>
+        """,
+        wait_until="domcontentloaded",
+    )
+    await page.evaluate(
+        """() => {
+          scroller.scrollTop = 80;
+          return [scroller.clientWidth, scroller.clientHeight, overlay.getBoundingClientRect().x];
+        }"""
+    )
+
+    async def mouse(event_type: str, x: int, y: int, *, pressed: bool) -> None:
+        await cdp.send(
+            "Input.dispatchMouseEvent",
+            {
+                "type": event_type,
+                "x": x,
+                "y": y,
+                "button": "left" if event_type != "mouseMoved" else "none",
+                "buttons": 1 if pressed else 0,
+                "clickCount": 1,
+            },
+        )
+
+    # This point is simultaneously inside the overlay and the vertical
+    # scrollbar beneath it. The ordinary painted sibling must win.
+    await mouse("mousePressed", 210, 30, pressed=True)
+    await mouse("mouseReleased", 210, 30, pressed=False)
+    covered = await page.evaluate(
+        "() => [scroller.scrollTop, __paintedSurfaceEvents.slice()]"
+    )
+    assert_equal(covered[0], 80, "covered scrollbar does not steal overlay input")
+    assert_equal(
+        covered[1],
+        [
+            "pointerdown:overlay",
+            "mousedown:overlay",
+            "pointerup:overlay",
+            "mouseup:overlay",
+            "click:overlay",
+        ],
+        "topmost painted overlay receives pointer and mouse dispatch",
+    )
+
+    await page.evaluate(
+        """() => {
+          overlay.style.display = "none";
+          __paintedSurfaceEvents.length = 0;
+          return scroller.getBoundingClientRect().width;
+        }"""
+    )
+    # Moli intentionally caps rendering at 50 ms. A screenshot is an explicit
+    # render trigger, so the second input probes the new painted state instead
+    # of the still-valid throttled snapshot from the first click.
+    await page.screenshot()
+    # The lower-right 15x15 intersection is painted UA chrome. Moli exposes
+    # it as a consume-only control surface rather than a DOM target.
+    await mouse("mousePressed", 210, 110, pressed=True)
+    await mouse("mouseReleased", 210, 110, pressed=False)
+    corner = await page.evaluate(
+        "() => [scroller.scrollTop, __paintedSurfaceEvents.slice()]"
+    )
+    assert_equal(corner[0], 80, "scrollbar corner has no scroll action")
+    if is_moli:
+        assert_equal(
+            corner[1],
+            [],
+            "Moli painted scrollbar corner stays outside DOM dispatch",
+        )
+
+    state.record(
+        "paint_ordered_scrollbar_and_corner_input_surfaces",
+        {
+            "engine": "moli" if is_moli else "chromium",
+            "covered": covered,
+            "corner": corner,
+            "cornerConsumedOutsideDom": is_moli,
+        },
+    )
+
+
+async def _run_viewport_policy_and_numeric_gutter_workflow(
+    state: SmokeState, is_moli: bool
+) -> None:
+    page = state.page
+    cdp = state.cdp
+    await page.set_viewport_size({"width": 800, "height": 600})
+    await page.set_content(
+        """
+        <!doctype html>
+        <style>
+          html, body { margin: 0; }
+          .scroller {
+            width: 200px; height: 100px;
+            overflow: scroll;
+            scrollbar-gutter: stable both-edges;
+          }
+          .scroller > div { width: 100%; height: 100%; }
+          #flex { display: flex; }
+          #grid { display: grid; }
+        </style>
+        <div id="block" class="scroller"><div></div></div>
+        <div id="flex" class="scroller"><div></div></div>
+        <div id="grid" class="scroller"><div></div></div>
+        """,
+        wait_until="domcontentloaded",
+    )
+    both_edges = await page.evaluate(
+        """() => ["block", "flex", "grid"].map(id => {
+          const scroller = document.getElementById(id);
+          const child = scroller.firstElementChild;
+          return [
+            scroller.clientWidth, scroller.clientHeight,
+            child.offsetWidth, child.offsetHeight,
+          ];
+        })"""
+    )
+    assert_equal(
+        both_edges,
+        [[170, 85, 170, 85], [170, 85, 170, 85], [170, 85, 170, 85]],
+        "both-edge horizontal gutter participates in block/flex/grid numeric layout",
+    )
+
+    await page.set_content(
+        """
+        <!doctype html>
+        <style>
+          html { margin: 0; overflow: visible; }
+          body { margin: 0; overflow: hidden; }
+          main { height: 1200px; }
+        </style>
+        <main></main>
+        """,
+        wait_until="domcontentloaded",
+    )
+
+    async def wheel(delta_y: int) -> None:
+        await cdp.send(
+            "Input.dispatchMouseEvent",
+            {
+                "type": "mouseWheel",
+                "x": 10,
+                "y": 10,
+                "deltaX": 0,
+                "deltaY": delta_y,
+            },
+        )
+
+    hidden_before = await page.evaluate(
+        """() => {
+          scrollTo(0, 0);
+          return [
+            document.documentElement.clientWidth,
+            document.documentElement.scrollHeight,
+            scrollY,
+          ];
+        }"""
+    )
+    assert_equal(hidden_before, [800, 1200, 0], "body hidden propagates to viewport")
+    await wheel(80)
+    await page.wait_for_timeout(100)
+    hidden_wheel = await page.evaluate("() => scrollY")
+    assert_equal(hidden_wheel, 0, "body hidden disables user viewport scrolling")
+    hidden_script = await page.evaluate("() => { scrollTo(0, 100); return scrollY; }")
+    assert_equal(hidden_script, 100, "body hidden retains script viewport scrolling")
+
+    auto_width = await page.evaluate(
+        """() => {
+          document.body.style.overflow = "auto";
+          scrollTo(0, 0);
+          return document.documentElement.clientWidth;
+        }"""
+    )
+    assert_equal(auto_width, 785, "body auto exposes the viewport scrollbar")
+    await wheel(80)
+    await page.wait_for_function("() => scrollY > 0", timeout=2_000)
+    auto_wheel = await page.evaluate("() => scrollY")
+    assert_equal(auto_wheel, 80, "body auto permits user viewport scrolling")
+
+    clip_width = await page.evaluate(
+        """() => {
+          document.body.style.overflow = "clip";
+          void document.documentElement.clientWidth;
+          scrollTo(0, 100);
+          return document.documentElement.clientWidth;
+        }"""
+    )
+    assert_equal(clip_width, 800, "body clip maps to hidden at the viewport")
+    await wheel(80)
+    await page.wait_for_timeout(100)
+    clip_wheel = await page.evaluate("() => scrollY")
+    assert_equal(clip_wheel, 100, "clip-derived viewport disables user scrolling")
+
+    await page.set_content(
+        """
+        <!doctype html>
+        <style>
+          html { margin: 0; overflow: visible; scrollbar-gutter: stable; }
+          body { margin: 0; }
+        </style>
+        """,
+        wait_until="domcontentloaded",
+    )
+
+    async def root_gutter_metrics() -> list[float]:
+        return await page.evaluate(
+            """() => {
+              const html = document.documentElement.getBoundingClientRect();
+              const body = document.body.getBoundingClientRect();
+              return [
+                document.documentElement.clientWidth,
+                html.x, html.width, body.x, body.width,
+              ];
+            }"""
+        )
+
+    stable = await root_gutter_metrics()
+    assert_equal(stable, [800, 0, 785, 0, 785], "default-visible root stable gutter")
+    await page.evaluate(
+        "() => { document.documentElement.style.scrollbarGutter = 'stable both-edges'; }"
+    )
+    await page.screenshot()
+    both_edge_root = await root_gutter_metrics()
+    assert_equal(
+        both_edge_root,
+        [800, 15, 770, 15, 770],
+        "default-visible root stable both-edge gutters",
+    )
+
+    await page.set_content(
+        """
+        <!doctype html>
+        <style>
+          html { margin: 0; overflow: visible; }
+          body { display: contents; overflow: scroll; }
+        </style>
+        """,
+        wait_until="domcontentloaded",
+    )
+    display_contents_width = await page.evaluate(
+        "() => document.documentElement.getBoundingClientRect().width"
+    )
+    assert_equal(
+        display_contents_width,
+        800,
+        "display:contents body does not propagate overflow to viewport",
+    )
+    await page.evaluate("() => { document.body.style.display = 'block'; }")
+    await page.screenshot()
+    principal_body_width = await page.evaluate(
+        "() => document.documentElement.getBoundingClientRect().width"
+    )
+    assert_equal(
+        principal_body_width,
+        785,
+        "principal body propagates overflow:scroll to viewport",
+    )
+
+    state.record(
+        "viewport_overflow_policy_and_numeric_scrollbar_gutters",
+        {
+            "engine": "moli" if is_moli else "chromium",
+            "bothEdges": both_edges,
+            "bodyHidden": [hidden_before, hidden_wheel, hidden_script],
+            "bodyAuto": [auto_width, auto_wheel],
+            "bodyClip": [clip_width, clip_wheel],
+            "rootStable": stable,
+            "rootBothEdges": both_edge_root,
+            "displayContentsBody": display_contents_width,
+            "principalBody": principal_body_width,
         },
     )

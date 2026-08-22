@@ -167,6 +167,17 @@ Covered well:
 - Chromium-derived proxy authentication coverage uses a real local proxy and per-browser-context proxy configuration. HTTP Basic authentication must expose the initial unauthenticated target request headers and final `200` response through ExtraInfo without leaking `Proxy-Authorization`; an HTTPS `CONNECT` challenge canceled through Fetch must expose proxy origin, a `407` response with `hasExtraInfo=false`, and `Network.loadingFailed` without treating CONNECT headers as target-request ExtraInfo.
 - Parser-discovered external script, link stylesheet, and parser-created `@import` stylesheet observation plus `Network.getResponseBody`; configured `20,000,000 / 2,000,000` inspector-cache budgets retain a small body while a `2,000,001`-byte body keeps its request identity and repeatedly returns the inspector-cache eviction error.
 - Classic WebSocket echo, WebSocket `Network.webSocket*` events, and blocked WebSocket handshake behavior.
+- The focused `classic-scrollbar` group compares Chromium and Moli for
+  block/flex/grid `stable both-edges` numeric sizing, default-visible root
+  stable gutters, body hidden/auto/clip viewport overflow propagation,
+  `overflow-body-propagation-003`'s `display:contents` exclusion, and an overlay
+  that occludes a lower painted scrollbar. It also verifies Moli's consume-only
+  scrollbar corner and screenshot-triggered layout freshness.
+  The final workflow was calibrated on 2026-08-22 against the headed Xvfb
+  build `~/chromium/src/out/Default/chrome` (`Chrome/147.0.7709.0`) and then
+  passed unchanged against Moli. Chromium/Xvfb routes raw-CDP clicks on its
+  native scrollbar corner through DOM input, so only that control-consumption
+  assertion remains Moli-specific.
 - Chromium-calibrated transformed-iframe input routing through raw CDP: exact
   used child viewports, hover/click/wheel targets and child-local coordinates,
   overflow-container scrolling, focus chains, and cross-frame mouseout

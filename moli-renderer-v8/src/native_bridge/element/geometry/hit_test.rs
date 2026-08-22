@@ -1,7 +1,11 @@
 use moli_layout::{
-    FrozenLayoutTree, LayoutError, LayoutFlushReason, LayoutHit, LayoutPoint, LayoutQuery,
-    LayoutQueryAnswer, LayoutQueryBatch, LayoutScrollbarHit, LayoutTransform2D, LayoutViewport,
+    FrozenLayoutTree, LayoutControlSurfaceHit, LayoutError, LayoutFlushReason, LayoutHit,
+    LayoutPaintedSurfaceHit, LayoutPoint, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch,
+    LayoutTransform2D, LayoutViewport,
 };
+
+#[cfg(test)]
+use moli_layout::LayoutScrollbarHit;
 
 use super::provider::{
     observable_geometry_batch, observable_hit_test_all, provider_contract_error,
@@ -22,7 +26,7 @@ pub(crate) struct InputHit {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct InputSurfaceHit {
     pub(crate) input: Option<InputHit>,
-    pub(crate) scrollbar: Option<LayoutScrollbarHit<DomHandle>>,
+    pub(crate) control: Option<LayoutControlSurfaceHit<DomHandle>>,
 }
 
 #[derive(Clone, Copy)]
@@ -85,8 +89,12 @@ pub(crate) fn observable_scrollbar_hit_test(
     document: DomHandle,
     point: LayoutPoint,
 ) -> Result<Option<LayoutScrollbarHit<DomHandle>>, LayoutError> {
-    observable_input_surface_hit_test(runtime, document, point, false, true)
-        .map(|hit| hit.scrollbar)
+    observable_input_surface_hit_test(runtime, document, point, false, true).map(|hit| {
+        match hit.control {
+            Some(LayoutControlSurfaceHit::Scrollbar(scrollbar)) => Some(scrollbar),
+            Some(LayoutControlSurfaceHit::ScrollbarCorner(_)) | None => None,
+        }
+    })
 }
 
 pub(crate) fn observable_input_surface_hit_test(
@@ -100,7 +108,7 @@ pub(crate) fn observable_input_surface_hit_test(
         return input_hit_test_via_documents(runtime, document, point, ignore_pointer_events_none)
             .map(|input| InputSurfaceHit {
                 input,
-                scrollbar: None,
+                control: None,
             });
     }
 
@@ -187,17 +195,42 @@ fn input_surface_hit_test_in_tree(
     include_scrollbars: bool,
     depth: usize,
 ) -> InputSurfaceHit {
-    if include_scrollbars && let Some(mut scrollbar) = tree.scrollbar_hit_test(point) {
-        scrollbar.viewport_to_local = scrollbar.viewport_to_local.concatenate(root_to_frame);
-        return InputSurfaceHit {
-            input: None,
-            scrollbar: Some(scrollbar),
-        };
-    }
-
-    let Some((layout_hit, target)) =
+    let live_dom_hit = if include_scrollbars {
+        let mut live_dom_hit = None;
+        for surface in tree.painted_surface_hits(point, ignore_pointer_events_none) {
+            match surface {
+                LayoutPaintedSurfaceHit::Control(mut control) => {
+                    match &mut control {
+                        LayoutControlSurfaceHit::Scrollbar(hit) => {
+                            hit.viewport_to_local =
+                                hit.viewport_to_local.concatenate(root_to_frame);
+                        }
+                        LayoutControlSurfaceHit::ScrollbarCorner(hit) => {
+                            hit.viewport_to_local =
+                                hit.viewport_to_local.concatenate(root_to_frame);
+                        }
+                    }
+                    return InputSurfaceHit {
+                        input: None,
+                        control: Some(control),
+                    };
+                }
+                LayoutPaintedSurfaceHit::Dom(layout_hit) => {
+                    let Some(target) = element_for_hit_source(runtime, layout_hit.source) else {
+                        continue;
+                    };
+                    if runtime.dom_host().is_connected(target) {
+                        live_dom_hit = Some((layout_hit, target));
+                        break;
+                    }
+                }
+            }
+        }
+        live_dom_hit
+    } else {
         live_hit_in_tree(runtime, tree, point, ignore_pointer_events_none)
-    else {
+    };
+    let Some((layout_hit, target)) = live_dom_hit else {
         return InputSurfaceHit::default();
     };
     let target_hit = InputHit {
@@ -207,13 +240,13 @@ fn input_surface_hit_test_in_tree(
     if depth >= CHILD_FRAME_DEPTH_LIMIT {
         return InputSurfaceHit {
             input: Some(target_hit),
-            scrollbar: None,
+            control: None,
         };
     }
     let Some(child_tree) = tree.embedded_frame_tree(target) else {
         return InputSurfaceHit {
             input: Some(target_hit),
-            scrollbar: None,
+            control: None,
         };
     };
     if runtime
@@ -222,19 +255,19 @@ fn input_surface_hit_test_in_tree(
     {
         return InputSurfaceHit {
             input: Some(target_hit),
-            scrollbar: None,
+            control: None,
         };
     }
     let Some(content_box) = layout_hit.local_content_box else {
         return InputSurfaceHit {
             input: Some(target_hit),
-            scrollbar: None,
+            control: None,
         };
     };
     if !content_box.contains(layout_hit.local_point) {
         return InputSurfaceHit {
             input: Some(target_hit),
-            scrollbar: None,
+            control: None,
         };
     }
     let frame_to_child = LayoutTransform2D::translation(-content_box.x, -content_box.y)
@@ -248,12 +281,12 @@ fn input_surface_hit_test_in_tree(
         include_scrollbars,
         depth + 1,
     );
-    if child_hit.input.is_some() || child_hit.scrollbar.is_some() {
+    if child_hit.input.is_some() || child_hit.control.is_some() {
         child_hit
     } else {
         InputSurfaceHit {
             input: Some(target_hit),
-            scrollbar: None,
+            control: None,
         }
     }
 }

@@ -212,6 +212,13 @@ where
 {
     let started = Instant::now();
     let mut world = build_layout_world(source, styles)?;
+    debug_assert!(
+        world
+            .viewport_scroll_policy
+            .defining_body()
+            .is_none_or(|body| world.box_by_id(body).is_some()),
+        "viewport policy must retain only a live pass-local body box identity"
+    );
     prepare_list_markers(&mut world);
     prepare_form_controls(&mut world);
     prepare_inline_contexts(&mut world, services);
@@ -276,27 +283,46 @@ fn compute_world_layout_with_scrollbars<N>(
 ) where
     N: Copy + std::fmt::Debug + Eq + std::hash::Hash,
 {
-    let root = world.root.index();
+    let root_id = world.root;
+    let root = root_id.index();
+    let defining_body = world.viewport_scroll_policy.defining_body();
+    world.viewport_scroll_policy.prepare_scrollbar_layout();
     for (index, layout_box) in world.boxes.iter_mut().enumerate() {
-        layout_box.style.prepare_scrollbar_layout(index == root);
+        let id = crate::LayoutBoxId::from_index(index);
+        if id == root_id {
+            layout_box.style.prepare_viewport_root_layout();
+        } else if defining_body == Some(id) {
+            layout_box.style.prepare_viewport_defining_body_layout();
+        } else {
+            layout_box.style.prepare_scrollbar_layout(false);
+        }
     }
 
     loop {
         compute_world_layout(world, viewport);
         let overflow = overflowing_axes(world, viewport);
-        let mut changed = false;
+        let (root_overflow_x, root_overflow_y) = overflow[root];
+        let mut changed = world
+            .viewport_scroll_policy
+            .reveal_auto_scrollbar(LayoutScrollbarAxis::Horizontal, root_overflow_x);
+        changed |= world
+            .viewport_scroll_policy
+            .reveal_auto_scrollbar(LayoutScrollbarAxis::Vertical, root_overflow_y);
         for (index, ((overflow_x, overflow_y), layout_box)) in
             overflow.into_iter().zip(world.boxes.iter_mut()).enumerate()
         {
-            let is_root = index == root;
+            let id = crate::LayoutBoxId::from_index(index);
+            if id == root_id || defining_body == Some(id) {
+                continue;
+            }
             changed |= layout_box.style.reveal_auto_scrollbar(
                 LayoutScrollbarAxis::Horizontal,
-                is_root,
+                false,
                 overflow_x,
             );
             changed |= layout_box.style.reveal_auto_scrollbar(
                 LayoutScrollbarAxis::Vertical,
-                is_root,
+                false,
                 overflow_y,
             );
         }
@@ -325,6 +351,10 @@ where
                     // The synthetic initial containing block already places
                     // the root and its descendants after a root leading
                     // gutter.
+                    0.0
+                } else if world.is_viewport_defining_body(parent) {
+                    // This body's overflow/gutter has transferred to the
+                    // viewport and must not shift its own children.
                     0.0
                 } else {
                     world.boxes[parent.index()]

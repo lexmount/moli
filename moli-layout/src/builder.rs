@@ -16,7 +16,9 @@ use crate::{
     LayoutAnonymousReason, LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic, LayoutDisplay,
     LayoutElementCategory, LayoutElementSemantics, LayoutError, LayoutPseudo, LayoutSource,
     LayoutSourceKind, LayoutStyleResolver, LayoutWorld, ResolvedLayoutStyle,
-    replaced::ReplacedContext, style::InlineWhiteSpaceCollapse,
+    replaced::ReplacedContext,
+    style::{InlineWhiteSpaceCollapse, LayoutOverflowMode},
+    world::{ViewportDefiningBox, ViewportScrollPolicy},
 };
 use style::values::generics::image::GenericImage;
 
@@ -43,6 +45,9 @@ where
     seen_sources: HashMap<S::NodeId, String>,
     seen_css_images: HashSet<(S::NodeId, String)>,
     css_image_references: Vec<crate::LayoutCssImageReference<S::NodeId>>,
+    source_root: Option<S::NodeId>,
+    root_is_html: bool,
+    viewport_body_candidate: Option<ViewportBodyCandidate<S::NodeId>>,
 }
 
 impl<'a, S, R> BoxBuilder<'a, S, R>
@@ -58,6 +63,9 @@ where
             seen_sources: HashMap::new(),
             seen_css_images: HashSet::new(),
             css_image_references: Vec::new(),
+            source_root: None,
+            root_is_html: false,
+            viewport_body_candidate: None,
         }
     }
 
@@ -81,6 +89,8 @@ where
             ));
         }
         let root_semantics = self.validated_element_semantics(source_root, source_kind)?;
+        self.source_root = Some(source_root);
+        self.root_is_html = root_semantics.is_html_element("html");
         let Some(mut root_style) = self.styles.primary_style(source_root)? else {
             return Err(LayoutError::MissingRootStyle { source_label });
         };
@@ -136,6 +146,7 @@ where
         }
 
         world.compact_reachable();
+        self.finalize_viewport_scroll_policy(&mut world);
         world.validate_invariants()?;
         world.css_image_references = self.css_image_references;
         Ok(world)
@@ -217,6 +228,19 @@ where
             let Some(mut style) = self.styles.primary_style(source_node)? else {
                 return Ok(Vec::new());
             };
+            if self.viewport_body_candidate.is_none()
+                && self.root_is_html
+                && self
+                    .source_root
+                    .is_some_and(|root| self.source.flat_parent(source_node) == Some(root))
+                && semantics.is_html_element("body")
+            {
+                self.viewport_body_candidate = Some(ViewportBodyCandidate {
+                    source: source_node,
+                    overflow: style.overflow_modes(),
+                    blocks_propagation: style.applies_any_viewport_containment(),
+                });
+            }
             let metrics = self.source.replaced_metrics(source_node);
             if semantics.is_replaced() {
                 style.mark_replaced(natural_replaced_ratio(&semantics, metrics));
@@ -266,6 +290,47 @@ where
 
         self.active_sources.remove(&source_node);
         result
+    }
+
+    /// Converts the construction-only body candidate into the final viewport
+    /// policy before the world crosses into numeric layout. No body computed
+    /// style is retained by `LayoutWorld`.
+    fn finalize_viewport_scroll_policy(&self, world: &mut LayoutWorld<S::NodeId>) {
+        let root = world.root;
+        let root_style = &world.boxes[root.index()].style;
+        let body_box = self
+            .viewport_body_candidate
+            .as_ref()
+            .and_then(|body| world.source_box(body.source));
+        let body_can_define_viewport = self.root_is_html
+            && root_style.overflow_is_visible_along_both_axes()
+            && !root_style.applies_any_viewport_containment()
+            && body_box.is_some()
+            && self
+                .viewport_body_candidate
+                .as_ref()
+                .is_some_and(|body| !body.blocks_propagation);
+        let (defining_box, overflow) = if body_can_define_viewport {
+            let body = self
+                .viewport_body_candidate
+                .as_ref()
+                .expect("body viewport policy requires a candidate");
+            (
+                ViewportDefiningBox::Body(
+                    body_box.expect("body viewport policy requires a principal box"),
+                ),
+                body.overflow,
+            )
+        } else {
+            (ViewportDefiningBox::Root, root_style.overflow_modes())
+        };
+        world.viewport_scroll_policy = ViewportScrollPolicy::new(
+            defining_box,
+            overflow.map(LayoutOverflowMode::for_viewport),
+            root_style.viewport_scrollbar_width(),
+            root_style.viewport_scrollbar_gutter(),
+            root_style.scrollbar_colors(),
+        );
     }
 
     fn principal_box(
@@ -1209,6 +1274,13 @@ where
         }
         Ok(())
     }
+}
+
+/// Minimal construction-time snapshot for the first HTML body child.
+struct ViewportBodyCandidate<N> {
+    source: N,
+    overflow: [LayoutOverflowMode; 2],
+    blocks_propagation: bool,
 }
 
 fn natural_replaced_ratio(

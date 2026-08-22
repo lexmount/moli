@@ -50,11 +50,12 @@ pub use layout_tree::{
     LayoutClipChainId, LayoutClipNode, LayoutCoordinateSpaceId, LayoutCssImageReference,
     LayoutDocumentMetrics, LayoutElementMetrics, LayoutFlushReason, LayoutFragment,
     LayoutFragmentBoxModel, LayoutFragmentId, LayoutFragmentKind, LayoutHit,
-    LayoutIntersectionGeometry, LayoutNodeOutput, LayoutOutputBoxId, LayoutPassMetrics,
-    LayoutPassResult, LayoutPoint, LayoutQuad, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch,
-    LayoutRect, LayoutScrollContainerMetrics, LayoutScrollExtent, LayoutScrollIntoViewGeometry,
-    LayoutSize, LayoutTransform2D, LayoutTreeRetentionMetrics, LayoutViewport,
-    MAX_RETAINED_LAYOUT_BOXES, MAX_RETAINED_LAYOUT_FRAGMENTS, MAX_RETAINED_LAYOUT_TREE_BYTES,
+    LayoutIntersectionGeometry, LayoutNodeOutput, LayoutOutputBoxId, LayoutPaintedSurfaceHit,
+    LayoutPassMetrics, LayoutPassResult, LayoutPoint, LayoutQuad, LayoutQuery, LayoutQueryAnswer,
+    LayoutQueryBatch, LayoutRect, LayoutScrollContainerMetrics, LayoutScrollExtent,
+    LayoutScrollIntoViewGeometry, LayoutSize, LayoutTransform2D, LayoutTreeRetentionMetrics,
+    LayoutViewport, MAX_RETAINED_LAYOUT_BOXES, MAX_RETAINED_LAYOUT_FRAGMENTS,
+    MAX_RETAINED_LAYOUT_TREE_BYTES,
 };
 pub use normalize::{NormalizedBoxNode, NormalizedBoxTree, NormalizedFormattingContext};
 pub use normalize_source::{
@@ -65,8 +66,9 @@ pub use pass::{
     build_layout_pass, build_layout_pass_with_embedded_frames, build_screenshot_snapshot,
 };
 pub use scrollbar::{
-    LayoutScrollbarAxis, LayoutScrollbarColors, LayoutScrollbarGeometry, LayoutScrollbarGutter,
-    LayoutScrollbarHit, LayoutScrollbarPart, LayoutScrollbarWidth,
+    LayoutControlSurfaceHit, LayoutScrollbarAxis, LayoutScrollbarColors, LayoutScrollbarCornerHit,
+    LayoutScrollbarGeometry, LayoutScrollbarGutter, LayoutScrollbarHit, LayoutScrollbarPart,
+    LayoutScrollbarWidth,
 };
 pub use snapshot::{
     PaintBlendMode, PaintBorderColors, PaintBorderStyle, PaintBorderStyles, PaintBoxShadow,

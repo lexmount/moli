@@ -165,7 +165,7 @@ PAGE_GROUPS: tuple[SmokeGroup, ...] = (
     ),
     SmokeGroup(
         "classic-scrollbar",
-        "Cross-engine classic scrollbar layout, paint, and raw CDP thumb dragging.",
+        "Cross-engine classic scrollbar layout, viewport overflow policy, paint-ordered controls, and raw CDP input.",
         "page",
         run_classic_scrollbar_group,
     ),

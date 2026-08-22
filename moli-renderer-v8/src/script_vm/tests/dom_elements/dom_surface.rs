@@ -1191,6 +1191,281 @@ fn classic_scrollbar_metrics_and_thumb_drag_match_chromium_without_dom_mouse_eve
 }
 
 #[test]
+fn painted_overlay_wins_over_scrollbar_and_corner_consumes_input() {
+    let mut vm = new_storage_test_vm("https://painted-scrollbar-surface.test/");
+    vm.eval(
+        r#"
+        (() => {
+          if (!document.documentElement) {
+            document.appendChild(document.createElement("html"));
+          }
+          if (!document.body) {
+            document.documentElement.appendChild(document.createElement("body"));
+          }
+          document.documentElement.style.margin = "0";
+          document.body.style.margin = "0";
+          document.body.innerHTML = `
+            <div id="scroller" style="position:absolute;left:20px;top:20px;width:200px;height:100px;overflow:scroll">
+              <div style="width:400px;height:300px"></div>
+            </div>
+            <div id="overlay" style="position:absolute;left:200px;top:20px;width:40px;height:100px;z-index:10"></div>`;
+          window.__paintedSurfaceEvents = [];
+          for (const name of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
+            document.addEventListener(name, event => {
+              window.__paintedSurfaceEvents.push(`${name}:${event.target.id || event.target.localName}`);
+            }, true);
+          }
+        })()
+        "#,
+    )
+    .expect("painted surface fixture should initialize");
+    refresh_layout_for_test(&mut vm);
+    vm.eval("scroller.scrollTop = 80")
+        .expect("scroller should move before the overlay probe");
+
+    vm.dispatch_mouse_event_at_point(210.0, 30.0, "mousedown", 0, Some(1), 0.0, 0.0)
+        .expect("overlay press should dispatch");
+    vm.dispatch_mouse_event_at_point(210.0, 30.0, "mouseup", 0, Some(0), 0.0, 0.0)
+        .expect("overlay release should dispatch");
+    assert_eq!(
+        vm.eval("JSON.stringify([scroller.scrollTop, __paintedSurfaceEvents])")
+            .expect("overlay result should evaluate"),
+        r#"[80,["pointerdown:overlay","mousedown:overlay","pointerup:overlay","mouseup:overlay","click:overlay"]]"#,
+        "a higher painted sibling must occlude the scrollbar beneath it"
+    );
+
+    vm.eval(
+        r#"
+        overlay.style.display = "none";
+        window.__paintedSurfaceEvents.length = 0;
+        "#,
+    )
+    .expect("overlay should be removed before the corner probe");
+    refresh_layout_for_test(&mut vm);
+    let corner = vm
+        ._context_host
+        .borrow()
+        .with_latest_layout_tree_for_document(vm.document_runtime.document_handle(), |tree| {
+            tree.control_surface_hit_test(moli_layout::LayoutPoint::new(210.0, 110.0))
+        })
+        .flatten();
+    assert!(
+        matches!(
+            corner,
+            Some(moli_layout::LayoutControlSurfaceHit::ScrollbarCorner(_))
+        ),
+        "the painted lower-right scrollbar corner should be an input surface: {corner:?}"
+    );
+
+    vm.dispatch_mouse_event_at_point(210.0, 110.0, "mousedown", 0, Some(1), 0.0, 0.0)
+        .expect("corner press should be consumed");
+    vm.dispatch_mouse_event_at_point(210.0, 110.0, "mouseup", 0, Some(0), 0.0, 0.0)
+        .expect("corner release should be consumed");
+    assert_eq!(
+        vm.eval("JSON.stringify([scroller.scrollTop, __paintedSurfaceEvents])")
+            .expect("corner result should evaluate"),
+        "[80,[]]",
+        "the UA scrollbar corner must not fall through into DOM dispatch"
+    );
+}
+
+#[test]
+fn body_overflow_defines_viewport_scrolling_and_default_root_stable_gutters() {
+    let mut vm = new_storage_test_vm("https://viewport-overflow-policy.test/");
+    vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+        inner_width: 800,
+        inner_height: 600,
+        outer_width: 800,
+        outer_height: 600,
+        device_pixel_ratio: 1.0,
+        screen_width: 800,
+        screen_height: 600,
+        screen_avail_width: 800,
+        screen_avail_height: 600,
+    }))
+    .expect("viewport overflow surface should update");
+    vm.eval(
+        r#"
+        (() => {
+          if (!document.documentElement) {
+            document.appendChild(document.createElement("html"));
+          }
+          if (!document.body) {
+            document.documentElement.appendChild(document.createElement("body"));
+          }
+          document.documentElement.style.cssText = "margin:0;overflow:visible";
+          document.body.style.cssText = "margin:0;overflow:hidden";
+          document.body.innerHTML = '<main id="content" style="height:1200px"></main>';
+        })()
+        "#,
+    )
+    .expect("viewport overflow fixture should initialize");
+    refresh_layout_for_test(&mut vm);
+    assert_eq!(
+        vm.eval(
+            "JSON.stringify([document.documentElement.clientWidth, document.documentElement.scrollHeight, scrollY])"
+        )
+        .expect("hidden viewport metrics should evaluate"),
+        "[800,1200,0]"
+    );
+
+    vm.dispatch_mouse_event_at_point(10.0, 10.0, "wheel", -1, Some(0), 0.0, 80.0)
+        .expect("hidden viewport wheel should dispatch without scrolling");
+    assert_eq!(
+        vm.eval("String(scrollY)")
+            .expect("hidden viewport wheel result should evaluate"),
+        "0"
+    );
+    vm.eval("scrollTo(0, 100)")
+        .expect("hidden viewport should remain script-scrollable");
+    assert_eq!(
+        vm.eval("String(scrollY)")
+            .expect("hidden programmatic scroll should evaluate"),
+        "100"
+    );
+
+    vm.eval("document.body.style.overflow = 'auto'; scrollTo(0, 0)")
+        .expect("body auto should become the viewport policy");
+    refresh_layout_for_test(&mut vm);
+    assert_eq!(
+        vm.eval("String(document.documentElement.clientWidth)")
+            .expect("auto viewport width should evaluate"),
+        "785"
+    );
+    vm.dispatch_mouse_event_at_point(10.0, 10.0, "wheel", -1, Some(0), 0.0, 80.0)
+        .expect("auto viewport wheel should scroll");
+    assert_eq!(
+        vm.eval("String(scrollY)")
+            .expect("auto viewport wheel result should evaluate"),
+        "80"
+    );
+
+    vm.eval("document.body.style.overflow = 'clip'")
+        .expect("body clip should become hidden at the viewport boundary");
+    refresh_layout_for_test(&mut vm);
+    vm.eval("scrollTo(0, 100)")
+        .expect("clip-derived viewport should remain script-scrollable");
+    vm.dispatch_mouse_event_at_point(10.0, 10.0, "wheel", -1, Some(0), 0.0, 80.0)
+        .expect("clip-derived viewport wheel should not scroll");
+    assert_eq!(
+        vm.eval("JSON.stringify([document.documentElement.clientWidth, scrollY])")
+            .expect("clip-derived viewport result should evaluate"),
+        "[800,100]"
+    );
+
+    vm.eval(
+        r#"
+        document.documentElement.style.cssText =
+          "margin:0;overflow:visible;scrollbar-gutter:stable";
+        document.body.style.cssText = "margin:0;overflow:visible";
+        document.body.innerHTML = "";
+        "#,
+    )
+    .expect("stable viewport gutter fixture should initialize");
+    refresh_layout_for_test(&mut vm);
+    assert_eq!(
+        vm.eval(
+            r#"
+            JSON.stringify((() => {
+              const html = document.documentElement.getBoundingClientRect();
+              const body = document.body.getBoundingClientRect();
+              return [document.documentElement.clientWidth, html.x, html.width, body.x, body.width];
+            })())
+            "#,
+        )
+        .expect("default-visible stable viewport gutter should evaluate"),
+        "[800,0,785,0,785]"
+    );
+
+    vm.eval("document.documentElement.style.scrollbarGutter = 'stable both-edges'")
+        .expect("both-edge stable gutter should apply");
+    refresh_layout_for_test(&mut vm);
+    assert_eq!(
+        vm.eval(
+            r#"
+            JSON.stringify((() => {
+              const html = document.documentElement.getBoundingClientRect();
+              const body = document.body.getBoundingClientRect();
+              return [document.documentElement.clientWidth, html.x, html.width, body.x, body.width];
+            })())
+            "#,
+        )
+        .expect("default-visible both-edge viewport gutter should evaluate"),
+        "[800,15,770,15,770]"
+    );
+
+    vm.eval(
+        r#"
+        document.documentElement.style.cssText = "margin:0;overflow:visible";
+        document.body.style.cssText = "display:contents;overflow:scroll";
+        document.body.innerHTML = "";
+        "#,
+    )
+    .expect("display-contents body fixture should initialize");
+    refresh_layout_for_test(&mut vm);
+    assert_eq!(
+        vm.eval("String(document.documentElement.getBoundingClientRect().width)")
+            .expect("display-contents viewport width should evaluate"),
+        "800",
+        "overflow-body-propagation-003: a body without a principal box cannot define the viewport"
+    );
+
+    vm.eval("document.body.style.display = 'block'")
+        .expect("principal body fixture should initialize");
+    refresh_layout_for_test(&mut vm);
+    assert_eq!(
+        vm.eval("String(document.documentElement.getBoundingClientRect().width)")
+            .expect("principal-body viewport width should evaluate"),
+        "785",
+        "a principal body with overflow:scroll must define the viewport"
+    );
+}
+
+#[test]
+fn stable_both_edges_horizontal_bar_sizes_percentage_children_in_numeric_layout() {
+    let mut vm = new_storage_test_vm("https://both-edges-numeric-layout.test/");
+    vm.eval(
+        r#"
+        (() => {
+          if (!document.documentElement) {
+            document.appendChild(document.createElement("html"));
+          }
+          if (!document.body) {
+            document.documentElement.appendChild(document.createElement("body"));
+          }
+          document.documentElement.style.margin = "0";
+          document.body.style.margin = "0";
+          document.body.innerHTML = ["block", "flex", "grid"].map(display => `
+            <div id="${display}" style="display:${display};width:200px;height:100px;overflow:scroll;scrollbar-gutter:stable both-edges">
+              <div style="width:100%;height:100%"></div>
+            </div>`).join("");
+        })()
+        "#,
+    )
+    .expect("both-edge numeric layout fixture should initialize");
+    refresh_layout_for_test(&mut vm);
+
+    assert_eq!(
+        vm.eval(
+            r#"
+            JSON.stringify(["block", "flex", "grid"].map(id => {
+              const scroller = document.getElementById(id);
+              const child = scroller.firstElementChild;
+              return [
+                scroller.clientWidth,
+                scroller.clientHeight,
+                child.offsetWidth,
+                child.offsetHeight,
+              ];
+            }))
+            "#,
+        )
+        .expect("both-edge numeric layout metrics should evaluate"),
+        "[[170,85,170,85],[170,85,170,85],[170,85,170,85]]"
+    );
+}
+
+#[test]
 fn nested_and_sibling_scrollbar_drags_stay_bound_to_the_pressed_scroller() {
     let mut vm = new_storage_test_vm("https://nested-classic-scrollbar-input.test/");
     vm.eval(

@@ -49,11 +49,15 @@ where
     world.viewport_layout.cache.clear();
     world.viewport_layout.unrounded_layout = Layout::with_order(0);
     world.viewport_layout.final_layout = Layout::with_order(0);
-    let root_style = &world.boxes[world.root.index()].style;
-    let vertical_gutter = root_style.scrollbar_gutter_thickness(LayoutScrollbarAxis::Vertical);
-    let vertical_leading_gutter =
-        root_style.scrollbar_leading_gutter_thickness(LayoutScrollbarAxis::Vertical, true);
-    let horizontal_gutter = root_style.scrollbar_gutter_thickness(LayoutScrollbarAxis::Horizontal);
+    let vertical_gutter = world
+        .viewport_scroll_policy
+        .scrollbar_gutter_thickness(LayoutScrollbarAxis::Vertical);
+    let vertical_leading_gutter = world
+        .viewport_scroll_policy
+        .scrollbar_leading_gutter_thickness(LayoutScrollbarAxis::Vertical);
+    let horizontal_gutter = world
+        .viewport_scroll_policy
+        .scrollbar_gutter_thickness(LayoutScrollbarAxis::Horizontal);
     world.viewport_layout.style = Style {
         display: Display::Block,
         box_sizing: BoxSizing::BorderBox,
@@ -584,7 +588,9 @@ where
     let mut ancestor = world.boxes[id.index()].parent;
     while let Some(candidate) = ancestor {
         let layout_box = &world.boxes[candidate.index()];
-        if layout_box.style.establishes_scroll_container() {
+        if !world.is_viewport_defining_body(candidate)
+            && layout_box.style.establishes_scroll_container()
+        {
             let layout = layout_box.unrounded_layout;
             let origin = unrounded_global_origin(world, candidate);
             return Some(PaintRect::new(
@@ -1430,6 +1436,55 @@ where
     }
 
     fn compute_child_layout_uncached(
+        &mut self,
+        node_id: NodeId,
+        inputs: LayoutInput,
+        block_context: Option<&mut BlockContext<'_>>,
+    ) -> LayoutOutput {
+        let id = LayoutBoxId::from_taffy(node_id);
+        let horizontal_reservation = if id == self.root || self.boxes[id.index()].is_replaced() {
+            0.0
+        } else {
+            self.boxes[id.index()]
+                .style
+                .horizontal_scrollbar_layout_compensation()
+        };
+        if horizontal_reservation <= 0.0 {
+            return self.compute_child_layout_for_box(node_id, inputs, block_context);
+        }
+
+        // Taffy exposes one scalar scrollbar width for both axes. A
+        // `stable both-edges` box needs that scalar to reserve two vertical
+        // gutters, leaving no way to describe the single horizontal gutter.
+        // Adapt the container's numeric block-size input here: descendants,
+        // percentages, flex/grid tracks and intrinsic calculations all see
+        // the reduced scrollport, while the returned outer border-box keeps
+        // the size selected by the parent. The root uses the synthetic
+        // viewport's axis-specific borders and never enters this adapter.
+        let outer_known_height = inputs.known_dimensions.height;
+        let inputs = LayoutInput {
+            known_dimensions: inputs.known_dimensions.map_height(|height| {
+                height.map(|height| (height - horizontal_reservation).max(0.0))
+            }),
+            definite_dimensions: inputs.definite_dimensions.map_height(|height| {
+                height.map(|height| (height - horizontal_reservation).max(0.0))
+            }),
+            available_space: inputs.available_space.map_height(|height| match height {
+                AvailableSpace::Definite(height) => {
+                    AvailableSpace::Definite((height - horizontal_reservation).max(0.0))
+                }
+                AvailableSpace::MinContent => AvailableSpace::MinContent,
+                AvailableSpace::MaxContent => AvailableSpace::MaxContent,
+            }),
+            ..inputs
+        };
+        let mut output = self.compute_child_layout_for_box(node_id, inputs, block_context);
+        output.size.height =
+            outer_known_height.unwrap_or(output.size.height + horizontal_reservation);
+        output
+    }
+
+    fn compute_child_layout_for_box(
         &mut self,
         node_id: NodeId,
         inputs: LayoutInput,
