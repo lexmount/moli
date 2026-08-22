@@ -1559,6 +1559,93 @@ fn physical_scrollbar_insets_cover_box_intrinsic_ratio_and_vertical_writing_layo
 }
 
 #[test]
+fn vertical_block_flow_uses_writing_mode_instead_of_inline_direction_for_x_anchor() {
+    let mut vm = new_storage_test_vm("https://vertical-block-flow-anchor.test/");
+    vm.eval(
+        r#"
+        (() => {
+          if (!document.documentElement) {
+            document.appendChild(document.createElement("html"));
+          }
+          if (!document.body) {
+            document.documentElement.appendChild(document.createElement("body"));
+          }
+          document.documentElement.style.margin = "0";
+          document.body.style.margin = "0";
+          document.body.innerHTML = `
+            <style>
+              .case {
+                width: 200px;
+                height: 200px;
+                margin: 1px;
+                padding: 0;
+                border: 0;
+                overflow: auto;
+                scrollbar-gutter: stable;
+              }
+              .case > div { width: 300px; height: 300px; }
+              .vlr { writing-mode: vertical-lr; }
+              .vrl { writing-mode: vertical-rl; }
+              .thin { scrollbar-width: thin; }
+              .none { scrollbar-width: none; }
+              .rtl { direction: rtl; }
+              .boxed {
+                box-sizing: border-box;
+                width: 240px;
+                border-style: solid;
+                border-width: 0 4px 0 3px;
+                padding: 0 7px 0 11px;
+                scrollbar-width: none;
+              }
+              .boxed > div {
+                margin-left: 13px;
+                margin-right: 17px;
+                position: relative;
+                left: 5px;
+              }
+            </style>
+            <div id="vlr-auto" class="case vlr"><div></div></div>
+            <div id="vlr-thin" class="case vlr thin"><div></div></div>
+            <div id="vlr-none" class="case vlr none"><div></div></div>
+            <div id="vrl-auto" class="case vrl"><div></div></div>
+            <div id="vrl-thin" class="case vrl thin"><div></div></div>
+            <div id="vrl-none" class="case vrl none"><div></div></div>
+            <div id="vlr-rtl" class="case vlr rtl"><div></div></div>
+            <div id="vrl-rtl" class="case vrl rtl"><div></div></div>
+            <div id="boxed-vlr" class="case boxed vlr rtl"><div></div></div>
+            <div id="boxed-vrl" class="case boxed vrl"><div></div></div>`;
+        })()
+        "#,
+    )
+    .expect("vertical block-flow fixture should initialize");
+    refresh_layout_for_test(&mut vm);
+
+    assert_eq!(
+        vm.eval(
+            r#"
+            JSON.stringify([
+              "vlr-auto", "vlr-thin", "vlr-none",
+              "vrl-auto", "vrl-thin", "vrl-none",
+              "vlr-rtl", "vrl-rtl", "boxed-vlr", "boxed-vrl"
+            ].map(id => {
+              const container = document.getElementById(id);
+              const content = container.firstElementChild;
+              return [
+                container.offsetWidth,
+                container.clientWidth,
+                container.offsetLeft,
+                content.offsetLeft,
+                content.offsetWidth,
+              ];
+            }))
+            "#,
+        )
+        .expect("vertical block-flow metrics should evaluate"),
+        "[[200,185,1,1,300],[200,190,1,1,300],[200,200,1,1,300],[200,185,1,-114,300],[200,190,1,-109,300],[200,200,1,-99,300],[200,185,1,1,300],[200,185,1,-114,300],[240,233,1,33,300],[240,233,1,-82,300]]"
+    );
+}
+
+#[test]
 fn nested_and_sibling_scrollbar_drags_stay_bound_to_the_pressed_scroller() {
     let mut vm = new_storage_test_vm("https://nested-classic-scrollbar-input.test/");
     vm.eval(

@@ -128,6 +128,43 @@ pub(crate) enum InlineDirection {
     Rtl,
 }
 
+/// Physical block-flow direction retained at the Stylo/Taffy boundary.
+///
+/// Taffy currently has no writing-mode input, so its numeric algorithms run
+/// in horizontal-tb coordinates. Keeping the full authored mode here lets the
+/// browser adapter physicalize the result without confusing `vertical-lr`
+/// and `vertical-rl`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum LayoutWritingMode {
+    #[default]
+    HorizontalTb,
+    VerticalRl,
+    VerticalLr,
+}
+
+impl LayoutWritingMode {
+    const fn from_stylo(value: StyloWritingMode) -> Self {
+        match value {
+            StyloWritingMode::HorizontalTb => Self::HorizontalTb,
+            StyloWritingMode::VerticalRl => Self::VerticalRl,
+            StyloWritingMode::VerticalLr => Self::VerticalLr,
+        }
+    }
+
+    pub(crate) const fn is_horizontal(self) -> bool {
+        matches!(self, Self::HorizontalTb)
+    }
+
+    /// Physical edge used as block-start by vertical normal flow.
+    pub(crate) const fn vertical_block_start_is_right(self) -> Option<bool> {
+        match self {
+            Self::HorizontalTb => None,
+            Self::VerticalRl => Some(true),
+            Self::VerticalLr => Some(false),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum LayoutOverflowMode {
     #[default]
@@ -469,7 +506,7 @@ pub struct ResolvedLayoutStyle {
     text_transform: InlineTextTransform,
     text_align: parley::Alignment,
     direction: InlineDirection,
-    horizontal_writing_mode: bool,
+    writing_mode: LayoutWritingMode,
     unicode_bidi: InlineUnicodeBidi,
     vertical_align: InlineVerticalAlign,
     text_projection_deferred: bool,
@@ -524,7 +561,7 @@ impl std::fmt::Debug for ResolvedLayoutStyle {
             .field("text_transform", &self.text_transform)
             .field("text_align", &self.text_align)
             .field("direction", &self.direction)
-            .field("horizontal_writing_mode", &self.horizontal_writing_mode)
+            .field("writing_mode", &self.writing_mode)
             .field("unicode_bidi", &self.unicode_bidi)
             .field("vertical_align", &self.vertical_align)
             .field("text_projection_deferred", &self.text_projection_deferred)
@@ -615,8 +652,7 @@ impl ResolvedLayoutStyle {
             StyloDirection::Ltr => InlineDirection::Ltr,
             StyloDirection::Rtl => InlineDirection::Rtl,
         };
-        let horizontal_writing_mode =
-            computed.clone_writing_mode() == StyloWritingMode::HorizontalTb;
+        let writing_mode = LayoutWritingMode::from_stylo(computed.clone_writing_mode());
         let unicode_bidi = match computed.clone_unicode_bidi() {
             StyloUnicodeBidi::Normal => InlineUnicodeBidi::Normal,
             StyloUnicodeBidi::Embed => InlineUnicodeBidi::Embed,
@@ -841,7 +877,7 @@ impl ResolvedLayoutStyle {
             text_transform,
             text_align,
             direction,
-            horizontal_writing_mode,
+            writing_mode,
             unicode_bidi,
             vertical_align,
             text_projection_deferred,
@@ -917,7 +953,7 @@ impl ResolvedLayoutStyle {
             text_transform: InlineTextTransform::None,
             text_align: parley::Alignment::Start,
             direction: InlineDirection::Ltr,
-            horizontal_writing_mode: true,
+            writing_mode: LayoutWritingMode::HorizontalTb,
             unicode_bidi: InlineUnicodeBidi::Normal,
             vertical_align: InlineVerticalAlign::default(),
             text_projection_deferred: false,
@@ -1692,9 +1728,11 @@ impl ResolvedLayoutStyle {
             && self.scrollbar_gutter != LayoutScrollbarGutter::Auto
             && self.scrollbar_width != LayoutScrollbarWidth::None
         {
-            if self.horizontal_writing_mode && self.overflow_y.creates_scroll_container() {
+            if self.uses_horizontal_writing_mode() && self.overflow_y.creates_scroll_container() {
                 self.taffy.overflow.y = taffy::Overflow::Scroll;
-            } else if !self.horizontal_writing_mode && self.overflow_x.creates_scroll_container() {
+            } else if !self.uses_horizontal_writing_mode()
+                && self.overflow_x.creates_scroll_container()
+            {
                 self.taffy.overflow.x = taffy::Overflow::Scroll;
             }
         }
@@ -1839,7 +1877,7 @@ impl ResolvedLayoutStyle {
         }
 
         if self.scrollbar_gutter != LayoutScrollbarGutter::Auto {
-            if self.horizontal_writing_mode && self.overflow_y.creates_scroll_container() {
+            if self.uses_horizontal_writing_mode() && self.overflow_y.creates_scroll_container() {
                 if self.places_vertical_scrollbar_on_left(is_root) {
                     insets.left = thickness;
                     if self.scrollbar_gutter == LayoutScrollbarGutter::StableBothEdges {
@@ -1851,7 +1889,9 @@ impl ResolvedLayoutStyle {
                         insets.left = thickness;
                     }
                 }
-            } else if !self.horizontal_writing_mode && self.overflow_x.creates_scroll_container() {
+            } else if !self.uses_horizontal_writing_mode()
+                && self.overflow_x.creates_scroll_container()
+            {
                 insets.bottom = thickness;
                 if self.scrollbar_gutter == LayoutScrollbarGutter::StableBothEdges {
                     insets.top = thickness;
@@ -1862,11 +1902,15 @@ impl ResolvedLayoutStyle {
     }
 
     pub(crate) fn places_vertical_scrollbar_on_left(&self, is_root: bool) -> bool {
-        !is_root && self.horizontal_writing_mode && self.direction == InlineDirection::Rtl
+        !is_root && self.uses_horizontal_writing_mode() && self.direction == InlineDirection::Rtl
     }
 
     pub(crate) const fn uses_horizontal_writing_mode(&self) -> bool {
-        self.horizontal_writing_mode
+        self.writing_mode.is_horizontal()
+    }
+
+    pub(crate) const fn vertical_block_start_is_right(&self) -> Option<bool> {
+        self.writing_mode.vertical_block_start_is_right()
     }
 
     pub(crate) fn text_leaf_from(parent: &Self) -> Self {
@@ -1889,7 +1933,7 @@ impl ResolvedLayoutStyle {
             text_transform: parent.text_transform,
             text_align: parent.text_align,
             direction: parent.direction,
-            horizontal_writing_mode: parent.horizontal_writing_mode,
+            writing_mode: parent.writing_mode,
             unicode_bidi: InlineUnicodeBidi::Normal,
             vertical_align: parent.vertical_align,
             text_projection_deferred: parent.text_projection_deferred,
@@ -1955,7 +1999,7 @@ impl ResolvedLayoutStyle {
             text_transform: parent.text_transform,
             text_align: parent.text_align,
             direction: parent.direction,
-            horizontal_writing_mode: parent.horizontal_writing_mode,
+            writing_mode: parent.writing_mode,
             unicode_bidi: InlineUnicodeBidi::Normal,
             vertical_align: parent.vertical_align,
             text_projection_deferred: parent.text_projection_deferred,

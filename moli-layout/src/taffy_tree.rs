@@ -90,6 +90,7 @@ where
             height: AvailableSpace::Definite(viewport.css_height as f32),
         },
     );
+    physicalize_vertical_block_flow(world);
     finish_block_positioned_layout(world, viewport, &positioned_static_placeholders);
     finish_inline_positioned_layout(world, viewport);
     finish_form_control_contents(world);
@@ -106,6 +107,78 @@ where
         .collect::<Vec<_>>();
     for marker in outside_markers {
         round_layout_to_css_subpixels(world, marker.to_taffy());
+    }
+}
+
+/// Converts Taffy's horizontal block-start anchor into the physical edge used
+/// by a vertical writing mode.
+///
+/// Taffy deliberately has no writing-mode input yet. Its block algorithm does
+/// still produce the right border-box size, margins and physical relative
+/// inset, but it chooses the x anchor from CSS `direction`: left for LTR and
+/// right for RTL. In a vertical formatting context, direction controls the
+/// vertical inline axis instead; block-start is always left for `vertical-lr`
+/// and right for `vertical-rl`.
+///
+/// Apply this adapter immediately after numeric layout so positioned, sticky,
+/// scroll-overflow, CSSOM and paint all observe the same real box coordinates.
+/// The preserved delta carries any physical relative inset through unchanged.
+fn physicalize_vertical_block_flow<N>(world: &mut LayoutWorld<N>)
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    let mut adjusted_x = Vec::new();
+
+    for parent_index in 0..world.boxes.len() {
+        let parent = LayoutBoxId::from_index(parent_index);
+        let Some(block_start_is_right) = world.boxes[parent_index]
+            .style
+            .vertical_block_start_is_right()
+        else {
+            continue;
+        };
+        if !original_parent_uses_block_layout(world, parent) {
+            continue;
+        }
+
+        let parent_layout = world.boxes[parent_index].unrounded_layout;
+        let scrollbar = world.get_scrollbar_insets(parent.to_taffy());
+        let content_left = parent_layout.border.left + parent_layout.padding.left + scrollbar.left;
+        let content_right = parent_layout.size.width
+            - parent_layout.border.right
+            - parent_layout.padding.right
+            - scrollbar.right;
+        let taffy_anchored_right =
+            world.boxes[parent_index].style.taffy.direction == taffy::Direction::Rtl;
+
+        for child in world.boxes[parent_index].layout_children.iter().copied() {
+            let child_box = &world.boxes[child.index()];
+            if child_box.style.is_absolute_positioned()
+                || child_box.style.is_fixed_positioned()
+                || box_is_effectively_floated(world, child)
+            {
+                continue;
+            }
+
+            let layout = child_box.unrounded_layout;
+            let left_anchor = content_left + layout.margin.left;
+            let right_anchor = content_right - layout.size.width - layout.margin.right;
+            let taffy_anchor = if taffy_anchored_right {
+                right_anchor
+            } else {
+                left_anchor
+            };
+            let physical_anchor = if block_start_is_right {
+                right_anchor
+            } else {
+                left_anchor
+            };
+            adjusted_x.push((child, physical_anchor + (layout.location.x - taffy_anchor)));
+        }
+    }
+
+    for (child, x) in adjusted_x {
+        world.boxes[child.index()].unrounded_layout.location.x = x;
     }
 }
 
