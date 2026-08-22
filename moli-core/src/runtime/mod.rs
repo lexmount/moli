@@ -671,11 +671,15 @@ impl Browser {
         deadline: FetchDeadline,
     ) -> Result<crate::page::RendererDocumentQuerySelectorNode> {
         let loader = self.resource_request_client();
-        let remaining = deadline.remaining();
+        // The absolute deadline is the timeout authority. The renderer keeps
+        // its own relative timeout only as a safety bound; giving both layers
+        // the same remaining duration would make their timers race and could
+        // discard the typed fetch phase when the renderer wins.
+        let command_timeout = deadline.timeout();
         deadline
             .wait(
                 FetchTimeoutPhase::WaitingForSelector,
-                page.wait_for_selector(&loader, selector, remaining),
+                page.wait_for_selector(&loader, selector, command_timeout),
             )
             .await
     }
@@ -699,11 +703,11 @@ impl Browser {
         deadline: FetchDeadline,
     ) -> Result<()> {
         let loader = self.resource_request_client();
-        let remaining = deadline.remaining();
+        let command_timeout = deadline.timeout();
         deadline
             .wait(
                 FetchTimeoutPhase::WaitingForScript,
-                page.wait_for_script_truthy(&loader, expression, remaining),
+                page.wait_for_script_truthy(&loader, expression, command_timeout),
             )
             .await
     }
@@ -726,11 +730,11 @@ impl Browser {
         deadline: FetchDeadline,
     ) -> Result<()> {
         let loader = self.resource_request_client();
-        let remaining = deadline.remaining();
+        let command_timeout = deadline.timeout();
         deadline
             .wait(
                 FetchTimeoutPhase::WaitingForSubresourceResponse,
-                page.wait_for_subresource_response(&loader, criteria, remaining),
+                page.wait_for_subresource_response(&loader, criteria, command_timeout),
             )
             .await
     }

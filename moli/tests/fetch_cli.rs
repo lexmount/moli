@@ -1934,7 +1934,9 @@ fn cli_readiness_plan_does_not_restart_timeout_for_script() -> Result<()> {
     let stderr = clean_output(&output.stderr);
     assert!(stdout.is_empty(), "stdout={stdout}");
     assert!(
-        stderr.contains("failed while waiting for script to become truthy"),
+        stderr.contains(
+            "fetch readiness timed out after 700 ms while waiting for a script to become truthy"
+        ),
         "the shared deadline should expire during the final plan phase: stderr={stderr}"
     );
     Ok(())
@@ -1948,15 +1950,15 @@ fn cli_readiness_timeout_identifies_response_selector_and_script_phases() -> Res
     let cases: [(&[&str], &str); 3] = [
         (
             &["--wait-response-url", "/response-that-never-arrives"],
-            "failed while waiting for subresource response",
+            "fetch readiness timed out after 350 ms while waiting for a subresource response",
         ),
         (
             &["--wait-selector", "#selector-that-never-appears"],
-            "failed while waiting for selector `#selector-that-never-appears`",
+            "fetch readiness timed out after 350 ms while waiting for a selector",
         ),
         (
             &["--wait-script", "globalThis.scriptThatNeverBecomesTruthy"],
-            "failed while waiting for script to become truthy",
+            "fetch readiness timed out after 350 ms while waiting for a script to become truthy",
         ),
     ];
 
@@ -2495,7 +2497,7 @@ fn cli_post_readiness_wait_cannot_restart_an_exhausted_best_effort_deadline() ->
         "stderr={stderr}"
     );
     assert!(
-        stderr.contains("failed while waiting for selector `#never-appears`"),
+        stderr.contains("fetch readiness timed out after 1000 ms while waiting for a selector"),
         "stderr={stderr}"
     );
     assert!(
@@ -3027,7 +3029,9 @@ fn cli_http_error_replacement_and_post_waits_share_one_deadline() -> Result<()> 
     let stderr = clean_output(&output.stderr);
     assert!(stdout.is_empty(), "stdout={stdout}");
     assert!(
-        stderr.contains("failed while waiting for script to become truthy"),
+        stderr.contains(
+            "fetch readiness timed out after 850 ms while waiting for a script to become truthy"
+        ),
         "the replacement and earlier post waits should leave the script phase with only the remaining budget: stderr={stderr}"
     );
     Ok(())
@@ -3331,10 +3335,9 @@ fn cli_slow_streaming_500_and_page_wait_share_one_total_timeout() -> Result<()> 
     let stderr = clean_output(&output.stderr);
     assert!(stdout.is_empty(), "stdout={stdout}");
     assert!(
-        stderr.contains("failed while waiting for selector"),
+        stderr.contains("fetch readiness timed out after 4000 ms while waiting for a selector"),
         "stderr={stderr}"
     );
-    assert!(stderr.contains("timed out"), "stderr={stderr}");
     Ok(())
 }
 

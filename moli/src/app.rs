@@ -14,7 +14,8 @@ use anyhow::Result;
 use anyhow::{Context, anyhow};
 use clap::Parser;
 use moli_core::runtime::{
-    Browser, FetchedDocument, NavigationRuntimeConfig, storage_partition::StoragePartitionState,
+    Browser, FetchReadinessTimeout, FetchedDocument, NavigationRuntimeConfig,
+    storage_partition::StoragePartitionState,
 };
 use moli_fetch::{NetworkFetchFailureContext, Request};
 use moli_protocol_server::ProtocolServer;
@@ -176,10 +177,13 @@ fn with_fetch_context(error: anyhow::Error, url: &str) -> anyhow::Error {
     if error.is::<CliFetchFailureContext>() {
         return error;
     }
-    let reason = error
-        .downcast_ref::<NetworkFetchFailureContext>()
-        .map(|failure| failure.reason().to_owned())
-        .unwrap_or_else(|| error.to_string());
+    let reason = if let Some(failure) = error.downcast_ref::<NetworkFetchFailureContext>() {
+        failure.reason().to_owned()
+    } else if let Some(timeout) = error.downcast_ref::<FetchReadinessTimeout>() {
+        timeout.to_string()
+    } else {
+        error.to_string()
+    };
     with_fetch_context_reason(error, url, reason)
 }
 
@@ -239,6 +243,8 @@ fn finalize_fetch_browser(browser: Browser) {
 #[cfg(test)]
 mod tests {
     use super::{with_fetch_context, write_error_report};
+    use moli_core::runtime::{FetchReadinessTimeout, FetchTimeoutPhase};
+    use std::time::Duration;
 
     #[test]
     fn fetch_report_has_one_reason_line_without_rendering_the_source_chain() {
@@ -255,6 +261,28 @@ mod tests {
             report,
             "Error: failed to fetch `https://example.test/`\nReason: first failure line second failure line\n"
         );
+        assert!(!report.contains("Caused by:"));
+    }
+
+    #[test]
+    fn fetch_report_selects_the_typed_readiness_timeout_through_outer_context() {
+        let error = anyhow::Error::new(FetchReadinessTimeout::new(
+            Duration::from_millis(4000),
+            FetchTimeoutPhase::WaitingForSelector,
+        ))
+        .context("failed while waiting for selector `#target`");
+        let error = with_fetch_context(error, "https://example.test/");
+        let mut report = Vec::new();
+
+        write_error_report(&mut report, &error).expect("report should write");
+        let report = String::from_utf8(report).expect("report should be UTF-8");
+
+        assert_eq!(
+            report,
+            "Error: failed to fetch `https://example.test/`\n\
+             Reason: fetch readiness timed out after 4000 ms while waiting for a selector\n"
+        );
+        assert!(!report.contains("failed while waiting for selector"));
         assert!(!report.contains("Caused by:"));
     }
 
