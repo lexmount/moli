@@ -182,7 +182,7 @@ fn apply_common_args(config: &mut AppConfig, common: &CommonArgs) -> Result<()> 
     config.fetch.cookie_files = common.cookie_file.clone();
     config.browser.fetch_mut().set_network_blocking(
         common.block_private_networks,
-        parse_block_cidrs(common.block_cidrs.as_deref()),
+        parse_block_cidrs(common.block_cidrs.as_deref())?,
     );
     config
         .browser
@@ -257,16 +257,22 @@ fn validate_http_host_resolve_entry(entry: &str) -> Result<()> {
     Ok(())
 }
 
-fn parse_block_cidrs(raw: Option<&str>) -> Vec<AnyIpCidr> {
-    raw.into_iter()
-        .flat_map(|value| value.split(','))
-        .filter_map(|item| {
-            let trimmed = item.trim();
-            (!trimmed.is_empty())
-                .then(|| AnyIpCidr::from_str(trimmed).ok())
-                .flatten()
-        })
-        .collect()
+fn parse_block_cidrs(raw: Option<&str>) -> Result<Vec<AnyIpCidr>> {
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+
+    let mut cidrs = Vec::new();
+    for item in raw.split(',').map(str::trim) {
+        if item.is_empty() {
+            bail!("--block-cidrs entries must not be empty");
+        }
+        cidrs.push(
+            AnyIpCidr::from_str(item)
+                .with_context(|| format!("invalid --block-cidrs entry `{item}`"))?,
+        );
+    }
+    Ok(cidrs)
 }
 
 impl Default for AppConfig {

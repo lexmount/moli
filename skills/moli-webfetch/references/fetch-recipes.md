@@ -158,7 +158,8 @@ For a crawl rather than a single lookup:
 - Use `--document-start-script` or `--document-start-script-file` only when the
   task explicitly requires pre-navigation instrumentation.
 - Combine `--block-private-networks` with `--block-cidrs` for untrusted URL
-  workloads that need explicit network boundaries.
+  workloads that need explicit network boundaries. Pass `--block-cidrs` as a
+  comma-separated list of CIDR ranges; invalid or empty entries are rejected.
 
 ## Failure Diagnosis
 

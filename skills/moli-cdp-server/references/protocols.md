@@ -51,7 +51,8 @@ hard-coding a `/devtools/...` path.
 - Add `--profile-dir` for persistent storage and cookies.
 - Add `--cookie-file` to import cookies.
 - Configure proxy and connection controls on `moli serve`.
-- Add `--block-private-networks` or `--block-cidrs` for untrusted navigation.
+- Add `--block-private-networks` or a comma-separated `--block-cidrs` list for
+  untrusted navigation; invalid or empty CIDR entries are rejected.
 - Keep loopback binding unless remote clients genuinely require exposure.
 
 ## Full-document screenshots

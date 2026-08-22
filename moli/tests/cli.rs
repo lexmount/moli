@@ -1184,6 +1184,66 @@ fn app_config_rejects_invalid_http_host_resolve_entry() {
 }
 
 #[test]
+fn app_config_from_cli_applies_block_cidrs() {
+    let cli = Cli::try_parse_from(normalize_args_for_compat([
+        "moli",
+        "fetch",
+        "--block-cidrs",
+        "198.18.0.0/15, 203.0.113.0/24",
+        "https://example.com",
+    ]))
+    .unwrap();
+
+    let config = AppConfig::from_cli(&cli).unwrap();
+    let cidrs = config.browser.fetch().block_cidrs();
+    assert_eq!(cidrs.len(), 2);
+    assert_eq!(cidrs[0].to_string(), "198.18.0.0/15");
+    assert_eq!(cidrs[1].to_string(), "203.0.113.0/24");
+}
+
+#[test]
+fn app_config_rejects_invalid_block_cidr_entry() {
+    let cli = Cli::try_parse_from(normalize_args_for_compat([
+        "moli",
+        "fetch",
+        "--block-cidrs",
+        "198.18.0.0/15,not-a-cidr",
+        "https://example.com",
+    ]))
+    .unwrap();
+
+    let error = AppConfig::from_cli(&cli).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("invalid --block-cidrs entry `not-a-cidr`"),
+        "{error:#}"
+    );
+}
+
+#[test]
+fn app_config_rejects_empty_block_cidr_entries() {
+    for raw in ["", "198.18.0.0/15,", ",198.18.0.0/15"] {
+        let cli = Cli::try_parse_from(normalize_args_for_compat([
+            "moli",
+            "fetch",
+            "--block-cidrs",
+            raw,
+            "https://example.com",
+        ]))
+        .unwrap();
+
+        let error = AppConfig::from_cli(&cli).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("--block-cidrs entries must not be empty"),
+            "{error:#}"
+        );
+    }
+}
+
+#[test]
 fn removed_cookie_cache_flag_is_rejected() {
     let error = Cli::try_parse_from(normalize_args_for_compat([
         "moli",
