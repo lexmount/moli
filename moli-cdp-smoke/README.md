@@ -173,8 +173,10 @@ Covered well:
   `overflow-body-propagation-003`'s `display:contents` exclusion, and an overlay
   that occludes a lower painted scrollbar. The numeric matrix additionally
   covers padding/border with both box-sizing modes, auto/min/max block sizing,
-  aspect-ratio, and physical top/bottom gutters in `vertical-rl`. It also
-  verifies Moli's consume-only scrollbar corner and screenshot-triggered layout freshness.
+  aspect-ratio, and physical top/bottom gutters in `vertical-rl`. Block, flex,
+  and grid cases also assert that leading `both-edges` gutters neither create a
+  phantom `scrollWidth`/`scrollHeight` nor inflate a real overflow range. It
+  also verifies Moli's consume-only scrollbar corner and screenshot-triggered layout freshness.
   The final workflow was calibrated on 2026-08-22 against the headed Xvfb
   build `~/chromium/src/out/Default/chrome` (`Chrome/147.0.7709.0`) and then
   extended with the physical-inset matrix on 2026-08-23 against that same

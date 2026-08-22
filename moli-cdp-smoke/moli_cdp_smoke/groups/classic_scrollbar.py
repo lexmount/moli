@@ -751,23 +751,30 @@ async def _run_viewport_policy_and_numeric_gutter_workflow(
         <div id="block" class="scroller"><div></div></div>
         <div id="flex" class="scroller"><div></div></div>
         <div id="grid" class="scroller"><div></div></div>
+        <div id="overflow" class="scroller"><div style="width:400px;height:200px"></div></div>
         """,
         wait_until="domcontentloaded",
     )
     both_edges = await page.evaluate(
-        """() => ["block", "flex", "grid"].map(id => {
+        """() => ["block", "flex", "grid", "overflow"].map(id => {
           const scroller = document.getElementById(id);
           const child = scroller.firstElementChild;
           return [
             scroller.clientWidth, scroller.clientHeight,
+            scroller.scrollWidth, scroller.scrollHeight,
             child.offsetWidth, child.offsetHeight,
           ];
         })"""
     )
     assert_equal(
         both_edges,
-        [[170, 85, 170, 85], [170, 85, 170, 85], [170, 85, 170, 85]],
-        "both-edge horizontal gutter participates in block/flex/grid numeric layout",
+        [
+            [170, 85, 170, 85, 170, 85],
+            [170, 85, 170, 85, 170, 85],
+            [170, 85, 170, 85, 170, 85],
+            [170, 85, 400, 200, 400, 200],
+        ],
+        "both-edge gutters participate in numeric layout without inflating scroll ranges",
     )
 
     await page.set_content(

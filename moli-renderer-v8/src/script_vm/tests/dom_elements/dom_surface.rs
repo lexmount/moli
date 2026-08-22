@@ -1422,7 +1422,7 @@ fn body_overflow_defines_viewport_scrolling_and_default_root_stable_gutters() {
 }
 
 #[test]
-fn stable_both_edges_horizontal_bar_sizes_percentage_children_in_numeric_layout() {
+fn stable_both_edges_preserve_numeric_layout_and_scroll_ranges() {
     let mut vm = new_storage_test_vm("https://both-edges-numeric-layout.test/");
     vm.eval(
         r#"
@@ -1438,7 +1438,10 @@ fn stable_both_edges_horizontal_bar_sizes_percentage_children_in_numeric_layout(
           document.body.innerHTML = ["block", "flex", "grid"].map(display => `
             <div id="${display}" style="display:${display};width:200px;height:100px;overflow:scroll;scrollbar-gutter:stable both-edges">
               <div style="width:100%;height:100%"></div>
-            </div>`).join("");
+            </div>`).join("") + `
+            <div id="overflow" style="width:200px;height:100px;overflow:scroll;scrollbar-gutter:stable both-edges">
+              <div style="width:400px;height:200px"></div>
+            </div>`;
         })()
         "#,
     )
@@ -1448,12 +1451,14 @@ fn stable_both_edges_horizontal_bar_sizes_percentage_children_in_numeric_layout(
     assert_eq!(
         vm.eval(
             r#"
-            JSON.stringify(["block", "flex", "grid"].map(id => {
+            JSON.stringify(["block", "flex", "grid", "overflow"].map(id => {
               const scroller = document.getElementById(id);
               const child = scroller.firstElementChild;
               return [
                 scroller.clientWidth,
                 scroller.clientHeight,
+                scroller.scrollWidth,
+                scroller.scrollHeight,
                 child.offsetWidth,
                 child.offsetHeight,
               ];
@@ -1461,7 +1466,7 @@ fn stable_both_edges_horizontal_bar_sizes_percentage_children_in_numeric_layout(
             "#,
         )
         .expect("both-edge numeric layout metrics should evaluate"),
-        "[[170,85,170,85],[170,85,170,85],[170,85,170,85]]"
+        "[[170,85,170,85,170,85],[170,85,170,85,170,85],[170,85,170,85,170,85],[170,85,400,200,400,200]]"
     );
 }
 
