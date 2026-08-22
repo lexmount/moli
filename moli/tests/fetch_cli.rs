@@ -2962,6 +2962,39 @@ fn cli_streaming_page_creation_timeout_exits_cleanly_for_every_wait_mode() -> Re
 }
 
 #[test]
+fn cli_meta_refresh_shutdown_exits_without_renderer_abort() -> Result<()> {
+    let output = Command::new(env!("CARGO_BIN_EXE_moli"))
+        .args([
+            "fetch",
+            "--log-level",
+            "error",
+            "--wait-until",
+            "load",
+            "--dump",
+            "html",
+            "data:text/html,<meta http-equiv='refresh' content='0;url=about:blank'>",
+        ])
+        .output()?;
+    let stdout = clean_output(&output.stdout);
+    let stderr = clean_output(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "meta refresh shutdown must not abort the CLI: stdout={stdout}\nstderr={stderr}"
+    );
+    assert!(
+        stdout.contains("http-equiv=\"refresh\""),
+        "the source document should still be emitted: stdout={stdout}"
+    );
+    assert!(
+        !stderr.contains("PageVm must retain a live ScriptVm until drop"),
+        "renderer teardown invariant leaked to the CLI: stderr={stderr}"
+    );
+    Ok(())
+}
+
+#[test]
 fn cli_domcontentloaded_exit_stays_stable_with_inflight_background_fetch_tail() -> Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
     let server = runtime.block_on(FixtureServer::spawn())?;

@@ -211,6 +211,11 @@ impl JsRuntime {
     }
 
     #[cfg(test)]
+    pub(crate) fn renderer_page_count_for_testing(&self) -> usize {
+        self.inner.renderer_owner.len()
+    }
+
+    #[cfg(test)]
     pub(crate) fn start_minimal_html_page_for_reservation_testing(
         &self,
         page_reservation: RendererPageReservationToken,

@@ -234,6 +234,26 @@ impl LivePageEntry {
         self.standalone_navigation_follow.settle(current, succeeded);
     }
 
+    /// Consume the inert PageVm shell left after a cross-document commit whose
+    /// replacement failed to bootstrap. The old ScriptVm is already gone, so
+    /// this entry can only return through the teardown-only residence path.
+    pub(in crate::runtime) fn into_retiring_after_committed_navigation(
+        mut self,
+    ) -> RetiringPageEntry {
+        assert!(
+            self.pending_phase_one_navigation.is_none(),
+            "a committed navigation shell cannot coexist with pending phase one"
+        );
+        assert!(
+            self.vm
+                .as_ref()
+                .is_none_or(|page_vm| !page_vm.has_live_script_vm()),
+            "a committed navigation shell must not retain a live ScriptVm"
+        );
+        self.vm = None;
+        RetiringPageEntry::new(self)
+    }
+
     /// A replacement PageVm becomes the active owner-local runtime before its
     /// view is committed to the stable cross-thread Page slot.
     pub(in crate::runtime) fn has_uncommitted_page_vm(&self) -> bool {

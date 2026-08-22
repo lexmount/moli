@@ -111,16 +111,8 @@ mod navigation_dispatch_tests {
         }
     }
 
-    fn retiring_entry_without_active_page_vm(
-        standalone_navigation_follow: StandaloneNavigationFollowState,
-    ) -> RetiringPageEntry {
-        RetiringPageEntry::new(phase_one_entry_shell_without_active_page_vm(
-            standalone_navigation_follow,
-        ))
-    }
-
     #[test]
-    fn retiring_navigation_settlement_does_not_require_an_active_vm() {
+    fn committed_navigation_transitions_to_retiring_before_settlement() {
         let handoff = crate::page_task_queue::RendererTopLevelNavigationHandoff::new(1);
         for succeeded in [false, true] {
             for state in [
@@ -128,14 +120,15 @@ mod navigation_dispatch_tests {
                 StandaloneNavigationFollowState::Following { handoff },
                 StandaloneNavigationFollowState::FailedWithPendingNavigation { handoff },
             ] {
-                let mut entry = retiring_entry_without_active_page_vm(state);
+                let entry = phase_one_entry_shell_without_active_page_vm(state);
+                let mut entry = entry.into_retiring_after_committed_navigation();
 
                 entry.settle_standalone_navigation_follow(succeeded);
 
                 assert_eq!(
                     entry.entry.standalone_navigation_follow,
                     StandaloneNavigationFollowState::Idle,
-                    "an empty phase-one shell must settle {state:?} to Idle after succeeded={succeeded}"
+                    "a committed navigation shell must settle {state:?} to Idle after succeeded={succeeded}"
                 );
             }
         }

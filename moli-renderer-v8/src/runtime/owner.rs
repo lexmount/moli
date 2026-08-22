@@ -3255,7 +3255,6 @@ impl RendererOwnerHandle {
         retire_page_on_failure: bool,
         disposition: LivePageNavigationFailureDisposition,
     ) -> RenderRuntimeDispatchOutcome {
-        entry.settle_standalone_navigation_follow(false);
         let had_uncommitted_page_vm = entry.has_uncommitted_page_vm();
         let navigation_committed = entry
             .vm
@@ -3297,7 +3296,14 @@ impl RendererOwnerHandle {
             );
             remove_page_on_bound_owner_local_store(token);
         }
-        self.restore_live_page_entry(token, entry);
+        if navigation_committed {
+            let mut entry = entry.into_retiring_after_committed_navigation();
+            entry.settle_standalone_navigation_follow(false);
+            restore_retiring_entry_after_command_on_bound_owner_local_store(token, entry);
+        } else {
+            entry.settle_standalone_navigation_follow(false);
+            self.restore_live_page_entry(token, entry);
+        }
         match disposition {
             LivePageNavigationFailureDisposition::PublishToPageCreation(failure) => {
                 match page_creation_publication

@@ -3091,6 +3091,67 @@ document.close();
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn committed_navigation_bootstrap_failure_retires_page_before_follow_settlement() {
+    let runtime = JsRuntime::initialize();
+    let loader =
+        ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("default loader");
+    let (base_url, server) = spawn_owner_wake_server_with_content_type_and_headers(
+        "/replacement",
+        "<!doctype html><main>replacement</main>",
+        "text/html",
+        vec![("x-moli-test-fail-after-navigation-commit", "1")],
+        Duration::ZERO,
+    )
+    .await;
+    let source_url = url::Url::parse(&format!("{base_url}/source")).expect("source URL");
+    let replacement_url = format!("{base_url}/replacement");
+    let replacement_url_literal =
+        serde_json::to_string(&replacement_url).expect("serialize replacement URL");
+    let html = format!(
+        "<!doctype html><script>location.href = {replacement_url_literal};</script><main>source</main>"
+    );
+
+    let pending = start_test_html_page_with_optional_indexed_db_manager_and_navigation_dispatch(
+        &runtime,
+        &loader,
+        source_url,
+        &html,
+        None,
+        RendererTopLevelNavigationDispatch::FollowInStandaloneAdapter,
+    );
+    let result = pending.await_ready().await;
+    let Err(error) = result else {
+        panic!("the injected post-commit bootstrap failure must reject page creation")
+    };
+    let failure = format!("{error:#}");
+    assert!(
+        failure.contains("injected failure after main navigation commit for testing"),
+        "page creation must report the injected post-commit failure: {failure}"
+    );
+    server
+        .await
+        .expect("post-commit failure server should finish");
+    assert_eq!(
+        runtime.renderer_page_count_for_testing(),
+        0,
+        "a committed navigation bootstrap failure must not restore its inert PageVm as live"
+    );
+
+    let mut survivor = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse("about:blank").expect("survivor URL"),
+        "<!doctype html><main>survivor</main>",
+    )
+    .await;
+    survivor
+        .close_async()
+        .await
+        .expect("renderer owner should remain usable after retiring the failed navigation");
+    assert_eq!(runtime.renderer_page_count_for_testing(), 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn external_raw_streaming_delegates_post_load_meta_refresh_to_browser() {
     let runtime = JsRuntime::initialize();
     let (activity_wake_tx, mut activity_wake_rx) = renderer_external_activity_test_channel();
@@ -17372,7 +17433,31 @@ async fn create_test_html_page_with_optional_indexed_db_manager_and_navigation_d
     indexed_db_manager: Option<crate::WeakIndexedDbManager>,
     top_level_navigation_dispatch: RendererTopLevelNavigationDispatch,
 ) -> RendererPageHandle {
-    let pending = runtime
+    let pending = start_test_html_page_with_optional_indexed_db_manager_and_navigation_dispatch(
+        runtime,
+        loader,
+        url,
+        html,
+        indexed_db_manager,
+        top_level_navigation_dispatch,
+    );
+    let (page, _, _, _creation_artifacts, pending_download) = pending
+        .await_ready()
+        .await
+        .expect("test HTML page should load");
+    assert!(pending_download.is_none());
+    page
+}
+
+fn start_test_html_page_with_optional_indexed_db_manager_and_navigation_dispatch(
+    runtime: &JsRuntime,
+    loader: &ResourceRequestClient,
+    url: url::Url,
+    html: &str,
+    indexed_db_manager: Option<crate::WeakIndexedDbManager>,
+    top_level_navigation_dispatch: RendererTopLevelNavigationDispatch,
+) -> super::PendingHtmlPage {
+    runtime
         .start_create_html_page_from_response_with_inspector_session_restores(
             runtime.reserve_page_for_creation(),
             url.clone(),
@@ -17407,13 +17492,7 @@ async fn create_test_html_page_with_optional_indexed_db_manager_and_navigation_d
             top_level_navigation_dispatch,
             None,
         )
-        .expect("test HTML page should start");
-    let (page, _, _, _creation_artifacts, pending_download) = pending
-        .await_ready()
-        .await
-        .expect("test HTML page should load");
-    assert!(pending_download.is_none());
-    page
+        .expect("test HTML page should start")
 }
 
 async fn create_test_html_page_at_document_commit(
@@ -17953,6 +18032,23 @@ async fn spawn_owner_wake_server_with_content_type(
     content_type: &'static str,
     delay: Duration,
 ) -> (String, tokio::task::JoinHandle<()>) {
+    spawn_owner_wake_server_with_content_type_and_headers(
+        expected_path,
+        body,
+        content_type,
+        Vec::new(),
+        delay,
+    )
+    .await
+}
+
+async fn spawn_owner_wake_server_with_content_type_and_headers(
+    expected_path: &'static str,
+    body: &'static str,
+    content_type: &'static str,
+    response_headers: Vec<(&'static str, &'static str)>,
+    delay: Duration,
+) -> (String, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind owner wake fetch server");
@@ -17972,8 +18068,12 @@ async fn spawn_owner_wake_server_with_content_type(
         if !delay.is_zero() {
             tokio::time::sleep(delay).await;
         }
+        let response_headers = response_headers
+            .into_iter()
+            .map(|(name, value)| format!("{name}: {value}\r\n"))
+            .collect::<String>();
         let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\n{response_headers}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
             body.len(),
             body
         );
