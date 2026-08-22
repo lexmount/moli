@@ -1,7 +1,8 @@
 use crate::{
     document_runtime::{
         ConnectedLoadCompletion, ConnectedStyleEventElementKind,
-        LiveStylesheetImportLoadCompletion, ReadyConnectedStyleLoad,
+        LinkedStylesheetImportGraphCompletion, LiveStylesheetImportLoadCompletion,
+        ReadyConnectedStyleLoad,
     },
     frame_owner_model::FrameDocumentTaskOwner,
     runtime::{PageOwnerTurnOutcome, RendererDocumentToken},
@@ -28,6 +29,7 @@ pub(crate) type RendererPageStylesheetTaskOwner = super::RendererPageMainDocumen
 pub(crate) enum RendererPageStylesheetCompletion {
     Blocking(StylesheetCompletion),
     Connected(ConnectedLoadCompletion),
+    LinkedImport(LinkedStylesheetImportGraphCompletion),
     LiveImport(LiveStylesheetImportLoadCompletion),
 }
 
@@ -129,6 +131,13 @@ impl RendererPageStylesheetTaskProducer {
         completion: ConnectedLoadCompletion,
     ) -> Result<(), RendererPageStylesheetTaskRouteClosed> {
         self.send_networking_completion(RendererPageStylesheetCompletion::Connected(completion))
+    }
+
+    pub(crate) fn send_linked_import_completion(
+        &self,
+        completion: LinkedStylesheetImportGraphCompletion,
+    ) -> Result<(), RendererPageStylesheetTaskRouteClosed> {
+        self.send_networking_completion(RendererPageStylesheetCompletion::LinkedImport(completion))
     }
 
     pub(crate) fn send_live_import_completion(

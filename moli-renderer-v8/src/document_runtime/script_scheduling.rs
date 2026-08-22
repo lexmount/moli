@@ -390,7 +390,12 @@ mod tests {
             .expect("parser stylesheet should retain its exact event client");
         // This low-level fixture has no ScriptVm to parse the root stylesheet and
         // publish its import graph. Complete the known-empty graph explicitly.
-        runtime.note_stylesheet_import_graph_completion(link_load.fetch(), true);
+        runtime.note_stylesheet_import_graph_completion(
+            link_load.fetch(),
+            Arc::new(
+                crate::stylesheet_blocking::StylesheetImportGraphFetchResult::new(true, Vec::new()),
+            ),
+        );
         assert!(
             runtime.has_connected_style_event_for_test(),
             "the link load event should be resident in its independent DOM-manipulation source"

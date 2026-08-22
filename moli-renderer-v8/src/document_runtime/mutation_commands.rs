@@ -1808,6 +1808,7 @@ pub(super) fn finish_runtime_mutation_effects(
     }
     runtime.apply_pending_stylesheet_source_css_projections(scope, host_ptr);
     if changed {
+        let mut prime_result = ConnectedStyleLoadPrimeResult::default();
         let prepared_owner_changes =
             runtime.prepare_stylesheet_owner_runtime_changes(&stylesheet_owner_changes);
         let (canceled_load_event_bindings, prepared_owner_changes) =
@@ -1844,12 +1845,12 @@ pub(super) fn finish_runtime_mutation_effects(
                     continue;
                 };
                 debug_assert_eq!(prepared_load.owner(), owner);
-                runtime.apply_prepared_connected_style_load(
+                prime_result.extend(runtime.apply_prepared_connected_style_load(
                     prepared_load,
                     inline_source.clone(),
                     event_admission,
                     host_ptr,
-                );
+                ));
             }
         }
         crate::native_bridge::document::apply_stylesheet_owner_css_projections(
@@ -1857,6 +1858,11 @@ pub(super) fn finish_runtime_mutation_effects(
             unsafe { &*host_ptr },
             &stylesheet_owner_changes,
         );
+        let completed_clients = prime_result.take_completed_stylesheet_clients();
+        runtime.settle_stylesheet_link_clients_in_current_scope(scope, host_ptr, completed_clients);
+        runtime
+            .pending_connected_style_load_prime_result
+            .extend(prime_result);
     }
     changed
 }

@@ -3,23 +3,19 @@ use tracing::debug;
 use super::*;
 use crate::frame_owner_model::MainDocumentStyleLoadEventBinding;
 use crate::link_as::{LinkAsDestination, link_as_destination};
-use crate::live_stylesheet::import_url_identity;
 use crate::module_runtime::{
     ModuleMapKey, NativeModuleSingleFetchRequest, NativeModulepreloadLinkClient,
 };
 use crate::planning::{ScriptFetchMetadata, module_script_credentials_mode};
 use crate::service_worker_runtime::ServiceWorkerRequestDestination;
 use crate::stylesheet_blocking::{
-    StylesheetFetchOptions, StylesheetFetcher, connected_preload_like_link_url,
+    StylesheetFetchOptions, connected_preload_like_link_url,
     document_owned_blocking_stylesheet_candidate_for_node, link_rel_includes_token,
     preload_like_link_loads_stylesheet, stylesheet_link_disposition,
     stylesheet_preload_link_request,
 };
 use crate::types::{AsyncSubresourceFetchResponseFilter, SubresourceResourceType};
-use futures_util::future::join_all;
-use moli_encoding::decode_text_for_legacy_web;
 use moli_fetch::{FetchPriorityHint, RequestCredentialsMode, RequestResourceType};
-use moli_web_mime::{data_url_body_and_mime_type, mime_charset};
 
 struct ConnectedLinkReadinessFetchResponse {
     response: crate::protocol_types::NavigationResponse,
@@ -39,13 +35,6 @@ impl ConnectedLinkReadinessFetchResponse {
             load_event_successful,
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum DataStylesheetImportReadiness {
-    NoImports,
-    Imports(Vec<Url>),
-    Failed,
 }
 
 #[derive(Debug)]
@@ -79,6 +68,7 @@ impl ConnectedModulepreloadStart {
 pub(crate) struct ConnectedStyleLoadPrimeResult {
     modulepreload_starts: Vec<ConnectedModulepreloadStart>,
     runtime_warnings: Vec<String>,
+    completed_stylesheet_clients: Vec<StylesheetLinkClientTerminal>,
 }
 
 /// One DOM-derived connected-style operation awaiting lifecycle commit.
@@ -177,19 +167,45 @@ impl ConnectedStyleLoadPrimeResult {
         self.runtime_warnings.push(warning.into());
     }
 
-    fn extend(&mut self, other: Self) {
+    fn push_completed_stylesheet_client(&mut self, client: StylesheetLinkClientTerminal) {
+        self.completed_stylesheet_clients.push(client);
+    }
+
+    pub(in crate::document_runtime) fn extend(&mut self, other: Self) {
         self.modulepreload_starts.extend(other.modulepreload_starts);
         self.runtime_warnings.extend(other.runtime_warnings);
+        self.completed_stylesheet_clients
+            .extend(other.completed_stylesheet_clients);
     }
 
+    pub(crate) fn take_completed_stylesheet_clients(
+        &mut self,
+    ) -> Vec<StylesheetLinkClientTerminal> {
+        std::mem::take(&mut self.completed_stylesheet_clients)
+    }
+
+    #[cfg(test)]
     pub(crate) fn into_parts(self) -> (Vec<ConnectedModulepreloadStart>, Vec<String>) {
+        debug_assert!(
+            self.completed_stylesheet_clients.is_empty(),
+            "completed stylesheet clients require immediate settlement"
+        );
         (self.modulepreload_starts, self.runtime_warnings)
     }
-}
 
-enum ConnectedStyleImportReadiness {
-    Ready(bool),
-    Pending(Vec<Url>),
+    pub(crate) fn into_parts_with_completed_stylesheet_clients(
+        self,
+    ) -> (
+        Vec<ConnectedModulepreloadStart>,
+        Vec<String>,
+        Vec<StylesheetLinkClientTerminal>,
+    ) {
+        (
+            self.modulepreload_starts,
+            self.runtime_warnings,
+            self.completed_stylesheet_clients,
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -203,136 +219,6 @@ impl ConnectedStyleOwnerKind {
     fn uses_connected_load_lifecycle(self) -> bool {
         !matches!(self, Self::DeclarativeCssModule)
     }
-}
-
-const MAX_DATA_STYLESHEET_IMPORT_EXPANSIONS: usize = 16;
-const MAX_DATA_STYLESHEET_IMPORT_URL_BYTES: usize = 16 * 1024;
-
-#[derive(Default)]
-struct ConnectedNetworkStyleImportGraph {
-    pending_urls: std::collections::VecDeque<Url>,
-    admitted_identities: std::collections::HashSet<Url>,
-}
-
-impl ConnectedNetworkStyleImportGraph {
-    fn extend(&mut self, urls: impl IntoIterator<Item = Url>) {
-        for url in urls {
-            let identity = import_url_identity(&url);
-            if self.admitted_identities.contains(&identity) {
-                continue;
-            }
-            self.admitted_identities.insert(identity);
-            self.pending_urls.push_back(url);
-        }
-    }
-
-    fn is_empty(&self) -> bool {
-        self.pending_urls.is_empty()
-    }
-
-    fn take_pending(&mut self) -> Vec<Url> {
-        self.pending_urls.drain(..).collect()
-    }
-}
-
-pub(crate) async fn fetch_complete_stylesheet_import_graph(
-    stylesheet_fetcher: crate::stylesheet_blocking::RendererStylesheetFetcher,
-    document_url: Url,
-    urls: Vec<Url>,
-) -> crate::stylesheet_blocking::StylesheetImportGraphFetchResult {
-    let (mut successful, urls) = match connected_style_import_readiness(urls) {
-        ConnectedStyleImportReadiness::Ready(successful) => {
-            return crate::stylesheet_blocking::StylesheetImportGraphFetchResult::new(
-                successful,
-                Vec::new(),
-            );
-        }
-        ConnectedStyleImportReadiness::Pending(urls) => (true, urls),
-    };
-    let mut network_results = Vec::new();
-    let mut import_graph = ConnectedNetworkStyleImportGraph::default();
-    import_graph.extend(urls);
-    while !import_graph.is_empty() {
-        let current_urls = import_graph.take_pending();
-        let pending_fetches = join_all(current_urls.into_iter().map(|url| {
-            let stylesheet_fetcher = stylesheet_fetcher.clone();
-            let fetch_document_url = document_url.clone();
-            let request_url = url.clone();
-            let start_unix_millis = moli_time::unix_epoch_millis();
-            async move {
-                let terminal = stylesheet_fetcher
-                    .fetch_stylesheet_resource(
-                        fetch_document_url,
-                        request_url,
-                        StylesheetFetchOptions::default(),
-                    )
-                    .await;
-                (url, start_unix_millis, terminal)
-            }
-        }))
-        .await;
-        for (url, start_unix_millis, terminal) in pending_fetches {
-            successful &= terminal.is_ready();
-            if let Some(response) = terminal.ready_response() {
-                let nested_urls = crate::style_engine::stylesheet_top_level_import_urls(
-                    response.body_text(),
-                    &response.final_url,
-                    false,
-                )
-                .unwrap_or_default();
-                match connected_style_import_readiness(nested_urls) {
-                    ConnectedStyleImportReadiness::Ready(nested_successful) => {
-                        successful &= nested_successful;
-                    }
-                    ConnectedStyleImportReadiness::Pending(urls) => {
-                        import_graph.extend(urls);
-                    }
-                }
-            }
-            network_results.push(
-                crate::stylesheet_blocking::StylesheetImportNetworkResult::new(
-                    url,
-                    start_unix_millis,
-                    terminal,
-                ),
-            );
-        }
-    }
-    crate::stylesheet_blocking::StylesheetImportGraphFetchResult::new(successful, network_results)
-}
-
-async fn fetch_connected_style_import_graph(
-    stylesheet_fetcher: crate::stylesheet_blocking::RendererStylesheetFetcher,
-    document_url: Url,
-    urls: Vec<Url>,
-    source_owners: Vec<DomHandle>,
-) -> (bool, Vec<ConnectedLoadNetworkResult>) {
-    let graph =
-        fetch_complete_stylesheet_import_graph(stylesheet_fetcher, document_url.clone(), urls)
-            .await;
-    let (successful, network_results) = graph.into_parts();
-    let network_results = network_results
-        .into_iter()
-        .map(|result| {
-            let (request_url, start_unix_millis, terminal) = result.into_parts();
-            let origin_clean = terminal.origin_clean().unwrap_or(false);
-            let result = terminal.physical().as_result();
-            ConnectedLoadNetworkResult {
-                stylesheet_fetch: None,
-                blocking_operation: None,
-                source_operation: None,
-                import_roots: Vec::new(),
-                document_url: document_url.clone(),
-                request_url,
-                source_owners: source_owners.clone(),
-                resource_type: SubresourceResourceType::Stylesheet,
-                start_unix_millis: Some(start_unix_millis),
-                origin_clean,
-                result,
-            }
-        })
-        .collect();
-    (successful, network_results)
 }
 
 impl DocumentRuntime {
@@ -529,7 +415,7 @@ impl DocumentRuntime {
         inline_source: Option<Arc<crate::style_engine::OwnerStyleSheetSource>>,
         event_admission: ConnectedStyleLoadEventAdmission,
         host_ptr: *mut JsContextHost,
-    ) {
+    ) -> ConnectedStyleLoadPrimeResult {
         assert!(
             event_admission.matches_plan(prepared.event_plan),
             "connected-style commit must match its synchronously prepared plan"
@@ -547,17 +433,10 @@ impl DocumentRuntime {
                 false,
                 event_admission.load_event_binding(),
             );
-            return;
+            return ConnectedStyleLoadPrimeResult::default();
         }
         let inline_source = inline_source.or_else(|| self.inline_style_source_for_test(handle));
-        let prime_result = self.enqueue_connected_style_load(
-            handle,
-            inline_source,
-            host_ptr,
-            Some(event_admission),
-        );
-        self.pending_connected_style_load_prime_result
-            .extend(prime_result);
+        self.enqueue_connected_style_load(handle, inline_source, host_ptr, Some(event_admission))
     }
 
     #[cfg(test)]
@@ -565,6 +444,7 @@ impl DocumentRuntime {
         &mut self,
         prepared: Vec<PreparedConnectedStyleLoad>,
     ) {
+        let mut result = ConnectedStyleLoadPrimeResult::default();
         for prepared in prepared {
             let plan = prepared.event_plan();
             let admission = match plan {
@@ -583,13 +463,15 @@ impl DocumentRuntime {
                     )
                 }
             };
-            self.apply_prepared_connected_style_load(
+            result.extend(self.apply_prepared_connected_style_load(
                 prepared,
                 None,
                 admission,
                 std::ptr::null_mut(),
-            );
+            ));
         }
+        self.pending_connected_style_load_prime_result
+            .extend(result);
     }
 
     fn parser_created_style_load_waits_for_initial_scan(&self, handle: DomHandle) -> bool {
@@ -895,8 +777,8 @@ impl DocumentRuntime {
                 disposition.url().clone(),
                 disposition.options().clone(),
             );
-            let import_completion_successful =
-                initial_stylesheet_import_completion_successful(disposition.url(), &fetch);
+            let import_completion =
+                self.initial_stylesheet_import_completion(disposition.url(), &fetch);
             let existing_load = self
                 .stylesheet_lifecycle
                 .owner_states
@@ -927,14 +809,16 @@ impl DocumentRuntime {
                 );
                 self.install_stylesheet_link_state(
                     handle,
-                    LinkStyleState::new(Arc::clone(&load), import_completion_successful),
+                    LinkStyleState::new(Arc::clone(&load), import_completion),
                 );
                 load
             };
             // `adopt_or_begin_link_load` may attach this owner to a fetch that
             // completed for an earlier link. Such an admission has no future
             // network terminal, so deliver only this exact client now.
-            self.promote_stylesheet_link_client_if_ready(Arc::clone(&load));
+            if let Some(client) = self.promote_stylesheet_link_client_if_ready(Arc::clone(&load)) {
+                result.push_completed_stylesheet_client(client);
+            }
             // Network and data responses are processed through the same exact
             // stylesheet terminal. That boundary owns import discovery and
             // starts the shared dependency graph once per physical fetch.
@@ -1066,9 +950,11 @@ impl DocumentRuntime {
                 );
                 self.install_stylesheet_link_state(
                     handle,
-                    LinkStyleState::new(Arc::clone(&load), Some(true)),
+                    LinkStyleState::new(Arc::clone(&load), StylesheetCompletionState::Succeeded),
                 );
-                self.promote_stylesheet_link_client_if_ready(load);
+                if let Some(client) = self.promote_stylesheet_link_client_if_ready(load) {
+                    result.push_completed_stylesheet_client(client);
+                }
                 return result;
             }
             let fetch_options = element
@@ -1197,14 +1083,14 @@ impl DocumentRuntime {
             };
             if !urls.is_empty() {
                 self.prime_connected_style_import_loads(
-                    ConnectedStyleImportSource::Inline(source),
+                    InlineStyleImportSource::new(source),
                     urls,
                     load_event_binding,
                     host_ptr,
                 );
                 return result;
             }
-            let source = ConnectedStyleImportSource::Inline(source);
+            let source = InlineStyleImportSource::new(source);
             let roots = self.connected_style_import_roots(&source, host_ptr);
             let operation = ConnectedLoadOperation::new_with_load_event_binding(
                 handle,
@@ -1254,13 +1140,12 @@ impl DocumentRuntime {
 
     fn prime_connected_style_import_loads(
         &mut self,
-        source: ConnectedStyleImportSource,
+        source: InlineStyleImportSource,
         urls: Vec<Url>,
         load_event_binding: Option<MainDocumentStyleLoadEventBinding>,
         host_ptr: *mut JsContextHost,
     ) {
         let handle = source.owner();
-        let element_kind = source.element_kind();
         let roots = self.connected_style_import_roots(&source, host_ptr);
         let urls = match connected_style_import_readiness(urls.clone()) {
             ConnectedStyleImportReadiness::Ready(mut successful) => {
@@ -1278,10 +1163,9 @@ impl DocumentRuntime {
                         }
                     }
                 }
-                let event_pending = matches!(&source, ConnectedStyleImportSource::Inline(_));
                 let operation = ConnectedLoadOperation::new_with_load_event_binding(
                     handle,
-                    element_kind,
+                    ConnectedStyleEventElementKind::Style,
                     ConnectedLoadParameters::StyleImports {
                         source,
                         urls,
@@ -1293,11 +1177,10 @@ impl DocumentRuntime {
                 self.stylesheet_lifecycle
                     .owner_states
                     .install_pending_operation(Arc::clone(&operation));
-                let _ = self.stylesheet_lifecycle.owner_states.accept_completion(
-                    &operation,
-                    0,
-                    event_pending,
-                );
+                let _ = self
+                    .stylesheet_lifecycle
+                    .owner_states
+                    .accept_completion(&operation, 0, true);
                 self.note_connected_style_import_completion(&operation, successful);
                 return;
             }
@@ -1326,7 +1209,7 @@ impl DocumentRuntime {
         }
         let operation = ConnectedLoadOperation::new_with_load_event_binding(
             handle,
-            element_kind,
+            ConnectedStyleEventElementKind::Style,
             parameters,
             blocking_operation,
             load_event_binding,
@@ -1354,7 +1237,7 @@ impl DocumentRuntime {
             .current_document_resource_loader()
             .expect("connected stylesheet import requires its Document authority");
         resource_loader.spawn_resource_task(async move {
-            let (successful, network_results) = fetch_connected_style_import_graph(
+            let (graph, network_results) = fetch_observed_stylesheet_import_graph(
                 stylesheet_fetcher,
                 document_url,
                 urls,
@@ -1363,7 +1246,7 @@ impl DocumentRuntime {
             .await;
             let completion = ConnectedLoadCompletion {
                 operation,
-                successful,
+                successful: graph.successful(),
                 network_results,
             };
             let _ = task_producer.send_connected_completion(completion);
@@ -1372,54 +1255,18 @@ impl DocumentRuntime {
 
     fn connected_style_import_roots(
         &self,
-        source: &ConnectedStyleImportSource,
+        source: &InlineStyleImportSource,
         host_ptr: *mut JsContextHost,
     ) -> Vec<ConnectedStyleImportRoot> {
         if host_ptr.is_null() {
             return Vec::new();
         }
-        let owners = match source {
-            ConnectedStyleImportSource::Inline(source) => vec![source.owner()],
-            ConnectedStyleImportSource::Linked(load) => self
-                .stylesheet_lifecycle
-                .owner_states
-                .link_states()
-                .filter(|(_, state)| state.active_load().fetch().ptr_eq(load.fetch()))
-                .map(|(owner, _)| owner)
-                .collect(),
-        };
-        owners
+        let owner = source.owner();
+        unsafe { &*host_ptr }
+            .owner_live_stylesheet(owner)
+            .map(|stylesheet| ConnectedStyleImportRoot::new(owner, &stylesheet, false))
             .into_iter()
-            .filter_map(|owner| {
-                let stylesheet = match source {
-                    ConnectedStyleImportSource::Inline(_) => {
-                        unsafe { &*host_ptr }.owner_live_stylesheet(owner)
-                    }
-                    ConnectedStyleImportSource::Linked(_) => {
-                        unsafe { &*host_ptr }.linked_live_stylesheet(owner)
-                    }
-                }?;
-                Some(ConnectedStyleImportRoot::new(
-                    owner,
-                    &stylesheet,
-                    matches!(source, ConnectedStyleImportSource::Linked(_)),
-                ))
-            })
             .collect()
-    }
-
-    pub(crate) fn prime_network_stylesheet_import_loads(
-        &mut self,
-        load: Arc<StylesheetLinkClient>,
-        urls: Vec<Url>,
-        host_ptr: *mut JsContextHost,
-    ) {
-        self.prime_connected_style_import_loads(
-            ConnectedStyleImportSource::Linked(load),
-            urls,
-            None,
-            host_ptr,
-        );
     }
 
     fn prime_live_stylesheet_import_loads(
@@ -1467,7 +1314,7 @@ impl DocumentRuntime {
             .current_document_resource_loader()
             .expect("live stylesheet import requires its Document authority");
         resource_loader.spawn_resource_task(async move {
-            let (_, mut network_results) = fetch_connected_style_import_graph(
+            let (_, mut network_results) = fetch_observed_stylesheet_import_graph(
                 stylesheet_fetcher,
                 document_url,
                 urls,
@@ -1493,158 +1340,6 @@ impl DocumentRuntime {
     #[cfg(test)]
     pub(crate) fn prime_document_lifecycle_processing(&mut self) -> ConnectedStyleLoadPrimeResult {
         self.prime_document_lifecycle_processing_for_owner(std::ptr::null_mut())
-    }
-
-    pub(crate) fn reconcile_connected_style_imports_with_blocking_stylesheets(&mut self) {
-        let pending_imports = self
-            .stylesheet_lifecycle
-            .owner_states
-            .pending_operations()
-            .into_iter()
-            .filter_map(|operation| match &operation.parameters {
-                ConnectedLoadParameters::StyleImports { .. }
-                    if operation.blocking_operation.is_some() =>
-                {
-                    Some(operation)
-                }
-                ConnectedLoadParameters::ImmediateOwnerProcessing => None,
-                ConnectedLoadParameters::PreloadLikeLink { .. } => None,
-                ConnectedLoadParameters::StyleImports { .. } => None,
-            })
-            .collect::<Vec<_>>();
-        for operation in pending_imports {
-            if self.connected_style_import_uses_blocking_stylesheet(&operation) {
-                continue;
-            }
-            let handle = operation.owner;
-            if self
-                .stylesheet_lifecycle
-                .owner_states
-                .pending_operation(handle)
-                .is_none_or(|pending| !ConnectedLoadOperation::ptr_eq(pending, &operation))
-            {
-                continue;
-            }
-            self.stylesheet_lifecycle
-                .owner_states
-                .clear_connected_operation(handle);
-            let inline_source = match &operation.parameters {
-                ConnectedLoadParameters::StyleImports {
-                    source: ConnectedStyleImportSource::Inline(source),
-                    ..
-                } => Some(Arc::clone(source)),
-                ConnectedLoadParameters::StyleImports {
-                    source: ConnectedStyleImportSource::Linked(_),
-                    ..
-                }
-                | ConnectedLoadParameters::ImmediateOwnerProcessing
-                | ConnectedLoadParameters::PreloadLikeLink { .. } => None,
-            };
-            self.stylesheet_lifecycle.pending_connected_loads.push_back(
-                QueuedConnectedStyleLoad::new(
-                    handle,
-                    inline_source,
-                    operation
-                        .load_event_binding()
-                        .map(ConnectedStyleLoadEventAdmission::LoadDelaying),
-                ),
-            );
-        }
-    }
-
-    fn connected_style_import_uses_blocking_stylesheet(
-        &self,
-        operation: &Arc<ConnectedLoadOperation>,
-    ) -> bool {
-        let ConnectedLoadParameters::StyleImports { urls, .. } = &operation.parameters else {
-            return false;
-        };
-        let Some(blocking_operation) = &operation.blocking_operation else {
-            return false;
-        };
-        debug_assert_eq!(
-            blocking_operation.signature(),
-            &DocumentBlockingStylesheetSignature::ParserCreatedStyleImport {
-                urls: urls.to_vec(),
-            }
-        );
-        self.stylesheet_lifecycle
-            .fetches
-            .status_for_blocking_operation(blocking_operation)
-            .is_some()
-    }
-
-    pub(crate) fn take_ready_blocking_style_import_graphs(
-        &mut self,
-    ) -> Vec<ReadyBlockingStyleImportGraph> {
-        let pending_imports = self
-            .stylesheet_lifecycle
-            .owner_states
-            .pending_operations()
-            .into_iter()
-            .filter(|operation| {
-                matches!(
-                    &operation.parameters,
-                    ConnectedLoadParameters::StyleImports { .. }
-                ) && operation.blocking_operation.is_some()
-            })
-            .collect::<Vec<_>>();
-        let mut ready = Vec::new();
-        for operation in pending_imports {
-            let Some(blocking_operation) = operation.blocking_operation.as_ref() else {
-                continue;
-            };
-            let Some(status) = self
-                .stylesheet_lifecycle
-                .fetches
-                .status_for_blocking_operation(blocking_operation)
-            else {
-                continue;
-            };
-            if status == StylesheetBlockingStatus::Pending {
-                continue;
-            }
-            let roots = match &operation.parameters {
-                ConnectedLoadParameters::StyleImports { roots, .. } => roots.clone(),
-                _ => continue,
-            };
-            if roots.is_empty() {
-                continue;
-            }
-            let Some(graph) = self
-                .stylesheet_lifecycle
-                .fetches
-                .take_completed_import_graph_for_blocking_operation(blocking_operation)
-            else {
-                continue;
-            };
-            let successful = status == StylesheetBlockingStatus::Ready && graph.successful();
-            ready.push(ReadyBlockingStyleImportGraph::new(
-                operation, roots, graph, successful,
-            ));
-        }
-        ready
-    }
-
-    pub(crate) fn complete_ready_blocking_style_import_graph(
-        &mut self,
-        operation: &Arc<ConnectedLoadOperation>,
-        successful: bool,
-    ) {
-        let event_pending = matches!(
-            &operation.parameters,
-            ConnectedLoadParameters::StyleImports {
-                source: ConnectedStyleImportSource::Inline(_),
-                ..
-            }
-        );
-        if self
-            .stylesheet_lifecycle
-            .owner_states
-            .accept_completion(operation, 0, event_pending)
-        {
-            self.note_connected_style_import_completion(operation, successful);
-        }
     }
 
     pub(crate) fn prepare_stylesheet_owner_runtime_changes(
@@ -2247,89 +1942,6 @@ fn link_rel_is_standalone_prefetch(rel: &str) -> bool {
         && !link_rel_includes_token(rel, "modulepreload")
 }
 
-pub(super) fn initial_stylesheet_import_completion_successful(
-    stylesheet_url: &Url,
-    fetch: &crate::stylesheet_blocking::StylesheetFetch,
-) -> Option<bool> {
-    if stylesheet_url.scheme() != "data" {
-        // A network stylesheet's import graph is not known until its response
-        // body has been parsed. Keep the link pending so parser-blocking scripts
-        // and the load event wait for every imported sheet, as Blink does.
-        return fetch.import_graph_terminal();
-    }
-    match data_stylesheet_import_readiness(stylesheet_url) {
-        DataStylesheetImportReadiness::NoImports => Some(true),
-        DataStylesheetImportReadiness::Imports(_) => None,
-        DataStylesheetImportReadiness::Failed => Some(false),
-    }
-}
-
-fn data_stylesheet_import_readiness(stylesheet_url: &Url) -> DataStylesheetImportReadiness {
-    if stylesheet_url.scheme() != "data" {
-        return DataStylesheetImportReadiness::NoImports;
-    }
-    if stylesheet_url.as_str().len() > MAX_DATA_STYLESHEET_IMPORT_URL_BYTES {
-        return DataStylesheetImportReadiness::Failed;
-    }
-    let Some((body, mime_type)) = data_url_body_and_mime_type(stylesheet_url.as_str()) else {
-        return DataStylesheetImportReadiness::Failed;
-    };
-    // Chromium treats a data: URL selected by a stylesheet request as CSS even
-    // when its media type is omitted or is not text/css. HTTP response MIME
-    // enforcement belongs to the network stylesheet response validator and
-    // must not be reused for this local-scheme path.
-    let css_text = decode_text_for_legacy_web(&body, mime_charset(&mime_type).as_deref());
-    let Ok(urls) =
-        crate::style_engine::stylesheet_top_level_import_urls(&css_text, stylesheet_url, true)
-    else {
-        return DataStylesheetImportReadiness::Failed;
-    };
-    if urls.is_empty() {
-        DataStylesheetImportReadiness::NoImports
-    } else {
-        DataStylesheetImportReadiness::Imports(urls)
-    }
-}
-
-fn connected_style_import_readiness(urls: Vec<Url>) -> ConnectedStyleImportReadiness {
-    let mut pending = Vec::new();
-    let mut stack = std::collections::VecDeque::from(urls);
-    let mut seen = std::collections::HashSet::new();
-    let mut data_expansions = 0;
-    while let Some(url) = stack.pop_front() {
-        if !seen.insert(import_url_identity(&url)) {
-            continue;
-        }
-        if url.scheme() != "data" {
-            pending.push(url);
-            continue;
-        }
-        if url.as_str().len() > MAX_DATA_STYLESHEET_IMPORT_URL_BYTES {
-            return ConnectedStyleImportReadiness::Ready(false);
-        }
-        data_expansions += 1;
-        if data_expansions > MAX_DATA_STYLESHEET_IMPORT_EXPANSIONS {
-            return ConnectedStyleImportReadiness::Ready(false);
-        }
-        match data_stylesheet_import_readiness(&url) {
-            DataStylesheetImportReadiness::NoImports => {}
-            DataStylesheetImportReadiness::Failed => {
-                return ConnectedStyleImportReadiness::Ready(false);
-            }
-            DataStylesheetImportReadiness::Imports(imports) => {
-                for import in imports.into_iter().rev() {
-                    stack.push_front(import);
-                }
-            }
-        }
-    }
-    if pending.is_empty() {
-        ConnectedStyleImportReadiness::Ready(true)
-    } else {
-        ConnectedStyleImportReadiness::Pending(pending)
-    }
-}
-
 fn preload_like_link_request_resource_type(
     element: &crate::dom::native::Element,
     resource_type: SubresourceResourceType,
@@ -2624,6 +2236,9 @@ async fn fetch_connected_link_readiness_with_request(
 
 #[cfg(test)]
 mod tests {
+    use super::super::import_graph::{
+        DataStylesheetImportReadiness, data_stylesheet_import_readiness,
+    };
     use super::*;
     use crate::module_runtime::{
         ModuleAttributesKey, ModuleLoadError, ModuleLoadStage, ModuleMapFetchDisposition,
@@ -2746,9 +2361,17 @@ mod tests {
         runtime: &mut DocumentRuntime,
         owner: DomHandle,
     ) -> ReadyConnectedStyleLoad {
-        let (starts, warnings) = runtime.prime_pending_connected_style_loads().into_parts();
+        let (starts, warnings, completed_clients) = runtime
+            .prime_pending_connected_style_loads()
+            .into_parts_with_completed_stylesheet_clients();
         assert!(starts.is_empty(), "stylesheet must not start module work");
         assert!(warnings.is_empty(), "stylesheet warnings: {warnings:?}");
+        assert!(
+            completed_clients
+                .iter()
+                .all(|client| client.load().owner() == owner),
+            "a completed admission must belong to the exact requested owner"
+        );
 
         runtime.drain_ready_connected_style_load_completions();
         if let Some(ready) = runtime.pop_ready_connected_style_load() {
@@ -3569,71 +3192,6 @@ mod tests {
     }
 
     #[test]
-    fn data_stylesheet_import_readiness_tracks_top_level_imports() {
-        let stylesheet_url =
-            Url::parse("data:/,@import url('https://example.test/imported.css');").unwrap();
-
-        assert_eq!(
-            data_stylesheet_import_readiness(&stylesheet_url),
-            DataStylesheetImportReadiness::Imports(vec![
-                Url::parse("https://example.test/imported.css").unwrap()
-            ])
-        );
-    }
-
-    #[test]
-    fn connected_style_import_readiness_preserves_external_import_order() {
-        let first = Url::parse("https://example.test/first.css").unwrap();
-        let second = Url::parse("https://example.test/second.css").unwrap();
-
-        let ConnectedStyleImportReadiness::Pending(pending) =
-            connected_style_import_readiness(vec![first.clone(), second.clone()])
-        else {
-            panic!("external imports must remain pending");
-        };
-
-        assert_eq!(pending, vec![first, second]);
-    }
-
-    #[test]
-    fn connected_style_import_readiness_deduplicates_url_fragments() {
-        let first = Url::parse("https://example.test/shared.css#first").unwrap();
-        let duplicate = Url::parse("https://example.test/shared.css#second").unwrap();
-
-        let ConnectedStyleImportReadiness::Pending(pending) =
-            connected_style_import_readiness(vec![first.clone(), duplicate])
-        else {
-            panic!("external import must remain pending");
-        };
-
-        assert_eq!(pending, vec![first]);
-    }
-
-    #[test]
-    fn network_style_import_graph_deduplicates_fragments_before_fetch() {
-        let first = Url::parse("https://example.test/shared.css#first").unwrap();
-        let duplicate = Url::parse("https://example.test/shared.css#second").unwrap();
-        let second = Url::parse("https://example.test/second.css").unwrap();
-        let mut graph = ConnectedNetworkStyleImportGraph::default();
-
-        graph.extend([first.clone(), duplicate, second.clone()]);
-        assert_eq!(graph.take_pending(), vec![first, second]);
-        assert!(graph.is_empty());
-    }
-
-    #[test]
-    fn network_style_import_graph_leaves_admission_to_resource_scheduler() {
-        let urls = (0..1_100)
-            .map(|index| Url::parse(&format!("https://example.test/import-{index}.css")).unwrap());
-        let mut graph = ConnectedNetworkStyleImportGraph::default();
-
-        graph.extend(urls);
-
-        assert_eq!(graph.take_pending().len(), 1_100);
-        assert!(graph.is_empty());
-    }
-
-    #[test]
     fn processed_inline_source_deduplicates_imports_in_document_order() {
         let parser = HtmlParser;
         let document = parser.parse(
@@ -3680,7 +3238,7 @@ mod tests {
             style,
             ConnectedStyleEventElementKind::Style,
             ConnectedLoadParameters::StyleImports {
-                source: ConnectedStyleImportSource::Inline(source),
+                source: InlineStyleImportSource::new(source),
                 urls: vec![Url::parse("https://example.test/runtime.css").unwrap()],
                 roots: Vec::new(),
             },
@@ -4426,9 +3984,11 @@ mod tests {
         assert!(runtime.apply_next_stylesheet_networking_task_for_test());
         assert!(speculative.terminal().is_some());
 
-        runtime.note_discovered_document_owned_blocking_stylesheet_inputs(
+        let completed_clients = runtime.note_discovered_document_owned_blocking_stylesheet_inputs(
             blocking_stylesheet_inputs.iter(),
         );
+        assert_eq!(completed_clients.len(), 1);
+        assert_eq!(completed_clients[0].load().owner(), link);
         let parser_client = runtime
             .active_stylesheet_link_client_for_test(link)
             .expect("parser discovery should bind the exact owner client");
@@ -4483,9 +4043,6 @@ mod tests {
         let first_physical = runtime.take_ready_stylesheet_network_results();
         assert_eq!(first_physical.len(), 1);
         assert!(first_physical[0].source_owners.is_empty());
-        let first_client = runtime.take_ready_stylesheet_link_client_terminals();
-        assert_eq!(first_client.len(), 1);
-        assert_eq!(first_client[0].load().owner(), first_link);
 
         let head = runtime
             .dom_host()
@@ -4505,9 +4062,13 @@ mod tests {
         assert!(runtime.dom_host_mut().append_child(head, second_link));
 
         runtime.queue_connected_style_loads(second_link);
-        let (starts, warnings) = runtime.prime_pending_connected_style_loads().into_parts();
+        let (starts, warnings, completed_clients) = runtime
+            .prime_pending_connected_style_loads()
+            .into_parts_with_completed_stylesheet_clients();
         assert!(starts.is_empty(), "stylesheet must not start module work");
         assert!(warnings.is_empty(), "stylesheet warnings: {warnings:?}");
+        assert_eq!(completed_clients.len(), 1);
+        assert_eq!(completed_clients[0].load().owner(), second_link);
 
         let second_ready = runtime
             .pop_ready_connected_style_load()
@@ -4518,9 +4079,16 @@ mod tests {
             runtime.take_ready_stylesheet_network_results().is_empty(),
             "late compatible client admission must not publish another physical terminal"
         );
-        let second_client = runtime.take_ready_stylesheet_link_client_terminals();
-        assert_eq!(second_client.len(), 1);
-        assert_eq!(second_client[0].load().owner(), second_link);
+        let selected_physical_client = runtime.take_ready_stylesheet_link_client_terminals();
+        assert_eq!(selected_physical_client.len(), 1);
+        assert_eq!(selected_physical_client[0].load().owner(), first_link);
+        let (_, _, repeated_clients) = runtime
+            .prime_pending_connected_style_loads()
+            .into_parts_with_completed_stylesheet_clients();
+        assert!(
+            repeated_clients.is_empty(),
+            "repeated lifecycle priming must not settle one client twice"
+        );
         assert!(
             !runtime.apply_ready_stylesheet_networking_tasks_for_test(),
             "cached admission must not require a second network terminal"
@@ -4576,9 +4144,11 @@ mod tests {
                 .is_some_and(|terminal| !terminal.is_ready())
         );
 
-        runtime.note_discovered_document_owned_blocking_stylesheet_inputs(
+        let completed_clients = runtime.note_discovered_document_owned_blocking_stylesheet_inputs(
             blocking_stylesheet_inputs.iter(),
         );
+        assert_eq!(completed_clients.len(), 1);
+        assert_eq!(completed_clients[0].load().owner(), link);
         let signatures = blocking_stylesheet_inputs
             .iter()
             .map(|input| input.signature().clone())
@@ -4711,7 +4281,12 @@ mod tests {
         // import graph. This low-level fixture has no ScriptVm, so publish the
         // known-empty graph explicitly before asserting the install client's
         // load event.
-        runtime.note_stylesheet_import_graph_completion(stylesheet_client.fetch(), true);
+        runtime.note_stylesheet_import_graph_completion(
+            stylesheet_client.fetch(),
+            Arc::new(
+                crate::stylesheet_blocking::StylesheetImportGraphFetchResult::new(true, Vec::new()),
+            ),
+        );
         let mut ready_owners = Vec::new();
         while let Some(ready) = runtime.pop_ready_connected_style_load() {
             assert!(ready.successful());
@@ -4729,7 +4304,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn completed_style_preload_replays_to_late_stylesheet_install_client() {
+    async fn completed_style_preload_admits_late_stylesheet_install_client() {
         let href = "data:text/css,.late%7Bcolor%3Agreen%7D";
         let parser = HtmlParser;
         let document = parser.parse(
@@ -4768,7 +4343,9 @@ mod tests {
         );
         assert!(runtime.dom_host_mut().append_child(head, stylesheet));
         runtime.queue_connected_style_loads(stylesheet);
-        runtime.prime_pending_connected_style_loads();
+        let (_, _, completed_clients) = runtime
+            .prime_pending_connected_style_loads()
+            .into_parts_with_completed_stylesheet_clients();
 
         let stylesheet_client = runtime
             .active_stylesheet_link_client_for_test(stylesheet)
@@ -4781,17 +4358,16 @@ mod tests {
         assert_eq!(ready.owner(), stylesheet);
         assert!(ready.successful());
         assert!(runtime.take_ready_stylesheet_network_results().is_empty());
-        let terminals = runtime.take_ready_stylesheet_link_client_terminals();
-        assert_eq!(terminals.len(), 1);
-        assert!(terminals[0].load().installs_stylesheet());
+        assert_eq!(completed_clients.len(), 1);
+        assert!(completed_clients[0].load().installs_stylesheet());
         assert!(
             !runtime.apply_ready_stylesheet_networking_tasks_for_test(),
-            "terminal replay must not create another physical task"
+            "completed-client admission must not create another physical task"
         );
     }
 
     #[tokio::test]
-    async fn completed_stylesheet_replays_to_late_preload_event_only_client() {
+    async fn completed_stylesheet_admits_late_preload_event_only_client() {
         let href = "data:text/css,.first%7Bcolor%3Agreen%7D";
         let parser = HtmlParser;
         let document = parser.parse(
@@ -4828,7 +4404,9 @@ mod tests {
         assert!(runtime.dom_host_mut().set_attribute(preload, "href", href));
         assert!(runtime.dom_host_mut().append_child(head, preload));
         runtime.queue_connected_style_loads(preload);
-        runtime.prime_pending_connected_style_loads();
+        let (_, _, completed_clients) = runtime
+            .prime_pending_connected_style_loads()
+            .into_parts_with_completed_stylesheet_clients();
 
         let preload_client = runtime
             .active_stylesheet_link_client_for_test(preload)
@@ -4841,9 +4419,8 @@ mod tests {
         assert_eq!(ready.owner(), preload);
         assert!(ready.successful());
         assert!(runtime.take_ready_stylesheet_network_results().is_empty());
-        let terminals = runtime.take_ready_stylesheet_link_client_terminals();
-        assert_eq!(terminals.len(), 1);
-        assert!(!terminals[0].load().installs_stylesheet());
+        assert_eq!(completed_clients.len(), 1);
+        assert!(!completed_clients[0].load().installs_stylesheet());
     }
 
     #[test]

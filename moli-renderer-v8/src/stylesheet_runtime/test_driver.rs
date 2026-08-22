@@ -29,6 +29,9 @@ impl DocumentRuntime {
             crate::page_task_queue::RendererPageStylesheetCompletion::Connected(completion) => {
                 self.apply_connected_style_load_completion(completion);
             }
+            crate::page_task_queue::RendererPageStylesheetCompletion::LinkedImport(completion) => {
+                self.apply_linked_stylesheet_import_graph_completion(completion);
+            }
             crate::page_task_queue::RendererPageStylesheetCompletion::LiveImport(completion) => {
                 self.apply_live_stylesheet_import_load_completion(completion, true);
             }

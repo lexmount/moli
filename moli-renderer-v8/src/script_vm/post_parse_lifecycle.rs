@@ -2263,6 +2263,28 @@ impl ScriptVm {
             });
     }
 
+    pub(crate) fn settle_stylesheet_link_clients(
+        &mut self,
+        clients: Vec<crate::document_runtime::StylesheetLinkClientTerminal>,
+    ) {
+        if clients.is_empty() {
+            return;
+        }
+        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context;
+        let context_host = self._context_host.clone();
+        let document_runtime = &mut self.document_runtime;
+        self.renderer_document_isolate
+            .with_renderer_document_isolate_mut(|isolate| {
+                let scope = pin!(v8::HandleScope::new(isolate));
+                let scope = &mut scope.init();
+                let context = unsafe { v8::Local::new(scope, &*context_ptr) };
+                let scope = &mut v8::ContextScope::new(scope, context);
+                let host_ptr: *mut JsContextHost = (*context_host).as_ptr();
+                document_runtime
+                    .settle_stylesheet_link_clients_in_current_scope(scope, host_ptr, clients);
+            });
+    }
+
     pub(crate) fn dispatch_preload_like_link_error_event(&mut self, handle: DomHandle) -> bool {
         let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context;
         let context_host = self._context_host.clone();
@@ -2335,16 +2357,18 @@ impl ScriptVm {
         let prime_result = self
             .document_runtime
             .prime_document_lifecycle_processing_for_owner(self._context_host.as_ref().as_ptr());
-        self.schedule_connected_modulepreloads_from_prime_result(prime_result);
+        self.apply_connected_style_load_prime_result(prime_result);
         self.record_ready_stylesheet_network_results();
         self.reconcile_document_web_fonts_for_layout();
     }
 
-    pub(crate) fn schedule_connected_modulepreloads_from_prime_result(
+    pub(crate) fn apply_connected_style_load_prime_result(
         &mut self,
         prime_result: crate::document_runtime::ConnectedStyleLoadPrimeResult,
     ) {
-        let (modulepreload_starts, runtime_warnings) = prime_result.into_parts();
+        let (modulepreload_starts, runtime_warnings, completed_stylesheet_clients) =
+            prime_result.into_parts_with_completed_stylesheet_clients();
+        self.settle_stylesheet_link_clients(completed_stylesheet_clients);
         for warning in runtime_warnings {
             self.record_runtime_warning(format_args!("{warning}"));
         }
@@ -2361,6 +2385,7 @@ impl ScriptVm {
         }
     }
 
+    #[cfg(test)]
     pub(in crate::script_vm) fn queue_linked_stylesheet_import_csp_violations(
         &mut self,
         import_urls: impl IntoIterator<Item = url::Url>,
@@ -2424,8 +2449,6 @@ impl ScriptVm {
             );
         let mut performance_entries = Vec::new();
         let mut css_subresources = Vec::new();
-        let mut linked_stylesheet_import_urls = Vec::new();
-        let mut linked_stylesheet_import_loads = Vec::new();
         let mut import_graph_results: Vec<(
             crate::document_runtime::ConnectedStyleImportRoot,
             Vec<crate::live_stylesheet::LiveStylesheetImportResponse>,
@@ -2575,7 +2598,8 @@ impl ScriptVm {
             }
         }
         for blocking_import_graph in blocking_import_graphs {
-            let (operation, roots, graph, mut successful) = blocking_import_graph.into_parts();
+            let (source, roots, graph) = blocking_import_graph.into_parts();
+            let mut successful = graph.successful();
             let expected_root_count = roots.len();
             let roots = roots
                 .into_iter()
@@ -2585,27 +2609,8 @@ impl ScriptVm {
                 })
                 .collect::<Vec<_>>();
             successful &= !roots.is_empty() && roots.len() == expected_root_count;
-            let responses = graph
-                .network_results()
-                .iter()
-                .map(|result| {
-                    let terminal = result.terminal();
-                    let physical_response = terminal.physical().as_result().ok();
-                    let ready_response = terminal.ready_response();
-                    crate::live_stylesheet::LiveStylesheetImportResponse {
-                        request_url: result.request_url().clone(),
-                        response_url: physical_response
-                            .as_ref()
-                            .map(|response| response.final_url.clone())
-                            .unwrap_or_else(|| result.request_url().clone()),
-                        css_text: ready_response
-                            .map(|response| response.body_text().to_owned())
-                            .unwrap_or_default(),
-                        successful: ready_response.is_some(),
-                        origin_clean: terminal.origin_clean().unwrap_or(false),
-                    }
-                })
-                .collect::<Vec<_>>();
+            let responses =
+                crate::document_runtime::live_stylesheet_import_responses(graph.as_ref());
             if !roots.is_empty() {
                 for response in &responses {
                     if !response.successful {
@@ -2638,86 +2643,10 @@ impl ScriptVm {
                 }
             }
             self.document_runtime
-                .complete_ready_blocking_style_import_graph(&operation, successful);
-        }
-        for client in client_terminals {
-            let load = client.load();
-            if !load.installs_stylesheet() {
-                continue;
-            }
-            let terminal = client.terminal();
-            // Blink creates the owner's CSSStyleSheet even when the resource
-            // failed or was cancelled. An unusable terminal therefore installs
-            // an empty source; its existing link task still reports the error.
-            let ready_response = terminal.ready_response();
-            let stylesheet_text = ready_response
-                .map(|response| response.body_text().to_owned())
-                .unwrap_or_default();
-            let stylesheet_base_url = match terminal.physical() {
-                crate::stylesheet_blocking::StylesheetPhysicalOutcome::Response(response) => {
-                    response.final_url.clone()
-                }
-                crate::stylesheet_blocking::StylesheetPhysicalOutcome::NetworkError(_) => {
-                    load.request_url().clone()
-                }
-            };
-            let request_url = load.request_url().clone();
-            let prepared = host.prepare_linked_stylesheet_resource(
-                load.owner(),
-                &stylesheet_text,
-                stylesheet_base_url.clone(),
-                request_url.clone(),
-                terminal.origin_clean().unwrap_or(false),
-            );
-            if let Some(prepared) = prepared.as_ref() {
-                host.install_linked_stylesheet(
-                    crate::document_runtime::InstallLinkedStylesheet::from_prepared(
-                        load.owner(),
-                        request_url.clone(),
-                        prepared.clone(),
-                    ),
-                );
-            }
-            if !load.fetch().claim_dependent_resource_start() {
-                continue;
-            }
-            let import_urls = ready_response
-                .and(prepared.as_ref())
-                .map(|prepared| prepared.import_urls().to_vec())
-                .unwrap_or_default();
-            linked_stylesheet_import_loads.push((Arc::clone(load), import_urls.clone()));
-            if ready_response.is_none() {
-                // Only a usable response may contribute CSS text, imports, or
-                // other dependent resources. The empty owner sheet is CSSOM-only.
-                continue;
-            }
-            if request_url.scheme() != "data" {
-                linked_stylesheet_import_urls.extend(import_urls);
-            }
-            for resource in crate::css_resource_urls::stylesheet_load_blocking_resources(
-                &stylesheet_text,
-                &stylesheet_base_url,
-                optional_resource_fetch_mask,
-            ) {
-                let Some(binding) = host.accept_current_main_stylesheet_subresource_load_delay()
-                else {
-                    tracing::debug!(
-                        url = %resource.request_url(),
-                        kind = ?resource.kind(),
-                        "skipping stylesheet subresource for stale main document owner"
-                    );
-                    continue;
-                };
-                css_subresources.push((binding, resource));
-            }
+                .complete_ready_blocking_style_import_graph(source, successful, Arc::clone(&graph));
         }
         drop(host);
-        let host_ptr: *mut JsContextHost = (*self._context_host).as_ptr();
-        for (load, urls) in linked_stylesheet_import_loads {
-            self.document_runtime
-                .prime_network_stylesheet_import_loads(load, urls, host_ptr);
-        }
-        self.queue_linked_stylesheet_import_csp_violations(linked_stylesheet_import_urls);
+        self.settle_stylesheet_link_clients(client_terminals);
         self.apply_pending_stylesheet_source_css_projections();
         self.start_stylesheet_subresource_fetches(css_subresources);
         self.record_resource_performance_entries(performance_entries);
@@ -2752,115 +2681,16 @@ impl ScriptVm {
         if resources.is_empty() {
             return;
         }
-        let started = Instant::now();
-        let resource_count = resources.len();
-        let context_host = self._context_host.clone();
-        let retain_css_images = context_host.borrow().layout_policy().uses_real_layout();
-        let mut admitted = Vec::with_capacity(resources.len());
-        let mut duplicate_bindings = Vec::new();
-        for (binding, resource) in resources {
-            match resource.kind() {
-                crate::css_resource_urls::StylesheetLoadBlockingResourceKind::Font
-                    if binding.child_handle().is_none() =>
-                {
-                    match self
-                        ._context_host
-                        .borrow()
-                        .admit_document_web_font(resource)
-                    {
-                        Some(resource) => admitted.push((binding, resource, None)),
-                        None => duplicate_bindings.push(binding),
-                    }
-                }
-                crate::css_resource_urls::StylesheetLoadBlockingResourceKind::Image
-                    if retain_css_images =>
-                {
-                    let resolved_url = resource.request_url().as_str().to_owned();
-                    match self
-                        ._context_host
-                        .borrow_mut()
-                        .admit_stylesheet_css_image(binding, resolved_url)
-                    {
-                        crate::native_bridge::CssImageResourceAdmission::Fetch(identity) => {
-                            admitted.push((binding, resource, Some(identity)));
-                        }
-                        crate::native_bridge::CssImageResourceAdmission::Reused => {
-                            duplicate_bindings.push(binding);
-                        }
-                        crate::native_bridge::CssImageResourceAdmission::Untracked => {
-                            admitted.push((binding, resource, None));
-                        }
-                    }
-                }
-                _ => admitted.push((binding, resource, None)),
-            }
-        }
-        if !duplicate_bindings.is_empty() {
-            let mut host = context_host.borrow_mut();
-            for binding in duplicate_bindings {
-                host.settle_stylesheet_subresource_load_delay(binding);
-            }
-        }
-        let result = self.with_default_context_scope(move |scope, _host_ptr| {
-            let mut host = context_host.borrow_mut();
-            let mut local_web_fonts = Vec::new();
-            for (binding, resource, css_image) in admitted {
-                let request_url = resource.request_url().clone();
-                let kind = resource.kind();
-                let failed_css_image = css_image.clone();
-                let failed_web_font = (binding.child_handle().is_none()
-                    && kind == crate::css_resource_urls::StylesheetLoadBlockingResourceKind::Font)
-                    .then(|| {
-                        resource
-                            .web_font()
-                            .cloned()
-                            .map(crate::css_resource_urls::CompletedStylesheetWebFont::failure)
-                    })
-                    .flatten();
-                match crate::network_host::start_stylesheet_subresource_fetch(
-                    scope, &mut host, binding, resource, css_image,
-                ) {
-                    Ok(crate::network_host::StylesheetSubresourceFetchStart::WebFontSettled(
-                        web_font,
-                    )) => local_web_fonts.push(web_font),
-                    Ok(
-                        crate::network_host::StylesheetSubresourceFetchStart::Pending
-                        | crate::network_host::StylesheetSubresourceFetchStart::Settled,
-                    ) => {}
-                    Err(error) => {
-                        if let Some(identity) = failed_css_image.as_ref() {
-                            let _ = host.fail_stylesheet_css_image(identity);
-                        }
-                        let settlement = host.settle_stylesheet_subresource_load_delay(binding);
-                        local_web_fonts.extend(failed_web_font);
-                        tracing::warn!(
-                            url = %request_url,
-                            ?kind,
-                            owner = ?binding.owner(),
-                            settled = settlement.settled(),
-                            %error,
-                            "stylesheet subresource failed before network scheduling"
-                        );
-                    }
-                }
-            }
-            Ok(local_web_fonts)
-        });
-        match result {
-            Ok(web_fonts) => {
-                for web_font in web_fonts {
-                    self.complete_document_web_font(web_font);
-                }
-            }
-            Err(error) => self.record_runtime_warning(format_args!(
+        if let Err(error) = self.with_default_context_scope(move |scope, host_ptr| {
+            crate::document_runtime::DocumentRuntime::start_stylesheet_subresource_fetches_in_current_scope(
+                scope, host_ptr, resources,
+            );
+            Ok(())
+        }) {
+            self.record_runtime_warning(format_args!(
                 "failed to enter stylesheet subresource request scope: {error}"
-            )),
+            ));
         }
-        debug!(
-            resource_count,
-            elapsed_ms = started.elapsed().as_millis(),
-            "started owner-bound stylesheet subresource requests"
-        );
     }
 
     pub(crate) fn record_script_subresource_network_result(

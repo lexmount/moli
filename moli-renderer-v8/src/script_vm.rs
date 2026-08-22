@@ -7737,9 +7737,11 @@ impl ScriptVm {
                         .await;
                 }
                 None => {
-                    self.document_runtime
+                    let completed_stylesheet_clients = self
+                        .document_runtime
                         .wait_for_script_blockers_before(script.node_id)
                         .await;
+                    self.settle_stylesheet_link_clients(completed_stylesheet_clients);
                 }
             }
             self.record_ready_stylesheet_network_results();

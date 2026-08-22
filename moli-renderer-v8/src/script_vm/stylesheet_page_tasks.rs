@@ -39,6 +39,9 @@ impl ScriptVm {
             RendererPageStylesheetCompletion::Connected(completion) => self
                 .document_runtime
                 .apply_connected_style_load_completion(completion),
+            RendererPageStylesheetCompletion::LinkedImport(completion) => self
+                .document_runtime
+                .apply_linked_stylesheet_import_graph_completion(completion),
             RendererPageStylesheetCompletion::LiveImport(completion) => self
                 .document_runtime
                 .apply_live_stylesheet_import_load_completion(completion, current),

@@ -35,12 +35,13 @@ impl ScriptVm {
                 );
                 continue;
             };
-            self.document_runtime.apply_prepared_connected_style_load(
+            let prime_result = self.document_runtime.apply_prepared_connected_style_load(
                 prepared,
                 inline_source,
                 event_admission,
                 self._context_host.as_ref().as_ptr(),
             );
+            self.apply_connected_style_load_prime_result(prime_result);
         }
     }
 
@@ -58,8 +59,10 @@ impl ScriptVm {
             );
             return 0;
         }
-        self.document_runtime
+        let completed_stylesheet_clients = self
+            .document_runtime
             .note_discovered_document_owned_blocking_stylesheet_inputs(inputs.iter());
+        self.settle_stylesheet_link_clients(completed_stylesheet_clients);
         inputs.len()
     }
 

@@ -52,6 +52,7 @@ impl DocumentRuntime {
             self.stylesheet_lifecycle
                 .link_client_index
                 .unregister(replaced.active_load());
+            self.unregister_linked_stylesheet_import_consumer(replaced.active_load());
         }
         if load.fetch().terminal().is_none() {
             self.stylesheet_lifecycle.link_client_index.register(load);
@@ -68,6 +69,7 @@ impl DocumentRuntime {
             self.stylesheet_lifecycle
                 .link_client_index
                 .unregister(&load);
+            self.unregister_linked_stylesheet_import_consumer(&load);
         }
         self.stylesheet_lifecycle
             .owner_states
@@ -77,9 +79,11 @@ impl DocumentRuntime {
     pub(super) fn promote_stylesheet_link_client_if_ready(
         &mut self,
         load: Arc<StylesheetLinkClient>,
-    ) {
+    ) -> Option<StylesheetLinkClientTerminal> {
         let active_link_clients = self.stylesheet_lifecycle.link_client_index.len();
-        self.promote_stylesheet_link_client_candidates(vec![load], active_link_clients);
+        self.promote_stylesheet_link_client_candidates(vec![load], active_link_clients)
+            .into_iter()
+            .next()
     }
 
     pub(super) fn promote_stylesheet_link_clients_for_fetch(
@@ -91,14 +95,18 @@ impl DocumentRuntime {
             .stylesheet_lifecycle
             .link_client_index
             .take_for_fetch(fetch);
-        self.promote_stylesheet_link_client_candidates(clients, active_link_clients);
+        let terminals =
+            self.promote_stylesheet_link_client_candidates(clients, active_link_clients);
+        self.stylesheet_lifecycle
+            .ready_stylesheet_link_client_terminals
+            .extend(terminals);
     }
 
     fn promote_stylesheet_link_client_candidates(
         &mut self,
         candidates: Vec<Arc<StylesheetLinkClient>>,
         active_link_clients: usize,
-    ) {
+    ) -> Vec<StylesheetLinkClientTerminal> {
         #[cfg(test)]
         let trace_enabled = true;
         #[cfg(not(test))]
@@ -106,6 +114,7 @@ impl DocumentRuntime {
         let trace_started = trace_enabled.then(std::time::Instant::now);
         let mut inspected_link_states = 0_u64;
         let mut promoted_clients = 0_u64;
+        let mut terminals = Vec::new();
         for load in candidates {
             if trace_enabled {
                 inspected_link_states += 1;
@@ -127,12 +136,10 @@ impl DocumentRuntime {
                 .unwrap_or((false, None));
             if accepted {
                 promoted_clients += 1;
-                self.stylesheet_lifecycle
-                    .ready_stylesheet_link_client_terminals
-                    .push_back(StylesheetLinkClientTerminal::new(
-                        Arc::clone(&load),
-                        terminal,
-                    ));
+                terminals.push(StylesheetLinkClientTerminal::new(
+                    Arc::clone(&load),
+                    terminal,
+                ));
             }
             if let Some((load, successful)) = ready {
                 self.push_ready_connected_style_load(ReadyConnectedStyleLoad::for_stylesheet_link(
@@ -162,6 +169,7 @@ impl DocumentRuntime {
                 stage = "stylesheet_link_client_promotion_done",
             );
         }
+        terminals
     }
 
     pub(super) fn note_connected_style_import_completion(
@@ -169,36 +177,13 @@ impl DocumentRuntime {
         operation: &Arc<ConnectedLoadOperation>,
         successful: bool,
     ) {
-        if let ConnectedLoadParameters::StyleImports {
-            source: ConnectedStyleImportSource::Linked(load),
-            ..
-        } = &operation.parameters
-        {
-            self.note_stylesheet_import_graph_completion(load.fetch(), successful);
-            return;
-        }
-        let handle = operation.owner;
-        if let Some(state) = self
-            .stylesheet_lifecycle
-            .owner_states
-            .link_state_mut(handle)
-        {
-            let accepted = state.accept_import_completion(successful);
-            let ready = accepted.then(|| state.take_ready_event()).flatten();
-            if let Some((load, successful)) = ready {
-                self.push_ready_connected_style_load(ReadyConnectedStyleLoad::for_stylesheet_link(
-                    load, successful,
-                ));
-            }
-            return;
-        }
         self.push_ready_connected_style_load(ReadyConnectedStyleLoad::for_operation(
             Arc::clone(operation),
             successful,
         ));
     }
 
-    fn note_stylesheet_link_import_completion(
+    pub(super) fn note_stylesheet_link_import_completion(
         &mut self,
         load: &Arc<StylesheetLinkClient>,
         successful: bool,
@@ -217,27 +202,6 @@ impl DocumentRuntime {
             self.push_ready_connected_style_load(ReadyConnectedStyleLoad::for_stylesheet_link(
                 load, successful,
             ));
-        }
-    }
-
-    pub(crate) fn note_stylesheet_import_graph_completion(
-        &mut self,
-        fetch: &crate::stylesheet_blocking::StylesheetFetch,
-        successful: bool,
-    ) {
-        let _ = fetch.finish_import_graph(successful);
-        let successful = fetch
-            .import_graph_terminal()
-            .expect("a finished stylesheet import graph must retain its terminal");
-        let clients = self
-            .stylesheet_lifecycle
-            .owner_states
-            .link_states()
-            .filter(|(_, state)| state.active_load().fetch().ptr_eq(fetch))
-            .map(|(_, state)| Arc::clone(state.active_load()))
-            .collect::<Vec<_>>();
-        for client in clients {
-            self.note_stylesheet_link_import_completion(&client, successful);
         }
     }
 
@@ -280,27 +244,6 @@ impl DocumentRuntime {
             result.import_roots.clear();
             return result;
         };
-        if let ConnectedLoadParameters::StyleImports {
-            source: ConnectedStyleImportSource::Linked(load),
-            roots,
-            ..
-        } = &operation.parameters
-        {
-            result.import_roots = roots
-                .iter()
-                .filter(|root| {
-                    self.dom_host.is_connected(root.owner)
-                        && self
-                            .stylesheet_lifecycle
-                            .owner_states
-                            .link_state(root.owner)
-                            .is_some_and(|state| state.active_load().fetch().ptr_eq(load.fetch()))
-                })
-                .cloned()
-                .collect();
-            result.source_owners = result.import_roots.iter().map(|root| root.owner).collect();
-            return result;
-        }
         let accepted = self.dom_host.is_connected(operation.owner)
             && self
                 .stylesheet_lifecycle
@@ -339,37 +282,10 @@ impl DocumentRuntime {
             successful,
             mut network_results,
         } = completion;
-        if matches!(
-            &operation.parameters,
-            ConnectedLoadParameters::StyleImports {
-                source: ConnectedStyleImportSource::Linked(_),
-                ..
-            }
-        ) {
-            // A linked sheet's import graph is owned by its shared physical
-            // fetch, not by whichever DOM client happened to start it. Keep all
-            // responses observable while avoiding top-level source rebinding,
-            // then fan completion out to every still-current client.
-            let _ = self
-                .stylesheet_lifecycle
-                .owner_states
-                .accept_completion(&operation, 0, false);
-            for result in &mut network_results {
-                result.source_operation = Some(Arc::clone(&operation));
-            }
-            self.stylesheet_lifecycle
-                .ready_connected_load_network_results
-                .extend(network_results);
-            self.note_connected_style_import_completion(&operation, successful);
-            return;
-        }
         let (source_result_count, event_pending) = match &operation.parameters {
             ConnectedLoadParameters::ImmediateOwnerProcessing
             | ConnectedLoadParameters::PreloadLikeLink { .. } => (0, true),
-            ConnectedLoadParameters::StyleImports { source, .. } => (
-                network_results.len(),
-                matches!(source, ConnectedStyleImportSource::Inline(_)),
-            ),
+            ConnectedLoadParameters::StyleImports { .. } => (network_results.len(), true),
         };
         if !self.stylesheet_lifecycle.owner_states.accept_completion(
             &operation,

@@ -2,8 +2,8 @@ use super::*;
 
 use crate::page_task_queue::{
     PageConnectedStyleEventTargetEffect, PageConnectedStyleLoadDelayEffect,
-    PageNetworkingTurnAction, PageStylesheetNetworkingTargetEffect, RendererOwnerWakeSource,
-    RendererPageConnectedStyleEventTask,
+    PageDomManipulationTurnAction, PageNetworkingTurnAction, PageStylesheetNetworkingTargetEffect,
+    RendererOwnerWakeSource, RendererPageConnectedStyleEventTask,
 };
 use crate::runtime::PageTaskCompletion;
 
@@ -67,6 +67,48 @@ async fn wait_for_stylesheet_source(
     );
 }
 
+async fn complete_stylesheet_preload_for_cache_hit(
+    page_vm: &mut PageVm,
+    wake_rx: &mut tokio::sync::mpsc::UnboundedReceiver<crate::page_task_queue::RendererOwnerWake>,
+    loader: &crate::network::ResourceRequestClient,
+    href: &str,
+) -> anyhow::Result<()> {
+    let href = serde_json::to_string(href)?;
+    page_vm.vm_mut().eval(&format!(
+        r#"
+const cachedPreload = document.createElement("link");
+cachedPreload.rel = "preload";
+cachedPreload.as = "style";
+cachedPreload.href = {href};
+document.head.append(cachedPreload);
+"queued"
+"#,
+    ))?;
+    page_vm
+        .vm_mut()
+        .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+    wait_for_stylesheet_source(wake_rx, RendererOwnerWakeSource::NetworkingTask).await;
+    assert!(
+        page_vm
+            .run_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::StylesheetCompletion,
+                loader,
+            )
+            .await?,
+        "the preload physical terminal should consume one exact Networking turn"
+    );
+    wait_for_stylesheet_source(wake_rx, RendererOwnerWakeSource::DomManipulationTask).await;
+    let event = take_next_link_element_event_task_for_test(page_vm)
+        .expect("the completed preload should publish one link event");
+    page_vm
+        .run_claimed_dom_manipulation_task_through_selected_dispatcher_for_test(
+            crate::page_task_queue::RendererPageDomManipulationTask::ConnectedStyleEvent(event),
+            loader,
+        )
+        .await?;
+    Ok(())
+}
+
 fn parser_captured_stylesheet_input_for_test(
     page_vm: &PageVm,
     id: &str,
@@ -98,10 +140,13 @@ fn note_parser_captured_stylesheet_inputs_for_test(
     page_vm: &mut PageVm,
     inputs: &[crate::DocumentOwnedBlockingStylesheetDiscoveryInput],
 ) {
-    page_vm
+    let completed_clients = page_vm
         .vm_mut()
         .document_runtime
         .note_discovered_document_owned_blocking_stylesheet_inputs(inputs);
+    page_vm
+        .vm_mut()
+        .settle_stylesheet_link_clients(completed_clients);
 }
 
 fn queue_stylesheet_checkpoint_marker(page_vm: &mut PageVm, marker: &str) -> anyhow::Result<()> {
@@ -121,6 +166,714 @@ fn stylesheet_checkpoint_marker(page_vm: &mut PageVm, marker: &str) -> anyhow::R
     page_vm
         .vm_mut()
         .eval_without_microtask_checkpoint_for_test(&format!("String(globalThis.{marker})"))
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn completed_data_preload_settles_new_stylesheet_client_synchronously() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let document_url = Url::parse("https://example.com/stylesheet-completed-cache-hit").unwrap();
+        let (mut page_vm, _resource_source, mut wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        let href = "data:text/css,.completed-cache-hit%7Bcolor%3Argb(1%2C%202%2C%203)%7D";
+        complete_stylesheet_preload_for_cache_hit(&mut page_vm, &mut wake_rx, &loader, href)
+            .await?;
+
+        let href = serde_json::to_string(href)?;
+        let synchronous_state = page_vm.vm_mut().eval(&format!(
+            r#"
+globalThis.__completedCacheHitEvents = [];
+const cachedTarget = document.createElement("div");
+cachedTarget.className = "completed-cache-hit";
+document.body.append(cachedTarget);
+const cachedStyle = document.createElement("link");
+cachedStyle.id = "completed-cache-hit-style";
+cachedStyle.rel = "stylesheet";
+cachedStyle.href = {href};
+cachedStyle.addEventListener("load", () => __completedCacheHitEvents.push("load"));
+cachedStyle.addEventListener("error", () => __completedCacheHitEvents.push("error"));
+document.head.append(cachedStyle);
+[
+  Object.prototype.toString.call(cachedStyle.sheet),
+  getComputedStyle(cachedTarget).color,
+  __completedCacheHitEvents.join(",")
+].join("|")
+"#,
+        ))?;
+        assert_eq!(
+            synchronous_state,
+            "[object CSSStyleSheet]|rgb(1, 2, 3)|",
+            "a completed cache hit must install and style in the same append call while its link event remains asynchronous"
+        );
+
+        assert!(
+            page_vm
+                .take_stylesheet_networking_body_task_for_test()
+                .is_none(),
+            "a completed cache hit must not manufacture another physical Networking terminal"
+        );
+        assert!(
+            page_vm.has_ready_dom_manipulation_task_for_test(),
+            "client admission must publish the later link event without an external parser retry"
+        );
+
+        let event = take_next_link_element_event_task_for_test(&mut page_vm)
+            .expect("the synchronously settled stylesheet should retain one link event");
+        page_vm
+            .run_claimed_dom_manipulation_task_through_selected_dispatcher_for_test(
+                crate::page_task_queue::RendererPageDomManipulationTask::ConnectedStyleEvent(event),
+                &loader,
+            )
+            .await?;
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval("__completedCacheHitEvents.join('|')")?,
+            "load"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("completed data stylesheet cache-hit test should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn completed_data_import_graph_settles_late_stylesheet_client() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let document_url =
+            Url::parse("https://example.com/stylesheet-completed-data-import").unwrap();
+        let (mut page_vm, _resource_source, mut wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        let href = concat!(
+            "data:text/css,@import%20url(%22data:text/css,",
+            ".late-data-imported%257Bcolor%253Argb(21%252C%252022%252C%252023)%257D",
+            "%22)%3B"
+        );
+        complete_stylesheet_preload_for_cache_hit(&mut page_vm, &mut wake_rx, &loader, href)
+            .await?;
+
+        let href = serde_json::to_string(href)?;
+        assert_eq!(
+            page_vm.vm_mut().eval(&format!(
+                r#"
+globalThis.__lateDataImportEvents = [];
+const target = document.createElement("div");
+target.className = "late-data-imported";
+document.body.append(target);
+const first = document.createElement("link");
+first.id = "data-import-first";
+first.rel = "stylesheet";
+first.href = {href};
+first.addEventListener("load", () => __lateDataImportEvents.push("first-load"));
+first.addEventListener("error", () => __lateDataImportEvents.push("first-error"));
+document.head.append(first);
+[
+  Object.prototype.toString.call(first.sheet),
+  getComputedStyle(target).color,
+  __lateDataImportEvents.join(",")
+].join("|")
+"#,
+            ))?,
+            "[object CSSStyleSheet]|rgb(21, 22, 23)|",
+            "the first client must complete the shared data import graph before its asynchronous event"
+        );
+        let first_event = take_next_link_element_event_task_for_test(&mut page_vm)
+            .expect("the first data import client should publish one load event");
+        page_vm
+            .run_claimed_dom_manipulation_task_through_selected_dispatcher_for_test(
+                crate::page_task_queue::RendererPageDomManipulationTask::ConnectedStyleEvent(
+                    first_event,
+                ),
+                &loader,
+            )
+            .await?;
+
+        assert_eq!(
+            page_vm.vm_mut().eval(&format!(
+                r#"
+const second = document.createElement("link");
+second.id = "data-import-second";
+second.rel = "stylesheet";
+second.href = {href};
+second.addEventListener("load", () => __lateDataImportEvents.push("second-load"));
+second.addEventListener("error", () => __lateDataImportEvents.push("second-error"));
+document.head.append(second);
+[
+  Object.prototype.toString.call(second.sheet),
+  getComputedStyle(target).color,
+  __lateDataImportEvents.join(",")
+].join("|")
+"#,
+            ))?,
+            "[object CSSStyleSheet]|rgb(21, 22, 23)|first-load",
+            "a late client must synchronously install the retained data import graph"
+        );
+        assert!(
+            !page_vm.has_ready_page_networking_task(),
+            "late data graph installation must not create another Networking task"
+        );
+
+        let second_event = take_next_link_element_event_task_for_test(&mut page_vm)
+            .expect("the late data import client must publish one terminal event");
+        let body = page_vm.apply_selected_page_connected_style_event_turn(second_event)?;
+        assert_eq!(
+            body.action.target_effect,
+            PageConnectedStyleEventTargetEffect::DispatchedToCurrentOwner {
+                load_delay_effect: PageConnectedStyleLoadDelayEffect::ReleasedExactBinding,
+            },
+            "the late client event must release its exact Document load-delay binding"
+        );
+        page_vm
+            .finish_selected_page_dom_manipulation_task(
+                PageDomManipulationTurnAction::ConnectedStyleEvent(body.action),
+                &loader,
+            )
+            .await?;
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval("__lateDataImportEvents.join(',')")?,
+            "first-load,second-load"
+        );
+        assert!(
+            take_next_link_element_event_task_for_test(&mut page_vm).is_none(),
+            "each data import client must settle exactly once"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("completed data import graph late-client test should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn completed_preload_settlement_starts_imports_before_publishing_link_load() {
+    run_page_vm_async_test(async move {
+        let (base_url, server) = spawn_path_response_http_server(vec![
+            (
+                "/cached-root.css",
+                "HTTP/1.1 200 OK",
+                "@import './cached-child.css'; .cached-root { color: rgb(4, 5, 6); }"
+                    .to_owned(),
+                Duration::ZERO,
+            ),
+            (
+                "/cached-child.css",
+                "HTTP/1.1 200 OK",
+                ".cached-child { color: rgb(7, 8, 9); }".to_owned(),
+                Duration::ZERO,
+            ),
+        ])
+        .await;
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let document_url = Url::parse(&format!("{base_url}/page.html"))?;
+        let (mut page_vm, _resource_source, mut wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        let href = format!("{base_url}/cached-root.css");
+        complete_stylesheet_preload_for_cache_hit(&mut page_vm, &mut wake_rx, &loader, &href)
+            .await?;
+
+        let href = serde_json::to_string(&href)?;
+        let synchronous_state = page_vm.vm_mut().eval(&format!(
+            r#"
+globalThis.__cachedImportEvents = [];
+for (const className of ["cached-root", "cached-child"]) {{
+  const target = document.createElement("div");
+  target.className = className;
+  document.body.append(target);
+}}
+const cachedImport = document.createElement("link");
+cachedImport.id = "cached-import";
+cachedImport.rel = "stylesheet";
+cachedImport.href = {href};
+cachedImport.addEventListener("load", () => __cachedImportEvents.push("load"));
+cachedImport.addEventListener("error", () => __cachedImportEvents.push("error"));
+document.head.append(cachedImport);
+[
+  Object.prototype.toString.call(cachedImport.sheet),
+  String(cachedImport.sheet.cssRules[0].styleSheet),
+  getComputedStyle(document.querySelector(".cached-root")).color,
+  __cachedImportEvents.join(",")
+].join("|")
+"#,
+        ))?;
+
+        assert_eq!(
+            synchronous_state,
+            "[object CSSStyleSheet]|null|rgb(4, 5, 6)|",
+            "client admission must synchronously install the root and start its import while keeping the event asynchronous"
+        );
+        assert!(
+            !page_vm.has_ready_dom_manipulation_task_for_test(),
+            "the cached link event must wait for its import graph"
+        );
+
+        wait_for_stylesheet_source(&mut wake_rx, RendererOwnerWakeSource::NetworkingTask).await;
+        assert!(
+            page_vm
+                .run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::StylesheetCompletion,
+                    &loader,
+                )
+                .await?,
+            "the cache-hit import graph should complete as Networking work"
+        );
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                r##"
+(() => {
+  const sheet = document.querySelector("#cached-import").sheet;
+  const child = sheet.cssRules[0].styleSheet;
+  return [
+    Object.prototype.toString.call(child),
+    child.cssRules.length,
+    getComputedStyle(document.querySelector(".cached-child")).color,
+    __cachedImportEvents.join(",")
+  ].join("|");
+})()
+"##,
+            )?,
+            "[object CSSStyleSheet]|1|rgb(7, 8, 9)|"
+        );
+
+        wait_for_stylesheet_source(&mut wake_rx, RendererOwnerWakeSource::DomManipulationTask)
+            .await;
+        let event = take_next_link_element_event_task_for_test(&mut page_vm)
+            .expect("the completed cache-hit import graph should publish one link event");
+        page_vm
+            .run_claimed_dom_manipulation_task_through_selected_dispatcher_for_test(
+                crate::page_task_queue::RendererPageDomManipulationTask::ConnectedStyleEvent(event),
+                &loader,
+            )
+            .await?;
+        assert_eq!(
+            page_vm.vm_mut().eval("__cachedImportEvents.join('|')")?,
+            "load"
+        );
+        server.await.expect("cached import fixture server");
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("completed stylesheet cache-hit import test should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn separately_appended_cache_hit_links_share_import_fetch_but_install_both_graphs() {
+    run_page_vm_async_test(async move {
+        let (base_url, server) = spawn_path_response_http_server(vec![
+            (
+                "/shared-root.css",
+                "HTTP/1.1 200 OK",
+                "@import './slow-child.css';".to_owned(),
+                Duration::ZERO,
+            ),
+            (
+                "/slow-child.css",
+                "HTTP/1.1 200 OK",
+                ".shared-import-target { color: rgb(17, 34, 51); }".to_owned(),
+                Duration::from_millis(100),
+            ),
+        ])
+        .await;
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let document_url = Url::parse(&format!("{base_url}/page.html"))?;
+        let (mut page_vm, _resource_source, mut wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        let href = format!("{base_url}/shared-root.css");
+        complete_stylesheet_preload_for_cache_hit(&mut page_vm, &mut wake_rx, &loader, &href)
+            .await?;
+
+        let href = serde_json::to_string(&href)?;
+        assert_eq!(
+            page_vm.vm_mut().eval(&format!(
+                r#"
+globalThis.__sharedImportEvents = [];
+const target = document.createElement("div");
+target.className = "shared-import-target";
+document.body.append(target);
+const first = document.createElement("link");
+first.id = "shared-import-first";
+first.rel = "stylesheet";
+first.href = {href};
+first.addEventListener("load", () => __sharedImportEvents.push("first-load"));
+document.head.append(first);
+const second = document.createElement("link");
+second.id = "shared-import-second";
+second.rel = "stylesheet";
+second.href = {href};
+second.addEventListener("load", () => __sharedImportEvents.push("second-load"));
+document.head.append(second);
+[
+  String(first.sheet.cssRules[0].styleSheet),
+  String(second.sheet.cssRules[0].styleSheet),
+  __sharedImportEvents.join(",")
+].join("|")
+"#,
+            ))?,
+            "null|null|",
+            "both owners must synchronously install their root sheet while the shared import remains pending"
+        );
+
+        wait_for_stylesheet_source(&mut wake_rx, RendererOwnerWakeSource::NetworkingTask).await;
+        assert!(
+            page_vm
+                .run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::StylesheetCompletion,
+                    &loader,
+                )
+                .await?,
+            "the shared import graph must complete as one Networking turn"
+        );
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                r##"
+(() => {
+  const first = document.querySelector("#shared-import-first");
+  const second = document.querySelector("#shared-import-second");
+  return [
+    first.sheet.cssRules[0].styleSheet !== null,
+    second.sheet.cssRules[0].styleSheet !== null,
+    getComputedStyle(document.querySelector(".shared-import-target")).color
+  ].join("|");
+})()
+"##,
+            )?,
+            "true|true|rgb(17, 34, 51)",
+            "the shared terminal must install the import graph into every owner sheet"
+        );
+
+        wait_for_stylesheet_source(&mut wake_rx, RendererOwnerWakeSource::DomManipulationTask)
+            .await;
+        for _ in 0..2 {
+            let event = take_next_link_element_event_task_for_test(&mut page_vm)
+                .expect("each current link client must publish one load event");
+            page_vm
+                .run_claimed_dom_manipulation_task_through_selected_dispatcher_for_test(
+                    crate::page_task_queue::RendererPageDomManipulationTask::ConnectedStyleEvent(
+                        event,
+                    ),
+                    &loader,
+                )
+                .await?;
+        }
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                r##"
+(() => {
+  document.querySelector("#shared-import-first").remove();
+  const surviving = document.querySelector("#shared-import-second");
+  return [
+    surviving.sheet.cssRules[0].styleSheet !== null,
+    getComputedStyle(document.querySelector(".shared-import-target")).color,
+    __sharedImportEvents.sort().join(",")
+  ].join("|");
+})()
+"##,
+            )?,
+            "true|rgb(17, 34, 51)|first-load,second-load",
+            "removing the first owner must not remove the second owner's imported stylesheet"
+        );
+        assert_eq!(
+            page_vm.vm_mut().eval(&format!(
+                r#"
+const late = document.createElement("link");
+late.id = "shared-import-late";
+late.rel = "stylesheet";
+late.href = {href};
+late.addEventListener("load", () => __sharedImportEvents.push("late-load"));
+document.head.append(late);
+[
+  late.sheet.cssRules[0].styleSheet !== null,
+  getComputedStyle(document.querySelector(".shared-import-target")).color,
+  __sharedImportEvents.sort().join(",")
+].join("|")
+"#,
+            ))?,
+            "true|rgb(17, 34, 51)|first-load,second-load",
+            "a client admitted after graph completion must synchronously replay the retained graph"
+        );
+        assert!(
+            !page_vm.has_ready_page_networking_task(),
+            "late per-owner graph replay must not manufacture another Networking task"
+        );
+        let late_event = take_next_link_element_event_task_for_test(&mut page_vm)
+            .expect("the late graph replay must publish its link event");
+        page_vm
+            .run_claimed_dom_manipulation_task_through_selected_dispatcher_for_test(
+                crate::page_task_queue::RendererPageDomManipulationTask::ConnectedStyleEvent(
+                    late_event,
+                ),
+                &loader,
+            )
+            .await?;
+        assert_eq!(
+            page_vm.vm_mut().eval("__sharedImportEvents.sort().join(',')")?,
+            "first-load,late-load,second-load"
+        );
+        server.await.expect("shared cache-hit import fixture server");
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("shared cache-hit stylesheet import test should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn failed_completed_preload_settles_empty_sheet_synchronously_before_link_error() {
+    run_page_vm_async_test(async move {
+        let (base_url, server) = spawn_path_response_http_server(vec![(
+            "/cached-failure.css",
+            "HTTP/1.1 404 Not Found",
+            "not found".to_owned(),
+            Duration::ZERO,
+        )])
+        .await;
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let document_url = Url::parse(&format!("{base_url}/page.html"))?;
+        let (mut page_vm, _resource_source, mut wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        let href = format!("{base_url}/cached-failure.css");
+        complete_stylesheet_preload_for_cache_hit(&mut page_vm, &mut wake_rx, &loader, &href)
+            .await?;
+
+        let href = serde_json::to_string(&href)?;
+        let synchronous_state = page_vm.vm_mut().eval(&format!(
+            r#"
+globalThis.__failedCacheHitEvents = [];
+const failedCacheHit = document.createElement("link");
+failedCacheHit.id = "failed-cache-hit";
+failedCacheHit.rel = "stylesheet";
+failedCacheHit.href = {href};
+failedCacheHit.addEventListener("load", () => __failedCacheHitEvents.push("load"));
+failedCacheHit.addEventListener("error", () => __failedCacheHitEvents.push("error"));
+document.head.append(failedCacheHit);
+[
+  Object.prototype.toString.call(failedCacheHit.sheet),
+  failedCacheHit.sheet.cssRules.length,
+  __failedCacheHitEvents.join(",")
+].join("|")
+"#,
+        ))?;
+        assert_eq!(
+            synchronous_state,
+            "[object CSSStyleSheet]|0|",
+            "Blink-compatible failure settlement must install an empty CSSOM sheet in the append call while keeping error asynchronous"
+        );
+
+        assert!(
+            page_vm
+                .take_stylesheet_networking_body_task_for_test()
+                .is_none(),
+            "a failed completed cache hit must not create another physical task"
+        );
+        let event = take_next_link_element_event_task_for_test(&mut page_vm)
+            .expect("the failed cache hit should publish one link error task");
+        page_vm
+            .run_claimed_dom_manipulation_task_through_selected_dispatcher_for_test(
+                crate::page_task_queue::RendererPageDomManipulationTask::ConnectedStyleEvent(
+                    event,
+                ),
+                &loader,
+            )
+            .await?;
+        assert_eq!(
+            page_vm.vm_mut().eval("__failedCacheHitEvents.join('|')")?,
+            "error"
+        );
+        server.await.expect("failed cache-hit fixture server");
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("failed completed stylesheet cache-hit test should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn posted_cache_hit_events_follow_link_and_document_lifetimes() {
+    run_page_vm_async_test(async move {
+        let (base_url, server) = spawn_path_response_http_server(vec![(
+            "/checkpoint-cache-hit.css",
+            "HTTP/1.1 200 OK",
+            ".checkpoint-cache-hit { color: green; }".to_owned(),
+            Duration::ZERO,
+        )])
+        .await;
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let document_url = Url::parse(&format!("{base_url}/page.html"))?;
+        let (mut page_vm, _resource_source, mut wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        let href = format!("{base_url}/checkpoint-cache-hit.css");
+        complete_stylesheet_preload_for_cache_hit(&mut page_vm, &mut wake_rx, &loader, &href)
+            .await?;
+        let href = serde_json::to_string(&href)?;
+
+        page_vm.vm_mut().eval(&format!(
+            r#"
+globalThis.__retiredCacheHitEvents = [];
+globalThis.__hrefInvalidatedCacheHit = document.createElement("link");
+__hrefInvalidatedCacheHit.rel = "stylesheet";
+__hrefInvalidatedCacheHit.href = {href};
+__hrefInvalidatedCacheHit.addEventListener("load", () => __retiredCacheHitEvents.push("href-load"));
+__hrefInvalidatedCacheHit.addEventListener("error", () => __retiredCacheHitEvents.push("href-error"));
+document.head.append(__hrefInvalidatedCacheHit);
+Promise.resolve().then(() => __hrefInvalidatedCacheHit.removeAttribute("href"));
+"queued"
+"#,
+        ))?;
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                "[__hrefInvalidatedCacheHit.hasAttribute('href'), String(__hrefInvalidatedCacheHit.sheet), __retiredCacheHitEvents.join(',')].join('|')",
+            )?,
+            "false|null|"
+        );
+        let event = take_next_link_element_event_task_for_test(&mut page_vm)
+            .expect("the already-posted href-invalidated event should remain selectable");
+        page_vm
+            .run_claimed_dom_manipulation_task_through_selected_dispatcher_for_test(
+                crate::page_task_queue::RendererPageDomManipulationTask::ConnectedStyleEvent(
+                    event,
+                ),
+                &loader,
+            )
+            .await?;
+        assert_eq!(
+            page_vm.vm_mut().eval("__retiredCacheHitEvents.join(',')")?,
+            "href-load",
+            "removing href must not retract a load task posted by an already-settled client"
+        );
+
+        page_vm.vm_mut().eval(&format!(
+            r#"
+globalThis.__disconnectedCacheHit = document.createElement("link");
+__disconnectedCacheHit.rel = "stylesheet";
+__disconnectedCacheHit.href = {href};
+__disconnectedCacheHit.addEventListener("load", () => __retiredCacheHitEvents.push("remove-load"));
+__disconnectedCacheHit.addEventListener("error", () => __retiredCacheHitEvents.push("remove-error"));
+document.head.append(__disconnectedCacheHit);
+Promise.resolve().then(() => __disconnectedCacheHit.remove());
+"queued"
+"#,
+        ))?;
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                "[__disconnectedCacheHit.isConnected, String(__disconnectedCacheHit.sheet), __retiredCacheHitEvents.join(',')].join('|')",
+            )?,
+            "false|null|href-load"
+        );
+        let event = take_next_link_element_event_task_for_test(&mut page_vm)
+            .expect("the already-posted disconnected event should remain selectable");
+        page_vm
+            .run_claimed_dom_manipulation_task_through_selected_dispatcher_for_test(
+                crate::page_task_queue::RendererPageDomManipulationTask::ConnectedStyleEvent(
+                    event,
+                ),
+                &loader,
+            )
+            .await?;
+        assert_eq!(
+            page_vm.vm_mut().eval("__retiredCacheHitEvents.join(',')")?,
+            "href-load,remove-load",
+            "disconnecting the element must not retract its already-posted load task"
+        );
+
+        page_vm.vm_mut().eval(&format!(
+            r#"
+const replacedCacheHit = document.createElement("link");
+replacedCacheHit.rel = "stylesheet";
+replacedCacheHit.href = {href};
+replacedCacheHit.addEventListener("load", () => __retiredCacheHitEvents.push("replace-load"));
+replacedCacheHit.addEventListener("error", () => __retiredCacheHitEvents.push("replace-error"));
+document.head.append(replacedCacheHit);
+Promise.resolve().then(() => {{
+  document.open();
+  document.write("<!doctype html><body>replacement</body>");
+  document.close();
+}});
+"queued"
+"#,
+        ))?;
+        assert_eq!(page_vm.vm_mut().eval("document.body.textContent")?, "replacement");
+        let event = take_next_link_element_event_task_for_test(&mut page_vm)
+            .expect("the old Document's already-posted event should remain selectable");
+        page_vm
+            .run_claimed_dom_manipulation_task_through_selected_dispatcher_for_test(
+                crate::page_task_queue::RendererPageDomManipulationTask::ConnectedStyleEvent(
+                    event,
+                ),
+                &loader,
+            )
+            .await?;
+        assert_eq!(
+            page_vm.vm_mut().eval("__retiredCacheHitEvents.join(',')")?,
+            "href-load,remove-load",
+            "exact-Document validation must discard the replaced Document's event task"
+        );
+        assert!(
+            page_vm
+                .take_stylesheet_networking_body_task_for_test()
+                .is_none(),
+            "invalidating cached clients must not create physical completion tasks"
+        );
+        server.await.expect("checkpoint cache-hit fixture server");
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("checkpoint stylesheet cache-hit invalidation test should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn completed_client_settlement_does_not_consume_an_unselected_physical_completion() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let document_url = Url::parse("https://example.com/stylesheet-physical-residence").unwrap();
+        let (mut page_vm, _resource_source, mut wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        page_vm.vm_mut().eval(
+            r#"
+globalThis.__unselectedPhysicalEvents = [];
+const physical = document.createElement("link");
+physical.rel = "stylesheet";
+physical.href = "data:text/css,.unselected%7Bcolor%3Agreen%7D";
+physical.addEventListener("load", () => __unselectedPhysicalEvents.push("load"));
+document.head.append(physical);
+"queued"
+"#,
+        )?;
+        page_vm
+            .vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+        wait_for_stylesheet_source(&mut wake_rx, RendererOwnerWakeSource::NetworkingTask).await;
+
+        page_vm
+            .vm_mut()
+            .eval("globalThis.__unrelatedTurnFinished = true")?;
+        assert!(
+            !page_vm.has_ready_dom_manipulation_task_for_test(),
+            "an unrelated owner turn must not apply an unselected physical terminal"
+        );
+        let task = page_vm
+            .take_stylesheet_networking_body_task_for_test()
+            .expect("the physical stylesheet completion must remain in its Networking source");
+        let outcome = page_vm.apply_selected_page_stylesheet_networking_turn(task)?;
+        page_vm
+            .finish_selected_page_networking_task(
+                PageNetworkingTurnAction::StylesheetCompletion(outcome.action),
+                &loader,
+            )
+            .await?;
+        assert!(
+            page_vm.has_ready_dom_manipulation_task_for_test(),
+            "selecting the physical completion should publish its later link event"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("unselected physical stylesheet residence test should run");
 }
 
 #[tokio::test(flavor = "current_thread")]

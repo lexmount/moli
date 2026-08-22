@@ -323,8 +323,6 @@ struct StylesheetFetchRequest {
     start_unix_millis: f64,
     terminal: OnceLock<Arc<StylesheetFetchTerminal>>,
     physical_observation_emitted: AtomicBool,
-    dependent_resources_started: AtomicBool,
-    import_graph_terminal: OnceLock<bool>,
 }
 
 impl StylesheetFetch {
@@ -342,8 +340,6 @@ impl StylesheetFetch {
             start_unix_millis,
             terminal: OnceLock::new(),
             physical_observation_emitted: AtomicBool::new(false),
-            dependent_resources_started: AtomicBool::new(false),
-            import_graph_terminal: OnceLock::new(),
         }))
     }
 
@@ -396,21 +392,6 @@ impl StylesheetFetch {
             .0
             .physical_observation_emitted
             .swap(true, Ordering::AcqRel)
-    }
-
-    pub fn claim_dependent_resource_start(&self) -> bool {
-        !self
-            .0
-            .dependent_resources_started
-            .swap(true, Ordering::AcqRel)
-    }
-
-    pub fn finish_import_graph(&self, successful: bool) -> bool {
-        self.0.import_graph_terminal.set(successful).is_ok()
-    }
-
-    pub fn import_graph_terminal(&self) -> Option<bool> {
-        self.0.import_graph_terminal.get().copied()
     }
 }
 

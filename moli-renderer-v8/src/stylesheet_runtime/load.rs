@@ -295,7 +295,7 @@ impl QueuedConnectedStyleLoad {
 pub(in crate::document_runtime) enum ConnectedLoadParameters {
     ImmediateOwnerProcessing,
     StyleImports {
-        source: ConnectedStyleImportSource,
+        source: InlineStyleImportSource,
         urls: Vec<Url>,
         roots: Vec<ConnectedStyleImportRoot>,
     },
@@ -305,43 +305,34 @@ pub(in crate::document_runtime) enum ConnectedLoadParameters {
     },
 }
 
+/// Exact processing identity for one inline `<style>` import graph.
+///
+/// Linked stylesheets have a fetch-owned graph lifecycle and deliberately do
+/// not use an owner-bound `ConnectedLoadOperation`.
 #[derive(Debug, Clone)]
-pub(in crate::document_runtime) enum ConnectedStyleImportSource {
-    Inline(Arc<OwnerStyleSheetSource>),
-    Linked(Arc<StylesheetLinkClient>),
-}
+pub(in crate::document_runtime) struct InlineStyleImportSource(Arc<OwnerStyleSheetSource>);
 
-impl ConnectedStyleImportSource {
+impl InlineStyleImportSource {
+    pub(in crate::document_runtime) fn new(source: Arc<OwnerStyleSheetSource>) -> Self {
+        Self(source)
+    }
+
     pub(in crate::document_runtime) fn owner(&self) -> DomHandle {
-        match self {
-            Self::Inline(source) => source.owner(),
-            Self::Linked(load) => load.owner(),
-        }
+        self.0.owner()
     }
 
-    pub(in crate::document_runtime) const fn element_kind(&self) -> ConnectedStyleEventElementKind {
-        match self {
-            Self::Inline(_) => ConnectedStyleEventElementKind::Style,
-            Self::Linked(_) => ConnectedStyleEventElementKind::Link,
-        }
-    }
-
-    pub(in crate::document_runtime) fn ptr_eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Inline(left), Self::Inline(right)) => Arc::ptr_eq(left, right),
-            (Self::Linked(left), Self::Linked(right)) => StylesheetLinkClient::ptr_eq(left, right),
-            (Self::Inline(_), Self::Linked(_)) | (Self::Linked(_), Self::Inline(_)) => false,
-        }
+    pub(in crate::document_runtime) fn source(&self) -> &Arc<OwnerStyleSheetSource> {
+        &self.0
     }
 }
 
-impl PartialEq for ConnectedStyleImportSource {
+impl PartialEq for InlineStyleImportSource {
     fn eq(&self, other: &Self) -> bool {
-        self.ptr_eq(other)
+        Arc::ptr_eq(&self.0, &other.0)
     }
 }
 
-impl Eq for ConnectedStyleImportSource {}
+impl Eq for InlineStyleImportSource {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::document_runtime) struct ConnectedLinkReadinessFetchOptions {

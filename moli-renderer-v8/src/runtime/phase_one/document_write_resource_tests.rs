@@ -164,6 +164,97 @@ async fn spawn_two_document_write_script_server(
     )
 }
 
+async fn spawn_document_write_script_with_completed_stylesheet_preload_server() -> (
+    Url,
+    Url,
+    tokio::sync::oneshot::Sender<()>,
+    tokio::sync::oneshot::Receiver<()>,
+    JoinHandle<()>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("document.write stylesheet preload server should bind");
+    let address = listener
+        .local_addr()
+        .expect("document.write stylesheet preload server should have an address");
+    let (script_release_tx, script_release_rx) = tokio::sync::oneshot::channel();
+    let (stylesheet_served_tx, stylesheet_served_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let mut script_stream = None;
+        let mut stylesheet_served_tx = Some(stylesheet_served_tx);
+        while script_stream.is_none() || stylesheet_served_tx.is_some() {
+            let (mut stream, _) = listener
+                .accept()
+                .await
+                .expect("document.write stylesheet preload request should arrive");
+            let mut request = vec![0; 4096];
+            let read = stream
+                .read(&mut request)
+                .await
+                .expect("document.write stylesheet preload request should be readable");
+            let request = String::from_utf8_lossy(&request[..read]);
+            if request.starts_with("GET /written.js ") {
+                assert!(
+                    script_stream.replace(stream).is_none(),
+                    "document.write external script should be requested once"
+                );
+                continue;
+            }
+            assert!(
+                request.starts_with("GET /ready.css "),
+                "unexpected document.write stylesheet preload request: {request}"
+            );
+            let body = "body { color: rgb(1, 2, 3); }";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/css\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body,
+            );
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("stylesheet preload response should be writable");
+            stream
+                .shutdown()
+                .await
+                .expect("stylesheet preload response should close");
+            stylesheet_served_tx
+                .take()
+                .expect("stylesheet preload should be served once")
+                .send(())
+                .expect("stylesheet preload observer should remain attached");
+        }
+
+        script_release_rx
+            .await
+            .expect("document.write external script should be released");
+        let mut stream = script_stream.expect("document.write script request should be retained");
+        let body = "globalThis.__completedPreloadEvents.push('external');";
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/javascript\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body,
+        );
+        stream
+            .write_all(response.as_bytes())
+            .await
+            .expect("document.write external script response should be writable");
+        stream
+            .shutdown()
+            .await
+            .expect("document.write external script response should close");
+    });
+    (
+        Url::parse(&format!("http://{address}/written.js"))
+            .expect("document.write external script URL should parse"),
+        Url::parse(&format!("http://{address}/ready.css"))
+            .expect("stylesheet preload URL should parse"),
+        script_release_tx,
+        stylesheet_served_rx,
+        server,
+    )
+}
+
 struct PendingStandaloneDocumentWritePage {
     runtime: Box<ConcurrentParseTimeRuntime>,
     started: Instant,
@@ -266,6 +357,62 @@ async fn wait_for_standalone_page_resource(
             .expect("document.write producer should retain its owner wake route");
     }
     resource_source
+}
+
+async fn wait_for_standalone_stylesheet_completion(
+    pending: &mut PendingStandaloneDocumentWritePage,
+) {
+    loop {
+        if pending
+            .runtime
+            .page_vm
+            .page_task_executor_sources_for_test()
+            .has_scheduler_task_for_executor_test(|descriptor| {
+                matches!(
+                    descriptor,
+                    crate::page_task_queue::RendererPageReadyDescriptor::Networking {
+                        owner:
+                            crate::page_task_queue::RendererPageNetworkingOwner::StylesheetCompletion(
+                                _
+                            ),
+                        ..
+                    }
+                )
+            })
+        {
+            return;
+        }
+        pending
+            .owner_wake_rx
+            .recv()
+            .await
+            .expect("stylesheet preload producer should retain its owner wake route");
+    }
+}
+
+async fn run_standalone_selected_page_task(
+    mut pending: PendingStandaloneDocumentWritePage,
+    selector: crate::runtime::page_vm::PageSelectedTaskTestSelector,
+) -> PendingStandaloneDocumentWritePage {
+    let executor = pending.runtime.page_vm.local_executor.clone();
+    super::access::run_named_owner_local_task(
+        executor,
+        "standalone selected Page task channel closed",
+        async move {
+            let loader = pending.runtime.loader.clone();
+            assert!(
+                pending
+                    .runtime
+                    .page_vm
+                    .run_exact_selected_page_task_for_test(selector, &loader)
+                    .await?,
+                "the fixture should expose one exact {selector:?} task"
+            );
+            Ok(pending)
+        },
+    )
+    .await
+    .expect("selected standalone Page task should execute on the owner lane")
 }
 
 async fn resume_standalone_document_write_page(
@@ -521,6 +668,113 @@ globalThis.__documentWriteEvents.push('inline-after');
                 .expect("document.write script server should finish");
         }));
     });
+}
+
+#[test]
+fn document_write_completion_settles_a_completed_stylesheet_preload_during_parser_admission() {
+    super::tests::run_phase_one_large_stack_test(
+        "document-write-completed-stylesheet-preload",
+        || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("current-thread runtime should build");
+            runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+                let _js_runtime = crate::JsRuntime::initialize();
+                let (
+                    script_url,
+                    stylesheet_url,
+                    script_release,
+                    stylesheet_served,
+                    server,
+                ) = spawn_document_write_script_with_completed_stylesheet_preload_server().await;
+                let document_url = script_url.join("page.html").expect("document URL");
+                let html = format!(
+                    r#"<!doctype html><html><head><script>
+globalThis.__completedPreloadEvents = ['inline-before'];
+document.write(`<script src="{script_url}" onload="__completedPreloadEvents.push('script-load')"><\/script><link id="inserted-ready-style" rel="stylesheet" href="{stylesheet_url}" onload="__completedPreloadEvents.push('style-load')"><script>__completedPreloadEvents.push('tail')<\/script>`);
+globalThis.__completedPreloadEvents.push('inline-after');
+</script><link rel="preload" as="style" href="{stylesheet_url}"></head><body></body></html>"#,
+                );
+                let mut pending =
+                    start_standalone_document_write_page(html, document_url).await;
+
+                tokio::time::timeout(std::time::Duration::from_secs(2), stylesheet_served)
+                    .await
+                    .expect("the scanned stylesheet preload should reach the local server")
+                    .expect("the scanned stylesheet preload server should report completion");
+                wait_for_standalone_stylesheet_completion(&mut pending).await;
+                pending = run_standalone_selected_page_task(
+                    pending,
+                    crate::runtime::page_vm::PageSelectedTaskTestSelector::StylesheetCompletion,
+                )
+                .await;
+                assert!(
+                    !pending
+                        .runtime
+                        .page_vm
+                        .has_ready_dom_manipulation_task_for_test(),
+                    "an ownerless preload must not publish an element event"
+                );
+
+                script_release
+                    .send(())
+                    .expect("document.write script response should be released");
+                drop(wait_for_standalone_page_resource(&mut pending).await);
+                pending = run_standalone_selected_page_task(
+                    pending,
+                    crate::runtime::page_vm::PageSelectedTaskTestSelector::ResourceCompletion,
+                )
+                .await;
+
+                let (pending_after_resource, result) = evaluate_pending_on_owner_local_task(
+                    pending,
+                    r#"JSON.stringify({
+  events: globalThis.__completedPreloadEvents,
+  linkConnected: !!document.getElementById('inserted-ready-style'),
+  sheet: Object.prototype.toString.call(document.getElementById('inserted-ready-style').sheet)
+})"#,
+                )
+                .await;
+                pending = pending_after_resource;
+                assert_eq!(
+                    result.get("value").and_then(serde_json::Value::as_str),
+                    Some(
+                        r#"{"events":["inline-before","inline-after","external","script-load"],"linkConnected":true,"sheet":"[object CSSStyleSheet]"}"#,
+                    ),
+                    "the external script callback should synchronously install the completed-preload client but keep the following script behind its event"
+                );
+                assert!(
+                    pending
+                        .runtime
+                        .page_vm
+                        .has_ready_dom_manipulation_task_for_test(),
+                    "parser admission must settle the adopted stylesheet and publish its later link event"
+                );
+
+                pending = run_standalone_selected_page_task(
+                    pending,
+                    crate::runtime::page_vm::PageSelectedTaskTestSelector::DomManipulation(
+                        crate::runtime::page_vm::PageDomManipulationTestFamily::ConnectedStyleEvent,
+                    ),
+                )
+                .await;
+                let (_, result) = evaluate_pending_on_owner_local_task(
+                    pending,
+                    "__completedPreloadEvents.join('|')",
+                )
+                .await;
+                assert_eq!(
+                    result.get("value").and_then(serde_json::Value::as_str),
+                    Some("inline-before|inline-after|external|script-load|style-load|tail"),
+                    "the link event must release the parser-inserted script behind the adopted stylesheet"
+                );
+                server
+                    .await
+                    .expect("document.write stylesheet preload server should finish");
+            }));
+        },
+    );
 }
 
 #[test]

@@ -113,22 +113,27 @@ impl DocumentRuntime {
     pub(crate) fn note_discovered_document_owned_blocking_stylesheet_inputs<'a>(
         &mut self,
         inputs: impl IntoIterator<Item = &'a DocumentOwnedBlockingStylesheetDiscoveryInput>,
-    ) {
+    ) -> Vec<super::StylesheetLinkClientTerminal> {
         let document_url = self.document_url().clone();
         self.note_discovered_document_owned_blocking_stylesheet_inputs_for_document_url(
             &document_url,
             inputs,
-        );
+        )
     }
 
     pub(crate) fn note_discovered_document_owned_blocking_stylesheet_inputs_for_document_url<'a>(
         &mut self,
         document_url: &url::Url,
         inputs: impl IntoIterator<Item = &'a DocumentOwnedBlockingStylesheetDiscoveryInput>,
-    ) {
+    ) -> Vec<super::StylesheetLinkClientTerminal> {
         let inputs = inputs.into_iter().cloned().collect::<Vec<_>>();
         let fetcher = self.stylesheet_fetcher();
-        self.discover_unblocked_stylesheet_inputs(&fetcher, document_url, inputs);
+        let inputs = self.discover_unblocked_stylesheet_inputs(&fetcher, document_url, inputs);
+        self.bind_discovered_link_owner_operations(
+            inputs
+                .iter()
+                .map(|input| (input.node_id(), input.signature())),
+        )
     }
 
     fn discover_unblocked_stylesheet_inputs(
@@ -136,7 +141,7 @@ impl DocumentRuntime {
         fetcher: &crate::stylesheet_blocking::RendererStylesheetFetcher,
         document_url: &url::Url,
         inputs: impl IntoIterator<Item = DocumentOwnedBlockingStylesheetDiscoveryInput>,
-    ) {
+    ) -> Vec<DocumentOwnedBlockingStylesheetDiscoveryInput> {
         let inputs = inputs
             .into_iter()
             .filter(|input| {
@@ -148,15 +153,20 @@ impl DocumentRuntime {
             document_url,
             inputs.iter(),
         );
-        self.bind_discovered_link_owner_operations(
-            inputs
-                .iter()
-                .map(|input| (input.node_id(), input.signature())),
-        );
+        inputs
     }
 
-    pub(crate) async fn wait_for_script_blockers_before(&mut self, target_node_id: NodeId) {
-        self.note_discovered_live_blocking_stylesheets();
+    pub(crate) async fn wait_for_script_blockers_before(
+        &mut self,
+        target_node_id: NodeId,
+    ) -> Vec<super::StylesheetLinkClientTerminal> {
+        let blockers = collect_document_owned_blocking_stylesheets(&self.dom_host);
+        let inputs = blockers
+            .iter()
+            .map(DocumentOwnedBlockingStylesheetDiscoveryInput::from)
+            .collect::<Vec<_>>();
+        let completed_clients =
+            self.note_discovered_document_owned_blocking_stylesheet_inputs(inputs.iter());
         loop {
             self.drain_blocking_stylesheet_completions();
             if !self
@@ -164,7 +174,7 @@ impl DocumentRuntime {
                 .fetches
                 .blocks_script(&self.dom_host, target_node_id)
             {
-                return;
+                return completed_clients;
             }
             if !self
                 .stylesheet_lifecycle
@@ -172,7 +182,7 @@ impl DocumentRuntime {
                 .wait_for_completion_arrival_without_timeout()
                 .await
             {
-                return;
+                return completed_clients;
             }
         }
     }
@@ -180,7 +190,8 @@ impl DocumentRuntime {
     fn bind_discovered_link_owner_operations<'a>(
         &mut self,
         blockers: impl IntoIterator<Item = (moli_dom::NodeId, &'a DocumentBlockingStylesheetSignature)>,
-    ) {
+    ) -> Vec<super::StylesheetLinkClientTerminal> {
+        let mut completed_clients = Vec::new();
         for (node_id, signature) in blockers {
             let DocumentBlockingStylesheetSignature::Link { url, .. } = signature else {
                 continue;
@@ -201,17 +212,19 @@ impl DocumentRuntime {
             if already_bound {
                 continue;
             }
-            let import_completion_successful =
-                super::connected::initial_stylesheet_import_completion_successful(url, &fetch);
+            let import_completion = self.initial_stylesheet_import_completion(url, &fetch);
             let load = super::StylesheetLinkClient::new(owner, url.clone(), fetch);
             self.install_stylesheet_link_state(
                 owner,
-                super::LinkStyleState::new(Arc::clone(&load), import_completion_successful),
+                super::LinkStyleState::new(Arc::clone(&load), import_completion),
             );
             // A speculative resource may already be terminal when the parser
             // creates its first real owner. No future terminal will revisit it.
-            self.promote_stylesheet_link_client_if_ready(load);
+            if let Some(client) = self.promote_stylesheet_link_client_if_ready(load) {
+                completed_clients.push(client);
+            }
         }
+        completed_clients
     }
 
     pub(crate) async fn wait_for_document_owned_blocking_stylesheet_signatures<'a>(

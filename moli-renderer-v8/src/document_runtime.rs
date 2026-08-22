@@ -92,12 +92,13 @@ pub(crate) use stylesheet_runtime::attribute_reprocesses_connected_stylesheet;
 #[cfg(test)]
 use stylesheet_runtime::{ConnectedLinkReadinessFetchOptions, ConnectedLoadParameters};
 pub(crate) use stylesheet_runtime::{
-    ConnectedLoadCompletion, LiveStylesheetImportLoadCompletion,
-    fetch_complete_stylesheet_import_graph,
+    ConnectedLoadCompletion, LinkedStylesheetImportGraphCompletion,
+    LiveStylesheetImportLoadCompletion, fetch_complete_stylesheet_import_graph,
+    live_stylesheet_import_responses,
 };
 use stylesheet_runtime::{
-    ConnectedLoadOperation, QueuedConnectedStyleLoad, StylesheetLinkClientIndex,
-    StylesheetOwnerCspDisposition, StylesheetOwnerRuntimeStates,
+    ConnectedLoadOperation, LinkedStylesheetImportGraphs, QueuedConnectedStyleLoad,
+    StylesheetLinkClientIndex, StylesheetOwnerCspDisposition, StylesheetOwnerRuntimeStates,
 };
 pub(crate) use stylesheet_runtime::{
     ConnectedStyleEventElementKind, ConnectedStyleLoadEventAdmission, ConnectedStyleLoadEventPlan,
@@ -273,7 +274,10 @@ struct StylesheetLifecycleState {
     /// discovery deduplication fact.
     pre_initial_scan_processed_owners: HashSet<DomHandle>,
     ready_connected_load_network_results: VecDeque<ConnectedLoadNetworkResult>,
+    /// Client completions accepted while applying the selected physical
+    /// stylesheet Networking task.
     ready_stylesheet_link_client_terminals: VecDeque<StylesheetLinkClientTerminal>,
+    linked_stylesheet_import_graphs: LinkedStylesheetImportGraphs,
     // One canonical entry owns each stylesheet-related owner's operation,
     // completion/event disposition, and link state.
     owner_states: StylesheetOwnerRuntimeStates,
@@ -296,6 +300,7 @@ impl StylesheetLifecycleState {
             pre_initial_scan_processed_owners: HashSet::new(),
             ready_connected_load_network_results: VecDeque::new(),
             ready_stylesheet_link_client_terminals: VecDeque::new(),
+            linked_stylesheet_import_graphs: LinkedStylesheetImportGraphs::default(),
             owner_states: StylesheetOwnerRuntimeStates::default(),
             link_client_index: StylesheetLinkClientIndex::default(),
             link_promotion_trace: StylesheetLinkPromotionTrace::default(),
@@ -357,41 +362,6 @@ impl ConnectedStyleImportRoot {
         stylesheet.id() == self.stylesheet_id
             && stylesheet.contents_revision() == self.contents_revision
             && stylesheet.import_generation() == self.import_generation
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct ReadyBlockingStyleImportGraph {
-    operation: Arc<ConnectedLoadOperation>,
-    roots: Vec<ConnectedStyleImportRoot>,
-    graph: Arc<crate::stylesheet_blocking::StylesheetImportGraphFetchResult>,
-    successful: bool,
-}
-
-impl ReadyBlockingStyleImportGraph {
-    fn new(
-        operation: Arc<ConnectedLoadOperation>,
-        roots: Vec<ConnectedStyleImportRoot>,
-        graph: Arc<crate::stylesheet_blocking::StylesheetImportGraphFetchResult>,
-        successful: bool,
-    ) -> Self {
-        Self {
-            operation,
-            roots,
-            graph,
-            successful,
-        }
-    }
-
-    pub(crate) fn into_parts(
-        self,
-    ) -> (
-        Arc<ConnectedLoadOperation>,
-        Vec<ConnectedStyleImportRoot>,
-        Arc<crate::stylesheet_blocking::StylesheetImportGraphFetchResult>,
-        bool,
-    ) {
-        (self.operation, self.roots, self.graph, self.successful)
     }
 }
 
@@ -3334,7 +3304,7 @@ mod tests {
         for parameters in [
             preload_load_parameters(request_url.clone()),
             ConnectedLoadParameters::StyleImports {
-                source: super::stylesheet_runtime::ConnectedStyleImportSource::Inline(Arc::clone(
+                source: super::stylesheet_runtime::InlineStyleImportSource::new(Arc::clone(
                     &inline_source,
                 )),
                 urls: vec![request_url.clone()],
@@ -3434,7 +3404,7 @@ mod tests {
             owner,
             ConnectedStyleEventElementKind::Style,
             ConnectedLoadParameters::StyleImports {
-                source: super::stylesheet_runtime::ConnectedStyleImportSource::Inline(source),
+                source: super::stylesheet_runtime::InlineStyleImportSource::new(source),
                 urls: vec![request_url.clone()],
                 roots: Vec::new(),
             },
@@ -3492,7 +3462,7 @@ mod tests {
                 owner,
                 ConnectedStyleEventElementKind::Style,
                 ConnectedLoadParameters::StyleImports {
-                    source: super::stylesheet_runtime::ConnectedStyleImportSource::Inline(source),
+                    source: super::stylesheet_runtime::InlineStyleImportSource::new(source),
                     urls: vec![request_url.clone()],
                     roots: Vec::new(),
                 },

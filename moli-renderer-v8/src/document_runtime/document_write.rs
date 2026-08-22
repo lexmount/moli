@@ -414,11 +414,17 @@ impl DocumentRuntime {
                 .discovery_signals
                 .modulepreload_link_candidates,
         );
-        self.note_discovered_document_owned_blocking_stylesheet_inputs(
-            finish_signals
-                .discovery_signals
-                .blocking_stylesheet_inputs
-                .iter(),
+        let completed_stylesheet_clients = self
+            .note_discovered_document_owned_blocking_stylesheet_inputs(
+                finish_signals
+                    .discovery_signals
+                    .blocking_stylesheet_inputs
+                    .iter(),
+            );
+        self.settle_stylesheet_link_clients_in_current_scope(
+            scope,
+            host_ptr,
+            completed_stylesheet_clients,
         );
         unsafe { &mut *host_ptr }.resync_child_browsing_contexts(scope);
         self.run_pending_parser_post_step_runtime_work(scope, host_ptr);
@@ -2500,8 +2506,14 @@ impl DocumentRuntime {
             chunk.clear();
             begin_insertion = false;
 
-            self.note_discovered_document_owned_blocking_stylesheet_inputs(
-                discovered_blocking_stylesheet_inputs.iter(),
+            let completed_stylesheet_clients = self
+                .note_discovered_document_owned_blocking_stylesheet_inputs(
+                    discovered_blocking_stylesheet_inputs.iter(),
+                );
+            self.settle_stylesheet_link_clients_in_current_scope(
+                scope,
+                host_ptr,
+                completed_stylesheet_clients,
             );
 
             match result {
