@@ -30,3 +30,7 @@ __pycache__
 /moli-benchmark/moli-benchmark/
 
 node_modules
+
+# `nix build` output symlink
+result
+result-*
