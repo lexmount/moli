@@ -84,20 +84,19 @@ canvas dependencies. Failed reftests retain `test.png`, `reference-N.png`, and
 An unfiltered full `default` or `all` run refreshes the unified status lists
 directly under `wpt-cross-current/`.
 
-Public-web suites read a Markdown seed list. A minimal `sites.md` looks like:
+Public-web suites read a `rank,target` CSV seed list. A minimal `sites.csv` looks like:
 
-```markdown
-## Top 2
-
-1. `https://example.com/`
-2. `https://www.rust-lang.org/`
+```csv
+rank,target
+1,https://example.com/
+2,https://www.rust-lang.org/
 ```
 
 Compare Moli and Chrome on that sample:
 
 ```bash
 uv run moli-benchmark top-sites \
-  --list-path sites.md \
+  --list-path sites.csv \
   --profile quick \
   --target moli \
   --target chrome \
@@ -108,7 +107,7 @@ Compare visible content with Chrome as the baseline:
 
 ```bash
 uv run moli-benchmark render-compare \
-  --list-path sites.md \
+  --list-path sites.csv \
   --profile quick \
   --target moli \
   --baseline-target chrome \
@@ -196,9 +195,58 @@ The harness distinguishes the browser engine from the way it is driven:
 Not every suite accepts every target. Its `--help` output lists the valid
 choices.
 
-The predefined public-web sources expect curated seed documents under the
-repository's `docs/` directory. Those files are not present in every checkout;
-use `--list-path` with `top-sites` or `render-compare` when they are unavailable.
+The predefined public-web CSV sources ship under `fixtures/top-sites/`, including
+the WebFetch longtail corpus used by `webfetch-mix`. Markdown remains supported
+for custom `--list-path` inputs.
+
+Public-web results distinguish an individual attempt from a stable per-site
+outcome. `raw-runs.csv` and `runs.json` retain every attempt, while
+`site-outcomes.json` groups repeated attempts into `all-pass`, `all-fail`, and
+`flaky` sites. Pairwise engine rows are marked `SINGLE SAMPLE` unless the suite
+was run with at least three attempts per site; use `--runs 3` or more before
+treating an engine-only result as repeat-validated.
+
+Public-web summaries keep three different populations explicit. `raw_*`
+metrics include reachable and unreachable observations before cross-engine site
+exclusions; the normal pass rate uses counted, comparable attempts; and
+`successful_*` latency/memory metrics contain successful attempts only. The
+`common_success` cohort contains the exact run/site attempts that succeeded on
+every selected target and is the source for cross-engine speed and memory
+claims in the HTML report.
+
+Multi-engine public-web runs are scheduled in site-paired groups. Each group
+runs the selected targets sequentially, rotates which target goes first, and
+allows multiple site groups to run concurrently. Raw rows record the schedule
+and target-order indexes, UTC start/finish times, output hashes and samples,
+response MIME/body-capture evidence, and the final URL when CDP exposes it.
+This makes order effects and response changes auditable without retaining every
+successful response body.
+
+When the driver exposes the main-document HTTP status, that status is
+authoritative: a rendered 4xx or 5xx error document is a failure even if its
+body exceeds the content-size threshold. The report includes HTTP-status
+coverage, evidence source, and classification basis for each target. Moli CLI
+failures that name a terminal main-document status retain it as
+`cli-diagnostic` evidence. CLI fetch drivers that expose neither protocol nor
+diagnostic status fall back to conservative error-document markers; for a
+protocol-aligned comparison with status coverage, select the `moli-cdp` and
+`lightpanda-cdp` targets alongside `chrome`.
+
+A CDP browser reports a binary main-document MIME type before it exposes a
+download body. That is retained as `binary-response-headers`, not fabricated
+into a successful PDF or archive. Header-only observations are neutral and do
+not enter body-success or latency denominators. A CLI transfer that times out
+after receiving only part of a binary response remains a transfer failure. For
+an explicit `.pdf` main-resource URL, the Moli CLI adapter omits DOM-only page
+wait options and counts the result only when the real PDF body is returned.
+
+The built-in `wild-web` targets use the same DOMContentLoaded snapshot boundary
+for Moli, Lightpanda, and Chrome: after the adapter observes DOMContentLoaded,
+the page event loop must advance for at least 50 ms before the DOM is dumped.
+The total readiness deadline still applies to that settle period. Seed
+extraction checks require the expected site identity in the title plus a
+non-trivial body; the brand name does not need to be repeated in the first
+body-text sample.
 
 Moli is discovered from `MOLI_BIN`, `../target/release/moli`, or `PATH`, in
 that order. Comparison browsers are optional and can be selected through
@@ -295,8 +343,8 @@ Run the core CLI tests from `moli-benchmark/`:
 uv run python -m unittest discover -s tests -p 'test_cli.py'
 ```
 
-The complete test suite uses `uv run python -m unittest discover -s tests` and
-also expects the curated public-web seed documents described above.
+The complete test suite uses `uv run python -m unittest discover -s tests`; its
+curated public-web seed CSV files are versioned under `fixtures/top-sites/`.
 
 Keep benchmark claims tied to archived raw data, exact binary versions, and
 the readiness checks. When adding a suite or target, update its CLI help and

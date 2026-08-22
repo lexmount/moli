@@ -49,6 +49,13 @@ class HtmlReportTests(unittest.TestCase):
         self.assertIn("render-compare/runs.json", paths["render-compare"])
         self.assertIn("render-compare/baseline-sites.csv", paths["render-compare"])
 
+    def test_artifact_index_includes_top_sites_site_outcomes(self) -> None:
+        paths = _artifact_paths_by_suite(
+            [{"suite": "top-sites", "total_failures": 0}]
+        )
+
+        self.assertIn("top-sites/site-outcomes.json", paths["top-sites"])
+
     def test_cdp_session_trace_link_uses_nested_summary_fallback(self) -> None:
         paths = _artifact_paths_by_suite(
             [
@@ -225,6 +232,36 @@ class HtmlReportTests(unittest.TestCase):
         self.assertIn("const attempts = passes + failures;", document)
         self.assertIn("result.pages ?? result.seeds ?? result.sites ?? result.runs", document)
         self.assertIn("result.successes ?? result.categories?.success ?? result.passes", document)
+        self.assertIn("counted pass rate", document)
+        self.assertIn("raw pass rate", document)
+        self.assertIn("successful p50 / p90 / p95 ms", document)
+        self.assertIn("common p50 / p90 / p95 ms", document)
+        self.assertIn("result?.successful_elapsed_ms || result?.elapsed_ms", document)
+        self.assertIn("summary?.common_success?.targets?.[target]", document)
+        self.assertIn("site stability", document)
+        self.assertIn("HTTP status observed", document)
+        self.assertIn("not repeat-validated", document)
+        self.assertIn("Pairwise site outcomes", document)
+        self.assertIn("SINGLE SAMPLE", document)
+
+    def test_chartjs_report_renders_every_aggregate_summary_and_prioritizes_top_sites(
+        self,
+    ) -> None:
+        document = _chartjs_document(
+            {
+                "output_dir": "/tmp/report",
+                "versions": {},
+                "summaries": [
+                    {"suite": "wild-web", "targets": {"moli": {}}},
+                    {"suite": "top-sites", "targets": {"moli": {}}},
+                ],
+            }
+        )
+
+        self.assertIn("function horizontalSummaries()", document)
+        self.assertIn("'top-sites', 'wild-web'", document)
+        self.assertIn("summaries.map(summary =>", document)
+        self.assertIn('class="comparison-summary"', document)
 
 
 if __name__ == "__main__":

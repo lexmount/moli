@@ -250,7 +250,11 @@ def _artifact_paths_by_suite(summaries: list[dict[str, Any]]) -> dict[str, tuple
         "crawler": ("crawler/summary.json", "crawler/raw-runs.csv"),
         "amiibo-crawler": ("amiibo-crawler/summary.json", "amiibo-crawler/raw-runs.csv"),
         "wild-web": ("wild-web/summary.json", "wild-web/raw-runs.csv"),
-        "top-sites": ("top-sites/summary.json", "top-sites/raw-runs.csv"),
+        "top-sites": (
+            "top-sites/summary.json",
+            "top-sites/raw-runs.csv",
+            "top-sites/site-outcomes.json",
+        ),
         "render-compare": (
             "render-compare/summary.json",
             "render-compare/raw-runs.csv",
@@ -997,11 +1001,25 @@ function targetLabel(targets, target) {
 function targetColor(targets, target) {
   return colors[targetEngine(targets, target)] || '#64748b';
 }
-function firstHorizontalSummary() {
+function horizontalSummaries() {
   const comparisons = report.horizontal_comparisons || [];
-  if (comparisons.length) return comparisons[0];
   const summaries = report.summaries || [];
-  return summaries.find(s => s.suite === 'synthetic-compare') || summaries.find(s => s.suite === 'cdp-session') || summaries.find(s => s.targets);
+  const result = [...comparisons];
+  const seen = new Set(result.map(summary => summary.suite));
+  for (const summary of summaries) {
+    if (!summary?.targets || seen.has(summary.suite)) continue;
+    result.push(summary);
+    seen.add(summary.suite);
+  }
+  return result;
+}
+function firstHorizontalSummary() {
+  const summaries = horizontalSummaries();
+  for (const suite of ['web-scraping-variants', 'synthetic-compare', 'top-sites', 'wild-web', 'cdp-session']) {
+    const summary = summaries.find(candidate => candidate.suite === suite);
+    if (summary) return summary;
+  }
+  return summaries[0];
 }
 function summaryCases(summary) {
   const cases = summary?.cases || [];
@@ -1014,8 +1032,20 @@ function resultFor(summary, target, caseName) {
   if (isAggregateSummary(summary)) return summary?.targets?.[target] || {};
   return summary?.targets?.[target]?.cases?.[caseName] || {};
 }
-function metricFor(summary, target, caseName, metric) {
+function performanceResultFor(summary, target, caseName) {
+  if (!isAggregateSummary(summary)) return resultFor(summary, target, caseName);
+  const common = summary?.common_success?.targets?.[target];
+  if (common && Number(common?.elapsed_ms?.count || 0) > 0) return common;
   const result = resultFor(summary, target, caseName);
+  return {
+    ...result,
+    elapsed_ms: result?.successful_elapsed_ms || result?.elapsed_ms,
+    peak_pss_bytes: result?.successful_peak_pss_bytes || result?.peak_pss_bytes,
+    peak_rss_bytes: result?.successful_peak_rss_bytes || result?.peak_rss_bytes,
+  };
+}
+function metricFor(summary, target, caseName, metric) {
+  const result = performanceResultFor(summary, target, caseName);
   return result?.[metric]?.p50 ?? null;
 }
 function targetFailures(summary, target) {
@@ -1033,7 +1063,7 @@ function horizontalCells(summary) {
   const targets = targetNames(summary?.targets || {});
   const cases = summaryCases(summary);
   return cases.flatMap(caseName => targets.map(target => {
-    const result = resultFor(summary, target, caseName);
+    const result = performanceResultFor(summary, target, caseName);
     return {caseName, target, result};
   }));
 }
@@ -1054,6 +1084,30 @@ function passRate(result) {
   const denominator = attempts || Number(result.pages ?? result.seeds ?? result.sites ?? result.runs ?? 0);
   if (!denominator) return '';
   return `${passes}/${denominator} (${(passes / denominator * 100).toFixed(1)}%)`;
+}
+function rawPassRate(result) {
+  const passes = Number(result?.raw_passes);
+  const attempts = Number(result?.raw_comparable_attempts);
+  if (!Number.isFinite(passes) || !Number.isFinite(attempts) || attempts <= 0) return '';
+  return `${passes}/${attempts} (${(passes / attempts * 100).toFixed(1)}%)`;
+}
+function siteStability(result) {
+  const sites = Number(result?.unique_sites);
+  if (!Number.isFinite(sites) || sites <= 0) return '';
+  const runs = Number(result?.runs || 0);
+  if (!result?.repeat_validated) return `${sites} sites; ${runs || 1} run(s), not repeat-validated`;
+  return `${Number(result?.all_pass_sites || 0)} all-pass / ${Number(result?.flaky_sites || 0)} flaky / ${Number(result?.all_fail_sites || 0)} all-fail`;
+}
+function statusCoverage(result) {
+  const observed = Number(result?.status_observed_attempts);
+  const attempts = Number(result?.observed_sites ?? result?.attempts);
+  const denominator = Number.isFinite(attempts) && attempts > 0 ? attempts : Number(result?.seeds);
+  if (!Number.isFinite(observed) || !Number.isFinite(denominator) || denominator <= 0) return '';
+  const sources = Object.entries(result?.response_status_sources || {})
+    .map(([source, count]) => `${source}: ${count}`)
+    .join(', ');
+  const coverage = `${observed}/${denominator} (${(observed / denominator * 100).toFixed(1)}%)`;
+  return sources ? `${coverage}; ${sources}` : coverage;
 }
 function breakdown(items) {
   if (!items || typeof items !== 'object') return '';
@@ -1108,12 +1162,14 @@ function renderExecutive() {
   if (horizontal) {
     const fastest = fastestCell(horizontal);
     const memory = lowestMemoryCell(horizontal);
+    const commonAttempts = Number(horizontal?.common_success?.attempts || 0);
+    const cohortNote = commonAttempts > 0 ? ` over ${commonAttempts} common-success attempt(s)` : '';
     const failureTargets = targetNames(horizontal.targets || {}).filter(target => targetFailures(horizontal, target) > 0);
     document.getElementById('executiveSummary').innerHTML = `
       <div class="finding-list">
         <div class="finding">Horizontal source: <strong>${htmlEscape(horizontal.suite)}</strong>. Gate target: <strong>${htmlEscape(horizontal.gate_target || 'moli')}</strong>.</div>
-        <div class="finding">${fastest ? `Fastest p50 cell: <strong>${htmlEscape(targetLabel(horizontal.targets, fastest.target))}</strong> / ${htmlEscape(fastest.caseName)} at ${number(fastest.result.elapsed_ms.p50)} ms.` : 'No successful latency cell is available.'}</div>
-        <div class="finding">${memory ? `Lowest PSS cell: <strong>${htmlEscape(targetLabel(horizontal.targets, memory.target))}</strong> / ${htmlEscape(memory.caseName)} at ${mib(memory.result.peak_pss_bytes.p50)}.` : 'No successful memory cell is available.'}</div>
+        <div class="finding">${fastest ? `Fastest comparable-success p50: <strong>${htmlEscape(targetLabel(horizontal.targets, fastest.target))}</strong> / ${htmlEscape(fastest.caseName)} at ${number(fastest.result.elapsed_ms.p50)} ms${cohortNote}.` : 'No comparable successful latency cell is available.'}</div>
+        <div class="finding">${memory ? `Lowest comparable-success PSS: <strong>${htmlEscape(targetLabel(horizontal.targets, memory.target))}</strong> / ${htmlEscape(memory.caseName)} at ${mib(memory.result.peak_pss_bytes.p50)}${cohortNote}.` : 'No comparable successful memory cell is available.'}</div>
         <div class="finding ${failureTargets.length ? 'warn' : ''}">${failureTargets.length ? `Targets with comparison failures: <strong>${htmlEscape(failureTargets.map(target => targetLabel(horizontal.targets, target)).join(', '))}</strong>.` : 'No comparison target failures in this suite.'}</div>
       </div>
     `;
@@ -1170,30 +1226,58 @@ function renderSuites() {
   </tr>`);
   document.getElementById('suiteTable').innerHTML = table(['suite', 'profile', 'gate target', 'gate failures', 'all failures', 'runs', 'timeout'], rows);
 }
-function renderComparisonTable() {
-  const summary = firstHorizontalSummary();
-  if (!summary || !summary.targets) {
-    document.getElementById('comparisonTable').innerHTML = '<p class="muted">No horizontal comparison data.</p>';
-    return;
-  }
+function comparisonSummaryHtml(summary) {
   const targets = targetNames(summary.targets);
   if (isAggregateSummary(summary)) {
     const rows = targets.map(target => {
       const result = summary.targets[target] || {};
+      const successfulElapsed = result.successful_elapsed_ms || result.elapsed_ms || {};
+      const successfulPss = result.successful_peak_pss_bytes || result.peak_pss_bytes || {};
+      const common = summary?.common_success?.targets?.[target] || {};
+      const commonAttempts = Number(summary?.common_success?.attempts || 0);
+      const exclusions = [
+        Number(result.excluded_runs || 0) ? `excluded: ${result.excluded_runs}` : '',
+        Number(result.non_comparable_attempts || 0) ? `neutral: ${result.non_comparable_attempts}` : '',
+      ].filter(Boolean).join('; ');
       return `<tr>
         <th>${htmlEscape(targetLabel(summary.targets, target))}</th>
         <td>${passRate(result)}</td>
+        <td>${rawPassRate(result)}</td>
+        <td>${htmlEscape(exclusions)}</td>
+        <td>${htmlEscape(siteStability(result))}</td>
+        <td>${htmlEscape(statusCoverage(result))}</td>
         <td>${htmlEscape(result.successes ?? result.categories?.success ?? result.passes ?? '')}</td>
-        <td>${htmlEscape(result.categories?.challenge ?? '')}</td>
-        <td>${htmlEscape(result.categories?.thin ?? '')}</td>
         <td>${htmlEscape(result.failures ?? '')}</td>
-        <td>${number(result.elapsed_ms?.p50)} / ${number(result.elapsed_ms?.p90)} / ${number(result.elapsed_ms?.p95)}</td>
-        <td>${mib(result.peak_pss_bytes?.p50)} / ${mib(result.peak_pss_bytes?.p95)}</td>
+        <td>${number(successfulElapsed.p50)} / ${number(successfulElapsed.p90)} / ${number(successfulElapsed.p95)}</td>
+        <td>${mib(successfulPss.p50)} / ${mib(successfulPss.p95)}</td>
+        <td>${commonAttempts || ''}</td>
+        <td>${number(common.elapsed_ms?.p50)} / ${number(common.elapsed_ms?.p90)} / ${number(common.elapsed_ms?.p95)}</td>
+        <td>${mib(common.peak_pss_bytes?.p50)} / ${mib(common.peak_pss_bytes?.p95)}</td>
         <td>${breakdown(result.failure_kinds)}</td>
       </tr>`;
     });
-    document.getElementById('comparisonTable').innerHTML = table(['target', 'pass rate', 'success', 'challenge', 'thin', 'failures', 'p50 / p90 / p95 ms', 'PSS p50 / p95', 'failure kinds'], rows);
-    return;
+    const pairwise = Array.isArray(summary.pairwise) ? summary.pairwise : [];
+    const pairRows = pairwise.map(item => `<tr>
+      <th>${htmlEscape(targetLabel(summary.targets, item.left))} vs ${htmlEscape(targetLabel(summary.targets, item.right))}</th>
+      <td>${badge(item.repeat_validated ? 'REPEAT VALIDATED' : 'SINGLE SAMPLE')}</td>
+      <td>${htmlEscape(item.both_all_pass ?? '')}</td>
+      <td>${htmlEscape(item.left_all_pass_right_all_fail ?? '')}</td>
+      <td>${htmlEscape(item.right_all_pass_left_all_fail ?? '')}</td>
+      <td>${htmlEscape(item.both_all_fail ?? '')}</td>
+      <td>${htmlEscape(item.flaky_or_incomplete ?? '')}</td>
+      <td>${htmlEscape(item.not_comparable ?? '')}</td>
+      <td>${htmlEscape(item.common_success?.attempts ?? '')}</td>
+    </tr>`);
+    const pairTable = pairRows.length
+      ? `<h4>Pairwise site outcomes</h4>${table(['targets', 'validation', 'both pass', 'left only', 'right only', 'both fail', 'flaky / incomplete', 'not comparable', 'common-success attempts'], pairRows)}`
+      : '';
+    const contract = summary.snapshot_contract
+      ? `<p class="muted">Snapshot contract: ${htmlEscape(summary.snapshot_contract)}</p>`
+      : '';
+    return contract + table(
+      ['target', 'counted pass rate', 'raw pass rate', 'excluded / neutral', 'site stability', 'HTTP status observed', 'success', 'failures', 'successful p50 / p90 / p95 ms', 'successful PSS p50 / p95', 'common n', 'common p50 / p90 / p95 ms', 'common PSS p50 / p95', 'failure kinds'],
+      rows,
+    ) + pairTable;
   }
   const cases = summaryCases(summary);
   const rows = cases.map(caseName => {
@@ -1207,7 +1291,20 @@ function renderComparisonTable() {
     }).join('');
     return `<tr><th>${htmlEscape(caseName)}</th>${cells}</tr>`;
   });
-  document.getElementById('comparisonTable').innerHTML = table(['case', ...targets.map(target => targetLabel(summary.targets, target))], rows);
+  return table(['case', ...targets.map(target => targetLabel(summary.targets, target))], rows);
+}
+function renderComparisonTable() {
+  const summaries = horizontalSummaries();
+  if (!summaries.length) {
+    document.getElementById('comparisonTable').innerHTML = '<p class="muted">No horizontal comparison data.</p>';
+    return;
+  }
+  document.getElementById('comparisonTable').innerHTML = summaries.map(summary => `
+    <section class="comparison-summary">
+      <h3>${htmlEscape(summary.suite || 'comparison')}</h3>
+      ${comparisonSummaryHtml(summary)}
+    </section>
+  `).join('');
 }
 function renderWebPages() {
   const section = document.getElementById('web-pages');

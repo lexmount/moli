@@ -22,6 +22,10 @@ class ProcessResult:
     resources: dict[str, Any]
     time_verbose: dict[str, Any] | None = None
     cgroup: dict[str, Any] | None = None
+    response_status: int | None = None
+    response_mime_type: str | None = None
+    main_document_body_capture: str | None = None
+    final_url: str | None = None
 
     def output_digest_material(self) -> bytes:
         return self.stdout + b"\n--- stderr ---\n" + self.stderr
@@ -40,6 +44,14 @@ class ProcessResult:
             summary["time_verbose"] = self.time_verbose
         if self.cgroup is not None:
             summary["cgroup"] = self.cgroup
+        if self.response_status is not None:
+            summary["response_status"] = self.response_status
+        if self.response_mime_type is not None:
+            summary["response_mime_type"] = self.response_mime_type
+        if self.main_document_body_capture is not None:
+            summary["main_document_body_capture"] = self.main_document_body_capture
+        if self.final_url is not None:
+            summary["final_url"] = self.final_url
         if include_output:
             summary["stdout_tail"] = self.stdout[-4096:].decode("utf-8", errors="replace")
             summary["stderr_tail"] = self.stderr[-4096:].decode("utf-8", errors="replace")

@@ -9,6 +9,9 @@ from . import __version__
 from .config import REPO_ROOT
 
 
+MOLI_VERSION_ARGS = ("--version",)
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as file:
@@ -33,7 +36,7 @@ def collect_versions(moli_bin: Path | None = None, targets: dict[str, Any] | Non
             "path": str(moli_bin),
             "size_bytes": moli_bin.stat().st_size,
             "sha256": sha256_file(moli_bin),
-            "version": _run([str(moli_bin), "version"]),
+            "version": _run([str(moli_bin), *MOLI_VERSION_ARGS]),
         }
     elif targets and isinstance(targets.get("moli"), dict):
         moli = targets["moli"]

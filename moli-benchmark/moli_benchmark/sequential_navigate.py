@@ -25,12 +25,13 @@ from .raw_cdp import (
 )
 from .sampling import snapshot_resources
 from .target_serve import start_target_serve, stop_target_serve
+from .top_sites import TOP_SITES_LIST_PATH, parse_top_sites_list
 
 
 DEFAULT_SEED = 20260809
 DEFAULT_COUNT = 50
 DEFAULT_PINNED_DOMAINS = ("csdn.net", "zol.com.cn")
-DEFAULT_SEED_FILE = REPO_ROOT / "docs" / "chinese-community-top100-websites.md"
+DEFAULT_SEED_FILE = TOP_SITES_LIST_PATH
 TRACE_METHODS = {
     "Page.frameStartedNavigating",
     "Page.frameStartedLoading",
@@ -1310,7 +1311,7 @@ def _selected_urls(args: argparse.Namespace) -> list[str]:
     if args.url:
         base = [normalize_public_url(url) for url in args.url]
     else:
-        domains = parse_top_100_domains(args.seed_file.read_text(encoding="utf-8"))
+        domains = [target for _, target in parse_top_sites_list(args.seed_file)]
         base = select_seed_urls(
             domains,
             seed=args.seed,

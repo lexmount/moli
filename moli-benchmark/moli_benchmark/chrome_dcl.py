@@ -6,11 +6,13 @@ import signal
 import subprocess
 import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from .config import REPO_ROOT, reserve_port
 from .process import ProcessResult
+from .public_web import POST_DCL_SETTLE_MILLISECONDS
 from .raw_cdp import RawCdpClient, RawCdpError, connect_raw_cdp
 from .sampling import ResourceSampler
 from .target_serve import start_target_serve, stop_target_serve
@@ -26,6 +28,14 @@ DEFAULT_CHROME_DCL_USER_AGENT = (
 # timeout. Keep this small so failed navigations do not distort timing reports.
 CDP_LATE_ERROR_GRACE_SECONDS = 2.0
 
+_POST_DCL_SETTLE_EXPRESSION = (
+    "new Promise(resolve => "
+    f"setTimeout(resolve, {POST_DCL_SETTLE_MILLISECONDS}))"
+)
+_POST_DCL_OUTER_HTML_EXPRESSION = (
+    "document.documentElement ? document.documentElement.outerHTML : ''"
+)
+
 
 class CdpDclDumpTimeoutError(TimeoutError):
     def __init__(self, stage: str, error: BaseException) -> None:
@@ -38,6 +48,15 @@ class CdpDclDumpTimeoutError(TimeoutError):
     def detail(self) -> str:
         detail = str(self.original_error)
         return detail if detail else self.stage
+
+
+@dataclass(frozen=True)
+class CdpDclDumpResult:
+    body: str
+    response_status: int | None
+    response_mime_type: str | None
+    main_document_body_capture: str
+    final_url: str | None
 
 
 def _chrome_command(binary: Path, port: int, profile_dir: Path) -> list[str]:
@@ -126,18 +145,28 @@ async def _raise_late_command_error_or_timeout(
         raise CdpDclDumpTimeoutError(stage, timeout_error) from timeout_error
 
 
-def _is_dcl_event(message: dict[str, Any], session_id: str, frame_id: str | None) -> bool:
+def _is_dcl_event(
+    message: dict[str, Any],
+    session_id: str,
+    frame_id: str | None,
+    expected_loader_id: str | None,
+) -> bool:
     if message.get("sessionId") != session_id:
         return False
-    method = message.get("method")
-    if method == "Page.domContentEventFired":
-        return True
-    if method != "Page.lifecycleEvent":
+    # Page.domContentEventFired has no loader identity. Lifecycle events are
+    # enabled for this runner and can be matched to the loader returned by
+    # Page.navigate below.
+    if message.get("method") != "Page.lifecycleEvent":
         return False
     params = message.get("params")
     if not isinstance(params, dict):
         return False
     if frame_id is not None and params.get("frameId") != frame_id:
+        return False
+    if (
+        expected_loader_id is not None
+        and params.get("loaderId") != expected_loader_id
+    ):
         return False
     return params.get("name") in {"DOMContentLoaded", "domContentLoaded"}
 
@@ -170,40 +199,112 @@ def _is_binary_document_mime_type(mime_type: str) -> bool:
     )
 
 
-def _binary_main_resource_body(mime_type: str) -> str:
-    normalized = mime_type.split(";", 1)[0].strip().lower()
-    if normalized == "application/pdf":
-        return "%PDF-1.7\n% moli benchmark CDP binary main resource\n" + ("\0" * 512)
-    return f"moli benchmark CDP binary main resource: {normalized}\n" + ("\0" * 512)
-
-
-def _binary_main_resource_body_from_message(
+def _main_document_response_from_message(
     message: dict[str, Any],
     *,
     session_id: str,
     frame_id: str | None,
-) -> str | None:
+    expected_loader_id: str | None = None,
+    main_document_request_ids: set[str] | None = None,
+) -> dict[str, Any] | None:
     if message.get("sessionId") != session_id:
-        return None
-    if message.get("method") != "Network.responseReceived":
         return None
     params = message.get("params")
     if not isinstance(params, dict):
         return None
-    if params.get("type") != "Document":
+    if (
+        expected_loader_id is not None
+        and params.get("loaderId") != expected_loader_id
+    ):
+        return None
+
+    method = message.get("method")
+    if method == "Network.requestWillBeSent":
+        if params.get("type") != "Document":
+            return None
+        if frame_id is not None and params.get("frameId") != frame_id:
+            return None
+        request_id = params.get("requestId")
+        if main_document_request_ids is not None and isinstance(request_id, str):
+            main_document_request_ids.clear()
+            main_document_request_ids.add(request_id)
+        return None
+
+    if method != "Network.responseReceived":
         return None
     if frame_id is not None and params.get("frameId") != frame_id:
         return None
+    request_id = params.get("requestId")
+    request_was_document = (
+        isinstance(request_id, str)
+        and main_document_request_ids is not None
+        and request_id in main_document_request_ids
+    )
+    if (
+        isinstance(request_id, str)
+        and main_document_request_ids
+        and not request_was_document
+    ):
+        return None
+    if params.get("type") != "Document" and not request_was_document:
+        return None
+    if main_document_request_ids is not None and isinstance(request_id, str):
+        main_document_request_ids.clear()
+        main_document_request_ids.add(request_id)
     response = params.get("response")
     if not isinstance(response, dict):
         return None
+    return response
+
+
+def _response_status(response: dict[str, Any]) -> int | None:
     status = response.get("status")
-    if isinstance(status, (int, float)) and not 200 <= status < 400:
+    if isinstance(status, bool) or not isinstance(status, (int, float)):
+        return None
+    return int(status)
+
+
+def _response_mime_type(response: dict[str, Any]) -> str | None:
+    mime_type = response.get("mimeType")
+    if not isinstance(mime_type, str):
+        return None
+    normalized = mime_type.strip().lower()
+    return normalized or None
+
+
+def _response_url(response: dict[str, Any]) -> str | None:
+    url = response.get("url")
+    return url if isinstance(url, str) and url else None
+
+
+def _binary_main_resource_mime_type_from_message(
+    message: dict[str, Any],
+    *,
+    session_id: str,
+    frame_id: str | None,
+    expected_loader_id: str | None = None,
+) -> str | None:
+    response = _main_document_response_from_message(
+        message,
+        session_id=session_id,
+        frame_id=frame_id,
+        expected_loader_id=expected_loader_id,
+    )
+    return _binary_main_resource_mime_type_from_response(response)
+
+
+def _binary_main_resource_mime_type_from_response(
+    response: dict[str, Any] | None,
+) -> str | None:
+    if response is None:
+        return None
+    status = _response_status(response)
+    if status is not None and not 200 <= status < 400:
         return None
     mime_type = response.get("mimeType")
     if not isinstance(mime_type, str) or not _is_binary_document_mime_type(mime_type):
         return None
-    return _binary_main_resource_body(mime_type)
+    return _response_mime_type(response)
 
 
 async def _recv_until_dcl_or_binary_main_resource(
@@ -211,36 +312,91 @@ async def _recv_until_dcl_or_binary_main_resource(
     *,
     session_id: str,
     frame_id: str | None,
+    expected_loader_id: str | None,
     deadline: float,
     seen: list[dict[str, Any]],
-) -> str | None:
+) -> tuple[str | None, int | None, str | None, str | None]:
+    response_status: int | None = None
+    response_mime_type: str | None = None
+    response_url: str | None = None
+    main_document_request_ids: set[str] = set()
     for message in seen:
-        binary_body = _binary_main_resource_body_from_message(
+        response = _main_document_response_from_message(
             message,
             session_id=session_id,
             frame_id=frame_id,
+            expected_loader_id=expected_loader_id,
+            main_document_request_ids=main_document_request_ids,
         )
-        if binary_body is not None:
-            return binary_body
-    if any(_is_dcl_event(message, session_id, frame_id) for message in seen):
-        return None
+        if response is not None:
+            response_status = _response_status(response)
+            response_mime_type = _response_mime_type(response)
+            response_url = _response_url(response)
+        binary_mime_type = _binary_main_resource_mime_type_from_response(response)
+        if binary_mime_type is not None:
+            return (
+                binary_mime_type,
+                response_status,
+                response_mime_type,
+                response_url,
+            )
+    if any(
+        _is_dcl_event(message, session_id, frame_id, expected_loader_id)
+        for message in seen
+    ):
+        return None, response_status, response_mime_type, response_url
     while True:
         remaining = deadline - time.perf_counter()
         if remaining <= 0:
             raise TimeoutError("timed out waiting for Page.domContentEventFired")
         message = await asyncio.wait_for(client.recv(), timeout=remaining)
-        binary_body = _binary_main_resource_body_from_message(
+        response = _main_document_response_from_message(
             message,
             session_id=session_id,
             frame_id=frame_id,
+            expected_loader_id=expected_loader_id,
+            main_document_request_ids=main_document_request_ids,
         )
-        if binary_body is not None:
-            return binary_body
-        if _is_dcl_event(message, session_id, frame_id):
-            return None
+        if response is not None:
+            response_status = _response_status(response)
+            response_mime_type = _response_mime_type(response)
+            response_url = _response_url(response)
+        binary_mime_type = _binary_main_resource_mime_type_from_response(response)
+        if binary_mime_type is not None:
+            return (
+                binary_mime_type,
+                response_status,
+                response_mime_type,
+                response_url,
+            )
+        if _is_dcl_event(message, session_id, frame_id, expected_loader_id):
+            return None, response_status, response_mime_type, response_url
 
 
-async def _dump_dcl_html(endpoint: str, process: subprocess.Popen[bytes], url: str, timeout_seconds: float) -> str:
+def _navigation_frame_and_loader(
+    navigate_response: dict[str, Any],
+    url: str,
+) -> tuple[str | None, str | None]:
+    result = navigate_response.get("result")
+    if not isinstance(result, dict):
+        result = {}
+    error_text = result.get("errorText")
+    if isinstance(error_text, str) and error_text:
+        raise RawCdpError(f"Page.navigate failed for `{url}`: {error_text}")
+    frame_id = result.get("frameId")
+    loader_id = result.get("loaderId")
+    return (
+        str(frame_id) if frame_id is not None else None,
+        str(loader_id) if loader_id is not None else None,
+    )
+
+
+async def _dump_dcl_html(
+    endpoint: str,
+    process: subprocess.Popen[bytes],
+    url: str,
+    timeout_seconds: float,
+) -> CdpDclDumpResult:
     deadline = time.perf_counter() + timeout_seconds
     try:
         client = await _wait_for_cdp(endpoint, process, min(5.0, max(0.1, timeout_seconds)))
@@ -290,26 +446,56 @@ async def _dump_dcl_html(endpoint: str, process: subprocess.Popen[bytes], url: s
             stage="Page.navigate",
             late_error_grace_seconds=CDP_LATE_ERROR_GRACE_SECONDS,
         )
-        frame_id = navigate_response.get("result", {}).get("frameId")
-        if frame_id is not None:
-            frame_id = str(frame_id)
+        frame_id, expected_loader_id = _navigation_frame_and_loader(
+            navigate_response,
+            url,
+        )
         try:
-            binary_body = await _recv_until_dcl_or_binary_main_resource(
+            main_document = await _recv_until_dcl_or_binary_main_resource(
                 client,
                 session_id=session_id,
                 frame_id=frame_id,
+                expected_loader_id=expected_loader_id,
                 deadline=deadline,
                 seen=seen,
             )
+            (
+                binary_mime_type,
+                response_status,
+                response_mime_type,
+                final_url,
+            ) = main_document
         except TimeoutError as error:
             raise CdpDclDumpTimeoutError("DCL", error) from error
-        if binary_body is not None:
-            return binary_body
+        if binary_mime_type is not None:
+            return CdpDclDumpResult(
+                body="",
+                response_status=response_status,
+                response_mime_type=binary_mime_type,
+                main_document_body_capture="response-headers-only",
+                final_url=final_url,
+            )
+
+        settle_id = await client.send(
+            "Runtime.evaluate",
+            {
+                "expression": _POST_DCL_SETTLE_EXPRESSION,
+                "awaitPromise": True,
+                "returnByValue": True,
+            },
+            session_id=session_id,
+        )
+        await _recv_command_response(
+            client,
+            settle_id,
+            deadline=deadline,
+            stage="post-DCL settle",
+        )
 
         evaluate_id = await client.send(
             "Runtime.evaluate",
             {
-                "expression": "document.documentElement ? document.documentElement.outerHTML : ''",
+                "expression": _POST_DCL_OUTER_HTML_EXPRESSION,
                 "returnByValue": True,
             },
             session_id=session_id,
@@ -322,7 +508,13 @@ async def _dump_dcl_html(endpoint: str, process: subprocess.Popen[bytes], url: s
         )
         result = evaluate_response.get("result", {}).get("result", {})
         value = result.get("value", "")
-        return value if isinstance(value, str) else ""
+        return CdpDclDumpResult(
+            body=value if isinstance(value, str) else "",
+            response_status=response_status,
+            response_mime_type=response_mime_type,
+            main_document_body_capture="dom-snapshot",
+            final_url=final_url,
+        )
     finally:
         if target_id is not None:
             try:
@@ -383,6 +575,10 @@ def run_chrome_dcl_dump(
     error_suffix = b""
     timed_out = False
     returncode: int | None = None
+    response_status: int | None = None
+    response_mime_type: str | None = None
+    main_document_body_capture: str | None = None
+    final_url: str | None = None
     with tempfile.TemporaryDirectory(prefix="moli-benchmark-chrome-") as temp_dir:
         profile_dir = Path(temp_dir) / "profile"
         profile_dir.mkdir()
@@ -409,8 +605,14 @@ def run_chrome_dcl_dump(
                 sampler.start()
             try:
                 try:
-                    html = asyncio.run(_dump_dcl_html(endpoint, process, url, timeout_seconds))
-                    stdout = html.encode("utf-8", errors="replace")
+                    dump = asyncio.run(
+                        _dump_dcl_html(endpoint, process, url, timeout_seconds)
+                    )
+                    stdout = dump.body.encode("utf-8", errors="replace")
+                    response_status = dump.response_status
+                    response_mime_type = dump.response_mime_type
+                    main_document_body_capture = dump.main_document_body_capture
+                    final_url = dump.final_url
                     returncode = 0
                 except CdpDclDumpTimeoutError as error:
                     timed_out = True
@@ -435,7 +637,11 @@ def run_chrome_dcl_dump(
             finally:
                 elapsed_ms = (time.perf_counter() - started) * 1000.0
                 resources = sampler.stop() if sampler is not None else {}
-    if browser_stdout.strip() and not stdout:
+    if (
+        browser_stdout.strip()
+        and not stdout
+        and main_document_body_capture is None
+    ):
         stdout = browser_stdout
     return ProcessResult(
         command=command,
@@ -445,6 +651,10 @@ def run_chrome_dcl_dump(
         stderr=stderr,
         timed_out=timed_out,
         resources=resources,
+        response_status=response_status,
+        response_mime_type=response_mime_type,
+        main_document_body_capture=main_document_body_capture,
+        final_url=final_url,
     )
 
 
@@ -466,13 +676,23 @@ def run_served_cdp_dcl_dump(
     timed_out = False
     returncode: int | None = None
     resources: dict[str, Any] = {}
+    response_status: int | None = None
+    response_mime_type: str | None = None
+    main_document_body_capture: str | None = None
+    final_url: str | None = None
     serve = None
     try:
         serve = start_target_serve(target, binary, timeout_seconds)
         command = serve.command
         try:
-            html = asyncio.run(_dump_dcl_html(serve.endpoint, serve.process, url, timeout_seconds))
-            stdout = html.encode("utf-8", errors="replace")
+            dump = asyncio.run(
+                _dump_dcl_html(serve.endpoint, serve.process, url, timeout_seconds)
+            )
+            stdout = dump.body.encode("utf-8", errors="replace")
+            response_status = dump.response_status
+            response_mime_type = dump.response_mime_type
+            main_document_body_capture = dump.main_document_body_capture
+            final_url = dump.final_url
             returncode = 0
         except CdpDclDumpTimeoutError as error:
             timed_out = True
@@ -521,4 +741,8 @@ def run_served_cdp_dcl_dump(
         stderr=stderr,
         timed_out=timed_out,
         resources=resources,
+        response_status=response_status,
+        response_mime_type=response_mime_type,
+        main_document_body_capture=main_document_body_capture,
+        final_url=final_url,
     )

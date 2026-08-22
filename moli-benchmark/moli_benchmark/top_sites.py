@@ -1,31 +1,47 @@
 from __future__ import annotations
 
+import csv
 import os
 import re
-import html.parser
-from hashlib import sha256
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from itertools import combinations
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
-from .artifacts import write_csv, write_json, write_text
+from .artifacts import write_csv, write_json
 from .chrome_dcl import run_chrome_dcl_dump, run_served_cdp_dcl_dump
-from .config import REPO_ROOT, clear_proxy_env
+from .config import PROJECT_ROOT, REPO_ROOT, clear_proxy_env
 from .process import ProcessResult, run_process
-from .stats import summarize
-from .synthetic_compare import (
-    WEBFETCH_TARGETS,
-    target_enables_all_resource_fetch,
-    target_is_cdp,
-    target_metadata,
+from .public_web import (
+    PUBLIC_WEB_SNAPSHOT_CONTRACT,
+    TOP_SITES_ARTIFACT_POLICY,
+    TOP_SITES_CLASSIFIER,
+    PublicWebAttempt,
+    PublicWebResult,
+    PublicWebScheduledCase,
+    PublicWebScheduler,
+    build_public_web_fetch_command,
+    count_public_web_row_values,
+    elapsed_failure_reached_timeout as _elapsed_failure_reached_timeout,
+    public_web_target_metadata as _top_sites_target_metadata,
+    rotated_target_order as _rotated_target_order,
+    run_public_web_target,
+    safe_artifact_filename_token as _artifact_filename_token,
+    schedule_public_web_cases,
+    successful_public_web_attempt_cohort,
+    unavailable_public_web_row,
+    write_public_web_failure_artifacts,
 )
+from .stats import summarize
+from .synthetic_compare import WEBFETCH_TARGETS
 
 
-TOP_SITES_LIST_PATH = REPO_ROOT / "docs" / "chinese-community-top100-websites.md"
-GLOBAL_TOP_SITES_LIST_PATH = REPO_ROOT / "docs" / "global-top-websites-seed-list.md"
-WEBFETCH_LONGTAIL_LIST_PATH = REPO_ROOT / "docs" / "webfetch-longtail-seed-list.md"
-RENDER_QUALITY_LIST_PATH = REPO_ROOT / "docs" / "render-quality-seed-list.md"
-LEGACY_ENCODING_LIST_PATH = REPO_ROOT / "docs" / "legacy-encoding-websites-seed-list.md"
+TOP_SITES_FIXTURE_ROOT = PROJECT_ROOT / "fixtures" / "top-sites"
+TOP_SITES_LIST_PATH = TOP_SITES_FIXTURE_ROOT / "chinese-community-top100-websites.csv"
+GLOBAL_TOP_SITES_LIST_PATH = TOP_SITES_FIXTURE_ROOT / "global-top-websites-seed-list.csv"
+WEBFETCH_LONGTAIL_LIST_PATH = TOP_SITES_FIXTURE_ROOT / "webfetch-longtail-seed-list.csv"
+RENDER_QUALITY_LIST_PATH = TOP_SITES_FIXTURE_ROOT / "render-quality-seed-list.csv"
+LEGACY_ENCODING_LIST_PATH = TOP_SITES_FIXTURE_ROOT / "legacy-encoding-websites-seed-list.csv"
 
 TOP_SITES_SOURCES: dict[str, dict[str, Any]] = {
     "chinese-community": {
@@ -75,232 +91,11 @@ def _default_top_sites_parallelism() -> int:
 
 
 DEFAULT_TOP_SITES_PARALLELISM = _default_top_sites_parallelism()
-DEFAULT_TOP_SITES_TEXT_SAMPLE_CHARS = 500
 
 _TOP_LIST_HEADING = re.compile(r"^##\s+Top\s+\d+\b", re.IGNORECASE)
 _NEXT_SECTION_HEADING = re.compile(r"^##\s+")
 _LIST_ENTRY = re.compile(r"^\s*(\d+)\.\s+`([^`]+)`")
-_BLOCKED_TITLE_403 = re.compile(r"^\s*(?:http\s*)?403\b")
-_SAFE_ARTIFACT_TOKEN = re.compile(r"[^A-Za-z0-9._-]+")
-_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
-_NETWORK_ERROR_MARKERS = (
-    "privacy error",
-    "your connection is not private",
-    "net::err_cert",
-    "this site can't be reached",
-    "this site can\u2019t be reached",
-    "err_name_not_resolved",
-    "err_connection",
-    "err_timed_out",
-    "dns_probe_finished",
-    "could not resolve",
-    "could not resolve host",
-    "could not resolve hostname",
-    "could not connect to server",
-    "name resolution",
-    "connection refused",
-    "connection reset",
-    "connection timed out",
-    "no route to host",
-    "network is unreachable",
-    "ssl handshake",
-    "ssl error",
-    "ssl connect error",
-    "tls handshake",
-    "timed out connecting",
-    "timeout was reached",
-    "request timeout",
-    "i/o error",
-    "broken pipe",
-    "operation timed out",
-    "failed to connect",
-    "dns lookup",
-    "curl request failed",
-    "recv failure",
-)
-_CLI_DEADLINE_COMMAND_MARKERS = (
-    "fetch_document_allow_http_error_with_wait_until",
-    "fetch document allow-http-error",
-    "fetch allow-http-error wait_until",
-    "fetch wait_until",
-)
-_CLI_DEADLINE_TIMEOUT_MARKERS = (
-    "timed out after",
-)
-_RAW_DOCUMENT_BODY_PROGRESS_RE = re.compile(
-    r"with\s+(\d+)\s+out\s+of\s+(\d+)\s+bytes\s+received",
-    re.IGNORECASE,
-)
-_ELAPSED_FAILURE_TIMEOUT_GRACE_SECONDS = 1.0
-_CAPTCHA_MARKERS = (
-    "captcha",
-    "安全验证",
-    "验证你是真人",
-    "人机验证",
-    "human verification",
-    "verification",
-    "verify you are human",
-    "verify that you're not a robot",
-    "verify that you are not a robot",
-    "are you a robot",
-    "not a robot",
-    "bot or not",
-    "checking your browser",
-    "perform security check",
-    "security verification",
-    "performing security verification",
-    "请完成验证",
-)
-_LOGIN_MARKERS = (
-    "sign in",
-    "log in",
-    "login",
-    "登录",
-    "注册",
-    "账号",
-)
-_LOGIN_FORM_MARKERS = (
-    "login to your account",
-    "email/username",
-    "your password is a required field",
-    "forgot password",
-    "create a free account",
-)
-_LOGIN_CONTEXT_MARKERS = (
-    "password",
-    "验证码",
-    "短信验证码",
-    "语音验证码",
-    "手机号",
-    "手机验证",
-    "邮箱",
-    "email",
-)
-_JS_CHALLENGE_MARKERS = (
-    "__cf_chl_",
-    "c2wf946j0/probe",
-    "cf-challenge",
-    "__tencent_chaos_vm",
-    "__eo_jschallenge_vm",
-    "teojschallengesdk.js",
-    "eojschallengesdk",
-    "window.solvechallenge(",
-    "jsl_clearance",
-    "acw_sc__v2",
-    "window._phantom",
-    "_$jsvmprt",
-    "awswaf",
-    "aliyun_waf",
-    "aliyun waf",
-    "_waf_",
-    "just a moment...",
-    "vercel security checkpoint",
-    "we're verifying your browser",
-    "we\u2019re verifying your browser",
-    "enable javascript and cookies to continue",
-    "javascript is needed to access this site",
-)
-_BLOCKED_BODY_MARKERS = (
-    "unable to give you access to our site",
-    "access denied",
-    "access to this page has been denied",
-    "sorry, you have been blocked",
-    "security issue was automatically identified",
-    "waf拦截",
-    "被waf拦截",
-)
-_NOT_FOUND_MARKERS = (
-    "404 not found",
-    "file not found",
-    "page not found",
-    "this page cannot be found",
-    "page you requested is missing",
-    "page you requested could not be found",
-)
-_FORBIDDEN_ERROR_MARKERS = (
-    "403 forbidden",
-    "returned 403",
-    "http 403",
-)
-_NOT_FOUND_ERROR_MARKERS = (
-    "returned 404",
-    "http 404",
-)
-_SHELL_MARKERS = (
-    'id="root"',
-    'id="app"',
-    'id="__next"',
-    'data-reactroot',
-    "webpackJsonp",
-    "__NUXT__",
-    "__NEXT_DATA__",
-)
-
-
-class _VisibleTextExtractor(html.parser.HTMLParser):
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self._skip_depth = 0
-        self.parts: list[str] = []
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag.lower() in {"script", "style", "noscript", "svg", "template"}:
-            self._skip_depth += 1
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag.lower() in {"script", "style", "noscript", "svg", "template"} and self._skip_depth:
-            self._skip_depth -= 1
-
-    def handle_data(self, data: str) -> None:
-        if self._skip_depth:
-            return
-        text = " ".join(data.split())
-        if text:
-            self.parts.append(text)
-
-
-def _extract_title_and_text(stdout: bytes) -> dict[str, Any]:
-    html_text = stdout.decode("utf-8", errors="replace")
-    title = ""
-    match = _TITLE_RE.search(html_text)
-    if match:
-        title = re.sub(r"\s+", " ", match.group(1)).strip()
-    parser = _VisibleTextExtractor()
-    try:
-        parser.feed(html_text)
-    except html.parser.HTMLParseError:
-        pass
-    visible_text = " ".join(parser.parts)
-    visible_text = re.sub(r"\s+", " ", visible_text).strip()
-    return {
-        "title": title,
-        "text_length": len(visible_text),
-        "text_sample": visible_text[:DEFAULT_TOP_SITES_TEXT_SAMPLE_CHARS],
-    }
-
-
-def _looks_like_binary_content(body: bytes) -> bool:
-    sample = body[:4096]
-    if sample.startswith(b"%PDF-"):
-        return True
-    if b"\x00" in sample:
-        return True
-    decoded = sample.decode("utf-8", errors="replace")
-    replacement_count = decoded.count("\ufffd")
-    return replacement_count > max(8, len(decoded) // 20)
-
-
-def _looks_like_raw_binary_main_resource_timeout(text: str, min_body_bytes: int) -> bool:
-    if "failed to read raw document body" not in text:
-        return False
-    if "timeout was reached" not in text and "operation timed out" not in text:
-        return False
-    match = _RAW_DOCUMENT_BODY_PROGRESS_RE.search(text)
-    if match is None:
-        return False
-    received = int(match.group(1))
-    total = int(match.group(2))
-    return received >= min_body_bytes and total >= received
+_extract_title_and_text = TOP_SITES_CLASSIFIER.snapshot
 
 
 def _parse_top_sites_sections(path: Path) -> list[tuple[str, list[tuple[int, str]]]]:
@@ -343,11 +138,47 @@ def _parse_top_sites_sections(path: Path) -> list[tuple[str, list[tuple[int, str
     return sections
 
 
+def _parse_top_sites_csv(path: Path) -> list[tuple[int, str]]:
+    if not path.exists():
+        raise RuntimeError(f"top sites list not found: {path}")
+    try:
+        with path.open(encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            if reader.fieldnames != ["rank", "target"]:
+                raise RuntimeError(f"expected CSV columns `rank,target` in {path}")
+            entries: list[tuple[int, str]] = []
+            seen_targets: set[str] = set()
+            for row_number, row in enumerate(reader, start=2):
+                rank_raw = (row.get("rank") or "").strip()
+                target = (row.get("target") or "").strip()
+                try:
+                    rank = int(rank_raw)
+                except ValueError as error:
+                    raise RuntimeError(f"invalid rank on CSV row {row_number} in {path}") from error
+                if rank <= 0 or not target:
+                    raise RuntimeError(f"invalid entry on CSV row {row_number} in {path}")
+                if target not in seen_targets:
+                    seen_targets.add(target)
+                    entries.append((rank, target))
+    except csv.Error as error:
+        raise RuntimeError(f"invalid CSV seed list {path}: {error}") from error
+    if not entries:
+        raise RuntimeError(f"no entries parsed from {path}")
+    return entries
+
+
 def parse_top_sites_list(path: Path) -> list[tuple[int, str]]:
+    if path.suffix.lower() == ".csv":
+        return _parse_top_sites_csv(path)
     return _parse_top_sites_sections(path)[0][1]
 
 
 def _parse_top_sites_list_by_count(path: Path, count: int) -> list[tuple[int, str]]:
+    if path.suffix.lower() == ".csv":
+        entries = _parse_top_sites_csv(path)
+        if len(entries) != count:
+            raise RuntimeError(f"expected {count} entries in {path}, found {len(entries)}")
+        return entries
     heading = re.compile(rf"^##\s+Top\s+{count}\b", re.IGNORECASE)
     for section_heading, entries in _parse_top_sites_sections(path):
         if heading.match(section_heading):
@@ -360,9 +191,9 @@ def resolve_top_sites_source(source: str, list_path: Path | None) -> tuple[str, 
         return ("custom", list_path)
     if source not in TOP_SITES_SOURCES:
         if source == "mixed":
-            return (source, REPO_ROOT / "docs" / "mixed-top-websites")
+            return (source, TOP_SITES_FIXTURE_ROOT / "mixed-top-websites")
         if source == "webfetch-mix":
-            return (source, REPO_ROOT / "docs" / "webfetch-mix-websites")
+            return (source, TOP_SITES_FIXTURE_ROOT / "webfetch-mix-websites")
         raise RuntimeError(
             f"unknown top-sites source `{source}`; expected one of "
             f"{sorted(TOP_SITES_SOURCES) + list(COMPOSITE_TOP_SITES_SOURCES)} or a --list-path override"
@@ -450,73 +281,24 @@ def load_top_sites_entries(source: str, list_path: Path | None) -> tuple[list[tu
     return entries, [f"{source}:{info['path'].name}"]
 
 
-def _top_command_for_target(target: str, binary: Path, url: str, timeout_seconds: float) -> list[str]:
-    metadata = target_metadata(target)
-    if target_is_cdp(target):
-        raise RuntimeError(f"{target} is a CDP target; use the cdp-session suite")
-    if target == "chrome":
-        raise RuntimeError("chrome top-sites uses the CDP DCL runner")
-    timeout_ms = str(int(timeout_seconds * 1000))
-    if target in {"moli", "moli-full"}:
-        compatibility_args = (
-            ["--layout", "--resource"]
-            if target_enables_all_resource_fetch(target)
-            else []
-        )
-        return [
-            str(binary),
-            "fetch",
-            *compatibility_args,
-            "--dump",
-            "html",
-            "--wait-until",
-            "domcontentloaded",
-            "--timeout",
-            timeout_ms,
-            "--http-timeout",
-            timeout_ms,
-            url,
-        ]
-    if target == "lightpanda":
-        return [
-            str(binary),
-            "fetch",
-            "--dump",
-            "html",
-            "--wait-until",
-            "domcontentloaded",
-            "--wait-ms",
-            timeout_ms,
-            "--http-timeout",
-            timeout_ms,
-            "--terminate-ms",
-            timeout_ms,
-            url,
-        ]
-    if target == "obscura":
-        return [
-            str(binary),
-            "fetch",
-            "--dump",
-            "html",
-            "--wait-until",
-            "load",
-            "--wait",
-            "0",
-            "--timeout",
-            str(max(1, int(timeout_seconds))),
-            url,
-        ]
-    raise RuntimeError(f"unknown target: {target}")
+def _is_explicit_pdf_url(url: str) -> bool:
+    return urlsplit(url).path.lower().endswith(".pdf")
 
 
-def _top_sites_target_metadata(target: str) -> dict[str, str]:
-    metadata = dict(target_metadata(target))
-    if target == "chrome" or target_is_cdp(target):
-        metadata["driver"] = "cdp-dcl"
-        prefix = "moli full" if target == "moli-full-cdp" else metadata["engine"]
-        metadata["label"] = f"{prefix} / cdp-dcl"
-    return metadata
+def _top_command_for_target(
+    target: str,
+    binary: Path,
+    url: str,
+    timeout_seconds: float,
+) -> list[str]:
+    return build_public_web_fetch_command(
+        target,
+        binary,
+        url,
+        timeout_seconds,
+        suite_name="top-sites",
+        omit_moli_page_wait=_is_explicit_pdf_url(url),
+    )
 
 
 def _run_top_sites_target(
@@ -527,29 +309,16 @@ def _run_top_sites_target(
     timeout_seconds: float,
     proc_env: dict[str, str],
 ) -> ProcessResult:
-    if target == "chrome":
-        return run_chrome_dcl_dump(
-            binary,
-            url,
-            cwd=REPO_ROOT,
-            timeout_seconds=timeout_seconds,
-            env=proc_env,
-        )
-    if target_is_cdp(target):
-        return run_served_cdp_dcl_dump(
-            target,
-            binary,
-            url,
-            cwd=REPO_ROOT,
-            timeout_seconds=timeout_seconds,
-            env=proc_env,
-        )
-    command = _top_command_for_target(target, binary, url, timeout_seconds)
-    return run_process(
-        command,
-        cwd=REPO_ROOT,
-        timeout_seconds=timeout_seconds + 2,
-        env=proc_env,
+    return run_public_web_target(
+        target=target,
+        binary=binary,
+        url=url,
+        timeout_seconds=timeout_seconds,
+        proc_env=proc_env,
+        command_builder=_top_command_for_target,
+        chrome_runner=run_chrome_dcl_dump,
+        served_cdp_runner=run_served_cdp_dcl_dump,
+        process_runner=run_process,
     )
 
 
@@ -560,118 +329,32 @@ def _classify(
     timed_out: bool,
     min_body_bytes: int,
     snapshot: dict[str, Any] | None = None,
+    response_status: int | None = None,
+    main_document_body_capture: str | None = None,
 ) -> str:
-    if timed_out:
-        return "timeout"
-    combined_text = (stdout + b"\n" + stderr).decode("utf-8", errors="replace").lower()
-    if "operationtimedout" in combined_text and (
-        "navigate failed" in combined_text or "navigation failed" in combined_text
-    ):
-        return "timeout"
-    if (
-        returncode != 0
-        and any(marker in combined_text for marker in _CLI_DEADLINE_COMMAND_MARKERS)
-        and any(marker in combined_text for marker in _CLI_DEADLINE_TIMEOUT_MARKERS)
-    ):
-        return "timeout"
-    if returncode != 0 and _looks_like_raw_binary_main_resource_timeout(
-        combined_text,
-        min_body_bytes,
-    ):
-        return "success-binary-main-resource"
-    if returncode != 0:
-        if any(marker in combined_text for marker in _FORBIDDEN_ERROR_MARKERS):
-            return "blocked-or-forbidden"
-        if any(marker in combined_text for marker in _NOT_FOUND_ERROR_MARKERS):
-            return "not-found"
-        if any(marker in combined_text for marker in _NETWORK_ERROR_MARKERS):
-            return "network-error"
-        return "process-error"
-    body = stdout.strip()
-    if not body:
-        if any(marker in combined_text for marker in _NETWORK_ERROR_MARKERS):
-            return "network-error"
-        return "empty-response"
-    if len(body) >= min_body_bytes and _looks_like_binary_content(body):
-        return "success-binary-content"
-    if snapshot is None:
-        snapshot = _extract_title_and_text(stdout)
-    text_length = int(snapshot.get("text_length") or 0)
-    title = str(snapshot.get("title") or "").lower()
-    sample = str(snapshot.get("text_sample") or "").lower()
-    page_text = f"{title}\n{sample}"
-    if any(marker in page_text for marker in _NETWORK_ERROR_MARKERS):
-        return "network-error"
-    if (
-        "blocked" in title
-        or "forbidden" in title
-        or _BLOCKED_TITLE_403.search(title)
-        or "access restricted" in title
-    ):
-        return "blocked-or-forbidden"
-    if any(marker in page_text for marker in _NOT_FOUND_MARKERS):
-        return "not-found"
-    if any(marker in page_text for marker in _BLOCKED_BODY_MARKERS):
-        return "blocked-or-forbidden"
-    if any(marker in page_text for marker in _CAPTCHA_MARKERS):
-        return "captcha-or-verification"
-    if any(marker in combined_text for marker in _JS_CHALLENGE_MARKERS):
-        return "js-challenge"
-    if _looks_like_login_wall(title, sample, text_length):
-        return "login-wall"
-    if len(body) < min_body_bytes:
-        return "app-shell-only"
-    if text_length < min_body_bytes:
-        return "app-shell-only"
-    return "success-content"
-
-
-def _elapsed_failure_reached_timeout(elapsed_ms: float | None, timeout_seconds: float) -> bool:
-    if elapsed_ms is None or timeout_seconds <= 0:
-        return False
-    grace_seconds = min(_ELAPSED_FAILURE_TIMEOUT_GRACE_SECONDS, timeout_seconds * 0.05)
-    timeout_floor_ms = max(0.0, (timeout_seconds - grace_seconds) * 1000.0)
-    return elapsed_ms >= timeout_floor_ms
-
-
-def _looks_like_login_wall(title: str, sample: str, text_length: int) -> bool:
-    page_text = f"{title}\n{sample}"
-    if sum(1 for marker in _LOGIN_FORM_MARKERS if marker in page_text) >= 2:
-        return True
-    if text_length >= 800:
-        return False
-    login_hits = {marker for marker in _LOGIN_MARKERS if marker in page_text}
-    if not login_hits:
-        return False
-    title_has_login = any(marker in title for marker in _LOGIN_MARKERS)
-    if title_has_login and len(login_hits) >= 2:
-        return True
-    if len(login_hits) >= 2 and any(marker in page_text for marker in _LOGIN_CONTEXT_MARKERS):
-        return True
-    return False
+    return TOP_SITES_CLASSIFIER.classify_output(
+        stdout=stdout,
+        stderr=stderr,
+        returncode=returncode,
+        timed_out=timed_out,
+        min_body_bytes=min_body_bytes,
+        snapshot=snapshot,
+        response_status=response_status,
+        main_document_body_capture=main_document_body_capture,
+    )
 
 
 def _ok_categories() -> set[str]:
-    return {"success-content", "success-binary-content", "success-binary-main-resource"}
+    return set(TOP_SITES_CLASSIFIER.ok_categories)
 
 
-def _failure_kind(category: str, error: str | None) -> str | None:
-    if error == "target binary unavailable":
-        return "target-unavailable"
-    if category not in _ok_categories():
-        return category
-    return None
+_SITE_UNREACHABLE_FAILURE_KINDS = {"network-error", "timeout"}
 
 
-_SITE_UNREACHABLE_FAILURE_KINDS = {
-    "network-error",
-    "timeout",
-    "empty-response",
-    "process-error",
-}
-
-
-def _site_unreachable_exclusions(rows: list[dict[str, Any]]) -> dict[str, str]:
+def _site_unreachable_exclusions(
+    rows: list[dict[str, Any]],
+    targets: tuple[str, ...],
+) -> dict[str, str]:
     rows_by_domain: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         rows_by_domain.setdefault(str(row["domain"]), []).append(row)
@@ -680,50 +363,171 @@ def _site_unreachable_exclusions(rows: list[dict[str, Any]]) -> dict[str, str]:
     for domain, domain_rows in rows_by_domain.items():
         if any(row.get("ok") for row in domain_rows):
             continue
+        if {str(row.get("target")) for row in domain_rows} != set(targets):
+            continue
         failure_kinds = {
-            str(row.get("failure_kind") or _failure_kind(str(row.get("category")), None) or "")
+            str(
+                row.get("failure_kind")
+                or TOP_SITES_CLASSIFIER.failure_kind(
+                    str(row.get("category"))
+                )
+                or ""
+            )
             for row in domain_rows
         }
         failure_kinds.discard("")
         if (
             failure_kinds
             and failure_kinds <= _SITE_UNREACHABLE_FAILURE_KINDS
-            and (failure_kinds - {"process-error"})
         ):
             excluded[domain] = "site-unreachable"
     return excluded
 
 
-def _artifact_filename_token(value: str, *, max_length: int = 80) -> str:
-    token = _SAFE_ARTIFACT_TOKEN.sub("_", value)
-    while ".." in token:
-        token = token.replace("..", "_")
-    token = token.strip("._-") or "site"
-    if token == value and len(token) <= max_length:
-        return token
-    digest = sha256(value.encode("utf-8", errors="surrogatepass")).hexdigest()[:12]
-    token = token[:max_length].rstrip("._-") or "site"
-    return f"{token}-{digest}"
+def _build_site_outcomes(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, int, str], list[dict[str, Any]]] = {}
+    for row in rows:
+        key = (str(row["target"]), int(row["rank"]), str(row["domain"]))
+        grouped.setdefault(key, []).append(row)
+
+    outcomes: list[dict[str, Any]] = []
+    for (target, rank, domain), attempts in grouped.items():
+        comparable_attempts = [
+            row for row in attempts if row.get("comparable", True)
+        ]
+        passes = sum(1 for row in comparable_attempts if row.get("ok"))
+        attempt_count = len(comparable_attempts)
+        if attempt_count == 0:
+            outcome = "not-comparable"
+        elif passes == attempt_count:
+            outcome = "all-pass"
+        elif passes == 0:
+            outcome = "all-fail"
+        else:
+            outcome = "flaky"
+        categories: dict[str, int] = {}
+        for row in attempts:
+            category = str(row.get("category") or "unknown")
+            categories[category] = categories.get(category, 0) + 1
+        response_statuses: set[int] = set()
+        response_status_sources: dict[str, int] = {}
+        for row in attempts:
+            status = row.get("response_status")
+            if isinstance(status, int) and not isinstance(status, bool):
+                response_statuses.add(status)
+            source = row.get("response_status_source")
+            if isinstance(source, str) and source:
+                response_status_sources[source] = (
+                    response_status_sources.get(source, 0) + 1
+                )
+        outcomes.append(
+            {
+                "target": target,
+                "rank": rank,
+                "domain": domain,
+                "url": str(attempts[0].get("url") or domain),
+                "attempts": attempt_count,
+                "raw_attempts": len(attempts),
+                "non_comparable_attempts": len(attempts) - attempt_count,
+                "passes": passes,
+                "failures": attempt_count - passes,
+                "pass_rate_percent": (
+                    (passes / attempt_count) * 100.0 if attempt_count else None
+                ),
+                "outcome": outcome,
+                "categories": categories,
+                "response_statuses": sorted(response_statuses),
+                "response_status_sources": response_status_sources,
+                "status_observed_attempts": sum(
+                    1 for row in attempts if row.get("response_status") is not None
+                ),
+            }
+        )
+    outcomes.sort(
+        key=lambda row: (
+            str(row["target"]),
+            int(row["rank"]),
+            str(row["domain"]),
+        )
+    )
+    return outcomes
 
 
-def _write_failure_artifact(
+def _pairwise_site_comparisons(
+    outcomes: list[dict[str, Any]],
+    targets: tuple[str, ...],
     *,
-    suite_dir: Path,
-    row: dict[str, Any],
-    stdout: bytes,
-    stderr: bytes,
-) -> str:
-    domain = _artifact_filename_token(str(row["domain"]))
-    name = f"{row['target']}-run-{row['run']}-rank{row['rank']:03d}-{domain}"
-    failures_dir = suite_dir / "failures"
-    json_path = failures_dir / f"{name}.json"
-    stderr_path = failures_dir / f"{name}.stderr.txt"
-    write_json(json_path, row)
-    write_text(stderr_path, stderr[-16 * 1024 :].decode("utf-8", errors="replace"))
-    if stdout.strip():
-        stdout_path = failures_dir / f"{name}.stdout.html"
-        write_text(stdout_path, stdout[-32 * 1024 :].decode("utf-8", errors="replace"))
-    return str(json_path.relative_to(suite_dir))
+    runs: int,
+) -> list[dict[str, Any]]:
+    by_target_site = {
+        (str(row["target"]), int(row["rank"]), str(row["domain"])): row
+        for row in outcomes
+    }
+    site_keys = sorted({(int(row["rank"]), str(row["domain"])) for row in outcomes})
+    comparisons: list[dict[str, Any]] = []
+    for left, right in combinations(targets, 2):
+        counts = {
+            "both_all_pass": 0,
+            "left_all_pass_right_all_fail": 0,
+            "right_all_pass_left_all_fail": 0,
+            "both_all_fail": 0,
+            "flaky_or_incomplete": 0,
+            "not_comparable": 0,
+        }
+        left_only_sites: list[dict[str, Any]] = []
+        right_only_sites: list[dict[str, Any]] = []
+        evaluated_sites = 0
+        for rank, domain in site_keys:
+            left_row = by_target_site.get((left, rank, domain))
+            right_row = by_target_site.get((right, rank, domain))
+            if left_row is None or right_row is None:
+                continue
+            left_outcome = left_row["outcome"]
+            right_outcome = right_row["outcome"]
+            if "not-comparable" in {left_outcome, right_outcome}:
+                counts["not_comparable"] += 1
+                continue
+            evaluated_sites += 1
+            if left_outcome == "all-pass" and right_outcome == "all-pass":
+                counts["both_all_pass"] += 1
+            elif left_outcome == "all-pass" and right_outcome == "all-fail":
+                counts["left_all_pass_right_all_fail"] += 1
+                left_only_sites.append({"rank": rank, "domain": domain})
+            elif right_outcome == "all-pass" and left_outcome == "all-fail":
+                counts["right_all_pass_left_all_fail"] += 1
+                right_only_sites.append({"rank": rank, "domain": domain})
+            elif left_outcome == "all-fail" and right_outcome == "all-fail":
+                counts["both_all_fail"] += 1
+            else:
+                counts["flaky_or_incomplete"] += 1
+        comparisons.append(
+            {
+                "left": left,
+                "right": right,
+                "runs_per_site": runs,
+                "repeat_validated": runs >= 3,
+                "evaluated_sites": evaluated_sites,
+                **counts,
+                "left_only_sites": left_only_sites,
+                "right_only_sites": right_only_sites,
+            }
+        )
+    return comparisons
+
+
+def _successful_attempt_cohort(
+    rows: list[dict[str, Any]],
+    targets: tuple[str, ...],
+) -> dict[str, Any]:
+    return successful_public_web_attempt_cohort(
+        rows,
+        targets,
+        attempt_key_fields=("run", "rank", "domain"),
+        unique_key_fields=("rank", "domain"),
+        unique_count_name="unique_sites",
+        metric_fields=("elapsed_ms", "peak_pss_bytes", "peak_rss_bytes"),
+        require_comparable=True,
+    )
 
 
 def _domain_to_url(domain: str) -> str:
@@ -744,69 +548,88 @@ def _execute_one(
     timeout_seconds: float,
     min_body_bytes: int,
     proc_env: dict[str, str],
+    schedule_index: int,
+    target_order_index: int,
 ) -> dict[str, Any]:
     url = _domain_to_url(domain)
-    if not info.get("available") or not info.get("path"):
-        row = {
-            "target": target,
-            **metadata,
-            "run": run_id,
-            "rank": rank,
-            "domain": domain,
-            "url": url,
-            "category": "error",
-            "ok": False,
-            "failure_kind": "target-unavailable",
-            "error": "target binary unavailable",
-        }
-        row["failure_artifact"] = _write_failure_artifact(suite_dir=suite_dir, row=row, stdout=b"", stderr=b"")
-        return row
-    result = _run_top_sites_target(
+    attempt = PublicWebAttempt.start(
         target=target,
-        binary=Path(info["path"]),
+        metadata=metadata,
+        target_info=info,
+        run=run_id,
+        case_fields={"rank": rank, "domain": domain},
+        url=url,
+        schedule_index=schedule_index,
+        target_order_index=target_order_index,
+        artifact_stem=(
+            f"{target}-run-{run_id}-rank{rank:03d}-"
+            f"{_artifact_filename_token(domain)}"
+        ),
+    )
+    binary = attempt.binary_path()
+    if binary is None:
+        row = unavailable_public_web_row(attempt, category="error")
+        row["failure_artifact"] = write_public_web_failure_artifacts(
+            suite_dir=suite_dir,
+            attempt=attempt,
+            row=row,
+            stdout=b"",
+            stderr=b"",
+            policy=TOP_SITES_ARTIFACT_POLICY,
+        )
+        return row
+
+    process = _run_top_sites_target(
+        target=target,
+        binary=binary,
         url=url,
         timeout_seconds=timeout_seconds,
         proc_env=proc_env,
     )
-    snapshot = _extract_title_and_text(result.stdout)
-    category = _classify(
-        result.stdout,
-        result.stderr,
-        result.returncode,
-        result.timed_out,
-        min_body_bytes,
-        snapshot,
+    result = PublicWebResult.capture(
+        attempt,
+        process,
+        classifier=TOP_SITES_CLASSIFIER,
     )
-    if category not in _ok_categories() and _elapsed_failure_reached_timeout(result.elapsed_ms, timeout_seconds):
+    category = TOP_SITES_CLASSIFIER.classify_result(
+        result,
+        min_body_bytes=min_body_bytes,
+    )
+    if (
+        result.response_status is None
+        and not TOP_SITES_CLASSIFIER.classification_ok(category)
+        and _elapsed_failure_reached_timeout(process.elapsed_ms, timeout_seconds)
+    ):
         category = "timeout"
-    ok = category in _ok_categories()
+    comparable = TOP_SITES_CLASSIFIER.comparable(category)
+    ok = TOP_SITES_CLASSIFIER.classification_ok(category)
     row: dict[str, Any] = {
-        "target": target,
-        **metadata,
-        "run": run_id,
-        "rank": rank,
-        "domain": domain,
-        "url": url,
-        "command": result.command,
+        **result.base_row(),
+        **result.evidence_fields(policy=TOP_SITES_ARTIFACT_POLICY),
+        "command": process.command,
         "category": category,
+        "classification_basis": TOP_SITES_CLASSIFIER.classification_basis(
+            result, category
+        ),
         "ok": ok,
-        "failure_kind": None if ok else _failure_kind(category, None),
-        "elapsed_ms": result.elapsed_ms,
-        "returncode": result.returncode,
-        "timed_out": result.timed_out,
-        "stdout_bytes": len(result.stdout),
-        "stderr_bytes": len(result.stderr),
-        "title": snapshot["title"],
-        "text_length": snapshot["text_length"],
-        "text_sample": snapshot["text_sample"],
-        "stdout_tail": result.stdout[-512:].decode("utf-8", errors="replace"),
-        "stderr_tail": result.stderr[-512:].decode("utf-8", errors="replace"),
-        "peak_pss_bytes": result.resources.get("peak_pss_bytes"),
-        "peak_rss_bytes": result.resources.get("peak_rss_bytes"),
+        "comparable": comparable,
+        "non_comparable_reason": (
+            None if comparable else "main-document-body-not-captured"
+        ),
+        "failure_kind": (
+            None
+            if ok or not comparable
+            else TOP_SITES_CLASSIFIER.failure_kind(category)
+        ),
     }
-    if not ok:
-        row["failure_artifact"] = _write_failure_artifact(
-            suite_dir=suite_dir, row=row, stdout=result.stdout, stderr=result.stderr
+    if comparable and not ok:
+        row["failure_artifact"] = write_public_web_failure_artifacts(
+            suite_dir=suite_dir,
+            attempt=attempt,
+            row=row,
+            stdout=process.stdout,
+            stderr=process.stderr,
+            policy=TOP_SITES_ARTIFACT_POLICY,
         )
     return row
 
@@ -853,52 +676,89 @@ def run_top_sites_suite(
     list_source = primary_path
     proc_env = clear_proxy_env(os.environ)
 
-    rows: list[dict[str, Any]] = []
-    for target in targets:
-        metadata = _top_sites_target_metadata(target)
-        info = target_matrix.get(metadata["binary_key"], {})
-        job_specs = [
-            (run_id, rank, domain)
-            for run_id in range(1, runs_count + 1)
-            for rank, domain in entries
-        ]
-        target_workers = chrome_parallelism if target == "chrome" else parallelism
-        with ThreadPoolExecutor(max_workers=target_workers) as executor:
-            future_to_spec = {
-                executor.submit(
-                    _execute_one,
-                    suite_dir=suite_dir,
-                    target=target,
-                    metadata=metadata,
-                    info=info,
-                    run_id=run_id,
-                    rank=rank,
-                    domain=domain,
-                    timeout_seconds=timeout_seconds,
-                    min_body_bytes=min_body_bytes,
-                    proc_env=proc_env,
-                ): (target, run_id, rank, domain)
-                for run_id, rank, domain in job_specs
-            }
-            for future in as_completed(future_to_spec):
-                rows.append(future.result())
+    metadata_by_target = {
+        target: _top_sites_target_metadata(target) for target in targets
+    }
+    info_by_target = {
+        target: target_matrix.get(metadata_by_target[target]["binary_key"], {})
+        for target in targets
+    }
+    scheduled_cases = schedule_public_web_cases(entries, runs=runs_count)
 
-    rows.sort(key=lambda row: (row["target"], row["run"], row["rank"]))
+    def execute_attempt(
+        scheduled: PublicWebScheduledCase[tuple[int, str]],
+        target: str,
+        target_order_index: int,
+    ) -> dict[str, Any]:
+        rank, domain = scheduled.case
+        return _execute_one(
+            suite_dir=suite_dir,
+            target=target,
+            metadata=metadata_by_target[target],
+            info=info_by_target[target],
+            run_id=scheduled.run,
+            rank=rank,
+            domain=domain,
+            timeout_seconds=timeout_seconds,
+            min_body_bytes=min_body_bytes,
+            proc_env=proc_env,
+            schedule_index=scheduled.schedule_index,
+            target_order_index=target_order_index,
+        )
 
-    excluded_domains = _site_unreachable_exclusions(rows) if len(targets) > 1 else {}
+    rows = PublicWebScheduler[tuple[int, str], dict[str, Any]](
+        targets,
+        parallelism=parallelism,
+        target_parallelism={"chrome": chrome_parallelism},
+    ).run(
+        scheduled_cases,
+        execute_attempt,
+    )
+
+    excluded_domains = (
+        _site_unreachable_exclusions(rows, targets) if len(targets) > 1 else {}
+    )
     for row in rows:
         exclusion_reason = excluded_domains.get(str(row["domain"]))
         row["excluded"] = exclusion_reason is not None
         row["exclusion_reason"] = exclusion_reason
 
     counted_rows = [row for row in rows if not row.get("excluded")]
-    gate_failures = sum(1 for row in counted_rows if row["target"] == gate_target and not row.get("ok"))
+    comparable_counted_rows = [
+        row for row in counted_rows if row.get("comparable", True)
+    ]
+    site_outcomes = _build_site_outcomes(counted_rows)
+    pairwise_comparisons = _pairwise_site_comparisons(
+        site_outcomes,
+        targets,
+        runs=runs_count,
+    )
+    for comparison in pairwise_comparisons:
+        comparison["common_success"] = _successful_attempt_cohort(
+            counted_rows,
+            (str(comparison["left"]), str(comparison["right"])),
+        )
+    common_success = _successful_attempt_cohort(counted_rows, targets)
+    gate_failures = sum(
+        1
+        for row in comparable_counted_rows
+        if row["target"] == gate_target and not row.get("ok")
+    )
+    gate_site_outcomes = [
+        row
+        for row in site_outcomes
+        if row["target"] == gate_target and row["outcome"] != "not-comparable"
+    ]
     summary: dict[str, Any] = {
         "suite": "top-sites",
         "profile": profile,
         "limit": limit,
         "source": resolved_source,
-        "list_source": str(list_source.relative_to(REPO_ROOT)) if list_source.is_relative_to(REPO_ROOT) else str(list_source),
+        "list_source": (
+            str(list_source.relative_to(REPO_ROOT))
+            if list_source.is_relative_to(REPO_ROOT)
+            else str(list_source)
+        ),
         "list_sources": list_source_labels,
         "site_count": len(entries),
         "counted_site_count": len(entries) - len(excluded_domains),
@@ -913,40 +773,158 @@ def run_top_sites_suite(
         "runs": runs_count,
         "timeout_seconds": timeout_seconds,
         "min_body_bytes": min_body_bytes,
+        "snapshot_contract": PUBLIC_WEB_SNAPSHOT_CONTRACT,
+        "schedule": "site-paired-rotating-target-order",
+        "scheduled_site_groups": len(scheduled_cases),
         "parallelism": parallelism,
         "chrome_parallelism": chrome_parallelism,
         "gate_target": gate_target,
         "gate_failures": gate_failures,
-        "total_failures": sum(1 for row in counted_rows if not row.get("ok")),
+        "gate_site_failures": sum(
+            1 for row in gate_site_outcomes if row["outcome"] != "all-pass"
+        ),
+        "gate_flaky_sites": sum(
+            1 for row in gate_site_outcomes if row["outcome"] == "flaky"
+        ),
+        "total_failures": sum(
+            1 for row in comparable_counted_rows if not row.get("ok")
+        ),
+        "total_non_comparable_runs": len(counted_rows)
+        - len(comparable_counted_rows),
         "total_excluded_runs": sum(1 for row in rows if row.get("excluded")),
+        "repeat_validated": runs_count >= 3,
+        "pairwise": pairwise_comparisons,
+        "common_success": common_success,
         "targets": {},
     }
     for target in targets:
         all_target_rows = [row for row in rows if row["target"] == target]
-        target_rows = [row for row in all_target_rows if not row.get("excluded")]
-        categories: dict[str, int] = {}
-        failure_kinds: dict[str, int] = {}
-        for row in target_rows:
-            categories[row["category"]] = categories.get(row["category"], 0) + 1
-            failure_kind = row.get("failure_kind")
-            if isinstance(failure_kind, str) and failure_kind:
-                failure_kinds[failure_kind] = failure_kinds.get(failure_kind, 0) + 1
+        target_observations = [
+            row for row in all_target_rows if not row.get("excluded")
+        ]
+        target_rows = [
+            row for row in target_observations if row.get("comparable", True)
+        ]
+        raw_comparable_rows = [
+            row for row in all_target_rows if row.get("comparable", True)
+        ]
+        successful_rows = [row for row in target_rows if row.get("ok")]
+        all_target_site_outcomes = [
+            row for row in site_outcomes if row["target"] == target
+        ]
+        target_site_outcomes = [
+            row
+            for row in all_target_site_outcomes
+            if row["outcome"] != "not-comparable"
+        ]
+        value_counts = count_public_web_row_values(target_observations)
+        status_observed_attempts = sum(
+            1
+            for row in target_observations
+            if row.get("response_status") is not None
+        )
         summary["targets"][target] = {
             **_top_sites_target_metadata(target),
             "sites": len(target_rows),
             "raw_sites": len(all_target_rows),
-            "excluded_runs": len(all_target_rows) - len(target_rows),
+            "observed_sites": len(target_observations),
+            "unique_sites": len(target_site_outcomes),
+            "observed_unique_sites": len(all_target_site_outcomes),
+            "attempts": len(target_rows),
+            "raw_observations": len(all_target_rows),
+            "raw_comparable_attempts": len(raw_comparable_rows),
+            "raw_non_comparable_attempts": len(all_target_rows)
+            - len(raw_comparable_rows),
+            "raw_passes": sum(1 for row in raw_comparable_rows if row.get("ok")),
+            "raw_failures": sum(
+                1 for row in raw_comparable_rows if not row.get("ok")
+            ),
+            "raw_pass_rate_percent": (
+                (
+                    sum(1 for row in raw_comparable_rows if row.get("ok"))
+                    / len(raw_comparable_rows)
+                )
+                * 100.0
+                if raw_comparable_rows
+                else None
+            ),
+            "non_comparable_attempts": len(target_observations) - len(target_rows),
+            "excluded_runs": len(all_target_rows) - len(target_observations),
             "runs": runs_count,
+            "repeat_validated": runs_count >= 3,
             "passes": sum(1 for row in target_rows if row.get("ok")),
             "failures": sum(1 for row in target_rows if not row.get("ok")),
-            "categories": categories,
-            "failure_kinds": failure_kinds,
-            "elapsed_ms": summarize(row["elapsed_ms"] for row in target_rows if row.get("elapsed_ms") is not None),
-            "peak_pss_bytes": summarize(row["peak_pss_bytes"] for row in target_rows if row.get("peak_pss_bytes") is not None),
-            "peak_rss_bytes": summarize(row["peak_rss_bytes"] for row in target_rows if row.get("peak_rss_bytes") is not None),
+            "pass_rate_percent": (
+                (sum(1 for row in target_rows if row.get("ok")) / len(target_rows))
+                * 100.0
+                if target_rows
+                else None
+            ),
+            "all_pass_sites": sum(
+                1 for row in target_site_outcomes if row["outcome"] == "all-pass"
+            ),
+            "all_fail_sites": sum(
+                1 for row in target_site_outcomes if row["outcome"] == "all-fail"
+            ),
+            "flaky_sites": sum(
+                1 for row in target_site_outcomes if row["outcome"] == "flaky"
+            ),
+            "status_observed_attempts": status_observed_attempts,
+            "status_unobserved_attempts": len(target_observations)
+            - status_observed_attempts,
+            "response_status_sources": value_counts[
+                "response_status_sources"
+            ],
+            "status_coverage_percent": (
+                (status_observed_attempts / len(target_observations)) * 100.0
+                if target_observations
+                else None
+            ),
+            "content_inferred_http_failures": sum(
+                1
+                for row in target_rows
+                if row.get("response_status") is None
+                and row.get("returncode") == 0
+                and row.get("category")
+                in {"blocked-or-forbidden", "not-found", "http-error"}
+            ),
+            "categories": value_counts["categories"],
+            "failure_kinds": value_counts["failure_kinds"],
+            "classification_bases": value_counts["classification_bases"],
+            "elapsed_ms": summarize(
+                row["elapsed_ms"]
+                for row in target_rows
+                if row.get("elapsed_ms") is not None
+            ),
+            "successful_elapsed_ms": summarize(
+                row["elapsed_ms"]
+                for row in successful_rows
+                if row.get("elapsed_ms") is not None
+            ),
+            "peak_pss_bytes": summarize(
+                row["peak_pss_bytes"]
+                for row in target_rows
+                if row.get("peak_pss_bytes") is not None
+            ),
+            "successful_peak_pss_bytes": summarize(
+                row["peak_pss_bytes"]
+                for row in successful_rows
+                if row.get("peak_pss_bytes") is not None
+            ),
+            "peak_rss_bytes": summarize(
+                row["peak_rss_bytes"]
+                for row in target_rows
+                if row.get("peak_rss_bytes") is not None
+            ),
+            "successful_peak_rss_bytes": summarize(
+                row["peak_rss_bytes"]
+                for row in successful_rows
+                if row.get("peak_rss_bytes") is not None
+            ),
         }
 
     write_csv(suite_dir / "raw-runs.csv", rows)
     write_json(suite_dir / "runs.json", rows)
+    write_json(suite_dir / "site-outcomes.json", site_outcomes)
     write_json(suite_dir / "summary.json", summary)
     return summary

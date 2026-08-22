@@ -7,15 +7,22 @@ from pathlib import Path
 from unittest.mock import patch
 
 from moli_benchmark.process import ProcessResult
+from moli_benchmark.public_web import POST_DCL_WAIT_SCRIPT
 from moli_benchmark.top_sites import (
     COMPOSITE_TOP_SITES_SOURCES,
     DEFAULT_TOP_SITES_SOURCE,
+    TOP_SITES_FIXTURE_ROOT,
     TOP_SITES_PROFILES,
     TOP_SITES_SOURCES,
+    _build_site_outcomes,
     _classify,
     _default_top_sites_parallelism,
     _elapsed_failure_reached_timeout,
+    _extract_title_and_text,
     _ok_categories,
+    _pairwise_site_comparisons,
+    _rotated_target_order,
+    _site_unreachable_exclusions,
     _top_command_for_target,
     _top_sites_target_metadata,
     load_top_sites_entries,
@@ -26,6 +33,163 @@ from moli_benchmark.top_sites import (
 
 
 class TopSitesTests(unittest.TestCase):
+    def test_target_order_rotates_per_site_group(self) -> None:
+        targets = ("moli", "lightpanda", "chrome")
+
+        self.assertEqual(_rotated_target_order(targets, 0), targets)
+        self.assertEqual(
+            _rotated_target_order(targets, 1),
+            ("lightpanda", "chrome", "moli"),
+        )
+        self.assertEqual(
+            _rotated_target_order(targets, 2),
+            ("chrome", "moli", "lightpanda"),
+        )
+
+    def test_site_unreachable_exclusion_requires_transport_failure_from_every_target(
+        self,
+    ) -> None:
+        rows = [
+            {
+                "target": "moli",
+                "domain": "dead.example",
+                "ok": False,
+                "category": "network-error",
+                "failure_kind": "network-error",
+            },
+            {
+                "target": "chrome",
+                "domain": "dead.example",
+                "ok": False,
+                "category": "process-error",
+                "failure_kind": "process-error",
+            },
+        ]
+
+        self.assertEqual(
+            _site_unreachable_exclusions(rows, ("moli", "chrome")),
+            {},
+        )
+        rows[1]["category"] = "timeout"
+        rows[1]["failure_kind"] = "timeout"
+        self.assertEqual(
+            _site_unreachable_exclusions(rows, ("moli", "chrome")),
+            {"dead.example": "site-unreachable"},
+        )
+
+    def test_site_outcomes_keep_header_only_binary_observations_neutral(self) -> None:
+        outcomes = _build_site_outcomes(
+            [
+                {
+                    "target": "chrome",
+                    "rank": 1,
+                    "domain": "document.example",
+                    "url": "https://document.example/file.pdf",
+                    "run": 1,
+                    "ok": False,
+                    "comparable": False,
+                    "category": "binary-response-headers",
+                    "response_status": 200,
+                }
+            ]
+        )
+
+        self.assertEqual(outcomes[0]["outcome"], "not-comparable")
+        self.assertEqual(outcomes[0]["attempts"], 0)
+        self.assertEqual(outcomes[0]["raw_attempts"], 1)
+        self.assertEqual(outcomes[0]["non_comparable_attempts"], 1)
+        self.assertIsNone(outcomes[0]["pass_rate_percent"])
+
+    def test_site_outcomes_separate_repeat_stability_from_attempt_passes(self) -> None:
+        rows: list[dict[str, object]] = []
+        for run, left_ok, right_ok in (
+            (1, True, False),
+            (2, True, False),
+            (3, True, False),
+        ):
+            rows.extend(
+                [
+                    {
+                        "target": "left",
+                        "rank": 1,
+                        "domain": "stable.example",
+                        "url": "https://stable.example/",
+                        "run": run,
+                        "ok": left_ok,
+                        "category": "success-content",
+                        "response_status": 200,
+                    },
+                    {
+                        "target": "right",
+                        "rank": 1,
+                        "domain": "stable.example",
+                        "url": "https://stable.example/",
+                        "run": run,
+                        "ok": right_ok,
+                        "category": "http-error",
+                        "response_status": 500,
+                    },
+                    {
+                        "target": "left",
+                        "rank": 2,
+                        "domain": "flaky.example",
+                        "url": "https://flaky.example/",
+                        "run": run,
+                        "ok": run != 2,
+                        "category": "success-content" if run != 2 else "timeout",
+                        "response_status": 200 if run != 2 else None,
+                    },
+                    {
+                        "target": "right",
+                        "rank": 2,
+                        "domain": "flaky.example",
+                        "url": "https://flaky.example/",
+                        "run": run,
+                        "ok": True,
+                        "category": "success-content",
+                        "response_status": 200,
+                    },
+                ]
+            )
+
+        outcomes = _build_site_outcomes(rows)  # type: ignore[arg-type]
+        comparisons = _pairwise_site_comparisons(
+            outcomes,
+            ("left", "right"),
+            runs=3,
+        )
+        by_target_rank = {
+            (row["target"], row["rank"]): row for row in outcomes
+        }
+
+        self.assertEqual(by_target_rank[("left", 1)]["outcome"], "all-pass")
+        self.assertEqual(by_target_rank[("right", 1)]["outcome"], "all-fail")
+        self.assertEqual(by_target_rank[("left", 2)]["outcome"], "flaky")
+        self.assertAlmostEqual(
+            by_target_rank[("left", 2)]["pass_rate_percent"],
+            200 / 3,
+        )
+        self.assertTrue(comparisons[0]["repeat_validated"])
+        self.assertEqual(comparisons[0]["left_all_pass_right_all_fail"], 1)
+        self.assertEqual(comparisons[0]["flaky_or_incomplete"], 1)
+        self.assertEqual(
+            comparisons[0]["left_only_sites"],
+            [{"rank": 1, "domain": "stable.example"}],
+        )
+
+    def test_builtin_seed_lists_are_benchmark_local(self) -> None:
+        for source in TOP_SITES_SOURCES:
+            resolved, path = resolve_top_sites_source(source, None)
+            self.assertEqual(resolved, source)
+            self.assertTrue(path.is_relative_to(TOP_SITES_FIXTURE_ROOT))
+            self.assertEqual(path.suffix, ".csv")
+            self.assertTrue(path.is_file(), f"missing benchmark seed fixture: {path}")
+
+        for source in COMPOSITE_TOP_SITES_SOURCES:
+            resolved, path = resolve_top_sites_source(source, None)
+            self.assertEqual(resolved, source)
+            self.assertEqual(path.parent, TOP_SITES_FIXTURE_ROOT)
+
     def test_parse_top_sites_list_reads_top_100_section(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "list.md"
@@ -56,6 +220,21 @@ class TopSitesTests(unittest.TestCase):
             entries = parse_top_sites_list(path)
         self.assertEqual(entries, [(1, "first.example")])
 
+    def test_parse_top_sites_list_reads_csv(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "list.csv"
+            path.write_text(
+                "rank,target\n"
+                "1,example.com\n"
+                '2,"https://example.com/search?q=one,two"\n',
+                encoding="utf-8",
+            )
+            entries = parse_top_sites_list(path)
+        self.assertEqual(
+            entries,
+            [(1, "example.com"), (2, "https://example.com/search?q=one,two")],
+        )
+
     def test_legacy_encoding_source_is_registered_and_parses(self) -> None:
         source, path = resolve_top_sites_source("legacy-encoding", None)
         entries = parse_top_sites_list(path)
@@ -75,6 +254,7 @@ class TopSitesTests(unittest.TestCase):
         self.assertNotIn("--resource", command)
         self.assertIn("--wait-until", command)
         self.assertEqual(command[command.index("--wait-until") + 1], "domcontentloaded")
+        self.assertEqual(command[command.index("--wait-script") + 1], POST_DCL_WAIT_SCRIPT)
         self.assertEqual(command[command.index("--timeout") + 1], "12000")
         self.assertEqual(command[command.index("--http-timeout") + 1], "12000")
         self.assertEqual(command[-1], "https://example.test/")
@@ -87,13 +267,29 @@ class TopSitesTests(unittest.TestCase):
         self.assertLess(command.index("--layout"), command.index("--dump"))
         self.assertLess(command.index("--resource"), command.index("--dump"))
         self.assertEqual(command[command.index("--wait-until") + 1], "domcontentloaded")
+        self.assertEqual(command[command.index("--wait-script") + 1], POST_DCL_WAIT_SCRIPT)
         self.assertEqual(command[-1], "https://example.test/")
+
+    def test_top_command_for_moli_omits_page_waits_for_explicit_pdf(self) -> None:
+        command = _top_command_for_target(
+            "moli",
+            Path("/bin/moli"),
+            "https://example.test/report.PDF?download=1",
+            12.0,
+        )
+
+        self.assertNotIn("--wait-until", command)
+        self.assertNotIn("--wait-script", command)
+        self.assertEqual(command[command.index("--timeout") + 1], "12000")
+        self.assertEqual(command[command.index("--http-timeout") + 1], "12000")
+        self.assertEqual(command[-1], "https://example.test/report.PDF?download=1")
 
     def test_top_command_for_lightpanda_aligns_wait_and_http_timeouts(self) -> None:
         command = _top_command_for_target("lightpanda", Path("/bin/lightpanda"), "https://example.test/", 12.0)
         self.assertEqual(command[0], "/bin/lightpanda")
         self.assertIn("--wait-until", command)
         self.assertEqual(command[command.index("--wait-until") + 1], "domcontentloaded")
+        self.assertEqual(command[command.index("--wait-script") + 1], POST_DCL_WAIT_SCRIPT)
         self.assertEqual(command[command.index("--wait-ms") + 1], "12000")
         self.assertEqual(command[command.index("--http-timeout") + 1], "12000")
         self.assertEqual(command[command.index("--terminate-ms") + 1], "12000")
@@ -244,6 +440,154 @@ class TopSitesTests(unittest.TestCase):
         self.assertEqual(_classify(b"", b"HTTP request `https://example.test/` returned 404 Not Found", 1, False, 256), "not-found")
         self.assertEqual(_classify(b"", b"", None, True, 256), "timeout")
 
+    def test_classify_recognizes_lightpanda_fatal_fetch_timeout(self) -> None:
+        stderr = (
+            b'$scope=app $level=fatal $msg="fetch error" err=Timeout '
+            b"url=https://example.test/data.json"
+        )
+
+        self.assertEqual(_classify(b"", stderr, 0, False, 256), "timeout")
+
+    def test_classify_preserves_cli_main_document_status_and_dns_reason(self) -> None:
+        self.assertEqual(
+            _classify(
+                b"",
+                b"Reason: lifecycle target document `https://example.test/` "
+                b"returned 429 Too Many Requests",
+                1,
+                False,
+                256,
+            ),
+            "http-error",
+        )
+        self.assertEqual(
+            _classify(
+                b"",
+                b"Reason: lifecycle target document `https://example.test/` "
+                b"returned 401 Unauthorized",
+                1,
+                False,
+                256,
+            ),
+            "blocked-or-forbidden",
+        )
+        self.assertEqual(
+            _classify(
+                b"",
+                b"Reason: failed to resolve example.test:443: failed to lookup "
+                b"address information",
+                1,
+                False,
+                256,
+            ),
+            "network-error",
+        )
+
+    def test_classify_uses_main_document_status_before_body_size(self) -> None:
+        large_error_body = (
+            b"<html><head><title>upstream response</title></head><body>"
+            + b"error details " * 100
+            + b"</body></html>"
+        )
+
+        for status in (400, 500, 502):
+            with self.subTest(status=status):
+                self.assertEqual(
+                    _classify(
+                        large_error_body,
+                        b"",
+                        0,
+                        False,
+                        256,
+                        response_status=status,
+                    ),
+                    "http-error",
+                )
+        self.assertEqual(
+            _classify(
+                large_error_body,
+                b"",
+                0,
+                False,
+                256,
+                response_status=403,
+            ),
+            "blocked-or-forbidden",
+        )
+        self.assertEqual(
+            _classify(
+                large_error_body,
+                b"",
+                0,
+                False,
+                256,
+                response_status=404,
+            ),
+            "not-found",
+        )
+
+    def test_classify_infers_http_error_documents_when_cli_hides_status(self) -> None:
+        cases = [
+            (
+                b"<html><head><title>Error: 500 | Service</title></head>"
+                b"<body>There was a technical error.</body></html>",
+                "http-error",
+            ),
+            (
+                b"<html><head><title>502 Bad Gateway</title></head>"
+                b"<body>Origin unavailable.</body></html>",
+                "http-error",
+            ),
+            (
+                b"<html><head><title></title></head><body><pre>"
+                b'{"error":{"message":"invalid query"}}'
+                b"</pre></body></html>",
+                "http-error",
+            ),
+            (
+                b"<html><head><title>ResearchGate - Temporarily Unavailable</title></head>"
+                b"<body>Access restricted due to unusual activity.</body></html>",
+                "blocked-or-forbidden",
+            ),
+        ]
+
+        for html, expected in cases:
+            with self.subTest(expected=expected, html=html):
+                self.assertEqual(_classify(html, b"", 0, False, 256), expected)
+
+    def test_classify_distinguishes_tls_verification_from_human_verification(self) -> None:
+        tls_error = (
+            b"<html><body><h1>Navigation failed</h1>"
+            b"<p>Reason: PeerFailedVerification</p></body></html>"
+        )
+        human_verification = (
+            "<html><body>环境异常 当前环境异常，完成验证后即可继续访问。去验证</body></html>".encode()
+        )
+
+        self.assertEqual(_classify(tls_error, b"", 0, False, 256), "network-error")
+        self.assertEqual(
+            _classify(human_verification, b"", 0, False, 256),
+            "captcha-or-verification",
+        )
+
+    def test_classify_recognizes_chinese_not_found_document(self) -> None:
+        html = (
+            "<html><head><title>出错了！</title></head>"
+            "<body>404 很抱歉，你访问的页面不存在或暂时无法访问！</body></html>"
+        ).encode()
+
+        self.assertEqual(_classify(html, b"", 0, False, 256), "not-found")
+
+    def test_visible_text_excludes_document_head(self) -> None:
+        snapshot = _extract_title_and_text(
+            b"<html><head><title>A very long title</title></head>"
+            b"<body>short body</body></html>"
+        )
+
+        self.assertEqual(snapshot["title"], "A very long title")
+        self.assertEqual(snapshot["text_sample"], "short body")
+        self.assertEqual(snapshot["text_length"], len("short body"))
+
     def test_classify_treats_browser_network_error_pages_as_failures(self) -> None:
         html = (
             b"<html><head><title>www.example.test</title></head><body>"
@@ -315,6 +659,21 @@ class TopSitesTests(unittest.TestCase):
         )
         stderr = b'$scope=frame $level=error $msg="navigate failed" err=OperationTimedout type=root'
         self.assertEqual(_classify(html, stderr, 0, False, 256), "timeout")
+
+    def test_classify_treats_lightpanda_navigation_transport_pages_as_network_errors(
+        self,
+    ) -> None:
+        for reason in ("CouldntResolveHost", "Http2Stream"):
+            with self.subTest(reason=reason):
+                html = (
+                    "<!doctype html><body><h1>Navigation failed</h1>"
+                    f"<p>Reason: {reason}</p></body>"
+                ).encode()
+                stderr = f'$msg="navigate failed" err={reason} type=root'.encode()
+                self.assertEqual(
+                    _classify(html, stderr, 0, False, 256),
+                    "network-error",
+                )
 
     def test_classify_ignores_lightpanda_subresource_operation_timeout_when_main_content_loaded(
         self,
@@ -397,6 +756,28 @@ class TopSitesTests(unittest.TestCase):
         self.assertEqual(_classify(aliyun_waf, b"", 0, False, 256), "js-challenge")
         self.assertEqual(_classify(vercel_checkpoint, b"", 0, False, 256), "js-challenge")
         self.assertEqual(_classify(bot_or_not, b"", 0, False, 256), "captcha-or-verification")
+
+    def test_classify_recognizes_safeline_and_privacy_tile_challenges(self) -> None:
+        safeline = (
+            b"<html><body>Security Detection Powered By SafeLine WAF "
+            + b"Confirm " * 100
+            + b"</body></html>"
+        )
+        privacy_tiles = (
+            b"<html><body>Select the 2 matching tiles A B C D Submit "
+            b"Powered and protected by Privacy "
+            + b"challenge " * 100
+            + b"</body></html>"
+        )
+
+        self.assertEqual(
+            _classify(safeline, b"", 0, False, 256),
+            "blocked-or-forbidden",
+        )
+        self.assertEqual(
+            _classify(privacy_tiles, b"", 0, False, 256),
+            "captcha-or-verification",
+        )
 
     def test_classify_treats_c2wf_probe_shell_as_js_challenge(self) -> None:
         probe_v1 = b"""<!DOCTYPE html><html><head>
@@ -490,7 +871,7 @@ if(window.EOJsChallengeSDK){new window.EOJsChallengeSDK({callback:function(){}})
         self.assertEqual(_classify(pdf, b"", 0, False, 256), "success-binary-content")
         self.assertIn("success-binary-content", _ok_categories())
 
-    def test_classify_treats_raw_binary_body_timeout_as_binary_main_resource(
+    def test_classify_keeps_partial_raw_binary_body_timeout_as_network_error(
         self,
     ) -> None:
         stderr = (
@@ -503,9 +884,24 @@ if(window.EOJsChallengeSDK){new window.EOJsChallengeSDK({callback:function(){}})
         )
         self.assertEqual(
             _classify(b"", stderr, 1, False, 256),
-            "success-binary-main-resource",
+            "network-error",
         )
-        self.assertIn("success-binary-main-resource", _ok_categories())
+        self.assertNotIn("success-binary-main-resource", _ok_categories())
+
+    def test_classify_marks_cdp_binary_headers_as_not_a_body_success(self) -> None:
+        self.assertEqual(
+            _classify(
+                b"",
+                b"",
+                0,
+                False,
+                256,
+                response_status=200,
+                main_document_body_capture="response-headers-only",
+            ),
+            "binary-response-headers",
+        )
+        self.assertNotIn("binary-response-headers", _ok_categories())
 
     def test_classify_keeps_raw_binary_header_timeout_as_network_error(self) -> None:
         stderr = (
@@ -565,19 +961,229 @@ if(window.EOJsChallengeSDK){new window.EOJsChallengeSDK({callback:function(){}})
             failure_files = sorted(p.name for p in (output_dir / "top-sites" / "failures").iterdir())
             summary_payload = (output_dir / "top-sites" / "summary.json").read_text(encoding="utf-8")
             run_rows = json.loads((output_dir / "top-sites" / "runs.json").read_text(encoding="utf-8"))
+            site_outcomes = json.loads(
+                (output_dir / "top-sites" / "site-outcomes.json").read_text(
+                    encoding="utf-8"
+                )
+            )
 
         self.assertEqual(summary["site_count"], 2)
         self.assertEqual(summary["gate_failures"], 1)
         self.assertEqual(summary["targets"]["moli"]["passes"], 1)
         self.assertEqual(summary["targets"]["moli"]["failures"], 1)
+        self.assertEqual(summary["targets"]["moli"]["raw_observations"], 2)
+        self.assertEqual(summary["targets"]["moli"]["raw_comparable_attempts"], 2)
+        self.assertEqual(summary["targets"]["moli"]["raw_passes"], 1)
+        self.assertEqual(summary["targets"]["moli"]["raw_failures"], 1)
+        self.assertEqual(summary["targets"]["moli"]["raw_pass_rate_percent"], 50.0)
+        self.assertEqual(summary["targets"]["moli"]["pass_rate_percent"], 50.0)
+        self.assertEqual(summary["targets"]["moli"]["elapsed_ms"]["count"], 2)
+        self.assertEqual(
+            summary["targets"]["moli"]["successful_elapsed_ms"]["count"],
+            1,
+        )
+        self.assertEqual(summary["common_success"]["attempts"], 1)
+        self.assertEqual(
+            summary["common_success"]["targets"]["moli"]["elapsed_ms"]["count"],
+            1,
+        )
+        self.assertEqual(summary["targets"]["moli"]["unique_sites"], 2)
+        self.assertEqual(summary["targets"]["moli"]["all_pass_sites"], 1)
+        self.assertEqual(summary["targets"]["moli"]["all_fail_sites"], 1)
+        self.assertEqual(summary["targets"]["moli"]["flaky_sites"], 0)
+        self.assertFalse(summary["repeat_validated"])
         self.assertEqual(summary["targets"]["moli"]["failure_kinds"], {"process-error": 1})
         self.assertEqual(summary["targets"]["moli"]["categories"]["success-content"], 1)
         self.assertEqual(summary["targets"]["moli"]["peak_rss_bytes"]["max"], 2048.0)
         self.assertEqual(summary["chrome_parallelism"], 2)
+        self.assertEqual(summary["schedule"], "site-paired-rotating-target-order")
+        self.assertEqual(summary["scheduled_site_groups"], 2)
         self.assertEqual(run_rows[0]["command"][0], "/bin/echo")
         self.assertEqual(run_rows[0]["peak_rss_bytes"], 2048)
+        self.assertEqual(run_rows[0]["schedule_index"], 0)
+        self.assertEqual(run_rows[0]["target_order_index"], 1)
+        self.assertTrue(run_rows[0]["started_at"].endswith("Z"))
+        self.assertTrue(run_rows[0]["finished_at"].endswith("Z"))
+        self.assertEqual(len(run_rows[0]["stdout_sha256"]), 64)
+        self.assertEqual(len(run_rows[0]["stderr_sha256"]), 64)
+        self.assertTrue(run_rows[0]["stdout_head"].startswith("<html>"))
+        self.assertEqual(len(site_outcomes), 2)
+        self.assertEqual(
+            {row["outcome"] for row in site_outcomes},
+            {"all-pass", "all-fail"},
+        )
         self.assertIn("moli-run-1-rank002-fail.example.json", failure_files)
         self.assertIn("\"profile\": \"quick\"", summary_payload)
+
+    def test_run_top_sites_suite_records_chrome_http_error_status(self) -> None:
+        list_md = "## Top 100\n\n1. `error.example` — synthetic HTTP error row\n"
+
+        def fake_chrome_run(*args: object, **kwargs: object) -> ProcessResult:
+            return ProcessResult(
+                command=["/bin/chromium", "https://error.example/"],
+                returncode=0,
+                elapsed_ms=995.0,
+                stdout=(
+                    b"<html><head><title>upstream response</title></head><body>"
+                    + b"error details " * 100
+                    + b"</body></html>"
+                ),
+                stderr=b"",
+                timed_out=False,
+                resources={},
+                response_status=502,
+            )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            list_path = output_dir / "top.md"
+            list_path.write_text(list_md, encoding="utf-8")
+            with patch(
+                "moli_benchmark.top_sites.run_chrome_dcl_dump",
+                side_effect=fake_chrome_run,
+            ):
+                summary = run_top_sites_suite(
+                    output_dir=output_dir,
+                    target_matrix={"chrome": {"available": True, "path": "/bin/chromium"}},
+                    targets=("chrome",),
+                    profile="quick",
+                    list_path=list_path,
+                    runs=1,
+                    timeout_seconds=1.0,
+                    gate_target="chrome",
+                    parallelism=1,
+                    chrome_parallelism=1,
+                    limit_override=1,
+                )
+            rows = json.loads(
+                (output_dir / "top-sites" / "runs.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(rows[0]["response_status"], 502)
+        self.assertEqual(rows[0]["category"], "http-error")
+        self.assertEqual(rows[0]["response_status_source"], "protocol")
+        self.assertEqual(rows[0]["classification_basis"], "protocol-http-status")
+        self.assertFalse(rows[0]["ok"])
+        self.assertEqual(summary["targets"]["chrome"]["failure_kinds"], {"http-error": 1})
+
+    def test_run_top_sites_suite_excludes_header_only_binary_from_denominator(
+        self,
+    ) -> None:
+        list_md = (
+            "## Top 100\n\n"
+            "1. `https://document.example/file.pdf` — synthetic PDF row\n"
+        )
+
+        def fake_chrome_run(*args: object, **kwargs: object) -> ProcessResult:
+            return ProcessResult(
+                command=["/bin/chromium", "https://document.example/file.pdf"],
+                returncode=0,
+                elapsed_ms=50.0,
+                stdout=b"",
+                stderr=b"",
+                timed_out=False,
+                resources={},
+                response_status=200,
+                response_mime_type="application/pdf",
+                main_document_body_capture="response-headers-only",
+            )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            list_path = output_dir / "top.md"
+            list_path.write_text(list_md, encoding="utf-8")
+            with patch(
+                "moli_benchmark.top_sites.run_chrome_dcl_dump",
+                side_effect=fake_chrome_run,
+            ):
+                summary = run_top_sites_suite(
+                    output_dir=output_dir,
+                    target_matrix={
+                        "chrome": {"available": True, "path": "/bin/chromium"}
+                    },
+                    targets=("chrome",),
+                    profile="quick",
+                    list_path=list_path,
+                    runs=1,
+                    timeout_seconds=1.0,
+                    gate_target="chrome",
+                    parallelism=1,
+                    chrome_parallelism=1,
+                    limit_override=1,
+                )
+            rows = json.loads(
+                (output_dir / "top-sites" / "runs.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+
+        self.assertEqual(rows[0]["category"], "binary-response-headers")
+        self.assertFalse(rows[0]["comparable"])
+        self.assertNotIn("failure_artifact", rows[0])
+        self.assertEqual(summary["gate_failures"], 0)
+        self.assertEqual(summary["targets"]["chrome"]["attempts"], 0)
+        self.assertEqual(summary["targets"]["chrome"]["raw_comparable_attempts"], 0)
+        self.assertEqual(summary["targets"]["chrome"]["raw_non_comparable_attempts"], 1)
+        self.assertEqual(
+            summary["targets"]["chrome"]["non_comparable_attempts"],
+            1,
+        )
+        self.assertEqual(summary["targets"]["chrome"]["failures"], 0)
+        self.assertEqual(summary["common_success"]["attempts"], 0)
+
+    def test_run_top_sites_suite_records_cli_diagnostic_http_status(self) -> None:
+        list_md = "## Top 100\n\n1. `error.example` — synthetic CLI HTTP error row\n"
+
+        def fake_run(command: list[str], **kwargs: object) -> ProcessResult:
+            return ProcessResult(
+                command=command,
+                returncode=1,
+                elapsed_ms=12.0,
+                stdout=b"",
+                stderr=(
+                    b"Error: failed to fetch `https://error.example/`\n"
+                    b"Reason: lifecycle target document `https://error.example/` "
+                    b"returned 502 Bad Gateway"
+                ),
+                timed_out=False,
+                resources={},
+            )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            list_path = output_dir / "top.md"
+            list_path.write_text(list_md, encoding="utf-8")
+            with patch("moli_benchmark.top_sites.run_process", fake_run):
+                summary = run_top_sites_suite(
+                    output_dir=output_dir,
+                    target_matrix={"moli": {"available": True, "path": "/bin/moli"}},
+                    targets=("moli",),
+                    profile="quick",
+                    list_path=list_path,
+                    runs=1,
+                    timeout_seconds=1.0,
+                    gate_target="moli",
+                    parallelism=1,
+                    limit_override=1,
+                )
+            rows = json.loads(
+                (output_dir / "top-sites" / "runs.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+
+        self.assertEqual(rows[0]["response_status"], 502)
+        self.assertEqual(rows[0]["response_status_source"], "cli-diagnostic")
+        self.assertEqual(rows[0]["category"], "http-error")
+        self.assertEqual(
+            rows[0]["classification_basis"],
+            "cli-diagnostic-http-status",
+        )
+        self.assertEqual(summary["targets"]["moli"]["status_observed_attempts"], 1)
+        self.assertEqual(
+            summary["targets"]["moli"]["response_status_sources"],
+            {"cli-diagnostic": 1},
+        )
 
     def test_run_top_sites_suite_promotes_deadline_adjacent_failures_to_timeout(
         self,
@@ -686,6 +1292,11 @@ if(window.EOJsChallengeSDK){new window.EOJsChallengeSDK({callback:function(){}})
                     limit_override=3,
                 )
             raw_runs = (output_dir / "top-sites" / "raw-runs.csv").read_text(encoding="utf-8")
+            run_rows = json.loads(
+                (output_dir / "top-sites" / "runs.json").read_text(
+                    encoding="utf-8"
+                )
+            )
 
         self.assertEqual(summary["site_count"], 3)
         self.assertEqual(summary["counted_site_count"], 2)
@@ -698,6 +1309,14 @@ if(window.EOJsChallengeSDK){new window.EOJsChallengeSDK({callback:function(){}})
         self.assertEqual(summary["targets"]["moli"]["passes"], 1)
         self.assertEqual(summary["targets"]["moli"]["failures"], 1)
         self.assertIn("site-unreachable", raw_runs)
+        order_by_target_rank = {
+            (row["target"], row["rank"]): row["target_order_index"]
+            for row in run_rows
+        }
+        self.assertEqual(order_by_target_rank[("moli", 1)], 1)
+        self.assertEqual(order_by_target_rank[("chrome", 1)], 2)
+        self.assertEqual(order_by_target_rank[("chrome", 2)], 1)
+        self.assertEqual(order_by_target_rank[("moli", 2)], 2)
 
     def test_run_top_sites_suite_keeps_single_target_unreachable_sites_counted(self) -> None:
         list_md = "## Top 100\n\n1. `dead.example` — synthetic unreachable row\n"
@@ -812,7 +1431,7 @@ if(window.EOJsChallengeSDK){new window.EOJsChallengeSDK({callback:function(){}})
         self.assertEqual(entries[19][0], 20)
         self.assertEqual(entries[-1][0], 100)
         self.assertIn("www.huxiu.com", domains)
-        self.assertEqual(labels, ["chinese-community:chinese-community-top100-websites.md"])
+        self.assertEqual(labels, ["chinese-community:chinese-community-top100-websites.csv"])
 
     def test_global_source_returns_english_world_sites(self) -> None:
         resolved, _ = resolve_top_sites_source("global", None)
@@ -823,7 +1442,7 @@ if(window.EOJsChallengeSDK){new window.EOJsChallengeSDK({callback:function(){}})
         self.assertIn("github.com", domains)
         self.assertIn("wikipedia.org", domains)
         self.assertNotIn("baidu.com", domains, "global list must not contain Chinese top sites")
-        self.assertEqual(labels, ["global:global-top-websites-seed-list.md"])
+        self.assertEqual(labels, ["global:global-top-websites-seed-list.csv"])
 
     def test_mixed_source_interleaves_cn_and_global(self) -> None:
         resolved, list_source = resolve_top_sites_source("mixed", None)
@@ -848,7 +1467,7 @@ if(window.EOJsChallengeSDK){new window.EOJsChallengeSDK({callback:function(){}})
             urls,
         )
         self.assertNotIn("https://github.com/golang/go/blob/master/doc/effective_go.md", urls)
-        self.assertEqual(labels, ["webfetch-longtail:webfetch-longtail-seed-list.md"])
+        self.assertEqual(labels, ["webfetch-longtail:webfetch-longtail-seed-list.csv"])
 
     def test_render_quality_source_returns_curated_url_paths(self) -> None:
         resolved, _ = resolve_top_sites_source("render-quality", None)
@@ -860,7 +1479,7 @@ if(window.EOJsChallengeSDK){new window.EOJsChallengeSDK({callback:function(){}})
             "https://www.feishu.cn/hc/zh-CN/articles/485770964672-管理者查看企业-ai-功能使用数据",
             urls,
         )
-        self.assertEqual(labels, ["render-quality:render-quality-seed-list.md"])
+        self.assertEqual(labels, ["render-quality:render-quality-seed-list.csv"])
 
     def test_webfetch_mix_keeps_top_site_mix_then_appends_longtail(self) -> None:
         resolved, list_source = resolve_top_sites_source("webfetch-mix", None)
@@ -883,9 +1502,9 @@ if(window.EOJsChallengeSDK){new window.EOJsChallengeSDK({callback:function(){}})
         self.assertEqual(
             labels,
             [
-                "chinese-community:chinese-community-top100-websites.md",
-                "global:global-top-websites-seed-list.md",
-                "webfetch-longtail:webfetch-longtail-seed-list.md",
+                "chinese-community:chinese-community-top100-websites.csv",
+                "global:global-top-websites-seed-list.csv",
+                "webfetch-longtail:webfetch-longtail-seed-list.csv",
             ],
         )
 

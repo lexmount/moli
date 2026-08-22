@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import chrome_binary, moli_binary, lightpanda_binary, obscura_binary
-from .versions import sha256_file
+from .versions import MOLI_VERSION_ARGS, sha256_file
 
 
 def _version(command: list[str]) -> str | None:
@@ -39,7 +39,7 @@ def collect_target_binaries(
 ) -> dict[str, Any]:
     moli_path = moli_binary(moli_override)
     return {
-        "moli": _binary_info(moli_path, ("version",)),
+        "moli": _binary_info(moli_path, MOLI_VERSION_ARGS),
         "lightpanda": _binary_info(lightpanda_binary(lightpanda_override), ("version",)),
         "chrome": _binary_info(chrome_binary(chrome_override), ("--version",)),
         "obscura": _binary_info(obscura_binary(obscura_override), ("--help",)),
