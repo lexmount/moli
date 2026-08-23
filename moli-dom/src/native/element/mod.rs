@@ -183,6 +183,15 @@ impl Element {
             .map(Attribute::value)
     }
 
+    pub fn attribute_utf16_units(&self, name: &str) -> Option<&[u16]> {
+        let qualified_name = self
+            .attributes
+            .iter()
+            .find(|attribute| attribute.name_matches(name))
+            .map(Attribute::name)?;
+        self.rare_data.attribute_utf16_units(&qualified_name)
+    }
+
     pub fn attribute_ns(&self, namespace: &str, local_name: &str) -> Option<&str> {
         self.attributes
             .iter()
@@ -1136,10 +1145,18 @@ impl Element {
             // insertion paths). Once an attribute is matched by its existing qualified name, we
             // preserve its current namespace/prefix and only update the value. Callers that need
             // namespace/local-name replacement semantics must go through `set_attribute_ns()`.
-            if self.attributes[index].value() == value {
+            let qualified_name = self.attributes[index].name();
+            if self.attributes[index].value() == value
+                && self
+                    .rare_data
+                    .attribute_utf16_units(&qualified_name)
+                    .is_none()
+            {
                 return false;
             }
             self.attributes[index].value = value.into_boxed_str();
+            self.rare_data
+                .set_attribute_utf16_units(qualified_name, None);
             let attribute_local_name = self.attributes[index].local_name.clone();
             self.sync_control_state_from_attribute(
                 attribute_local_name.as_ref(),
@@ -1159,6 +1176,58 @@ impl Element {
         true
     }
 
+    pub fn set_attribute_utf16_units(
+        &mut self,
+        local_name: String,
+        namespace: String,
+        prefix: Option<String>,
+        value: String,
+        units: Vec<u16>,
+    ) -> bool {
+        let next_value = value.clone();
+        let value_utf16_units =
+            utf16_units_contain_unpaired_surrogate(&units).then(|| units.into_boxed_slice());
+        if let Some(index) = self
+            .attributes
+            .iter()
+            .position(|attribute| attribute.name_matches(&local_name))
+        {
+            let qualified_name = self.attributes[index].name();
+            if self.attributes[index].value.as_ref() == value
+                && self.rare_data.attribute_utf16_units(&qualified_name)
+                    == value_utf16_units.as_deref()
+            {
+                return false;
+            }
+            self.attributes[index].value = value.into_boxed_str();
+            self.rare_data
+                .set_attribute_utf16_units(qualified_name, value_utf16_units);
+            let attribute_local_name = self.attributes[index].local_name.clone();
+            self.sync_control_state_from_attribute(
+                attribute_local_name.as_ref(),
+                Some(&next_value),
+            );
+            return true;
+        }
+
+        let attribute_local_name = LocalName::from(local_name);
+        self.attributes.push(Attribute {
+            local_name: attribute_local_name.clone(),
+            namespace: Namespace::from(namespace),
+            prefix: prefix.map(Prefix::from),
+            value: value.into_boxed_str(),
+        });
+        let qualified_name = self
+            .attributes
+            .last()
+            .expect("new attribute must be present")
+            .name();
+        self.rare_data
+            .set_attribute_utf16_units(qualified_name, value_utf16_units);
+        self.sync_control_state_from_attribute(attribute_local_name.as_ref(), Some(&next_value));
+        true
+    }
+
     pub fn set_attribute_ns(
         &mut self,
         local_name: String,
@@ -1170,10 +1239,18 @@ impl Element {
         if let Some(index) = self.attributes.iter().position(|attribute| {
             attribute.local_name() == local_name && attribute.namespace() == namespace
         }) {
-            if self.attributes[index].value() == value {
+            let qualified_name = self.attributes[index].name();
+            if self.attributes[index].value() == value
+                && self
+                    .rare_data
+                    .attribute_utf16_units(&qualified_name)
+                    .is_none()
+            {
                 return false;
             }
             self.attributes[index].value = value.into_boxed_str();
+            self.rare_data
+                .set_attribute_utf16_units(qualified_name, None);
             self.sync_control_state_from_attribute(&local_name, Some(&next_value));
             return true;
         }
@@ -1197,7 +1274,10 @@ impl Element {
         else {
             return false;
         };
-        let local_name = self.attributes.remove(index).local_name;
+        let removed = self.attributes.remove(index);
+        self.rare_data
+            .set_attribute_utf16_units(removed.name(), None);
+        let local_name = removed.local_name;
         self.sync_control_state_from_attribute(local_name.as_ref(), None);
         true
     }
@@ -1208,7 +1288,10 @@ impl Element {
         }) else {
             return false;
         };
-        let local_name = self.attributes.remove(index).local_name;
+        let removed = self.attributes.remove(index);
+        self.rare_data
+            .set_attribute_utf16_units(removed.name(), None);
+        let local_name = removed.local_name;
         self.sync_control_state_from_attribute(local_name.as_ref(), None);
         true
     }
@@ -1219,4 +1302,26 @@ impl Element {
             _ => self.local_name.to_string(),
         }
     }
+}
+
+fn utf16_units_contain_unpaired_surrogate(units: &[u16]) -> bool {
+    let mut index = 0;
+    while index < units.len() {
+        let unit = units[index];
+        if (0xD800..=0xDBFF).contains(&unit) {
+            if units
+                .get(index + 1)
+                .is_some_and(|next| (0xDC00..=0xDFFF).contains(next))
+            {
+                index += 2;
+                continue;
+            }
+            return true;
+        }
+        if (0xDC00..=0xDFFF).contains(&unit) {
+            return true;
+        }
+        index += 1;
+    }
+    false
 }
