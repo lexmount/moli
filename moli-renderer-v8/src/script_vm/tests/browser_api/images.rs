@@ -374,6 +374,105 @@ async fn image_current_src_is_empty_while_a_replacement_request_is_pending() {
 }
 
 #[tokio::test]
+async fn picture_source_and_image_tree_mutations_reselect_requests() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    loader.set_image_fetch_enabled(true);
+    let (mut vm, _resource_completion_queue) =
+        new_storage_test_vm_with_loader_and_resource_completion_queue(
+            "https://picture-source-removal.test/page.html",
+            &loader,
+        );
+
+    vm.eval(
+        r#"
+        (() => {
+          if (!document.documentElement) {
+            document.append(document.createElement("html"));
+          }
+          if (!document.body) {
+            document.documentElement.append(document.createElement("body"));
+          }
+          const picture = document.createElement("picture");
+          const source1 = document.createElement("source");
+          const source2 = document.createElement("source");
+          const source3 = document.createElement("source");
+          const source4 = document.createElement("source");
+          const source5 = document.createElement("source");
+          const image1 = document.createElement("img");
+          const image2 = document.createElement("img");
+          source1.srcset = "data:,s1";
+          source2.srcset = "data:,s2";
+          source3.srcset = "data:,s3";
+          source4.srcset = "data:,s4";
+          source5.srcset = "data:,s5";
+          image1.src = "data:,img1";
+          image2.src = "data:,img2";
+          picture.append(source1, source2, source3, image1, image2, source4, source5);
+          const host = document.body;
+          host.append(picture);
+          globalThis.__pictureSourceMutation = {
+            host,
+            picture,
+            source1,
+            source2,
+            source3,
+            source4,
+            source5,
+            image1,
+            image2
+          };
+        })()
+        "#,
+    )
+    .expect("picture source mutation setup should evaluate");
+
+    let current_sources = |vm: &mut ScriptVm| {
+        vm.eval(
+            "[__pictureSourceMutation.image1.currentSrc, \
+             __pictureSourceMutation.image2.currentSrc].join(',')",
+        )
+        .expect("picture image current sources should evaluate")
+    };
+    assert_eq!(current_sources(&mut vm), "data:,s1,data:,s1");
+
+    vm.eval("__pictureSourceMutation.source1.remove()")
+        .expect("first picture source removal should evaluate");
+    assert_eq!(current_sources(&mut vm), "data:,s2,data:,s2");
+
+    vm.eval("__pictureSourceMutation.source2.remove()")
+        .expect("second picture source removal should evaluate");
+    assert_eq!(current_sources(&mut vm), "data:,s3,data:,s3");
+
+    vm.eval("__pictureSourceMutation.host.append(__pictureSourceMutation.source3)")
+        .expect("third picture source move should evaluate");
+    assert_eq!(current_sources(&mut vm), "data:,img1,data:,img2");
+
+    vm.eval("__pictureSourceMutation.source4.remove()")
+        .expect("trailing picture source removal should evaluate");
+    assert_eq!(current_sources(&mut vm), "data:,img1,data:,img2");
+
+    vm.eval("__pictureSourceMutation.host.append(__pictureSourceMutation.source5)")
+        .expect("trailing picture source move should evaluate");
+    assert_eq!(current_sources(&mut vm), "data:,img1,data:,img2");
+
+    vm.eval("__pictureSourceMutation.picture.prepend(__pictureSourceMutation.source2)")
+        .expect("second picture source reinsertion should evaluate");
+    assert_eq!(current_sources(&mut vm), "data:,s2,data:,s2");
+
+    vm.eval("__pictureSourceMutation.picture.prepend(__pictureSourceMutation.source1)")
+        .expect("first picture source reinsertion should evaluate");
+    assert_eq!(current_sources(&mut vm), "data:,s1,data:,s1");
+
+    vm.eval("__pictureSourceMutation.source1.replaceWith(document.createElement('div'))")
+        .expect("first picture source replacement should evaluate");
+    assert_eq!(current_sources(&mut vm), "data:,s2,data:,s2");
+
+    vm.eval("__pictureSourceMutation.image1.remove()")
+        .expect("first picture image removal should evaluate");
+    assert_eq!(current_sources(&mut vm), "data:,img1,data:,s2");
+}
+
+#[tokio::test]
 async fn image_fetch_enabled_dispatches_http_error_after_resource_timing() {
     let (base_url, request_rx, server) =
         spawn_image_response_server("404 Not Found", "text/html", b"missing").await;
