@@ -29,6 +29,17 @@ impl DomHost {
         self.set_attribute_effects(handle, name, value).did_change()
     }
 
+    pub fn set_attribute_utf16_units(
+        &mut self,
+        handle: DomHandle,
+        name: &str,
+        value: &str,
+        units: Vec<u16>,
+    ) -> bool {
+        self.set_attribute_utf16_units_effects(handle, name, value, units)
+            .did_change()
+    }
+
     pub fn set_attribute_ns(
         &mut self,
         handle: DomHandle,
@@ -56,6 +67,37 @@ impl DomHost {
         handle: DomHandle,
         name: &str,
         value: &str,
+    ) -> DomAttributeMutationOutcome {
+        self.set_attribute_mutation_outcome_with_utf16_units(handle, name, value, None)
+    }
+
+    pub fn set_attribute_utf16_units_effects(
+        &mut self,
+        handle: DomHandle,
+        name: &str,
+        value: &str,
+        units: Vec<u16>,
+    ) -> DomMutationEffects {
+        self.set_attribute_utf16_units_mutation_outcome(handle, name, value, units)
+            .into_effects()
+    }
+
+    pub fn set_attribute_utf16_units_mutation_outcome(
+        &mut self,
+        handle: DomHandle,
+        name: &str,
+        value: &str,
+        units: Vec<u16>,
+    ) -> DomAttributeMutationOutcome {
+        self.set_attribute_mutation_outcome_with_utf16_units(handle, name, value, Some(units))
+    }
+
+    fn set_attribute_mutation_outcome_with_utf16_units(
+        &mut self,
+        handle: DomHandle,
+        name: &str,
+        value: &str,
+        units: Option<Vec<u16>>,
     ) -> DomAttributeMutationOutcome {
         let records_enabled = self.mutation_records_enabled();
         let prior_value = self.get_attribute(handle, name).map(Arc::from);
@@ -91,7 +133,12 @@ impl DomHost {
                 )
             })
             .unwrap_or_default();
-        let changed = self.dom.set_attribute(handle, name, value);
+        let changed = if let Some(units) = units {
+            self.dom
+                .set_attribute_utf16_units(handle, name, value, units)
+        } else {
+            self.dom.set_attribute(handle, name, value)
+        };
         if changed {
             self.invalidate_shadow_slot_name_index_for_attribute(handle, None, name);
             self.sync_select_state_after_option_selected_attribute(handle, name);
