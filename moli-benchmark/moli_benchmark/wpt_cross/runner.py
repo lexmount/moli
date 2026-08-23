@@ -132,6 +132,14 @@ class EngineRunResult:
     setup_error: str | None = None
 
 
+class _PageSessionUnusable(RuntimeError):
+    """Preserve the current case result while forcing page-session recovery."""
+
+    def __init__(self, case_result: CaseResult) -> None:
+        self.case_result = case_result
+        super().__init__(case_result.error or "page session became unusable")
+
+
 _TRACE_METHODS = {"Runtime.consoleAPICalled", "Runtime.exceptionThrown", "Log.entryAdded"}
 
 
@@ -316,13 +324,15 @@ async def _run_one_case(
         _, nav_seen = await client.recv_until_id(nav_id, timeout=timeout_seconds)
         seen_messages.extend(nav_seen)
     except (RawCdpError, asyncio.TimeoutError) as error:
-        return CaseResult(
-            case_path=case_path,
-            url=url,
-            status="error",
-            duration_ms=(time.perf_counter() - started) * 1000.0,
-            error=f"navigate failed: {error}",
-        )
+        raise _PageSessionUnusable(
+            CaseResult(
+                case_path=case_path,
+                url=url,
+                status="error",
+                duration_ms=(time.perf_counter() - started) * 1000.0,
+                error=f"navigate failed: {error}",
+            )
+        ) from error
 
     deadline = time.perf_counter() + timeout_seconds
     payload: Any = None
@@ -340,13 +350,15 @@ async def _run_one_case(
             response, eval_seen = await client.recv_until_id(eval_id, timeout=5)
             seen_messages.extend(eval_seen)
         except (RawCdpError, asyncio.TimeoutError) as error:
-            return CaseResult(
-                case_path=case_path,
-                url=url,
-                status="error",
-                duration_ms=(time.perf_counter() - started) * 1000.0,
-                error=f"evaluate failed: {error}",
-            )
+            raise _PageSessionUnusable(
+                CaseResult(
+                    case_path=case_path,
+                    url=url,
+                    status="error",
+                    duration_ms=(time.perf_counter() - started) * 1000.0,
+                    error=f"evaluate failed: {error}",
+                )
+            ) from error
         result = ((response.get("result") or {}).get("result") or {})
         value = result.get("value")
         if isinstance(value, dict):
@@ -1134,15 +1146,18 @@ async def _run_async(
                     )
             except Exception as error:
                 # CDP / websocket / asyncio explosion mid-case.
-                proc_alive = handle.process.poll() is None
-                case_result = CaseResult(
-                    case_path=case_path,
-                    url=url,
-                    status="crash" if not proc_alive else "error",
-                    duration_ms=None,
-                    error=f"runner exception: {type(error).__name__}: {error}",
-                    test_type=_case_test_type(case),
-                )
+                if isinstance(error, _PageSessionUnusable):
+                    case_result = error.case_result
+                else:
+                    proc_alive = handle.process.poll() is None
+                    case_result = CaseResult(
+                        case_path=case_path,
+                        url=url,
+                        status="crash" if not proc_alive else "error",
+                        duration_ms=None,
+                        error=f"runner exception: {type(error).__name__}: {error}",
+                        test_type=_case_test_type(case),
+                    )
                 result.cases.append(case_result)
                 if relaunch_count >= max_relaunches:
                     for remaining in cases[case_index + 1:]:

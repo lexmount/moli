@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import io
 import json
@@ -12,7 +13,7 @@ from http.client import HTTPConnection
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, Mock, patch
 from urllib.request import Request, urlopen
 
 from PIL import Image
@@ -78,7 +79,10 @@ from moli_benchmark.wpt_cross.any_js import (
 )
 from moli_benchmark.wpt_cross.render_html import render_html
 from moli_benchmark.wpt_cross.runner import (
+    _PageSessionUnusable,
     _ReftestEvidence,
+    _run_async,
+    _run_one_case,
     _write_reftest_failure_artifacts,
     CapturedScreenshot,
     CaseResult,
@@ -140,6 +144,106 @@ clear_current_proxy_env()
 
 
 class WptCrossTests(unittest.TestCase):
+    def test_cdp_command_failure_marks_page_session_unusable(self) -> None:
+        for receive_effect, error_prefix in (
+            (asyncio.TimeoutError(), "navigate failed:"),
+            ([({"result": {}}, []), asyncio.TimeoutError()], "evaluate failed:"),
+        ):
+            with self.subTest(error_prefix=error_prefix):
+                client = SimpleNamespace(
+                    send=AsyncMock(return_value=1),
+                    recv_until_id=AsyncMock(side_effect=receive_effect),
+                )
+                with self.assertRaises(_PageSessionUnusable) as raised:
+                    asyncio.run(
+                        _run_one_case(
+                            client=client,  # type: ignore[arg-type]
+                            session_id="SESSION-1",
+                            case_path="example.html",
+                            url="http://localhost/example.html",
+                            timeout_seconds=0.01,
+                        )
+                    )
+
+                case_result = raised.exception.case_result
+                self.assertEqual(case_result.status, "error")
+                self.assertTrue((case_result.error or "").startswith(error_prefix))
+
+    def test_unusable_page_session_preserves_case_result_and_relaunches(self) -> None:
+        def handle(name: str) -> SimpleNamespace:
+            return SimpleNamespace(
+                process=SimpleNamespace(poll=lambda: None),
+                binary=None,
+                binary_sha256=None,
+                binary_version=None,
+                endpoint=f"http://{name}",
+                ready_ms=1.0,
+            )
+
+        first_handle = handle("first")
+        second_handle = handle("second")
+        first_client = SimpleNamespace(websocket=SimpleNamespace(close=AsyncMock()))
+        second_client = SimpleNamespace(websocket=SimpleNamespace(close=AsyncMock()))
+        driver = SimpleNamespace(
+            name="moli",
+            launch=Mock(return_value=first_handle),
+            shutdown=Mock(return_value={"stopped": True}),
+        )
+        failed_case = CaseResult(
+            case_path="first.html",
+            url="http://localhost/first.html",
+            status="error",
+            duration_ms=5.0,
+            error="evaluate failed: timed out",
+        )
+        passed_case = CaseResult(
+            case_path="second.html",
+            url="http://localhost/second.html",
+            status="pass",
+            duration_ms=1.0,
+        )
+
+        with (
+            patch(
+                "moli_benchmark.wpt_cross.runner.connect_raw_cdp",
+                new=AsyncMock(return_value=first_client),
+            ),
+            patch(
+                "moli_benchmark.wpt_cross.runner._attach_page",
+                new=AsyncMock(return_value="SESSION-1"),
+            ),
+            patch(
+                "moli_benchmark.wpt_cross.runner._run_one_case",
+                new=AsyncMock(
+                    side_effect=[_PageSessionUnusable(failed_case), passed_case]
+                ),
+            ),
+            patch(
+                "moli_benchmark.wpt_cross.runner._try_relaunch",
+                new=AsyncMock(
+                    return_value=(second_handle, second_client, "SESSION-2")
+                ),
+            ),
+        ):
+            result = asyncio.run(
+                _run_async(
+                    driver=driver,  # type: ignore[arg-type]
+                    binary_override=None,
+                    cases=[
+                        ("first.html", "http://localhost/first.html"),
+                        ("second.html", "http://localhost/second.html"),
+                    ],
+                    case_timeout_seconds=1.0,
+                    launch_timeout_seconds=1.0,
+                    viewport=None,
+                    artifact_output_dir=None,
+                )
+            )
+
+        self.assertIs(result.cases[0], failed_case)
+        self.assertIs(result.cases[1], passed_case)
+        self.assertEqual(driver.shutdown.call_count, 2)
+
     def test_moli_wpt_commands_enable_layout_and_resources(self) -> None:
         self.assertEqual(
             _moli_command(Path("/bin/moli"), 9222, None),
