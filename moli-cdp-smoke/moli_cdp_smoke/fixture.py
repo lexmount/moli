@@ -606,6 +606,12 @@ class FixtureServer:
                     self.send_header("Content-Length", "0")
                     self.end_headers()
                     return
+                if route == "/navigation-redirect-download":
+                    self.send_response(HTTPStatus.FOUND)
+                    self.send_header("Location", "/navigation-download-html")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
                 if route == "/chromium-network-reset-before-response":
                     outer._increment_request_count(route)
                     self.connection.setsockopt(
@@ -1584,6 +1590,51 @@ class FixtureServer:
                     )
                 elif route == "/download":
                     self._send_download("smoke-download.txt", b"download contents")
+                elif route == "/navigation-download-html":
+                    self._send_common(
+                        HTTPStatus.OK,
+                        "text/html; charset=utf-8",
+                        b"<!doctype html><title>must download</title>",
+                        {
+                            "Content-Disposition": (
+                                'attachment; filename="navigation-download.html"'
+                            )
+                        },
+                    )
+                elif route == "/navigation-download-empty":
+                    self._send_common(
+                        HTTPStatus.OK,
+                        "application/zip",
+                        b"",
+                        {
+                            "Content-Disposition": (
+                                'attachment; filename="navigation-empty.zip"'
+                            )
+                        },
+                    )
+                elif route == "/navigation-download-http-error":
+                    self._send_common(
+                        HTTPStatus.NOT_FOUND,
+                        "text/plain; charset=utf-8",
+                        b"download not found",
+                        {
+                            "Content-Disposition": (
+                                'attachment; filename="navigation-missing.txt"'
+                            )
+                        },
+                    )
+                elif route == "/navigation-http-error":
+                    self._send_common(
+                        HTTPStatus.BAD_GATEWAY,
+                        "text/html; charset=utf-8",
+                        b"<!doctype html><title>gateway error</title><main>gateway error</main>",
+                    )
+                elif route == "/navigation-no-content":
+                    self._send_common(
+                        HTTPStatus.NO_CONTENT,
+                        "text/plain; charset=utf-8",
+                        b"",
+                    )
                 elif route == "/slow-download":
                     self._send_slow_download()
                 else:

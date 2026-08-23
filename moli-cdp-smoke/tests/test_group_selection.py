@@ -27,6 +27,7 @@ class GroupSelectionTests(unittest.TestCase):
         )
         self.assertEqual(DEFAULT_GROUP_NAMES, tuple(group.name for group in DEFAULT_GROUPS))
         self.assertIn("inspector-routing", DEFAULT_GROUP_NAMES)
+        self.assertIn("navigation-outcomes", DEFAULT_GROUP_NAMES)
         self.assertIn("puppeteer", DEFAULT_GROUP_NAMES)
         self.assertEqual(
             tuple(group.name for group in MANAGED_EXTERNAL_GROUPS),

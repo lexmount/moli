@@ -47,6 +47,7 @@ from .groups.network import (
     run_page_network_group,
     run_websocket_group,
 )
+from .groups.navigation_outcomes import run_navigation_outcomes_group
 from .groups.pdf import run_pdf_group
 from .groups.playwright_compat import run_playwright_compat_group
 from .groups.protocol import run_raw_protocol_group
@@ -210,6 +211,12 @@ PAGE_GROUPS: tuple[SmokeGroup, ...] = (
         "Chromium-calibrated failed-navigation error Document identity, lifecycle, replacement, recovery, and target isolation.",
         "page",
         run_error_document_group,
+    ),
+    SmokeGroup(
+        "navigation-outcomes",
+        "Chromium-calibrated direct Page.navigate downloads, redirects, binary/no-content responses, HTTP errors, and transport failures.",
+        "page",
+        run_navigation_outcomes_group,
     ),
     SmokeGroup(
         "computed-style",

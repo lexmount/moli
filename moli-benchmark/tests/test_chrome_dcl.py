@@ -93,6 +93,7 @@ def _document_response_message(
     request_id: str = "REQUEST-1",
     status: int = 200,
     loader_id: str = "LOADER-1",
+    url: str = "https://example.test/final",
 ) -> dict[str, object]:
     return {
         "sessionId": "SID-1",
@@ -105,7 +106,7 @@ def _document_response_message(
             "response": {
                 "mimeType": mime_type,
                 "status": status,
-                "url": "https://example.test/final",
+                "url": url,
             },
         },
     }
@@ -115,6 +116,7 @@ def _document_request_message(
     *,
     request_id: str = "REQUEST-1",
     loader_id: str = "LOADER-1",
+    url: str = "https://example.test/",
 ) -> dict[str, object]:
     return {
         "sessionId": "SID-1",
@@ -124,7 +126,7 @@ def _document_request_message(
             "frameId": "FRAME-1",
             "loaderId": loader_id,
             "requestId": request_id,
-            "request": {"url": "https://example.test/"},
+            "request": {"url": url},
         },
     }
 
@@ -252,13 +254,46 @@ class ChromeDclTests(unittest.TestCase):
         self.assertEqual(navigation.loader_id, "LOADER-1")
         self.assertFalse(navigation.is_download)
 
+    def test_navigation_result_only_treats_literal_true_as_download(self) -> None:
+        navigation = _parse_navigation_result(
+            {
+                "result": {
+                    "frameId": "FRAME-1",
+                    "errorText": "net::ERR_ABORTED",
+                    "isDownload": True,
+                }
+            },
+            "https://example.test/archive.zip",
+        )
+        self.assertTrue(navigation.is_download)
+
+        with self.assertRaises(RawCdpError):
+            _parse_navigation_result(
+                {
+                    "result": {
+                        "frameId": "FRAME-1",
+                        "errorText": "net::ERR_ABORTED",
+                        "isDownload": "true",
+                    }
+                },
+                "https://example.test/no-content",
+            )
+
+    def test_download_navigation_does_not_require_error_text_or_loader_id(self) -> None:
+        navigation = _parse_navigation_result(
+            {"result": {"frameId": "FRAME-1", "isDownload": True}},
+            "https://example.test/archive.zip",
+        )
+
+        self.assertTrue(navigation.is_download)
+        self.assertIsNone(navigation.loader_id)
+
     def test_download_navigation_keeps_abort_as_headers_only_evidence(self) -> None:
         async def run() -> None:
             navigation = _parse_navigation_result(
                 {
                     "result": {
                         "frameId": "FRAME-1",
-                        "loaderId": "LOADER-1",
                         "errorText": "net::ERR_ABORTED",
                         "isDownload": True,
                     }
@@ -272,7 +307,10 @@ class ChromeDclTests(unittest.TestCase):
                 frame_id=navigation.frame_id,
                 expected_loader_id=navigation.loader_id,
                 deadline=time.perf_counter() + 1.0,
-                seen=[_document_response_message("application/zip")],
+                seen=[
+                    _document_request_message(),
+                    _document_response_message("application/zip"),
+                ],
                 download_navigation=navigation.is_download,
             )
 
@@ -280,6 +318,94 @@ class ChromeDclTests(unittest.TestCase):
             self.assertEqual(observation.response_status, 200)
             self.assertEqual(observation.response_mime_type, "application/zip")
             self.assertEqual(observation.final_url, "https://example.test/final")
+
+        asyncio.run(run())
+
+    def test_download_navigation_is_authoritative_over_mime_and_status(self) -> None:
+        async def run() -> None:
+            observation = await _recv_until_dcl_or_binary_main_resource(
+                mock.Mock(),
+                session_id="SID-1",
+                frame_id="FRAME-1",
+                expected_loader_id="LOADER-1",
+                deadline=time.perf_counter() + 1.0,
+                seen=[
+                    _document_response_message(
+                        "text/html; charset=utf-8",
+                        status=404,
+                    )
+                ],
+                download_navigation=True,
+            )
+
+            self.assertTrue(observation.headers_only)
+            self.assertEqual(observation.response_status, 404)
+            self.assertEqual(observation.response_mime_type, "text/html; charset=utf-8")
+
+        asyncio.run(run())
+
+    def test_download_without_loader_ignores_stale_response_until_current_request(self) -> None:
+        async def run() -> None:
+            current_url = "https://example.test/current.zip"
+            client = _QueuedMessageClient(
+                [
+                    _document_request_message(
+                        request_id="CURRENT",
+                        loader_id="LOADER-CURRENT",
+                        url=current_url,
+                    ),
+                    _document_response_message(
+                        "application/zip",
+                        request_id="CURRENT",
+                        loader_id="LOADER-CURRENT",
+                        url=current_url,
+                    ),
+                ]
+            )
+            observation = await _recv_until_dcl_or_binary_main_resource(  # type: ignore[arg-type]
+                client,
+                session_id="SID-1",
+                frame_id="FRAME-1",
+                expected_loader_id=None,
+                deadline=time.perf_counter() + 1.0,
+                seen=[
+                    _document_response_message(
+                        "application/zip",
+                        request_id="STALE",
+                        loader_id="LOADER-STALE",
+                        status=206,
+                        url="https://example.test/stale.zip",
+                    ),
+                    _dcl_lifecycle_message(loader_id="LOADER-STALE"),
+                ],
+                download_navigation=True,
+            )
+
+            self.assertTrue(observation.headers_only)
+            self.assertEqual(observation.response_status, 200)
+            self.assertEqual(observation.final_url, current_url)
+            self.assertEqual(client.messages, [])
+
+        asyncio.run(run())
+
+    def test_wait_timeout_names_download_and_document_stages(self) -> None:
+        async def run() -> None:
+            for is_download, expected in (
+                (True, "main-document response headers"),
+                (False, "DOMContentLoaded"),
+            ):
+                with self.subTest(download=is_download):
+                    with self.assertRaises(TimeoutError) as raised:
+                        await _recv_until_dcl_or_binary_main_resource(
+                            mock.Mock(),
+                            session_id="SID-1",
+                            frame_id="FRAME-1",
+                            expected_loader_id=None,
+                            deadline=time.perf_counter() - 1.0,
+                            seen=[],
+                            download_navigation=is_download,
+                        )
+                    self.assertIn(expected, str(raised.exception))
 
         asyncio.run(run())
 

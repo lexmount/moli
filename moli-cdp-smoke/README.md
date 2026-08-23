@@ -80,6 +80,24 @@ both sessions. The identical probe timed out at the replacement evaluation after
 10,000 ms when Moli's parent-session renderer-inspector detach fix was removed,
 and passed after the fix was restored.
 
+The `navigation-outcomes` group was calibrated on 2026-08-23 against Debian
+`/usr/bin/chromium` 145.0.7632.116 and then run unchanged against Moli. It
+directly drives `Page.navigate` and correlates the result with the matching
+Document request/response identity. The matrix covers text, renderable HTML,
+empty, redirected, and HTTP-error attachments; unsupported binary MIME; an
+ordinary HTML 502 document; 204 No Content; and a reset before response
+headers. Chromium reports successful attachments as `isDownload=true` plus
+`net::ERR_ABORTED` while retaining the old Document, but a 204 reports the same
+error with `isDownload=false`; the smoke therefore treats `isDownload`, not the
+error string, as authoritative. Moli currently commits binary responses and
+204 responses as external Documents where Chromium retains the old Document;
+those two cases assert internally coherent response/lifecycle evidence and
+record the engine-selected outcome rather than claiming parity. For a 404
+attachment, both engines preserve `isDownload` and the HTTP response evidence,
+while Chromium commits an error Document with `net::ERR_INVALID_RESPONSE` and
+Moli retains the prior Document with `net::ERR_ABORTED`; that difference is
+also recorded rather than hidden behind an exact error-string assertion.
+
 ## Current Coverage
 
 The current suite is a strong core smoke gate, not a complete Playwright compatibility suite.
@@ -213,6 +231,10 @@ Covered well:
 - Locator/input workflows for fill/clear, Playwright user-facing `get_by_test_id()` / `get_by_text()` / `get_by_label()` / `get_by_placeholder()` / `get_by_alt_text()` / `get_by_title()` / `get_by_role()` plus role selector selected/checked/pressed/expanded/disabled/level/name/include-hidden filters, Playwright `expect(locator)` text/count/value/attribute/class/visible/hidden/enabled/disabled/checked matchers, `has_text` / `has` / `filter()` locator composition, upstream-derived `first()` / `last()` / `nth()` / `and_()` / `or_()` / Locator-argument composition and `FrameLocator.locator()` workflows, `$eval` / `$$eval` selector evaluation, `page.type()` selection/focus behavior, `fill()` input/change events, `locator.clear()` input event, input type/error/auto-wait behavior, `check()` / `uncheck()` / `setChecked()` state, aria-role, trial, error, and label-retarget behavior, type, press, keyboard modifiers, basic contenteditable editing, hover, checkbox, radio, richer Playwright `selectOption()` value/label/index/handle/multiple/wait behavior, click-triggered navigation, and drag/drop. Raw CDP smoke checks invalid-parameter priority plus explicit layout hit-testing errors for mouse, touch, emulated touch, tap, and drag, and verifies that none dispatch DOM events. Playwright `page.mouse` click/dblclick/buttons/move/wheel workflows enforce the same boundary.
 - DOM/handle workflows for `locator.evaluate()`, `ElementHandle` queries, `ElementHandle.content_frame()`, `ElementHandle.wait_for_element_state()` visible/hidden/enabled/editable/timeout/detached behavior, `JSHandle.as_element()`, `JSHandle` property reads, nested/same-handle `evaluate()` arguments, console events with JSHandle args, bounding boxes, owner frames, child-frame evaluation, detached-handle behavior after navigation, and isolated-world DOM resolution through Playwright's injected scripts.
 - Download event, downloaded artifact, and download cancellation.
+- Direct `Page.navigate` outcome coverage for attachments, empty and redirected
+  downloads, download HTTP errors, binary MIME responses, ordinary HTTP error
+  Documents, 204 responses, and transport failures, including response/request
+  correlation and retained-Document checks.
 - Viewport resize, the explicit Playwright-generated screenshot clip boundary, and Chromium-calibrated geolocation
   position/unavailable/clear behavior across navigation and auxiliary CDP sessions.
 - localStorage, sessionStorage, basic IndexedDB, multi-context cookie isolation,
@@ -269,6 +291,7 @@ Runner layout:
 - `groups/chromium_cdp.py`: Chromium inspector-protocol derived samples for Page, Runtime, Input, IO Blob streams, Performance, Profiler, and DOM contracts.
 - `groups/document_content.py`: Playwright and raw-CDP `Page.setDocumentContent` replacement identity, parser pause/resume, child-frame, and error-atomicity workflows.
 - `groups/error_document.py`: failed main-document transport error Document identity, lifecycle, realm replacement, recovery, and multi-target isolation.
+- `groups/navigation_outcomes.py`: direct Page.navigate download/no-document/error outcomes and matching Network evidence.
 - `groups/dom_parser_mutations.py`: cross-engine raw-CDP parser-tail mutation publication and commit/DCL DOM binding barriers.
 - `groups/layout_screenshot.py`: raw current-viewport PNG, DevTools parameter compatibility, paint/layout mutation freshness, open/closed Shadow Root and iframe TreeScope stability, generation-gated 1 FPS JPEG screencast/ACK behavior, and Moli default-Mock restart boundary.
 - `groups/action_window.py`: raw wheel admission/deadline batching, screenshot
@@ -346,6 +369,7 @@ uv run moli-cdp-smoke --group dom-snapshot
 uv run moli-cdp-smoke --group dom-whitespace
 uv run moli-cdp-smoke --group computed-style
 uv run moli-cdp-smoke --group error-document
+uv run moli-cdp-smoke --group navigation-outcomes
 uv run moli-cdp-smoke --group url-policy
 uv run moli-cdp-smoke --group inspector-routing
 MOLI_SMOKE_GROUPS=protocol,websocket uv run moli-cdp-smoke

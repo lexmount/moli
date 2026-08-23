@@ -255,6 +255,16 @@ def _main_document_response_from_message(
         and main_document_request_ids is not None
         and request_id in main_document_request_ids
     )
+    # Download navigations are allowed to omit loaderId. In that case a
+    # Document-typed response is not enough to establish ownership: an old
+    # loader on the same frame may still publish a late response. Require the
+    # request identity observed after Page.navigate was sent.
+    if (
+        expected_loader_id is None
+        and main_document_request_ids is not None
+        and not request_was_document
+    ):
+        return None
     if (
         isinstance(request_id, str)
         and main_document_request_ids
@@ -336,6 +346,11 @@ async def _recv_until_dcl_or_binary_main_resource(
     response_mime_type: str | None = None
     response_url: str | None = None
     main_document_request_ids: set[str] = set()
+    awaited = (
+        "main-document response headers"
+        if download_navigation
+        else "DOMContentLoaded"
+    )
     for message in seen:
         response = _main_document_response_from_message(
             message,
@@ -371,8 +386,11 @@ async def _recv_until_dcl_or_binary_main_resource(
     while True:
         remaining = deadline - time.perf_counter()
         if remaining <= 0:
-            raise TimeoutError("timed out waiting for Page.domContentEventFired")
-        message = await asyncio.wait_for(client.recv(), timeout=remaining)
+            raise TimeoutError(f"timed out waiting for {awaited}")
+        try:
+            message = await asyncio.wait_for(client.recv(), timeout=remaining)
+        except TimeoutError as error:
+            raise TimeoutError(f"timed out waiting for {awaited}") from error
         response = _main_document_response_from_message(
             message,
             session_id=session_id,
@@ -498,7 +516,8 @@ async def _dump_dcl_html(
                 download_navigation=navigation.is_download,
             )
         except TimeoutError as error:
-            raise CdpDclDumpTimeoutError("DCL", error) from error
+            stage = "response headers" if navigation.is_download else "DCL"
+            raise CdpDclDumpTimeoutError(stage, error) from error
         if main_document.headers_only:
             return CdpDclDumpResult(
                 body="",
