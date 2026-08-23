@@ -492,3 +492,34 @@ fn transport_utf16_still_wins_over_the_meta_rewrite() {
     assert_eq!(encoding, "UTF-16LE");
     assert!(text.ends_with("hi"), "decoded as {text:?}");
 }
+
+#[test]
+fn bom_less_utf16le_xml_declaration_is_detected() {
+    let input = utf16le_bytes(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<html><head></head><body>hi</body></html>",
+    );
+
+    let (text, encoding) = decode_html_document(&input, &[]);
+
+    assert_eq!(encoding, "UTF-16LE");
+    assert!(text.contains("hi"), "decoded as {text:?}");
+}
+
+fn utf16be_bytes(input: &str) -> Vec<u8> {
+    input
+        .encode_utf16()
+        .flat_map(|unit| unit.to_be_bytes())
+        .collect()
+}
+
+#[test]
+fn bom_less_utf16be_xml_declaration_is_detected() {
+    let input = utf16be_bytes(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<html><head></head><body>hi</body></html>",
+    );
+
+    let (text, encoding) = decode_html_document(&input, &[]);
+
+    assert_eq!(encoding, "UTF-16BE");
+    assert!(text.contains("hi"), "decoded as {text:?}");
+}

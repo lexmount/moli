@@ -119,6 +119,9 @@ impl HtmlDocumentStreamingDecoder {
         if !finishing && bytes_could_still_be_bom_prefix(&self.sniff_buffer) {
             return None;
         }
+        if let Some(encoding) = encoding_for_document_xml_declaration(&self.sniff_buffer) {
+            return Some(encoding);
+        }
         if let Some(encoding) = self.transport_encoding {
             return Some(encoding);
         }
@@ -227,6 +230,34 @@ fn encoding_for_document_bom(bytes: &[u8]) -> Option<&'static Encoding> {
     }
     if bytes.starts_with(&[0xFF, 0xFE]) {
         return Some(encoding_rs::UTF_16LE);
+    }
+    None
+}
+
+/// Detect BOM-less UTF-16LE/BE documents that begin with an XML declaration.
+///
+/// The WHATWG encoding standard's sniffing algorithm requires detecting UTF-16LE
+/// and UTF-16BE byte patterns for `<?` (the start of an XML declaration) even
+/// without BOM or transport charset, so that the document's encoding can be
+/// determined correctly.
+fn encoding_for_document_xml_declaration(bytes: &[u8]) -> Option<&'static Encoding> {
+    // UTF-16LE: 0x3C 0x00 0x3F 0x00 = "<?" in UTF-16LE
+    if bytes.len() >= 4
+        && bytes[0] == 0x3C
+        && bytes[1] == 0x00
+        && bytes[2] == 0x3F
+        && bytes[3] == 0x00
+    {
+        return Some(encoding_rs::UTF_16LE);
+    }
+    // UTF-16BE: 0x00 0x3C 0x00 0x3F = "<?" in UTF-16BE
+    if bytes.len() >= 4
+        && bytes[0] == 0x00
+        && bytes[1] == 0x3C
+        && bytes[2] == 0x00
+        && bytes[3] == 0x3F
+    {
+        return Some(encoding_rs::UTF_16BE);
     }
     None
 }
