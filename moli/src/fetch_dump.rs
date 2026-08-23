@@ -1,9 +1,9 @@
 use anyhow::{Context, Result, bail};
 use moli_core::page::{
-    DocumentNodeSnapshot, Page, RendererCaptureScreenshotReply, RendererCaptureScreenshotRequest,
-    RendererPageDumpFormat, RendererPageDumpOptions, RendererPageDumpStripOptions,
-    RendererScreenshotFormat, RendererScreenshotPurpose, RendererScreenshotRegion,
-    SubresourceResponseWaitCriteria, is_renderer_backend_node_id,
+    ChildFrameTreeSnapshot, DocumentNodeSnapshot, Page, RendererCaptureScreenshotReply,
+    RendererCaptureScreenshotRequest, RendererPageDumpFormat, RendererPageDumpOptions,
+    RendererPageDumpStripOptions, RendererScreenshotFormat, RendererScreenshotPurpose,
+    RendererScreenshotRegion, SubresourceResponseWaitCriteria, is_renderer_backend_node_id,
 };
 use moli_core::runtime::RawDocument;
 #[cfg(test)]
@@ -143,8 +143,10 @@ async fn render_page_dump_with_trace_config_async(
         DumpFormat::Screenshot | DumpFormat::ScreenshotFull | DumpFormat::Pdf => {
             bail!("binary dump formats are only supported by the fetch CLI output path")
         }
-        DumpFormat::SemanticTree => render_semantic_tree_dump_async(page).await,
-        DumpFormat::SemanticTreeText => render_semantic_tree_text_dump_async(page).await,
+        DumpFormat::SemanticTree => render_semantic_tree_dump_async(page, with_frames).await,
+        DumpFormat::SemanticTreeText => {
+            render_semantic_tree_text_dump_async(page, with_frames).await
+        }
     }
 }
 
@@ -316,17 +318,100 @@ fn renderer_strip_options(strip: StripOptions) -> RendererPageDumpStripOptions {
     }
 }
 
-async fn render_semantic_tree_dump_async(page: &mut Page) -> Result<String> {
-    let payloads = page
-        .accessibility_tree_payloads_for_document_async(None)
-        .await?;
+async fn render_semantic_tree_dump_async(page: &mut Page, with_frames: bool) -> Result<String> {
+    let payloads = semantic_tree_payloads_async(page, with_frames).await?;
     Ok(serde_json::to_string_pretty(&payloads)?)
 }
 
-async fn render_semantic_tree_text_dump_async(page: &mut Page) -> Result<String> {
-    let payloads = page
+async fn semantic_tree_payloads_async(page: &mut Page, with_frames: bool) -> Result<Vec<Value>> {
+    let mut payloads = page
         .accessibility_tree_payloads_for_document_async(None)
         .await?;
+    if !with_frames {
+        return Ok(payloads);
+    }
+
+    let frame_tree = page.child_frame_tree_snapshot_async().await?;
+    let mut frame_ids = Vec::new();
+    collect_child_frame_ids(&frame_tree, &mut frame_ids);
+
+    for frame_id in frame_ids {
+        let Some(owner) = page
+            .child_frame_owner_node_reference_async(&frame_id, None)
+            .await?
+        else {
+            continue;
+        };
+        let Some(child_payloads) = page
+            .child_frame_accessibility_tree_payloads_async(&frame_id, None)
+            .await?
+        else {
+            continue;
+        };
+        attach_child_frame_accessibility_tree(&mut payloads, owner.backend_node_id, child_payloads);
+    }
+
+    Ok(payloads)
+}
+
+fn collect_child_frame_ids(frames: &[ChildFrameTreeSnapshot], frame_ids: &mut Vec<String>) {
+    for frame in frames {
+        frame_ids.push(frame.frame_id.clone());
+        collect_child_frame_ids(&frame.child_frames, frame_ids);
+    }
+}
+
+fn attach_child_frame_accessibility_tree(
+    payloads: &mut Vec<Value>,
+    owner_backend_node_id: u32,
+    mut child_payloads: Vec<Value>,
+) {
+    let Some(child_root_id) = child_payloads
+        .first()
+        .and_then(|payload| payload.get("nodeId"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+    else {
+        return;
+    };
+    let Some(owner_index) = payloads.iter().position(|payload| {
+        payload.get("backendDOMNodeId").and_then(Value::as_u64)
+            == Some(u64::from(owner_backend_node_id))
+    }) else {
+        return;
+    };
+    let Some(owner_node_id) = payloads[owner_index]
+        .get("nodeId")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+    else {
+        return;
+    };
+    let Some(child_root) = child_payloads.first_mut().and_then(Value::as_object_mut) else {
+        return;
+    };
+    child_root.insert("parentId".to_owned(), json!(owner_node_id));
+
+    let Some(owner) = payloads[owner_index].as_object_mut() else {
+        return;
+    };
+    let child_ids = owner
+        .entry("childIds".to_owned())
+        .or_insert_with(|| Value::Array(Vec::new()));
+    let Some(child_ids) = child_ids.as_array_mut() else {
+        return;
+    };
+    if !child_ids.iter().any(|child_id| child_id == &child_root_id) {
+        child_ids.push(json!(child_root_id));
+    }
+    payloads.append(&mut child_payloads);
+}
+
+async fn render_semantic_tree_text_dump_async(
+    page: &mut Page,
+    with_frames: bool,
+) -> Result<String> {
+    let payloads = semantic_tree_payloads_async(page, with_frames).await?;
     if payloads.is_empty() {
         return Ok(String::new());
     }
@@ -706,6 +791,111 @@ mod tests {
         assert!(!rendered.contains(r#""value": "old""#));
 
         let _ = page.finish_runtime_protocol_message(completion)?;
+        http_server.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn render_semantic_tree_dumps_include_child_frames_only_when_requested() -> Result<()> {
+        let (_browser, mut page, http_server) = load_page(
+            r#"<!doctype html><html><body><iframe srcdoc="<button aria-label='Child action'>inside</button>"></iframe></body></html>"#,
+        )
+        .await?;
+
+        let without_frames = render_page_dump_with_options_async(
+            &mut page,
+            DumpFormat::SemanticTree,
+            StripOptions::default(),
+            false,
+            false,
+            false,
+            None,
+        )
+        .await?;
+        let with_frames = render_page_dump_with_options_async(
+            &mut page,
+            DumpFormat::SemanticTree,
+            StripOptions::default(),
+            false,
+            true,
+            false,
+            None,
+        )
+        .await?;
+
+        assert!(!without_frames.contains("Child action"));
+        assert!(with_frames.contains("Child action"));
+
+        let payloads: Vec<Value> = serde_json::from_str(&with_frames)?;
+        let child_root = payloads
+            .iter()
+            .filter(|payload| payload["role"]["value"] == "RootWebArea")
+            .nth(1)
+            .expect("child frame RootWebArea");
+        let child_root_id = child_root["nodeId"].as_str().expect("child root nodeId");
+        let owner_id = child_root["parentId"]
+            .as_str()
+            .expect("child root should be attached to its iframe owner");
+        let owner = payloads
+            .iter()
+            .find(|payload| payload["nodeId"] == owner_id)
+            .expect("iframe owner AX node");
+        assert_eq!(owner["role"]["value"], "Iframe");
+        assert!(
+            owner["childIds"]
+                .as_array()
+                .expect("iframe childIds")
+                .iter()
+                .any(|child_id| child_id == child_root_id)
+        );
+
+        let text_without_frames = render_page_dump_with_options_async(
+            &mut page,
+            DumpFormat::SemanticTreeText,
+            StripOptions::default(),
+            false,
+            false,
+            false,
+            None,
+        )
+        .await?;
+        let text_with_frames = render_page_dump_with_options_async(
+            &mut page,
+            DumpFormat::SemanticTreeText,
+            StripOptions::default(),
+            false,
+            true,
+            false,
+            None,
+        )
+        .await?;
+
+        assert!(!text_without_frames.contains("Child action"));
+        assert!(text_with_frames.contains("Child action"));
+
+        http_server.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn render_semantic_tree_with_frames_recurses_into_nested_frames() -> Result<()> {
+        let (_browser, mut page, http_server) = load_page(
+            r#"<!doctype html><html><body><iframe srcdoc="<iframe srcdoc='&lt;button aria-label=&quot;Nested action&quot;&gt;inside&lt;/button&gt;'></iframe>"></iframe></body></html>"#,
+        )
+        .await?;
+
+        let rendered = render_page_dump_with_options_async(
+            &mut page,
+            DumpFormat::SemanticTreeText,
+            StripOptions::default(),
+            false,
+            true,
+            false,
+            None,
+        )
+        .await?;
+
+        assert!(rendered.contains("Nested action"));
         http_server.abort();
         Ok(())
     }
