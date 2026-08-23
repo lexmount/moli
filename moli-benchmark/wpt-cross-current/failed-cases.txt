@@ -3071,7 +3071,6 @@ html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-qu
 html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-standards-mode.html
 html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-width-1000px.html
 html/semantics/embedded-content/the-img-element/source-media-outside-doc.html
-html/semantics/embedded-content/the-img-element/source-relevant-mutations.html
 html/semantics/embedded-content/the-img-element/svg-img-density-vs-zoom.html
 html/semantics/embedded-content/the-img-element/update-the-image-data/current-request-microtask-002.html
 html/semantics/embedded-content/the-img-element/update-the-image-data/lazy-out-of-band-load.html

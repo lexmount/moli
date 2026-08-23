@@ -323,5 +323,11 @@ impl DocumentRuntime {
             }
         }
         self.preserve_selectedness_for_insertion_plan(scope, host_ptr, insertion_plan);
+        self.queue_image_relevant_mutation_loads(
+            scope,
+            host_ptr,
+            &replacement_plan.removal.image_relevant_mutation_plan,
+            crate::types::SubresourceRequestInitiatorType::Script,
+        );
     }
 }

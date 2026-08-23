@@ -5677,6 +5677,7 @@ html/semantics/embedded-content/the-img-element/not-rendered-dimension-getter.ht
 html/semantics/embedded-content/the-img-element/not-rendered-image-loading-lazy.html
 html/semantics/embedded-content/the-img-element/null-image-source.html
 html/semantics/embedded-content/the-img-element/remove-element-and-scroll.html
+html/semantics/embedded-content/the-img-element/source-relevant-mutations.html
 html/semantics/embedded-content/the-img-element/srcset-natural-size-in-dynamic-iframe.html
 html/semantics/embedded-content/the-img-element/srcset/avoid-reload-on-resize.html
 html/semantics/embedded-content/the-img-element/srcset/parse-a-srcset-attribute.html
