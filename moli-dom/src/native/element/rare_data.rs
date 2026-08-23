@@ -30,6 +30,7 @@ struct ElementRareDataPayload {
     custom_element_is_name: Option<String>,
     parser_associated_form_owner: Option<NativeNodeId>,
     template_contents: Option<NativeNodeId>,
+    attribute_utf16_units: Vec<(String, Box<[u16]>)>,
 }
 
 impl ElementRareDataPayload {
@@ -39,6 +40,7 @@ impl ElementRareDataPayload {
             && self.custom_element_is_name.is_none()
             && self.parser_associated_form_owner.is_none()
             && self.template_contents.is_none()
+            && self.attribute_utf16_units.is_empty()
     }
 }
 
@@ -63,8 +65,44 @@ impl ElementRareData {
                 custom_element_is_name: None,
                 parser_associated_form_owner: None,
                 template_contents: None,
+                attribute_utf16_units: Vec::new(),
             })),
         }
+    }
+
+    pub(super) fn attribute_utf16_units(&self, qualified_name: &str) -> Option<&[u16]> {
+        self.payload
+            .as_deref()?
+            .attribute_utf16_units
+            .iter()
+            .find(|(name, _)| name == qualified_name)
+            .map(|(_, units)| units.as_ref())
+    }
+
+    pub(super) fn set_attribute_utf16_units(
+        &mut self,
+        qualified_name: String,
+        units: Option<Box<[u16]>>,
+    ) -> bool {
+        if self.attribute_utf16_units(&qualified_name) == units.as_deref() {
+            return false;
+        }
+
+        if let Some(units) = units {
+            let values = &mut self.payload_mut().attribute_utf16_units;
+            if let Some((_, current)) = values.iter_mut().find(|(name, _)| name == &qualified_name)
+            {
+                *current = units;
+            } else {
+                values.push((qualified_name, units));
+            }
+        } else if let Some(payload) = self.payload.as_deref_mut() {
+            payload
+                .attribute_utf16_units
+                .retain(|(name, _)| name != &qualified_name);
+        }
+        self.release_empty_payload();
+        true
     }
 
     pub(super) fn control_state(&self) -> &ElementControlState {
