@@ -6,7 +6,7 @@
 //! "finished" from a script handle, an event, or a compatibility boolean.
 
 use super::{PreparedScriptBodyActivity, ScriptTerminalBodyActivity};
-use crate::{document_runtime::ParserInsertionController, host::ScriptEventTask};
+use crate::{document_runtime::ParserConnectedScriptBridge, host::ScriptEventTask};
 
 #[derive(Debug)]
 pub(crate) struct ParserOwnedClassicScriptExecutionError {
@@ -79,7 +79,7 @@ impl ParserOwnedClassicScriptExecutionReport {
 #[derive(Clone, Debug)]
 pub(crate) enum ParserOwnedClassicScriptExecutionContext {
     ParserBlocking {
-        insertion_controller: Option<ParserInsertionController>,
+        parser_bridge: Option<ParserConnectedScriptBridge>,
     },
     Deferred,
 }
@@ -89,11 +89,9 @@ impl ParserOwnedClassicScriptExecutionContext {
         matches!(self, Self::ParserBlocking { .. })
     }
 
-    pub(crate) fn parser_insertion_controller(&self) -> Option<&ParserInsertionController> {
+    pub(crate) fn parser_bridge(&self) -> Option<&ParserConnectedScriptBridge> {
         match self {
-            Self::ParserBlocking {
-                insertion_controller,
-            } => insertion_controller.as_ref(),
+            Self::ParserBlocking { parser_bridge } => parser_bridge.as_ref(),
             Self::Deferred => None,
         }
     }
@@ -119,12 +117,12 @@ impl ParserOwnedClassicScriptCompletion {
     }
 
     pub(crate) fn parser_blocking_source_failure(
-        parser_insertion_controller: Option<ParserInsertionController>,
+        parser_bridge: Option<ParserConnectedScriptBridge>,
         script_element_event: Option<ScriptEventTask>,
     ) -> Self {
         Self {
             execution_context: ParserOwnedClassicScriptExecutionContext::ParserBlocking {
-                insertion_controller: parser_insertion_controller,
+                parser_bridge,
             },
             script_element_event,
             evaluation: ParserOwnedClassicScriptEvaluationSettlement::NotSettled,

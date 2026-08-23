@@ -19,7 +19,8 @@ use super::*;
 use crate::document_runtime::parser_script_preparation_failure_page_owned_work;
 use crate::dom::native::{Attribute, DomMutationEffects, NativeNodeId};
 use crate::live_document_parser::{
-    LiveDocumentParserOwner, LiveDocumentParserStepOutcome, ParserSuspensionCause,
+    DocumentParserFinishRequestState, LiveDocumentParserOwner, LiveDocumentParserStepOutcome,
+    ParserSuspensionCause,
 };
 use crate::parser::{
     ParserDomMutation, ParserDomMutationConsumer, ParserDomReadConsumer,
@@ -553,10 +554,7 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
         {
             if self.parser_session.input_is_empty() {
                 if *self.input_closed {
-                    return Ok(self.finish_main_parser_or_defer_borrowed_stream(
-                        page_vm,
-                        parser_document_owner,
-                    ));
+                    return Ok(self.request_or_finish_main_parser(page_vm, parser_document_owner));
                 }
                 return Ok(OwnerStepProgress::NeedMoreInput);
             }
@@ -680,7 +678,7 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
         *parser_step_ready = false;
         let progress = if self.parser_session.input_is_empty() {
             if *self.input_closed {
-                self.finish_main_parser_or_defer_borrowed_stream(page_vm, parser_document_owner)
+                self.request_or_finish_main_parser(page_vm, parser_document_owner)
             } else {
                 OwnerStepProgress::NeedMoreInput
             }
@@ -1305,27 +1303,37 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
         outcome
     }
 
-    fn finish_main_parser_or_defer_borrowed_stream(
+    fn request_or_finish_main_parser(
         &mut self,
         page_vm: &mut PageVm,
         parser_document_owner: crate::frame_owner_model::FrameDocumentTaskOwner,
     ) -> OwnerStepProgress {
-        if !self.parser_session.has_exclusive_stream_handle() {
-            // A document.write recovery turn can drive this same main stream
-            // to EOF while its temporary ParserInsertionController is still
-            // live on the Page-task stack. EOF is final, but destroying the
-            // stream is only valid after that stack has unwound. Cross the
-            // stable scheduler boundary once; the selected continuation then
-            // re-enters this sole parser runtime with exclusive ownership.
+        if self.parser_session.finish_request_state()
+            == DocumentParserFinishRequestState::NotRequested
+        {
+            // Low-level fixtures can close their input flag directly. The
+            // production input boundary records this before pumping begins.
+            self.parser_session.request_finish();
+        }
+        if self.parser_session.finish_request_state() == DocumentParserFinishRequestState::Delayed {
+            // A parser-connected script, suspension, or reentrant pump kept
+            // work active after EOF was requested. Preserve that historical
+            // fact even after the stack unwinds and require the exact
+            // phase-one continuation to admit finalization.
             assert!(
                 page_vm
                     .vm()
                     .document_runtime
                     .request_main_parser_continuation_if_active(),
-                "main parser EOF with a borrowed stream requires an active continuation route"
+                "main parser EOF requires an active phase-one continuation route"
             );
             return OwnerStepProgress::BlockedOnPageTask;
         }
+        debug_assert!(matches!(
+            self.parser_session.finish_request_state(),
+            DocumentParserFinishRequestState::Requested
+                | DocumentParserFinishRequestState::Admitted
+        ));
         self.finish_main_parser(page_vm, parser_document_owner);
         OwnerStepProgress::AdvancePhase
     }

@@ -1,6 +1,7 @@
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet, VecDeque},
+    rc::Weak,
     sync::Arc,
 };
 
@@ -110,6 +111,7 @@ pub(crate) use stylesheet_runtime::{
 
 pub(super) type DomHandle = NativeNodeId;
 pub(crate) type ParserStreamHandle = crate::live_document_parser::DocumentParserStreamHandle;
+type ParserStreamWeakHandle = Weak<RefCell<crate::parser::DocumentStream>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HtmlFragmentCustomElementUpgradeTiming {
@@ -169,7 +171,7 @@ pub(crate) enum PostParseOwnerDriverStep {
 
 #[derive(Debug)]
 struct ParserConnectedScriptContext {
-    insertion_controller: ParserInsertionController,
+    bridge: ParserConnectedScriptBridge,
     _input_context: ParserInputContext,
 }
 
@@ -183,53 +185,121 @@ struct CurrentScriptContext {
 pub(crate) struct CurrentScriptContextSpec {
     pub(crate) handle: Option<DomHandle>,
     pub(crate) parser_write_insertion_point_active: bool,
-    pub(crate) parser_insertion_controller: Option<ParserInsertionController>,
+    pub(crate) parser_bridge: Option<ParserConnectedScriptBridge>,
 }
 
 #[derive(Clone)]
 pub(crate) struct ParserInsertionController {
     input_session: ParserInputSession,
-    parser_stream: ParserStreamHandle,
-    parser_control: DocumentParserSessionControlHandle,
+    parser_stream: ParserStreamWeakHandle,
 }
 
 impl std::fmt::Debug for ParserInsertionController {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ParserInsertionController")
             .field("input_session", &self.input_session)
-            .field("session_id", &self.parser_control.session_id())
-            .field("run_state", &self.parser_control.run_state())
             .finish()
     }
 }
 
 impl ParserInsertionController {
-    #[cfg(test)]
-    pub(crate) fn for_stream(stream: ParserStreamHandle) -> Self {
+    fn for_stream(stream: &ParserStreamHandle) -> Self {
         let input_session = stream.borrow().script_input_session();
         Self {
             input_session,
-            parser_stream: stream,
-            parser_control: DocumentParserSessionControlHandle::new(),
+            parser_stream: std::rc::Rc::downgrade(stream),
         }
-    }
-
-    pub(crate) fn for_session(parser: &DocumentParserSession) -> Option<Self> {
-        let parser_stream = parser.html_stream_handle()?;
-        let input_session = parser_stream.borrow().script_input_session();
-        Some(Self {
-            input_session,
-            parser_stream,
-            parser_control: parser.control_handle(),
-        })
     }
 
     pub(crate) fn input_session(&self) -> ParserInputSession {
         self.input_session.clone()
     }
 
-    pub(crate) fn parser_stream(&self) -> ParserStreamHandle {
-        self.parser_stream.clone()
+    pub(crate) fn with_parser_stream<R>(
+        &self,
+        operation: impl FnOnce(&crate::parser::DocumentStream) -> R,
+    ) -> R {
+        let stream = self
+            .parser_stream
+            .upgrade()
+            .expect("synchronous parser insertion permission outlived its parser session");
+        let stream = stream.borrow();
+        operation(&stream)
+    }
+
+    pub(crate) fn with_parser_stream_mut<R>(
+        &self,
+        operation: impl FnOnce(&mut crate::parser::DocumentStream) -> R,
+    ) -> R {
+        let stream = self
+            .parser_stream
+            .upgrade()
+            .expect("synchronous parser insertion permission outlived its parser session");
+        let mut stream = stream.borrow_mut();
+        operation(&mut stream)
+    }
+}
+
+/// The explicit bridge between parser-connected script execution and the
+/// phase-owned parser session.
+///
+/// The insertion controller is deliberately limited to synchronous input
+/// insertion. Pump/suspend/script-nesting transitions are reported through
+/// the separate session control handle so retaining insertion permission can
+/// never itself authorize parser finalization.
+#[derive(Clone)]
+pub(crate) struct ParserConnectedScriptBridge {
+    insertion_controller: ParserInsertionController,
+    parser_control: DocumentParserSessionControlHandle,
+}
+
+impl std::fmt::Debug for ParserConnectedScriptBridge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ParserConnectedScriptBridge")
+            .field("insertion_controller", &self.insertion_controller)
+            .field("session_id", &self.parser_control.session_id())
+            .field("run_state", &self.parser_control.run_state())
+            .field(
+                "pump_session_nesting_level",
+                &self.parser_control.pump_session_nesting_level(),
+            )
+            .field(
+                "parser_script_nesting_level",
+                &self.parser_control.parser_script_nesting_level(),
+            )
+            .field(
+                "finish_request_state",
+                &self.parser_control.finish_request_state(),
+            )
+            .finish()
+    }
+}
+
+impl ParserConnectedScriptBridge {
+    #[cfg(test)]
+    pub(crate) fn for_stream(stream: &ParserStreamHandle) -> Self {
+        Self {
+            insertion_controller: ParserInsertionController::for_stream(stream),
+            parser_control: DocumentParserSessionControlHandle::new(),
+        }
+    }
+
+    pub(crate) fn for_session(parser: &DocumentParserSession) -> Option<Self> {
+        let stream = parser.html_stream_handle()?;
+        Some(Self {
+            insertion_controller: ParserInsertionController::for_stream(&stream),
+            parser_control: parser.control_handle(),
+        })
+    }
+
+    pub(crate) fn insertion_controller(&self) -> &ParserInsertionController {
+        &self.insertion_controller
+    }
+
+    pub(crate) fn enter_parser_script_nesting(
+        &self,
+    ) -> crate::live_document_parser::DocumentParserScriptNestingGuard {
+        self.parser_control.enter_parser_script_nesting()
     }
 
     pub(crate) fn run_state(&self) -> DocumentParserRunState {
@@ -390,7 +460,7 @@ struct DocumentWriteExternalScriptStart {
 #[derive(Debug)]
 struct SuspendedDocumentWriteInsertion {
     document_handle: DomHandle,
-    parser_insertion_controller: ParserInsertionController,
+    parser_bridge: ParserConnectedScriptBridge,
     resume_permit: ParserResumePermit,
     resume_permit_consumed: bool,
 }
@@ -548,6 +618,7 @@ struct ParserReentryState {
 
 pub(crate) struct ParserScriptNestingGuard {
     runtime: *mut DocumentRuntime,
+    _parser_session: Option<crate::live_document_parser::DocumentParserScriptNestingGuard>,
 }
 
 pub(crate) struct ParserPauseGuard {
@@ -835,6 +906,9 @@ impl DocumentRuntime {
     }
 
     pub(crate) fn enter_parser_script_nesting(&mut self) -> ParserScriptNestingGuard {
+        let parser_session = self
+            .current_parser_bridge()
+            .map(|bridge| bridge.enter_parser_script_nesting());
         self.parser_reentry.script_nesting_level = self
             .parser_reentry
             .script_nesting_level
@@ -842,6 +916,7 @@ impl DocumentRuntime {
             .expect("parser script nesting level overflow");
         ParserScriptNestingGuard {
             runtime: self as *mut DocumentRuntime,
+            _parser_session: parser_session,
         }
     }
 

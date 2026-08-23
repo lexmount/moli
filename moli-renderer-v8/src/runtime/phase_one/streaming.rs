@@ -551,7 +551,7 @@ impl ConcurrentParseTimeRuntime {
     }
 
     pub(super) fn close_streaming_html_input(&mut self) {
-        self.state.input_closed = true;
+        self.state.close_input();
     }
 
     pub(super) async fn continue_streaming_creation_on_execution_context(

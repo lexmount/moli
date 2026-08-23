@@ -9,7 +9,7 @@ use super::parser_blocking_task::{
 };
 use super::*;
 use crate::DocumentBlockingStylesheetSignature;
-use crate::document_runtime::ParserInsertionController;
+use crate::document_runtime::ParserConnectedScriptBridge;
 use crate::document_script_scheduler::MainDocumentClassicScriptTarget;
 use crate::frame_owner_model::FrameDocumentTaskOwner;
 use crate::parser_script::action::{
@@ -44,7 +44,7 @@ pub(super) struct MainParserBlockingExecutionGateOwner<'a> {
 }
 
 pub(super) struct MainParserBlockingBeginExecutionOwner {
-    pub(super) parser_insertion_controller: Option<ParserInsertionController>,
+    pub(super) parser_bridge: Option<ParserConnectedScriptBridge>,
     pub(super) completion_target: MainDocumentClassicScriptTarget,
 }
 
@@ -308,7 +308,7 @@ impl ParserScriptBeginExecutionOwner<PendingParsingBlockingClassicScriptContext>
         action: ParserPendingClassicScriptBeginExecutionAction,
     ) -> Option<Self::BeginExecutionAction> {
         Some(main_parser_blocking_begin_execution_action(
-            self.parser_insertion_controller.clone(),
+            self.parser_bridge.clone(),
             self.completion_target,
             action,
         ))

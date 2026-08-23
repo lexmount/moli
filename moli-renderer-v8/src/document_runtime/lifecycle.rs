@@ -435,23 +435,26 @@ impl DocumentRuntime {
         let CurrentScriptContextSpec {
             handle,
             parser_write_insertion_point_active,
-            parser_insertion_controller,
+            parser_bridge,
         } = spec;
         let handle = handle.filter(|node| self.dom_host.node(*node).is_some());
-        let parser_insertion_controller = parser_insertion_controller
+        let parser_bridge = parser_bridge
             .or_else(|| {
                 self.current_script_context().and_then(|context| {
                     context
                         .parser_connected
                         .as_ref()
-                        .map(|parser| parser.insertion_controller.clone())
+                        .map(|parser| parser.bridge.clone())
                 })
             })
             .filter(|_| parser_write_insertion_point_active);
-        let parser_connected = parser_insertion_controller.map(|insertion_controller| {
-            let input_context = insertion_controller.input_session().enter_pending_context();
+        let parser_connected = parser_bridge.map(|bridge| {
+            let input_context = bridge
+                .insertion_controller()
+                .input_session()
+                .enter_pending_context();
             ParserConnectedScriptContext {
-                insertion_controller,
+                bridge,
                 _input_context: input_context,
             }
         });
@@ -474,10 +477,10 @@ impl DocumentRuntime {
             .is_some_and(|context| context.parser_connected.is_some())
     }
 
-    pub(super) fn current_parser_insertion_controller(&self) -> Option<ParserInsertionController> {
+    pub(super) fn current_parser_bridge(&self) -> Option<ParserConnectedScriptBridge> {
         self.current_script_context()
             .and_then(|context| context.parser_connected.as_ref())
-            .map(|context| context.insertion_controller.clone())
+            .map(|context| context.bridge.clone())
     }
 
     pub(crate) fn take_post_parse_schedule_invalidated(&mut self) -> bool {
@@ -581,7 +584,7 @@ mod tests {
     };
 
     use super::{
-        CurrentScriptContextSpec, DocumentRuntime, DomHandle, ParserInsertionController,
+        CurrentScriptContextSpec, DocumentRuntime, DomHandle, ParserConnectedScriptBridge,
         PostParsePageTaskPopBlocker,
     };
 
@@ -632,12 +635,12 @@ mod tests {
         runtime.set_current_script_context(CurrentScriptContextSpec {
             handle: None,
             parser_write_insertion_point_active: true,
-            parser_insertion_controller: Some(ParserInsertionController::for_stream(stream)),
+            parser_bridge: Some(ParserConnectedScriptBridge::for_stream(&stream)),
         });
 
         assert_eq!(runtime.current_script_handle(), None);
         assert!(runtime.has_active_parser_write_insertion_point());
-        assert!(runtime.current_parser_insertion_controller().is_some());
+        assert!(runtime.current_parser_bridge().is_some());
     }
 
     fn modulepreload_as_matrix_markup(base_href: &str) -> String {

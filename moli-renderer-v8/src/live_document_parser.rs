@@ -225,7 +225,7 @@ pub(crate) enum ParserStopReason {
 pub(crate) enum DocumentParserRunState {
     Ready,
     Pumping {
-        epoch: u64,
+        nesting_level: usize,
     },
     Suspended {
         id: ParserSuspensionId,
@@ -236,7 +236,42 @@ pub(crate) enum DocumentParserRunState {
     Stopped(ParserStopReason),
 }
 
-impl From<ParserSuspension> for DocumentParserRunState {
+/// Tracks a live parser's end request separately from its current execution
+/// state.
+///
+/// `DocumentParserRunState` is the public projection used by callers; pump
+/// nesting is recorded independently so a suspended nested pump can retain
+/// both facts. This state answers whether EOF has requested finalization and
+/// whether the owning parser's safe boundary has admitted a previously delayed
+/// finish.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum DocumentParserFinishRequestState {
+    /// The parser owner can still append ordinary outer input.
+    #[default]
+    NotRequested,
+    /// EOF/close was requested and no unsafe end attempt has been observed.
+    Requested,
+    /// The request overlapped a pump, suspension, or parser-script scope and
+    /// must cross the parser owner's next stable boundary before finalizing.
+    Delayed,
+    /// The stable owner boundary admitted this delayed finish exactly once.
+    /// Entering more parser work consumes the admission.
+    Admitted,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DocumentParserLifecycleState {
+    Ready,
+    Suspended {
+        id: ParserSuspensionId,
+        cause: ParserSuspensionCause,
+    },
+    Finishing,
+    Finished,
+    Stopped(ParserStopReason),
+}
+
+impl From<ParserSuspension> for DocumentParserLifecycleState {
     fn from(suspension: ParserSuspension) -> Self {
         Self::Suspended {
             id: suspension.id,
@@ -245,11 +280,22 @@ impl From<ParserSuspension> for DocumentParserRunState {
     }
 }
 
-impl DocumentParserRunState {
+impl DocumentParserLifecycleState {
     fn suspension(self) -> Option<ParserSuspension> {
         match self {
             Self::Suspended { id, cause } => Some(ParserSuspension { id, cause }),
             _ => None,
+        }
+    }
+
+    fn observed_run_state(self, pump_session_nesting_level: usize) -> DocumentParserRunState {
+        match (self, pump_session_nesting_level) {
+            (Self::Ready, nesting_level @ 1..) => DocumentParserRunState::Pumping { nesting_level },
+            (Self::Ready, 0) => DocumentParserRunState::Ready,
+            (Self::Suspended { id, cause }, _) => DocumentParserRunState::Suspended { id, cause },
+            (Self::Finishing, _) => DocumentParserRunState::Finishing,
+            (Self::Finished, _) => DocumentParserRunState::Finished,
+            (Self::Stopped(reason), _) => DocumentParserRunState::Stopped(reason),
         }
     }
 }
@@ -258,8 +304,10 @@ impl DocumentParserRunState {
 struct DocumentParserSessionControl {
     session_id: ParserSessionId,
     next_suspension_id: u64,
-    next_pump_epoch: u64,
-    run_state: DocumentParserRunState,
+    pump_session_nesting_level: usize,
+    lifecycle_state: DocumentParserLifecycleState,
+    parser_script_nesting_level: usize,
+    finish_request_state: DocumentParserFinishRequestState,
 }
 
 #[derive(Clone, Debug)]
@@ -272,8 +320,10 @@ impl DocumentParserSessionControlHandle {
         Self(Rc::new(RefCell::new(DocumentParserSessionControl {
             session_id,
             next_suspension_id: 1,
-            next_pump_epoch: 1,
-            run_state: DocumentParserRunState::Ready,
+            pump_session_nesting_level: 0,
+            lifecycle_state: DocumentParserLifecycleState::Ready,
+            parser_script_nesting_level: 0,
+            finish_request_state: DocumentParserFinishRequestState::NotRequested,
         })))
     }
 
@@ -282,15 +332,89 @@ impl DocumentParserSessionControlHandle {
     }
 
     pub(crate) fn run_state(&self) -> DocumentParserRunState {
-        self.0.borrow().run_state
+        let control = self.0.borrow();
+        control
+            .lifecycle_state
+            .observed_run_state(control.pump_session_nesting_level)
+    }
+
+    pub(crate) fn parser_script_nesting_level(&self) -> usize {
+        self.0.borrow().parser_script_nesting_level
+    }
+
+    pub(crate) fn pump_session_nesting_level(&self) -> usize {
+        self.0.borrow().pump_session_nesting_level
+    }
+
+    pub(crate) fn finish_request_state(&self) -> DocumentParserFinishRequestState {
+        self.0.borrow().finish_request_state
+    }
+
+    pub(crate) fn enter_parser_script_nesting(&self) -> DocumentParserScriptNestingGuard {
+        let mut control = self.0.borrow_mut();
+        assert!(
+            !matches!(
+                control.lifecycle_state,
+                DocumentParserLifecycleState::Finishing
+                    | DocumentParserLifecycleState::Finished
+                    | DocumentParserLifecycleState::Stopped(_)
+            ),
+            "a terminal live parser cannot enter parser-script execution"
+        );
+        control.parser_script_nesting_level = control
+            .parser_script_nesting_level
+            .checked_add(1)
+            .expect("live parser script nesting level overflow");
+        if control.finish_request_state == DocumentParserFinishRequestState::Admitted {
+            // Admission authorizes the delayed finish at one exact boundary;
+            // entering more parser-connected work consumes that authority.
+            control.finish_request_state = DocumentParserFinishRequestState::Requested;
+        }
+        drop(control);
+        DocumentParserScriptNestingGuard {
+            control: self.clone(),
+        }
+    }
+
+    fn request_finish(&self) {
+        let mut control = self.0.borrow_mut();
+        let finish_is_unsafe = control.pump_session_nesting_level > 0
+            || matches!(
+                control.lifecycle_state,
+                DocumentParserLifecycleState::Suspended { .. }
+            )
+            || control.parser_script_nesting_level > 0;
+        match (control.finish_request_state, finish_is_unsafe) {
+            (DocumentParserFinishRequestState::Delayed, _) => {}
+            (_, true) => {
+                control.finish_request_state = DocumentParserFinishRequestState::Delayed;
+            }
+            (DocumentParserFinishRequestState::NotRequested, false) => {
+                control.finish_request_state = DocumentParserFinishRequestState::Requested;
+            }
+            (
+                DocumentParserFinishRequestState::Requested
+                | DocumentParserFinishRequestState::Admitted,
+                false,
+            ) => {}
+        }
+    }
+
+    fn admit_delayed_finish(&self) -> bool {
+        let mut control = self.0.borrow_mut();
+        if control.finish_request_state != DocumentParserFinishRequestState::Delayed {
+            return false;
+        }
+        control.finish_request_state = DocumentParserFinishRequestState::Admitted;
+        true
     }
 
     pub(crate) fn suspend(&self, cause: ParserSuspensionCause) -> ParserResumePermit {
         let mut control = self.0.borrow_mut();
         assert_eq!(
-            control.run_state,
-            DocumentParserRunState::Ready,
-            "only a ready live parser session can enter a persistent suspension"
+            control.lifecycle_state,
+            DocumentParserLifecycleState::Ready,
+            "only a live parser without an existing suspension can enter a persistent suspension"
         );
         let suspension_id = ParserSuspensionId(control.next_suspension_id);
         control.next_suspension_id = control
@@ -301,7 +425,14 @@ impl DocumentParserSessionControlHandle {
             id: suspension_id,
             cause,
         };
-        control.run_state = suspension.into();
+        if matches!(
+            control.finish_request_state,
+            DocumentParserFinishRequestState::Requested
+                | DocumentParserFinishRequestState::Admitted
+        ) {
+            control.finish_request_state = DocumentParserFinishRequestState::Delayed;
+        }
+        control.lifecycle_state = suspension.into();
         ParserResumePermit {
             session_id: control.session_id,
             suspension_id,
@@ -310,7 +441,7 @@ impl DocumentParserSessionControlHandle {
 
     pub(crate) fn current_resume_permit(&self) -> Option<ParserResumePermit> {
         let control = self.0.borrow();
-        let suspension = control.run_state.suspension()?;
+        let suspension = control.lifecycle_state.suspension()?;
         Some(ParserResumePermit {
             session_id: control.session_id,
             suspension_id: suspension.id,
@@ -322,75 +453,115 @@ impl DocumentParserSessionControlHandle {
         if permit.session_id != control.session_id {
             return false;
         }
-        let Some(suspension) = control.run_state.suspension() else {
+        let Some(suspension) = control.lifecycle_state.suspension() else {
             return false;
         };
         if suspension.id != permit.suspension_id {
             return false;
         }
-        control.run_state = DocumentParserRunState::Ready;
+        control.lifecycle_state = DocumentParserLifecycleState::Ready;
         true
     }
 
     pub(crate) fn begin_pump(&self) -> DocumentParserPumpGuard {
         let mut control = self.0.borrow_mut();
         assert_eq!(
-            control.run_state,
-            DocumentParserRunState::Ready,
-            "a live parser may only pump from the ready state"
+            control.lifecycle_state,
+            DocumentParserLifecycleState::Ready,
+            "a suspended or terminal live parser cannot enter a pump session"
         );
-        let epoch = control.next_pump_epoch;
-        control.next_pump_epoch = control.next_pump_epoch.wrapping_add(1).max(1);
-        control.run_state = DocumentParserRunState::Pumping { epoch };
+        control.pump_session_nesting_level = control
+            .pump_session_nesting_level
+            .checked_add(1)
+            .expect("live parser pump session nesting level overflow");
+        let nesting_level = control.pump_session_nesting_level;
+        if control.finish_request_state == DocumentParserFinishRequestState::Admitted {
+            // A continuation admission is a one-shot finish authority, not a
+            // blanket permit for arbitrary subsequent parser work.
+            control.finish_request_state = DocumentParserFinishRequestState::Requested;
+        }
         drop(control);
         DocumentParserPumpGuard {
             control: self.clone(),
-            epoch,
+            nesting_level,
         }
     }
 
     fn begin_finish(&self) {
         let mut control = self.0.borrow_mut();
         assert_eq!(
-            control.run_state,
-            DocumentParserRunState::Ready,
+            control.lifecycle_state,
+            DocumentParserLifecycleState::Ready,
             "a suspended or stopped live parser cannot finish"
         );
-        control.run_state = DocumentParserRunState::Finishing;
+        assert!(
+            control.pump_session_nesting_level == 0,
+            "a live parser cannot finish inside an active pump session"
+        );
+        assert_eq!(
+            control.parser_script_nesting_level, 0,
+            "a live parser cannot finish while a parser-connected script is executing"
+        );
+        assert!(
+            matches!(
+                control.finish_request_state,
+                DocumentParserFinishRequestState::Requested
+                    | DocumentParserFinishRequestState::Admitted
+            ),
+            "parser finish requires an undelayed finish request"
+        );
+        control.lifecycle_state = DocumentParserLifecycleState::Finishing;
     }
 
     fn finish(&self) {
         let mut control = self.0.borrow_mut();
         assert_eq!(
-            control.run_state,
-            DocumentParserRunState::Finishing,
+            control.lifecycle_state,
+            DocumentParserLifecycleState::Finishing,
             "parser finish must complete the active finishing transition"
         );
-        control.run_state = DocumentParserRunState::Finished;
+        control.lifecycle_state = DocumentParserLifecycleState::Finished;
     }
 
     pub(crate) fn stop(&self, reason: ParserStopReason) {
         let mut control = self.0.borrow_mut();
         if !matches!(
-            control.run_state,
-            DocumentParserRunState::Finished | DocumentParserRunState::Stopped(_)
+            control.lifecycle_state,
+            DocumentParserLifecycleState::Finished | DocumentParserLifecycleState::Stopped(_)
         ) {
-            control.run_state = DocumentParserRunState::Stopped(reason);
+            control.lifecycle_state = DocumentParserLifecycleState::Stopped(reason);
         }
     }
 }
 
 pub(crate) struct DocumentParserPumpGuard {
     control: DocumentParserSessionControlHandle,
-    epoch: u64,
+    nesting_level: usize,
+}
+
+pub(crate) struct DocumentParserScriptNestingGuard {
+    control: DocumentParserSessionControlHandle,
+}
+
+impl Drop for DocumentParserScriptNestingGuard {
+    fn drop(&mut self) {
+        let mut control = self.control.0.borrow_mut();
+        assert!(
+            control.parser_script_nesting_level > 0,
+            "parser script nesting guard exited without matching enter"
+        );
+        control.parser_script_nesting_level -= 1;
+    }
 }
 
 impl Drop for DocumentParserPumpGuard {
     fn drop(&mut self) {
         let mut control = self.control.0.borrow_mut();
-        if control.run_state == (DocumentParserRunState::Pumping { epoch: self.epoch }) {
-            control.run_state = DocumentParserRunState::Ready;
-        }
+        assert_eq!(
+            control.pump_session_nesting_level, self.nesting_level,
+            "live parser pump sessions must unwind in stack order"
+        );
+        control.pump_session_nesting_level -= 1;
     }
 }
 
@@ -434,6 +605,15 @@ impl std::fmt::Debug for DocumentParserSession {
             .field("lifetime", &self.lifetime)
             .field("session_id", &self.control.session_id())
             .field("run_state", &self.control.run_state())
+            .field(
+                "pump_session_nesting_level",
+                &self.control.pump_session_nesting_level(),
+            )
+            .field(
+                "parser_script_nesting_level",
+                &self.control.parser_script_nesting_level(),
+            )
+            .field("finish_request_state", &self.control.finish_request_state())
             .finish_non_exhaustive()
     }
 }
@@ -571,6 +751,20 @@ impl DocumentParserSession {
         self.control.run_state()
     }
 
+    pub(crate) fn finish_request_state(&self) -> DocumentParserFinishRequestState {
+        self.control.finish_request_state()
+    }
+
+    pub(crate) fn can_finish_now(&self) -> bool {
+        self.run_state() == DocumentParserRunState::Ready
+            && self.control.parser_script_nesting_level() == 0
+            && matches!(
+                self.finish_request_state(),
+                DocumentParserFinishRequestState::Requested
+                    | DocumentParserFinishRequestState::Admitted
+            )
+    }
+
     pub(crate) fn control_handle(&self) -> DocumentParserSessionControlHandle {
         self.control.clone()
     }
@@ -609,7 +803,10 @@ impl DocumentParserSession {
 
     pub(crate) fn request_close(&mut self) -> DocumentParserCloseDisposition {
         self.lifetime = DocumentParserLifetime::Closing;
-        if self.run_state() == DocumentParserRunState::Ready {
+        self.control.request_finish();
+        if self.run_state() == DocumentParserRunState::Ready
+            && self.control.parser_script_nesting_level() == 0
+        {
             DocumentParserCloseDisposition::DrainNow
         } else {
             DocumentParserCloseDisposition::DeferredUntilReady
@@ -628,14 +825,29 @@ impl DocumentParserSession {
     }
 
     pub(crate) fn suspension_cause(&self) -> Option<ParserSuspensionCause> {
-        self.run_state().suspension().map(|pause| pause.cause)
+        match self.run_state() {
+            DocumentParserRunState::Suspended { cause, .. } => Some(cause),
+            _ => None,
+        }
     }
 
-    pub(crate) fn has_exclusive_stream_handle(&self) -> bool {
-        match self.backend() {
-            ExecutableDocumentParserBackend::Html(stream) => Rc::strong_count(stream) == 1,
-            ExecutableDocumentParserBackend::Xml(stream) => Rc::strong_count(stream) == 1,
+    /// Record that no more ordinary outer input will arrive. Whether this can
+    /// finish synchronously is decided later, after parser input is drained.
+    pub(crate) fn request_finish(&mut self) {
+        self.control.request_finish();
+    }
+
+    pub(crate) fn admit_delayed_finish_continuation(&mut self) -> bool {
+        self.control.admit_delayed_finish()
+    }
+
+    pub(crate) fn admit_delayed_finish_at_local_owner_boundary(&mut self) -> bool {
+        if self.run_state() != DocumentParserRunState::Ready
+            || self.control.parser_script_nesting_level() > 0
+        {
+            return false;
         }
+        self.control.admit_delayed_finish()
     }
 
     pub(crate) fn note_defined_autonomous_custom_elements(
@@ -1066,5 +1278,160 @@ mod session_state_tests {
             control.run_state(),
             DocumentParserRunState::Stopped(ParserStopReason::OwnerDropped)
         );
+    }
+
+    #[test]
+    fn nested_pump_and_suspension_keep_finish_delayed_until_outermost_boundary() {
+        let mut parser = session();
+        let control = parser.control_handle();
+        parser.request_finish();
+
+        let outer_pump = control.begin_pump();
+        let outer_pump_state = control.run_state();
+        assert_eq!(control.pump_session_nesting_level(), 1);
+        parser.request_finish();
+        assert_eq!(
+            parser.finish_request_state(),
+            DocumentParserFinishRequestState::Delayed
+        );
+
+        let permit = parser.suspend(ParserSuspensionCause::ParserCreatedStylesheet {
+            owner: NativeNodeId::new(2),
+        });
+        assert!(matches!(
+            parser.run_state(),
+            DocumentParserRunState::Suspended { .. }
+        ));
+        assert_eq!(
+            control.pump_session_nesting_level(),
+            1,
+            "persistent suspension must not erase the resident outer pump frame"
+        );
+        assert!(parser.resume(permit));
+        assert_eq!(
+            parser.run_state(),
+            outer_pump_state,
+            "resuming a nested blocker must reveal the still-active outer pump"
+        );
+
+        {
+            let _nested_pump = control.begin_pump();
+            assert_eq!(control.pump_session_nesting_level(), 2);
+            assert_ne!(parser.run_state(), outer_pump_state);
+            assert!(!parser.admit_delayed_finish_at_local_owner_boundary());
+        }
+        assert_eq!(control.pump_session_nesting_level(), 1);
+        assert_eq!(parser.run_state(), outer_pump_state);
+        drop(outer_pump);
+
+        assert_eq!(control.pump_session_nesting_level(), 0);
+        assert_eq!(parser.run_state(), DocumentParserRunState::Ready);
+        assert!(parser.admit_delayed_finish_at_local_owner_boundary());
+        assert!(parser.can_finish_now());
+    }
+
+    #[test]
+    fn phase_one_finish_is_delayed_until_exact_continuation_admission() {
+        let mut parser = session();
+        let control = parser.control_handle();
+
+        {
+            let _pump = control.begin_pump();
+            parser.request_finish();
+        }
+        assert_eq!(
+            parser.finish_request_state(),
+            DocumentParserFinishRequestState::Delayed
+        );
+        assert!(
+            !parser.can_finish_now(),
+            "recording EOF must not grant parser destruction authority"
+        );
+
+        assert!(parser.admit_delayed_finish_continuation());
+        assert_eq!(
+            parser.finish_request_state(),
+            DocumentParserFinishRequestState::Admitted
+        );
+        assert!(parser.can_finish_now());
+        assert!(
+            !parser.admit_delayed_finish_continuation(),
+            "one selected continuation can only admit the delayed finish once"
+        );
+    }
+
+    #[test]
+    fn parser_script_nesting_blocks_a_requested_finish() {
+        let mut parser = DocumentParserSession::start_open_live_document(
+            Url::parse("https://parser-session.test/").expect("test URL"),
+            NativeNodeId::new(1),
+        );
+        let control = parser.control_handle();
+        let nesting = control.enter_parser_script_nesting();
+
+        assert_eq!(
+            parser.request_close(),
+            DocumentParserCloseDisposition::DeferredUntilReady
+        );
+
+        assert_eq!(control.parser_script_nesting_level(), 1);
+        assert_eq!(
+            parser.finish_request_state(),
+            DocumentParserFinishRequestState::Delayed
+        );
+        assert!(!parser.can_finish_now());
+
+        drop(nesting);
+        assert_eq!(control.parser_script_nesting_level(), 0);
+        assert!(
+            !parser.can_finish_now(),
+            "leaving script execution must not silently erase the delayed-end fact"
+        );
+        assert!(parser.admit_delayed_finish_at_local_owner_boundary());
+        assert!(parser.can_finish_now());
+    }
+
+    #[test]
+    fn completed_parser_script_does_not_delay_a_preexisting_finish_request() {
+        let mut parser = session();
+        let control = parser.control_handle();
+
+        parser.request_finish();
+        let nesting = control.enter_parser_script_nesting();
+        assert!(!parser.can_finish_now());
+        drop(nesting);
+
+        assert_eq!(
+            parser.finish_request_state(),
+            DocumentParserFinishRequestState::Requested
+        );
+        assert!(parser.can_finish_now());
+    }
+
+    #[test]
+    fn new_parser_work_consumes_delayed_finish_admission() {
+        let mut parser = session();
+        let control = parser.control_handle();
+        let nesting = control.enter_parser_script_nesting();
+        parser.request_finish();
+        drop(nesting);
+        assert!(parser.admit_delayed_finish_continuation());
+
+        {
+            let _pump = control.begin_pump();
+            assert_eq!(
+                parser.finish_request_state(),
+                DocumentParserFinishRequestState::Requested
+            );
+        }
+        let permit = parser.suspend(ParserSuspensionCause::ParserCreatedStylesheet {
+            owner: NativeNodeId::new(2),
+        });
+        assert_eq!(
+            parser.finish_request_state(),
+            DocumentParserFinishRequestState::Delayed
+        );
+        assert!(parser.resume(permit));
+        assert!(!parser.can_finish_now());
     }
 }

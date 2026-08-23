@@ -14,7 +14,7 @@ use super::parser_blocking_task::{
     MainParserBlockingNextAction,
 };
 use super::*;
-use crate::document_runtime::ParserInsertionController;
+use crate::document_runtime::ParserConnectedScriptBridge;
 use crate::document_script_scheduler::{
     DocumentScriptExecutionOutcome, ParserClassicDocumentScriptCompletionPlan,
     ParserClassicDocumentScriptContinuation, ParserClassicDocumentScriptExecutionHooks,
@@ -33,7 +33,7 @@ use crate::script_vm::{
 pub(super) struct MainParserBlockingDocumentScriptOwner<'page, 'runner> {
     page_vm: &'page mut PageVm,
     pending_runner: &'runner mut PendingParsingBlockingClassicScriptRunner,
-    parser_insertion_controller: Option<ParserInsertionController>,
+    parser_bridge: Option<ParserConnectedScriptBridge>,
     log_message: &'static str,
 }
 
@@ -59,13 +59,13 @@ impl<'page, 'runner> MainParserBlockingDocumentScriptOwner<'page, 'runner> {
     pub(super) fn new(
         page_vm: &'page mut PageVm,
         pending_runner: &'runner mut PendingParsingBlockingClassicScriptRunner,
-        parser_insertion_controller: Option<ParserInsertionController>,
+        parser_bridge: Option<ParserConnectedScriptBridge>,
         log_message: &'static str,
     ) -> Self {
         Self {
             page_vm,
             pending_runner,
-            parser_insertion_controller,
+            parser_bridge,
             log_message,
         }
     }
@@ -149,9 +149,9 @@ impl ParserClassicDocumentScriptExecutionHooks
         let owner = &mut **self;
         let script_handle = ready_script.script_handle();
         let completion_target = *ready_script.target();
-        let parser_insertion_controller = owner.parser_insertion_controller.clone();
+        let parser_bridge = owner.parser_bridge.clone();
         let mut begin_owner = MainParserBlockingBeginExecutionOwner {
-            parser_insertion_controller,
+            parser_bridge,
             completion_target,
         };
         let Some(execution_entry) = owner
@@ -186,7 +186,7 @@ impl ParserClassicDocumentScriptExecutionHooks
             let completion_target = target.completion_target();
             let live_execution = ParseTimeLiveExecution::ParserOwnedClassicScript {
                 execution_context: ParserOwnedClassicScriptExecutionContext::ParserBlocking {
-                    insertion_controller: target.parser_insertion_controller(),
+                    parser_bridge: target.parser_bridge(),
                 },
                 script: Box::new(executable_script.into_prepared_script()),
             };
@@ -272,7 +272,7 @@ impl ParserClassicDocumentScriptExecutionHooks
         let completion = MainParserBlockingClassicScriptCompletionAction::new(
             target,
             ParserOwnedClassicScriptCompletion::parser_blocking_source_failure(
-                owner.parser_insertion_controller.clone(),
+                owner.parser_bridge.clone(),
                 event,
             ),
         );

@@ -883,6 +883,8 @@ impl JsContextHost {
         document_handle: DomHandle,
         mut parser: DocumentParserSession,
     ) -> Option<crate::frame_owner_model::FrameDocumentInteractiveLifecycleAction> {
+        parser.request_finish();
+        let _ = parser.admit_delayed_finish_at_local_owner_boundary();
         let finish_signals = {
             let mut owner = ChildFrameLiveParserOwner::new(self, scope, document_handle);
             parser.finish(&mut owner)

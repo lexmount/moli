@@ -1,7 +1,7 @@
 use super::parser_blocking_pending::{
     PendingParsingBlockingClassicScript, PendingParsingBlockingClassicScriptContext,
 };
-use crate::document_runtime::ParserInsertionController;
+use crate::document_runtime::ParserConnectedScriptBridge;
 use crate::document_script_scheduler::{
     MainDocumentClassicReadyWork, MainDocumentClassicScriptTarget,
     MainDocumentClassicSourceFailureWork,
@@ -61,23 +61,23 @@ impl MainParserBlockingClassicScriptCompletionAction {
 
 #[derive(Clone)]
 pub(super) struct MainParserBlockingClassicScriptExecutionTarget {
-    parser_insertion_controller: Option<ParserInsertionController>,
+    parser_bridge: Option<ParserConnectedScriptBridge>,
     completion_target: MainDocumentClassicScriptTarget,
 }
 
 impl MainParserBlockingClassicScriptExecutionTarget {
     pub(super) fn new(
-        parser_insertion_controller: Option<ParserInsertionController>,
+        parser_bridge: Option<ParserConnectedScriptBridge>,
         completion_target: MainDocumentClassicScriptTarget,
     ) -> Self {
         Self {
-            parser_insertion_controller,
+            parser_bridge,
             completion_target,
         }
     }
 
-    pub(super) fn parser_insertion_controller(&self) -> Option<ParserInsertionController> {
-        self.parser_insertion_controller.clone()
+    pub(super) fn parser_bridge(&self) -> Option<ParserConnectedScriptBridge> {
+        self.parser_bridge.clone()
     }
 
     pub(super) fn completion_target(&self) -> MainDocumentClassicScriptTarget {
@@ -94,15 +94,12 @@ pub(super) fn main_parser_blocking_ready_action(
 }
 
 pub(super) fn main_parser_blocking_begin_execution_action(
-    parser_insertion_controller: Option<ParserInsertionController>,
+    parser_bridge: Option<ParserConnectedScriptBridge>,
     completion_target: MainDocumentClassicScriptTarget,
     action: ParserPendingClassicScriptBeginExecutionAction,
 ) -> MainParserBlockingClassicScriptExecutionEntry {
     ParserClassicScriptBeginExecutionAction::from_pending_begin_execution_action(
-        MainParserBlockingClassicScriptExecutionTarget::new(
-            parser_insertion_controller,
-            completion_target,
-        ),
+        MainParserBlockingClassicScriptExecutionTarget::new(parser_bridge, completion_target),
         action,
     )
 }

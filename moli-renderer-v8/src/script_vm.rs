@@ -5810,7 +5810,7 @@ impl ScriptVm {
             .set_current_script_context(CurrentScriptContextSpec {
                 handle: run_input.current_script,
                 parser_write_insertion_point_active: run_input.parser_write_insertion_point_active,
-                parser_insertion_controller: None,
+                parser_bridge: None,
             });
         let document_owner_before_run =
             self.current_main_document_task_owner().ok_or_else(|| {
@@ -7932,12 +7932,12 @@ impl ScriptVm {
                 );
             }
         };
-        let parser_insertion_controller = match (
+        let parser_bridge = match (
             run_input.current_script,
             run_input.parser_write_insertion_point_active,
-            execution_context.parser_insertion_controller(),
+            execution_context.parser_bridge(),
         ) {
-            (Some(_), true, Some(controller)) => Some(controller.clone()),
+            (Some(_), true, Some(bridge)) => Some(bridge.clone()),
             _ => None,
         };
         // XML parser-blocking scripts have a currentScript and use the same
@@ -7945,12 +7945,12 @@ impl ScriptVm {
         // Absence of a controller therefore means document.write is inactive;
         // it must not suppress otherwise valid XHTML/SVG script execution.
         let parser_write_insertion_point_active =
-            run_input.parser_write_insertion_point_active && parser_insertion_controller.is_some();
+            run_input.parser_write_insertion_point_active && parser_bridge.is_some();
         self.document_runtime
             .set_current_script_context(CurrentScriptContextSpec {
                 handle: run_input.current_script,
                 parser_write_insertion_point_active,
-                parser_insertion_controller,
+                parser_bridge,
             });
         let document_owner_before_run = self
             .current_main_document_task_owner()
@@ -8066,7 +8066,7 @@ impl ScriptVm {
             .set_current_script_context(CurrentScriptContextSpec {
                 handle: run_input.current_script,
                 parser_write_insertion_point_active: run_input.parser_write_insertion_point_active,
-                parser_insertion_controller: None,
+                parser_bridge: None,
             });
         let result = self
             .execute_prepared_script_run_body(script, run_input.body)

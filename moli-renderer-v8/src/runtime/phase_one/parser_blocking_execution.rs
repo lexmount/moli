@@ -3,7 +3,7 @@ use super::parser_blocking_owner::MainParserBlockingExecutionGateOwner;
 use super::parser_blocking_pending::PendingParsingBlockingClassicScriptRunner;
 use super::parser_blocking_task::PendingParsingBlockingClassicScriptBlockedOnExecution;
 use super::*;
-use crate::document_runtime::ParserInsertionController;
+use crate::document_runtime::ParserConnectedScriptBridge;
 use crate::document_script_scheduler::DocumentScriptExecutionOutcome;
 use crate::live_document_parser::{DocumentParserSession, ParserStopReason};
 use crate::parser_script::owner::ParserScriptExecutionBlocker;
@@ -60,7 +60,7 @@ pub(super) async fn resolve_main_parser_blocking_classic_after_runtime_gate(
         parser_session.stop(ParserStopReason::DocumentReplacement);
         return Ok(MainParserBlockingExecutionOutcome::StoppedCurrentDocument);
     }
-    let parser_insertion_controller = ParserInsertionController::for_session(parser_session);
+    let parser_bridge = ParserConnectedScriptBridge::for_session(parser_session);
     page_vm.vm_mut().sync_live_document_style_sources();
     let next_projection = {
         let mut owner = MainParserBlockingExecutionGateOwner { page_vm };
@@ -70,7 +70,7 @@ pub(super) async fn resolve_main_parser_blocking_classic_after_runtime_gate(
     let mut document_script_owner = MainParserBlockingDocumentScriptOwner::new(
         page_vm,
         pending_runner,
-        parser_insertion_controller,
+        parser_bridge,
         log_message,
     );
     let action = match next_projection {

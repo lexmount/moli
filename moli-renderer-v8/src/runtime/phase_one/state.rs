@@ -39,6 +39,14 @@ impl ParseTimeDriverState {
             input_closed: false,
         }
     }
+
+    pub(super) fn close_input(&mut self) {
+        if self.input_closed {
+            return;
+        }
+        self.parser_session.request_finish();
+        self.input_closed = true;
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -225,6 +233,10 @@ impl ConcurrentParseTimeRuntime {
         {
             return false;
         }
+        let _ = self
+            .state
+            .parser_session
+            .admit_delayed_finish_continuation();
         self.owner = ParseTimeOwner::Parser;
         self.parser_step_ready = true;
         self.pending_parsing_blocking_wait = PendingParsingBlockingWait::None;

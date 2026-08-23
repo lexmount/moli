@@ -30,7 +30,7 @@ impl DocumentRuntime {
         host_ptr: *mut JsContextHost,
         node: DomHandle,
         mut script: PreparedScript,
-        parser_insertion_controller: Option<ParserInsertionController>,
+        parser_bridge: Option<ParserConnectedScriptBridge>,
     ) -> DocumentWriteScriptRunOutcome {
         if !self
             .dom_host
@@ -110,7 +110,7 @@ impl DocumentRuntime {
                 node,
                 &host_script_handle,
                 source,
-                parser_insertion_controller,
+                parser_bridge,
                 DocumentWriteCurrentScriptEventBehavior::Skip,
             );
             DocumentWriteScriptRunOutcome::Complete
@@ -121,7 +121,7 @@ impl DocumentRuntime {
                 node,
                 &host_script_handle,
                 script,
-                parser_insertion_controller,
+                parser_bridge,
             )
         }
     }
@@ -133,13 +133,13 @@ impl DocumentRuntime {
         node: DomHandle,
         host_script_handle: &str,
         source: String,
-        parser_insertion_controller: Option<ParserInsertionController>,
+        parser_bridge: Option<ParserConnectedScriptBridge>,
         current_script_event_behavior: DocumentWriteCurrentScriptEventBehavior,
     ) {
         self.set_current_script_context(CurrentScriptContextSpec {
             handle: Some(node),
             parser_write_insertion_point_active: true,
-            parser_insertion_controller,
+            parser_bridge,
         });
         // A parser-created script belongs to the document's main world even
         // when an isolated/utility world called document.write(). Blink's
@@ -211,7 +211,7 @@ impl DocumentRuntime {
         node: DomHandle,
         host_script_handle: &str,
         script: PreparedScript,
-        parser_insertion_controller: Option<ParserInsertionController>,
+        parser_bridge: Option<ParserConnectedScriptBridge>,
     ) -> DocumentWriteScriptRunOutcome {
         if script.kind == ScriptKind::ImportMap
             && script.source_kind == crate::ScriptSourceKind::Inline
@@ -288,7 +288,7 @@ impl DocumentRuntime {
             node,
             host_script_handle,
             source,
-            parser_insertion_controller,
+            parser_bridge,
             DocumentWriteCurrentScriptEventBehavior::DispatchImmediately(ScriptEventKind::Load),
         );
         DocumentWriteScriptRunOutcome::Complete

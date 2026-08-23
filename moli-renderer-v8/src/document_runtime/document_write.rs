@@ -372,24 +372,21 @@ impl DocumentRuntime {
             || self
                 .root_document_parser
                 .as_ref()
-                .is_some_and(|parser| parser.run_state() != DocumentParserRunState::Ready)
-            || self
-                .root_document_parser
-                .as_ref()
                 .is_some_and(|parser| !parser.input_is_empty())
         {
             return false;
         }
-        // A speculative script preload can complete before a blocking
-        // stylesheet. Resuming that stylesheet may then consume the ready
-        // script synchronously while an outer parser pump still owns this
-        // stream. EOF is real, but finalization must wait until that recovery
-        // stack unwinds and the root controller is again the sole owner.
-        if self
+        let parser = self
             .root_document_parser
-            .as_ref()
-            .is_some_and(|parser| !parser.has_exclusive_stream_handle())
-        {
+            .as_mut()
+            .expect("closing root parser existence was checked");
+        // This is an actual attempt to end, not merely the earlier close/EOF
+        // notification. If it overlaps a pump, suspension, or parser script,
+        // retain that fact so the next owner boundary must explicitly admit
+        // the delayed finish.
+        parser.request_finish();
+        let _ = parser.admit_delayed_finish_at_local_owner_boundary();
+        if !parser.can_finish_now() {
             return false;
         }
         let Some(mut parser) = self.root_document_parser.take() else {
@@ -1311,12 +1308,14 @@ impl DocumentRuntime {
         };
         pending
             .insertion
-            .parser_insertion_controller
+            .parser_bridge
+            .insertion_controller()
             .input_session()
             .enqueue_script_input_html(html.to_owned());
         pending
             .insertion
-            .parser_insertion_controller
+            .parser_bridge
+            .insertion_controller()
             .input_session()
             .enqueue_script_input_preload_html(html.to_owned());
         true
@@ -1331,12 +1330,14 @@ impl DocumentRuntime {
         };
         pending
             .insertion
-            .parser_insertion_controller
+            .parser_bridge
+            .insertion_controller()
             .input_session()
             .enqueue_script_input_html(html.to_owned());
         pending
             .insertion
-            .parser_insertion_controller
+            .parser_bridge
+            .insertion_controller()
             .input_session()
             .enqueue_script_input_preload_html(html.to_owned());
         true
@@ -1348,12 +1349,14 @@ impl DocumentRuntime {
         };
         pending
             .insertion
-            .parser_insertion_controller
+            .parser_bridge
+            .insertion_controller()
             .input_session()
             .enqueue_script_input_html(html.to_owned());
         pending
             .insertion
-            .parser_insertion_controller
+            .parser_bridge
+            .insertion_controller()
             .input_session()
             .enqueue_script_input_preload_html(html.to_owned());
         true
@@ -1485,11 +1488,11 @@ impl DocumentRuntime {
     ) -> bool {
         match continuation {
             SuspendedDocumentWriteContinuation::ResumeAfterCompleted { start, insertion } => {
-                let parser_insertion_controller = insertion.parser_insertion_controller.clone();
+                let parser_bridge = insertion.parser_bridge.clone();
                 self.set_current_script_context(CurrentScriptContextSpec {
                     handle: Some(start.node),
                     parser_write_insertion_point_active: true,
-                    parser_insertion_controller: Some(parser_insertion_controller),
+                    parser_bridge: Some(parser_bridge),
                 });
                 let changed =
                     self.resume_suspended_document_write_insertion(scope, host_ptr, insertion);
@@ -1545,14 +1548,17 @@ impl DocumentRuntime {
             tracing::debug!(
                 document_handle = ?insertion.document_handle,
                 permit = ?insertion.resume_permit,
-                run_state = ?insertion.parser_insertion_controller.run_state(),
+                run_state = ?insertion.parser_bridge.run_state(),
                 "dropping stale document.write parser continuation"
             );
             return false;
         }
         let mut changed = false;
 
-        let parser_input_session = insertion.parser_insertion_controller.input_session();
+        let parser_input_session = insertion
+            .parser_bridge
+            .insertion_controller()
+            .input_session();
         while let Some(script_input_html) = parser_input_session.take_next_script_input_html() {
             if self.write_html_via_parser_stream(
                 scope,
@@ -1560,7 +1566,7 @@ impl DocumentRuntime {
                 insertion.document_handle,
                 &script_input_html,
                 false,
-                &insertion.parser_insertion_controller,
+                &insertion.parser_bridge,
             ) {
                 changed = true;
             }
@@ -1581,7 +1587,7 @@ impl DocumentRuntime {
                 insertion.document_handle,
                 "",
                 true,
-                &insertion.parser_insertion_controller,
+                &insertion.parser_bridge,
             ) {
                 changed = true;
             }
@@ -1589,10 +1595,9 @@ impl DocumentRuntime {
                 return true;
             }
             if !insertion
-                .parser_insertion_controller
-                .parser_stream()
-                .borrow()
-                .has_pending_input()
+                .parser_bridge
+                .insertion_controller()
+                .with_parser_stream(DocumentStream::has_pending_input)
             {
                 break;
             }
@@ -1605,14 +1610,13 @@ impl DocumentRuntime {
         insertion: &mut SuspendedDocumentWriteInsertion,
     ) -> bool {
         if insertion.resume_permit_consumed {
-            return insertion.parser_insertion_controller.run_state()
-                == DocumentParserRunState::Ready;
+            return insertion.parser_bridge.run_state() == DocumentParserRunState::Ready;
         }
-        let resumed = match insertion.parser_insertion_controller.run_state() {
+        let resumed = match insertion.parser_bridge.run_state() {
             DocumentParserRunState::Ready => false,
-            DocumentParserRunState::Suspended { .. } => insertion
-                .parser_insertion_controller
-                .resume(insertion.resume_permit),
+            DocumentParserRunState::Suspended { .. } => {
+                insertion.parser_bridge.resume(insertion.resume_permit)
+            }
             DocumentParserRunState::Pumping { .. }
             | DocumentParserRunState::Finishing
             | DocumentParserRunState::Finished
@@ -1628,7 +1632,7 @@ impl DocumentRuntime {
         insertion: &mut SuspendedDocumentWriteInsertion,
         cause: ParserSuspensionCause,
     ) {
-        insertion.resume_permit = insertion.parser_insertion_controller.suspend(cause);
+        insertion.resume_permit = insertion.parser_bridge.suspend(cause);
         insertion.resume_permit_consumed = false;
     }
 
@@ -1731,7 +1735,7 @@ impl DocumentRuntime {
             tracing::debug!(
                 target = ?completion_target,
                 permit = ?insertion.resume_permit,
-                run_state = ?insertion.parser_insertion_controller.run_state(),
+                run_state = ?insertion.parser_bridge.run_state(),
                 "rejecting document.write external-script terminal for a stale parser suspension"
             );
             return super::DocumentWriteExternalScriptLoadApplication::RejectedStaleTarget;
@@ -1778,7 +1782,7 @@ impl DocumentRuntime {
                         start.node,
                         &start.host_script_handle,
                         source,
-                        Some(insertion.parser_insertion_controller.clone()),
+                        Some(insertion.parser_bridge.clone()),
                         DocumentWriteCurrentScriptEventBehavior::DispatchImmediately(
                             ScriptEventKind::Load,
                         ),
@@ -1872,13 +1876,13 @@ impl DocumentRuntime {
     fn take_suspended_document_write_insertion(
         &mut self,
         document_handle: DomHandle,
-        parser_insertion_controller: &ParserInsertionController,
+        parser_bridge: &ParserConnectedScriptBridge,
         cause: ParserSuspensionCause,
     ) -> SuspendedDocumentWriteInsertion {
         SuspendedDocumentWriteInsertion {
             document_handle,
-            parser_insertion_controller: parser_insertion_controller.clone(),
-            resume_permit: parser_insertion_controller.suspend(cause),
+            parser_bridge: parser_bridge.clone(),
+            resume_permit: parser_bridge.suspend(cause),
             resume_permit_consumed: false,
         }
     }
@@ -1886,7 +1890,7 @@ impl DocumentRuntime {
     fn suspend_document_write_stylesheet_blocked_script(
         &mut self,
         document_handle: DomHandle,
-        parser_insertion_controller: &ParserInsertionController,
+        parser_bridge: &ParserConnectedScriptBridge,
         node: DomHandle,
         start_line: u64,
         start_column: u64,
@@ -1902,7 +1906,7 @@ impl DocumentRuntime {
         let _ = self.dom_host_mut().set_script_already_started(node, true);
         let insertion = self.take_suspended_document_write_insertion(
             document_handle,
-            parser_insertion_controller,
+            parser_bridge,
             ParserSuspensionCause::ParserClassicStylesheets { script: node },
         );
         self.pending_document_write_stylesheet_blocked_script =
@@ -1921,7 +1925,7 @@ impl DocumentRuntime {
         &mut self,
         host_ptr: *mut JsContextHost,
         document_handle: DomHandle,
-        parser_insertion_controller: &ParserInsertionController,
+        parser_bridge: &ParserConnectedScriptBridge,
         stylesheet_owner: DomHandle,
         blocking_signatures: HashSet<DocumentBlockingStylesheetSignature>,
     ) -> bool {
@@ -1932,15 +1936,14 @@ impl DocumentRuntime {
         );
         let insertion = self.take_suspended_document_write_insertion(
             document_handle,
-            parser_insertion_controller,
+            parser_bridge,
             ParserSuspensionCause::ParserCreatedStylesheet {
                 owner: stylesheet_owner,
             },
         );
-        let preload_html = parser_insertion_controller
-            .parser_stream()
-            .borrow()
-            .snapshot_pending_input();
+        let preload_html = parser_bridge
+            .insertion_controller()
+            .with_parser_stream(DocumentStream::snapshot_pending_input);
         self.scan_document_write_script_preloads(host_ptr, &preload_html, true);
         self.pending_document_write_stylesheet_parser_pause =
             Some(PendingDocumentWriteStylesheetParserPause {
@@ -1955,7 +1958,7 @@ impl DocumentRuntime {
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
         document_handle: DomHandle,
-        parser_insertion_controller: &ParserInsertionController,
+        parser_bridge: &ParserConnectedScriptBridge,
         node: DomHandle,
         start_line: u64,
         start_column: u64,
@@ -1970,14 +1973,14 @@ impl DocumentRuntime {
                 host_ptr,
                 node,
                 script,
-                Some(parser_insertion_controller.clone()),
+                Some(parser_bridge.clone()),
             )
         else {
             return false;
         };
         let insertion = self.take_suspended_document_write_insertion(
             document_handle,
-            parser_insertion_controller,
+            parser_bridge,
             ParserSuspensionCause::DocumentWriteExternalScript { script: node },
         );
         self.start_document_write_external_script_load(
@@ -2051,14 +2054,14 @@ impl DocumentRuntime {
             host_ptr,
             node,
             script,
-            Some(insertion.parser_insertion_controller.clone()),
+            Some(insertion.parser_bridge.clone()),
         ) {
             DocumentWriteScriptRunOutcome::Complete => {
-                let parser_insertion_controller = insertion.parser_insertion_controller.clone();
+                let parser_bridge = insertion.parser_bridge.clone();
                 self.set_current_script_context(CurrentScriptContextSpec {
                     handle: Some(node),
                     parser_write_insertion_point_active: true,
-                    parser_insertion_controller: Some(parser_insertion_controller),
+                    parser_bridge: Some(parser_bridge),
                 });
                 let _ = self.resume_suspended_document_write_insertion(scope, host_ptr, insertion);
                 self.clear_current_script_handle();
@@ -2087,7 +2090,7 @@ impl DocumentRuntime {
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
         document_handle: DomHandle,
-        parser_insertion_controller: &ParserInsertionController,
+        parser_bridge: &ParserConnectedScriptBridge,
         node: DomHandle,
         start_line: u64,
         start_column: u64,
@@ -2100,7 +2103,7 @@ impl DocumentRuntime {
             host_ptr,
             node,
             script,
-            Some(parser_insertion_controller.clone()),
+            Some(parser_bridge.clone()),
         ) {
             DocumentWriteScriptRunOutcome::Complete => {
                 self.has_pending_document_write_parser_blocking_work()
@@ -2110,7 +2113,7 @@ impl DocumentRuntime {
                     scope,
                     host_ptr,
                     document_handle,
-                    parser_insertion_controller,
+                    parser_bridge,
                     start,
                 ),
         }
@@ -2286,13 +2289,13 @@ impl DocumentRuntime {
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
         document_handle: DomHandle,
-        parser_insertion_controller: &ParserInsertionController,
+        parser_bridge: &ParserConnectedScriptBridge,
         start: Box<DocumentWriteExternalScriptStart>,
     ) -> bool {
         let script = start.node;
         let insertion = self.take_suspended_document_write_insertion(
             document_handle,
-            parser_insertion_controller,
+            parser_bridge,
             ParserSuspensionCause::DocumentWriteExternalScript { script },
         );
         self.start_document_write_external_script_load(
@@ -2309,7 +2312,7 @@ impl DocumentRuntime {
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
         document_handle: DomHandle,
-        parser_insertion_controller: &ParserInsertionController,
+        parser_bridge: &ParserConnectedScriptBridge,
         handoff: ParserScriptHandoff,
     ) -> bool {
         match handoff {
@@ -2328,7 +2331,7 @@ impl DocumentRuntime {
                             scope,
                             host_ptr,
                             document_handle,
-                            parser_insertion_controller,
+                            parser_bridge,
                             node_id,
                             start_line,
                             start_column,
@@ -2338,7 +2341,7 @@ impl DocumentRuntime {
                     } else {
                         self.suspend_document_write_stylesheet_blocked_script(
                             document_handle,
-                            parser_insertion_controller,
+                            parser_bridge,
                             node_id,
                             start_line,
                             start_column,
@@ -2351,7 +2354,7 @@ impl DocumentRuntime {
                         scope,
                         host_ptr,
                         document_handle,
-                        parser_insertion_controller,
+                        parser_bridge,
                         node_id,
                         start_line,
                         start_column,
@@ -2444,10 +2447,10 @@ impl DocumentRuntime {
         document_handle: DomHandle,
         html: &str,
         resume_existing_insertion: bool,
-        parser_insertion_controller: &ParserInsertionController,
+        parser_bridge: &ParserConnectedScriptBridge,
     ) -> bool {
-        let stream = parser_insertion_controller.parser_stream();
-        let parser_input_session = parser_insertion_controller.input_session();
+        let insertion_controller = parser_bridge.insertion_controller();
+        let parser_input_session = insertion_controller.input_session();
         parser_input_session.enqueue_script_input_preload_html(html.to_owned());
 
         let mut chunk = parser_input_session.take_current_script_input_html();
@@ -2455,12 +2458,17 @@ impl DocumentRuntime {
         if chunk.is_empty() && !resume_existing_insertion {
             return true;
         }
+        // One logical pump session includes processing the tokenizer yield and
+        // any synchronous parser continuation it triggers. In particular, a
+        // cache-hot external script can suspend and resume recursively before
+        // this call returns. Parser finalization must wait for the outermost
+        // pump frame, matching Blink's nested PumpTokenizer session boundary.
+        let _pump_guard = parser_bridge.begin_pump();
         let _parser_insertion_session = self.enter_parser_insertion_session();
         let mut begin_insertion = !chunk.is_empty();
 
         loop {
             let parser_step = {
-                let _pump_guard = parser_insertion_controller.begin_pump();
                 let input = if begin_insertion {
                     DocumentWriteParserPumpInput::Inserted(chunk.as_str())
                 } else if resume_existing_insertion && chunk.is_empty() {
@@ -2473,12 +2481,9 @@ impl DocumentRuntime {
                 } else {
                     DocumentWriteParserPumpInput::Ordinary(chunk.as_str())
                 };
-                self.pump_document_write_parser_step(
-                    scope,
-                    host_ptr,
-                    &mut stream.borrow_mut(),
-                    input,
-                )
+                insertion_controller.with_parser_stream_mut(|stream| {
+                    self.pump_document_write_parser_step(scope, host_ptr, stream, input)
+                })
             };
             let DocumentWriteParserPumpStep {
                 outcome:
@@ -2489,9 +2494,10 @@ impl DocumentRuntime {
                         discovered_blocking_stylesheet_inputs,
                     },
             } = parser_step;
-            let discovered_parser_meta_csp_candidates = stream
-                .borrow_mut()
-                .drain_discovered_parser_meta_csp_candidates();
+            let discovered_parser_meta_csp_candidates = insertion_controller
+                .with_parser_stream_mut(
+                    DocumentStream::drain_discovered_parser_meta_csp_candidates,
+                );
             for handle in &discovered_parser_meta_csp_candidates {
                 self.process_parser_meta_content_security_policy(*handle);
             }
@@ -2538,7 +2544,7 @@ impl DocumentRuntime {
                         && self.suspend_document_write_stylesheet_parser_pause(
                             host_ptr,
                             document_handle,
-                            parser_insertion_controller,
+                            parser_bridge,
                             pause.node_id,
                             blocking_signatures,
                         )
@@ -2551,7 +2557,7 @@ impl DocumentRuntime {
                         scope,
                         host_ptr,
                         document_handle,
-                        parser_insertion_controller,
+                        parser_bridge,
                         *handoff,
                     ) {
                         return true;
@@ -2651,11 +2657,11 @@ impl DocumentRuntime {
             return true;
         }
 
-        let parser_insertion_controller = self
+        let parser_bridge = self
             .root_document_parser
             .as_ref()
-            .and_then(ParserInsertionController::for_session)
-            .or_else(|| self.current_parser_insertion_controller())
+            .and_then(ParserConnectedScriptBridge::for_session)
+            .or_else(|| self.current_parser_bridge())
             .expect("document.write() must have a live root stream or parser insertion controller");
         self.write_html_via_parser_stream(
             scope,
@@ -2663,7 +2669,7 @@ impl DocumentRuntime {
             document_handle,
             html,
             false,
-            &parser_insertion_controller,
+            &parser_bridge,
         )
     }
 }
@@ -2755,7 +2761,11 @@ mod tests {
             .as_ref()
             .expect("root replacement parser session");
         assert_eq!(parser.lifetime(), DocumentParserLifetime::Open);
-        assert!(parser.has_exclusive_stream_handle());
+        assert_eq!(parser.run_state(), DocumentParserRunState::Ready);
+        assert_eq!(
+            parser.finish_request_state(),
+            crate::live_document_parser::DocumentParserFinishRequestState::NotRequested
+        );
     }
 
     #[test]

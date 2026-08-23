@@ -106,7 +106,7 @@ impl ConcurrentParseTimeRuntime {
                 service_worker_preload_context.as_ref(),
             );
         state.parser_session.queue_arrived_chunk(html);
-        state.input_closed = true;
+        state.close_input();
         let (state, page_vm, triggered_navigation) =
             Self::bootstrap_page_vm_from_state_on_fresh_local_task(
                 page_id,
@@ -189,7 +189,7 @@ impl ConcurrentParseTimeRuntime {
             );
         state.parser_session.queue_arrived_chunk(source);
         state.parser_session.declare_eof();
-        state.input_closed = true;
+        state.close_input();
         let (state, page_vm, triggered_navigation) =
             Self::bootstrap_page_vm_from_state_on_fresh_local_task(
                 page_id,

@@ -87,17 +87,16 @@ impl ScriptVm {
         let mut application = ParserOwnedClassicScriptCompletionApplication::default();
         application.note_completion_applied(evaluation);
         let terminal_activity = if let Some(task) = script_element_event {
-            let _parser_script_nesting = execution_context
-                .is_parser_blocking()
-                .then(|| self.document_runtime.enter_parser_script_nesting());
-            let parser_insertion_controller =
-                execution_context.parser_insertion_controller().cloned();
+            let parser_bridge = execution_context.parser_bridge().cloned();
             self.document_runtime
                 .set_current_script_context(CurrentScriptContextSpec {
                     handle: None,
-                    parser_write_insertion_point_active: parser_insertion_controller.is_some(),
-                    parser_insertion_controller,
+                    parser_write_insertion_point_active: parser_bridge.is_some(),
+                    parser_bridge,
                 });
+            let _parser_script_nesting = execution_context
+                .is_parser_blocking()
+                .then(|| self.document_runtime.enter_parser_script_nesting());
             let dispatch = self.dispatch_script_event_body(&task);
             self.document_runtime.clear_current_script_handle();
             match dispatch {

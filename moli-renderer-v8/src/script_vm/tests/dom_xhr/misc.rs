@@ -171,7 +171,7 @@ fn current_script_is_null_while_script_remains_in_shadow_tree() {
         .set_current_script_context(CurrentScriptContextSpec {
             handle: Some(outer),
             parser_write_insertion_point_active: false,
-            parser_insertion_controller: None,
+            parser_bridge: None,
         });
     vm.exec(
         r#"
@@ -220,7 +220,7 @@ fn current_script_is_null_while_script_remains_in_shadow_tree() {
         .set_current_script_context(CurrentScriptContextSpec {
             handle: Some(script),
             parser_write_insertion_point_active: false,
-            parser_insertion_controller: None,
+            parser_bridge: None,
         });
     assert_eq!(
         vm.eval("String(document.currentScript)")
@@ -235,7 +235,7 @@ fn current_script_is_null_while_script_remains_in_shadow_tree() {
         .set_current_script_context(CurrentScriptContextSpec {
             handle: Some(script),
             parser_write_insertion_point_active: false,
-            parser_insertion_controller: None,
+            parser_bridge: None,
         });
     assert_eq!(
         vm.eval("document.currentScript && document.currentScript.id")

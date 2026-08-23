@@ -3871,14 +3871,14 @@ document.body.setAttribute('data-error-state', [
     }
 
     #[test]
-    fn main_parser_finish_waits_for_transient_insertion_controller() {
+    fn main_parser_finish_waits_for_phase_one_continuation_boundary() {
         run_phase_one_large_stack_test(
-            "phase-one-main-parser-finish-after-insertion-controller",
-            main_parser_finish_waits_for_transient_insertion_controller_inner,
+            "phase-one-main-parser-finish-after-continuation-boundary",
+            main_parser_finish_waits_for_phase_one_continuation_boundary_inner,
         );
     }
 
-    fn main_parser_finish_waits_for_transient_insertion_controller_inner() {
+    fn main_parser_finish_waits_for_phase_one_continuation_boundary_inner() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -3891,12 +3891,22 @@ document.body.setAttribute('data-error-state', [
                 ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
             let loader = loader_owner.clone();
             let mut state = ParseTimeDriverState::new(final_url);
-            state.input_closed = true;
-            let insertion_controller =
-                crate::document_runtime::ParserInsertionController::for_session(
+            state.close_input();
+            let parser_bridge =
+                crate::document_runtime::ParserConnectedScriptBridge::for_session(
                     &state.parser_session,
                 )
-                .expect("HTML parser should expose an insertion controller");
+                .expect("HTML parser should expose a parser-connected script bridge");
+            let resume_permit = parser_bridge.suspend(
+                crate::live_document_parser::ParserSuspensionCause::ParserCreatedStylesheet {
+                    owner: crate::dom::native::NativeNodeId::new(1),
+                },
+            );
+            assert_eq!(
+                state.parser_session.finish_request_state(),
+                crate::live_document_parser::DocumentParserFinishRequestState::Delayed
+            );
+            assert!(parser_bridge.resume(resume_permit));
             let parser_dom_host = state
                 .parser_session
                 .stream_handle()
@@ -3923,13 +3933,18 @@ document.body.setAttribute('data-error-state', [
             let completion = ParseTimePhaseOnePump::new(phase_runtime)
                 .run_to_completion()
                 .await
-                .expect("borrowed parser stream should park instead of finishing");
+                .expect("EOF should park instead of finishing in the requesting turn");
             let super::loop_protocol::ParseTimeOwnerCompletion::PendingPageTask(
                 mut phase_runtime,
             ) = completion
             else {
-                panic!("borrowed parser stream should publish one continuation task");
+                panic!("EOF should publish one phase-one continuation task");
             };
+            assert_eq!(
+                phase_runtime.state.parser_session.finish_request_state(),
+                crate::live_document_parser::DocumentParserFinishRequestState::Delayed,
+                "the requesting turn must record an explicitly delayed finish"
+            );
             assert!(
                 phase_runtime
                     .page_vm
@@ -3947,7 +3962,6 @@ document.body.setAttribute('data-error-state', [
                 "deferred finish must cross a selected Page task boundary"
             );
 
-            drop(insertion_controller);
             let request_client = phase_runtime
                 .page_vm
                 .main_document_resource_loader()
@@ -3965,17 +3979,28 @@ document.body.setAttribute('data-error-state', [
                 "the exact deferred-finish continuation should remain selectable"
             );
 
+            // Keep the insertion bridge alive across finalization. Its weak
+            // stream capability must not participate in parser ownership.
             let completion = ParseTimePhaseOnePump::new(phase_runtime)
                 .run_to_completion()
                 .await
-                .expect("unborrowed parser stream should finish");
-            assert!(matches!(
-                completion,
-                super::loop_protocol::ParseTimeOwnerCompletion::AdvancePhase {
-                    reason: super::loop_protocol::ParseTimePhaseTransitionReason::ParserCompleted,
-                    ..
-                }
-            ));
+                .expect("admitted parser continuation should finish");
+            let super::loop_protocol::ParseTimeOwnerCompletion::AdvancePhase {
+                runtime,
+                reason: super::loop_protocol::ParseTimePhaseTransitionReason::ParserCompleted,
+            } = completion
+            else {
+                panic!("the admitted delayed finish should advance to phase two");
+            };
+            assert_eq!(
+                runtime.state.parser_session.run_state(),
+                crate::live_document_parser::DocumentParserRunState::Finished
+            );
+            assert_eq!(
+                runtime.state.parser_session.finish_request_state(),
+                crate::live_document_parser::DocumentParserFinishRequestState::Admitted
+            );
+            drop(parser_bridge);
         }));
     }
 
@@ -4605,14 +4630,14 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
                 );
             let mut pending_runner =
                 PendingParsingBlockingClassicScriptRunner::new_parser_blocking(Vec::new());
-            let parser_insertion_controller =
-                crate::document_runtime::ParserInsertionController::for_session(
+            let parser_bridge =
+                crate::document_runtime::ParserConnectedScriptBridge::for_session(
                     &state.parser_session,
                 );
             let mut owner = super::parser_blocking_document_script::MainParserBlockingDocumentScriptOwner::new(
                 &mut page_vm,
                 &mut pending_runner,
-                parser_insertion_controller,
+                parser_bridge,
                 "test source failure",
             );
 

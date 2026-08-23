@@ -246,7 +246,14 @@ impl ConcurrentParseTimeRuntime {
                                     && !state.parser_session.has_script_input()
                                 {
                                     if state.input_closed {
-                                        OwnerStepProgress::AdvancePhase
+                                        // Document work can expose EOF, but
+                                        // only the phase-one parser owner may
+                                        // request and claim finalization. Route
+                                        // through it so the exact continuation
+                                        // boundary remains mandatory.
+                                        *parser_step_ready = true;
+                                        *owner = ParseTimeOwner::Parser;
+                                        OwnerStepProgress::Continue
                                     } else {
                                         *owner = ParseTimeOwner::Parser;
                                         OwnerStepProgress::NeedMoreInput
