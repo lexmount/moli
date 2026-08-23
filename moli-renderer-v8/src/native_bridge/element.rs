@@ -578,7 +578,7 @@ use reflection::{
     property_dom_string_value, property_string_value, property_usv_string_value,
     remove_reflected_attribute, set_attribute_property_on_object_or_detached,
     set_boolean_attribute_property_on_object_or_detached,
-    set_dom_string_attribute_property_on_object,
+    set_dom_string_attribute_property_on_object, set_dom_string_attribute_property_utf16_on_object,
     set_nullable_dom_string_attribute_property_on_object, set_reflected_boolean_attribute,
     set_reflected_style_attribute_with_inline_base_url,
     set_usv_string_attribute_property_on_object,
@@ -6410,6 +6410,53 @@ pub(in crate::native_bridge) fn set_live_element_attribute_appending_to_current_
     did_set
 }
 
+pub(in crate::native_bridge) fn set_live_element_attribute_utf16_units_appending_to_current_reaction_queue(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+    name: &str,
+    value: &str,
+    units: Vec<u16>,
+) -> bool {
+    clear_detached_iframe_context_before_navigation_attribute_change(
+        scope,
+        runtime_ptr,
+        handle,
+        name,
+        Some(value),
+    );
+    let image_plan =
+        plan_image_attribute_mutation(unsafe { &*runtime_ptr }, handle, name, Some(value));
+    let runtime = unsafe { &mut *runtime_ptr };
+    let did_set = runtime.set_attribute_utf16_units_appending_to_current_reaction_queue(
+        scope,
+        runtime_ptr,
+        handle,
+        name,
+        value,
+        units,
+    );
+    if did_set && name.eq_ignore_ascii_case("style") {
+        runtime.set_element_inline_style_current_base_url(handle);
+    }
+    if did_set {
+        apply_image_attribute_mutation_plan(scope, runtime_ptr, image_plan);
+        if name.eq_ignore_ascii_case("loading") {
+            queue_image_load_event_for_loading_change(scope, runtime_ptr, handle);
+        }
+        queue_media_load_if_source_or_loading_change(scope, runtime_ptr, handle, name);
+        queue_text_track_load_if_source(scope, runtime_ptr, handle, name);
+    }
+    crate::context_bootstrap::reset_html_canvas_backing_store_for_dimension_assignment(
+        scope,
+        runtime_ptr,
+        handle,
+        None,
+        name,
+    );
+    did_set
+}
+
 pub(in crate::native_bridge) fn set_live_element_attribute_ns_appending_to_current_reaction_queue(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
@@ -6636,14 +6683,7 @@ fn element_id_setter_function<'s>(
     if element_setter_receiver(scope, args.this(), "id").is_none() {
         return;
     }
-    set_dom_string_attribute_property_on_object(
-        scope,
-        args.this(),
-        "id",
-        args.get(0),
-        "Element",
-        "id",
-    );
+    set_dom_string_attribute_property_utf16_on_object(scope, args.this(), "id", args.get(0));
     rv.set_undefined();
 }
 

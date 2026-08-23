@@ -3602,7 +3602,7 @@ fn dom_selector_queries_parse_webidl_strings() {
     );
 }
 #[test]
-fn reflected_id_lone_surrogates_use_the_lossy_dom_string_boundary() {
+fn dom_selector_id_escapes_do_not_match_lone_surrogate_ids() {
     let mut vm = new_parsed_test_vm(
         "https://dom-selector-surrogate-escapes.test/path/index.html",
         r#"<html><body></body></html>"#,
@@ -3632,14 +3632,10 @@ fn reflected_id_lone_surrogates_use_the_lossy_dom_string_boundary() {
   container.appendChild(surrogateSecond);
 
   return JSON.stringify({
-    highProperty: surrogateFirst.id,
-    highAttribute: surrogateFirst.getAttribute("id"),
-    highMatchesReplacementEscape: surrogateFirst.matches("#\\d83d surrogateFirst"),
-    escapedHighFindsFirstReplacement: container.querySelector("#\\d83d surrogateFirst") === replacementFirst,
-    lowProperty: surrogateSecond.id,
-    lowAttribute: surrogateSecond.getAttribute("id"),
-    lowMatchesReplacementEscape: surrogateSecond.matches("#surrogateSecond\\dd11"),
-    escapedLowFindsFirstReplacement: container.querySelector("#surrogateSecond\\dd11") === replacementSecond
+    escapedHighMatchesReplacement: container.querySelector("#\\d83d surrogateFirst") === replacementFirst,
+    escapedHighDoesNotMatchSurrogate: container.querySelector("#\\d83d surrogateFirst") !== surrogateFirst,
+    escapedLowMatchesReplacement: container.querySelector("#surrogateSecond\\dd11") === replacementSecond,
+    escapedLowDoesNotMatchSurrogate: container.querySelector("#surrogateSecond\\dd11") !== surrogateSecond
   });
 })()
 "##,
@@ -3648,7 +3644,7 @@ fn reflected_id_lone_surrogates_use_the_lossy_dom_string_boundary() {
 
     assert_eq!(
         result,
-        r#"{"highProperty":"�surrogateFirst","highAttribute":"�surrogateFirst","highMatchesReplacementEscape":true,"escapedHighFindsFirstReplacement":true,"lowProperty":"surrogateSecond�","lowAttribute":"surrogateSecond�","lowMatchesReplacementEscape":true,"escapedLowFindsFirstReplacement":true}"#
+        r#"{"escapedHighMatchesReplacement":true,"escapedHighDoesNotMatchSurrogate":true,"escapedLowMatchesReplacement":true,"escapedLowDoesNotMatchSurrogate":true}"#
     );
 }
 #[test]

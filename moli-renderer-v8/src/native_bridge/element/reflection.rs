@@ -1,6 +1,6 @@
 use crate::custom_elements;
 use crate::document_runtime::DomHandle;
-use crate::util::v8_string;
+use crate::util::{string_from_utf16_units_lossy, v8_string, v8_value_to_dom_string_u16};
 use crate::webidl;
 
 use super::super::node::{node_is_element, node_runtime_and_handle_from_object_or_detached};
@@ -8,6 +8,7 @@ use super::{
     element_attribute, element_has_attribute,
     remove_live_element_attribute_appending_to_current_reaction_queue,
     set_live_element_attribute_appending_to_current_reaction_queue,
+    set_live_element_attribute_utf16_units_appending_to_current_reaction_queue,
 };
 
 macro_rules! impl_reflection_callback_data {
@@ -1203,6 +1204,26 @@ pub(super) fn set_reflected_style_attribute_with_inline_base_url(
     });
 }
 
+fn set_reflected_attribute_utf16_units(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut super::super::JsContextHost,
+    handle: DomHandle,
+    name: &str,
+    value: &str,
+    units: Vec<u16>,
+) {
+    custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
+        let _ = set_live_element_attribute_utf16_units_appending_to_current_reaction_queue(
+            scope,
+            runtime_ptr,
+            handle,
+            name,
+            value,
+            units,
+        );
+    });
+}
+
 pub(super) fn remove_reflected_attribute(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut super::super::JsContextHost,
@@ -1310,6 +1331,24 @@ pub(super) fn set_nullable_dom_string_attribute_property_on_object<'s>(
         return;
     };
     set_reflected_attribute(scope, runtime_ptr, handle, name, &value);
+}
+
+pub(super) fn set_dom_string_attribute_property_utf16_on_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    name: &str,
+    value: v8::Local<'s, v8::Value>,
+) {
+    let Some(units) = v8_value_to_dom_string_u16(scope, value, false) else {
+        return;
+    };
+    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, object)
+    else {
+        return;
+    };
+    let units = units.into_vec();
+    let value = string_from_utf16_units_lossy(&units);
+    set_reflected_attribute_utf16_units(scope, runtime_ptr, handle, name, &value, units);
 }
 
 pub(super) fn attribute_property_getter_from_object_or_detached<'s>(
