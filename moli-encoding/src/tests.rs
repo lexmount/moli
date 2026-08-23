@@ -523,3 +523,57 @@ fn bom_less_utf16be_xml_declaration_is_detected() {
     assert_eq!(encoding, "UTF-16BE");
     assert!(text.contains("hi"), "decoded as {text:?}");
 }
+
+#[test]
+fn bom_less_utf16le_non_xml_not_detected() {
+    let input = utf16le_bytes("<?y>");
+
+    let (_, encoding) = decode_html_document(&input, &[]);
+
+    assert_eq!(encoding, "windows-1252");
+}
+
+#[test]
+fn bom_less_utf16le_uppercase_x_not_detected() {
+    let input = utf16le_bytes("<?X>");
+
+    let (_, encoding) = decode_html_document(&input, &[]);
+
+    assert_eq!(encoding, "windows-1252");
+}
+
+#[test]
+fn bom_less_utf16le_truncated_not_detected() {
+    let input: Vec<u8> = vec![0x3C, 0x00, 0x3F, 0x00];
+
+    let (_, encoding) = decode_html_document(&input, &[]);
+
+    assert_eq!(encoding, "windows-1252");
+}
+
+#[test]
+fn bom_less_utf16be_non_xml_not_detected() {
+    let input = utf16be_bytes("<?y>");
+
+    let (_, encoding) = decode_html_document(&input, &[]);
+
+    assert_eq!(encoding, "windows-1252");
+}
+
+#[test]
+fn bom_less_utf16be_uppercase_x_not_detected() {
+    let input = utf16be_bytes("<?X>");
+
+    let (_, encoding) = decode_html_document(&input, &[]);
+
+    assert_eq!(encoding, "windows-1252");
+}
+
+#[test]
+fn bom_less_utf16be_truncated_not_detected() {
+    let input: Vec<u8> = vec![0x00, 0x3C, 0x00, 0x3F];
+
+    let (_, encoding) = decode_html_document(&input, &[]);
+
+    assert_eq!(encoding, "windows-1252");
+}
