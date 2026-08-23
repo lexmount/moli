@@ -700,6 +700,119 @@ impl DocumentRuntime {
         changed
     }
 
+    pub(crate) fn set_attribute_utf16_units_appending_to_current_reaction_queue(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        handle: DomHandle,
+        name: &str,
+        value: &str,
+        units: Vec<u16>,
+    ) -> bool {
+        self.set_attribute_utf16_units_with_reaction_policy(
+            scope,
+            host_ptr,
+            handle,
+            name,
+            value,
+            units,
+            AttributeChangedReactionPolicy::EnqueueInCurrentQueue,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn set_attribute_utf16_units_with_reaction_policy(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        handle: DomHandle,
+        name: &str,
+        value: &str,
+        units: Vec<u16>,
+        reaction_policy: AttributeChangedReactionPolicy,
+    ) -> bool {
+        let started = dom_binding_timing_started();
+        unsafe { &mut *host_ptr }.break_on_dom_debugger_will_modify_dom_attribute(handle);
+        trace_resource_dom_mutation(
+            &self.dom_host,
+            "setAttribute",
+            handle,
+            Some(name),
+            Some(value),
+        );
+        let style_impact = StyleAttributeImpact::for_attribute_name(name);
+        let state = style_state_impact_for_attribute_mutation(&self.dom_host, handle, None, name);
+        let old_style_state = self.retained_old_style_state_for_impact(host_ptr, handle, state);
+        let derived_old_style_states = self.retained_derived_old_style_states_for_attribute_impact(
+            host_ptr, handle, None, name, state,
+        );
+        let (effects, old_value) = self
+            .dom_host
+            .set_attribute_utf16_units_mutation_outcome(handle, name, value, units)
+            .into_parts();
+        if style_impact.affects_layout_metric() && old_value.as_deref() != Some(value) {
+            self.note_attribute_layout_activity(host_ptr, handle, name);
+        }
+        let changed = self.apply_runtime_mutation_effects(
+            scope,
+            host_ptr,
+            effects,
+            RuntimeMutationOptions::js_dom_api(),
+        );
+        if changed {
+            self.handle_details_attribute_change(
+                scope,
+                host_ptr,
+                handle,
+                None,
+                name,
+                old_value.as_deref(),
+                Some(value),
+                reaction_policy,
+            );
+            self.note_attribute_state_style_activity_if_needed(
+                host_ptr,
+                handle,
+                state,
+                old_style_state,
+            );
+            self.note_derived_element_state_style_activity(host_ptr, &derived_old_style_states);
+            if name.eq_ignore_ascii_case("style") {
+                unsafe { &mut *host_ptr }.clear_element_inline_style_declaration_state(handle);
+            }
+        }
+        if should_dispatch_attribute_changed_for_set(changed, old_value.as_deref(), value) {
+            self.apply_attribute_changed_reaction_policy(
+                scope,
+                host_ptr,
+                handle,
+                name,
+                None,
+                old_value.as_deref(),
+                Some(value),
+                reaction_policy,
+            );
+        }
+        if changed {
+            self.dispatch_custom_element_form_state_attribute_change(scope, host_ptr, handle, name);
+        }
+        if changed && name == "disabled" && self.dom_host.is_html_element_named(handle, "link") {
+            let _ = self.dom_host.set_link_explicitly_enabled(handle, false);
+        }
+        if changed
+            && !Self::apply_frame_owner_attribute_mutation_followup(
+                scope, host_ptr, handle, name, false,
+            )
+        {
+            return changed;
+        }
+        record_dom_binding_timing(
+            attribute_operation_for_handle(&self.dom_host, "dom.setAttribute", handle, name),
+            started,
+        );
+        changed
+    }
+
     /// Applies frame-owner element semantics after an accepted attribute mutation. Returns false
     /// only when a `srcdoc` navigate event canceled the navigation.
     fn apply_frame_owner_attribute_mutation_followup(
