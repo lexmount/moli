@@ -4099,7 +4099,6 @@ dom/xpath-result-single-node-value-nullable.html
 domparsing/DOMParser-parseFromString-encoding.html
 domparsing/DOMParser-parseFromString-stylesheets.html
 domparsing/DOMParser-parseFromString-xml-parsererror.html
-domparsing/DOMParser-parseFromString-xml.html
 domparsing/createContextualFragment-in-detached-xml-document-crash.html
 domparsing/createContextualFragment.html
 domparsing/domparser-spurious-attributes.html
@@ -5559,10 +5558,7 @@ focus/iframe-focuses-parent-same-site.html
 focus/scroll-matches-focus.html
 focus/synthetic-focus-event-crash.html
 fullscreen/api/document-fullscreen-enabled-active-document.html
-fullscreen/api/document-onfullscreenerror.html
-fullscreen/api/element-request-fullscreen-not-allowed.html
 fullscreen/api/historical.html
-fullscreen/api/promises-reject.html
 fullscreen/crashtests/backdrop-list-item.html
 fullscreen/rendering/fullscreen-pseudo-class-support.html
 geolocation/non-secure-contexts.http.html
@@ -5730,7 +5726,6 @@ html/browsers/history/the-location-interface/assign-replace-from-iframe.html
 html/browsers/history/the-location-interface/assign-replace-from-top-to-nested-iframe.html
 html/browsers/history/the-location-interface/assign-with-nested-iframe.html
 html/browsers/history/the-location-interface/assign_after_load.html
-html/browsers/history/the-location-interface/document_location.html
 html/browsers/history/the-location-interface/location-non-configurable-toString-valueOf.html
 html/browsers/history/the-location-interface/location-pathname-setter-question-mark.html
 html/browsers/history/the-location-interface/location-prevent-extensions.html
@@ -6190,7 +6185,6 @@ html/semantics/embedded-content/the-img-element/image-loading-lazy-subframe-deta
 html/semantics/embedded-content/the-img-element/image-loading-lazy-to-eager.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-use-list-of-available-images.html
 html/semantics/embedded-content/the-img-element/img-created-in-active-document-crash.html
-html/semantics/embedded-content/the-img-element/img-picture-ancestor.html
 html/semantics/embedded-content/the-img-element/img-src-in-synthetic-document.html
 html/semantics/embedded-content/the-img-element/img.complete.html
 html/semantics/embedded-content/the-img-element/invalid-src.html
@@ -6211,7 +6205,6 @@ html/semantics/embedded-content/the-img-element/srcset/select-an-image-source.ht
 html/semantics/embedded-content/the-img-element/srcset/srcset-media-dynamic.html
 html/semantics/embedded-content/the-img-element/update-media.html
 html/semantics/embedded-content/the-img-element/update-src-complete.html
-html/semantics/embedded-content/the-img-element/update-the-image-data/current-request-microtask.html
 html/semantics/embedded-content/the-img-element/update-the-image-data/fail-to-resolve.html
 html/semantics/embedded-content/the-object-element/block-object-with-ruby-crash.html
 html/semantics/embedded-content/the-object-element/historical.html
@@ -7911,7 +7904,6 @@ old-tests/submission/Microsoft/selection/removeAllRanges.htm
 old-tests/submission/Microsoft/selection/removeRange.htm
 old-tests/submission/Microsoft/selection/selectAllChildren.htm
 orientation-sensor/OrientationSensor_insecure_context.html
-page-lifecycle/idlharness.html
 page-visibility/test_attributes_exist.html
 page-visibility/test_child_document.html
 page-visibility/test_default_view.html
