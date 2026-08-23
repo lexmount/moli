@@ -327,6 +327,10 @@ fn parses_trace_network_fetch_flag() {
     ]))
     .unwrap();
 
+    let config = AppConfig::from_cli(&cli).unwrap();
+    assert!(config.fetch.trace_network);
+    assert_eq!(config.fetch.dump_mode, Some(DumpFormat::Json));
+
     let Commands::Fetch(args) = cli.command else {
         panic!("expected fetch command");
     };
@@ -334,6 +338,35 @@ fn parses_trace_network_fetch_flag() {
     assert!(args.trace_network);
     assert!(!args.trace_matched_response_body);
     assert_eq!(args.dump, Some(DumpFormat::Json));
+}
+
+#[test]
+fn trace_network_requires_an_explicit_dump_mode() {
+    let err = Cli::try_parse_from(normalize_args_for_compat([
+        "moli",
+        "fetch",
+        "--trace-network",
+        "https://example.com",
+    ]))
+    .unwrap_err();
+
+    assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+}
+
+#[test]
+fn app_config_requires_json_dump_for_network_trace() {
+    let cli = Cli::try_parse_from(normalize_args_for_compat([
+        "moli",
+        "fetch",
+        "--trace-network",
+        "--dump",
+        "html",
+        "https://example.com",
+    ]))
+    .unwrap();
+
+    let error = AppConfig::from_cli(&cli).unwrap_err();
+    assert_eq!(error.to_string(), "--trace-network requires --dump json");
 }
 
 #[test]

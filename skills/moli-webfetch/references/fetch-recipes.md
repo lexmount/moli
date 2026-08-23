@@ -26,6 +26,9 @@
 
 Raw non-HTML responses support only `html` and `json`.
 
+Add `--trace-network` only with an explicit `--dump json`; it appends the
+structured `network` object.
+
 ## Readiness
 
 Start with `--wait-until done`. Change or extend it only when the page exposes

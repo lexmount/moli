@@ -31,6 +31,9 @@ impl AppConfig {
 
         match &cli.command {
             Commands::Fetch(args) => {
+                if args.trace_network && args.dump != Some(DumpFormat::Json) {
+                    bail!("--trace-network requires --dump json");
+                }
                 apply_common_args(&mut config, &args.common)?;
                 if args.common.log_level.is_none() {
                     config.log_filter = "off".to_owned();

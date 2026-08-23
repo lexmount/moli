@@ -56,7 +56,9 @@ pub struct FetchArgs {
     #[arg(long)]
     pub with_frames: bool,
 
-    #[arg(long)]
+    /// Include a structured network trace in JSON output. Requires
+    /// `--dump json`.
+    #[arg(long, requires = "dump")]
     pub trace_network: bool,
 
     #[arg(long, requires = "trace_network")]
