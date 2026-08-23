@@ -14295,7 +14295,7 @@ async fn in_flight_connected_modulepreload_does_not_delay_window_load() {
         "the module-map terminal must publish its joined link-client notification"
     );
     assert!(
-        vm.run_one_oldest_ready_page_task_executor_turn(&loader)
+        vm.run_one_native_module_owner_event_task_executor_turn(&loader)
             .await
             .expect("modulepreload owner-notification turn"),
         "the joined link client must be notified in a later selected task"
