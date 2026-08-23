@@ -3870,6 +3870,115 @@ document.body.setAttribute('data-error-state', [
         );
     }
 
+    #[test]
+    fn main_parser_finish_waits_for_transient_insertion_controller() {
+        run_phase_one_large_stack_test(
+            "phase-one-main-parser-finish-after-insertion-controller",
+            main_parser_finish_waits_for_transient_insertion_controller_inner,
+        );
+    }
+
+    fn main_parser_finish_waits_for_transient_insertion_controller_inner() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let _js_runtime = crate::JsRuntime::initialize();
+            let final_url = Url::parse("https://example.test/").expect("test url");
+            let loader_owner =
+                ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
+            let loader = loader_owner.clone();
+            let mut state = ParseTimeDriverState::new(final_url);
+            state.input_closed = true;
+            let insertion_controller =
+                crate::document_runtime::ParserInsertionController::for_session(
+                    &state.parser_session,
+                )
+                .expect("HTML parser should expose an insertion controller");
+            let parser_dom_host = state
+                .parser_session
+                .stream_handle()
+                .borrow_mut()
+                .take_parser_stream_dom_host();
+            let local_executor = JsLocalExecutor::new();
+            let page_vm = PageVm::new(
+                PageId::new_for_testing(103),
+                local_executor,
+                &loader,
+                &default_test_page_vm_env_config(),
+                PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
+                parser_dom_host,
+                Instant::now(),
+            )
+            .expect("page vm");
+            let phase_runtime = ConcurrentParseTimeRuntime::new_parser_owner(
+                loader,
+                PageVmInitStage::Load,
+                state,
+                page_vm,
+            );
+
+            let completion = ParseTimePhaseOnePump::new(phase_runtime)
+                .run_to_completion()
+                .await
+                .expect("borrowed parser stream should park instead of finishing");
+            let super::loop_protocol::ParseTimeOwnerCompletion::PendingPageTask(
+                mut phase_runtime,
+            ) = completion
+            else {
+                panic!("borrowed parser stream should publish one continuation task");
+            };
+            assert!(
+                phase_runtime
+                    .page_vm
+                    .page_task_executor_sources_for_test()
+                    .has_scheduler_task_for_executor_test(|descriptor| matches!(
+                        descriptor,
+                        crate::page_task_queue::RendererPageReadyDescriptor::Networking {
+                            owner:
+                                crate::page_task_queue::RendererPageNetworkingOwner::MainParserContinuation(
+                                    _
+                                ),
+                            ..
+                        }
+                    )),
+                "deferred finish must cross a selected Page task boundary"
+            );
+
+            drop(insertion_controller);
+            let request_client = phase_runtime
+                .page_vm
+                .main_document_resource_loader()
+                .request_client()
+                .clone();
+            assert!(
+                phase_runtime
+                    .page_vm
+                    .run_exact_selected_page_task_for_test(
+                        crate::runtime::page_vm::PageSelectedTaskTestSelector::MainParserContinuation,
+                        &request_client,
+                    )
+                    .await
+                    .expect("main parser continuation should execute"),
+                "the exact deferred-finish continuation should remain selectable"
+            );
+
+            let completion = ParseTimePhaseOnePump::new(phase_runtime)
+                .run_to_completion()
+                .await
+                .expect("unborrowed parser stream should finish");
+            assert!(matches!(
+                completion,
+                super::loop_protocol::ParseTimeOwnerCompletion::AdvancePhase {
+                    reason: super::loop_protocol::ParseTimePhaseTransitionReason::ParserCompleted,
+                    ..
+                }
+            ));
+        }));
+    }
+
     fn full_body_phase_one_parks_on_pending_parser_blocking_source_load_inner() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
