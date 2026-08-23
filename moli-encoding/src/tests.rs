@@ -505,6 +505,21 @@ fn bom_less_utf16le_xml_declaration_is_detected() {
     assert!(text.contains("hi"), "decoded as {text:?}");
 }
 
+#[test]
+fn transport_charset_wins_over_utf16_xml_signature() {
+    let headers = vec![(
+        "Content-Type".to_owned(),
+        "text/html; charset=windows-1252".to_owned(),
+    )];
+    let input = utf16le_bytes(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<html><head></head><body>hi</body></html>",
+    );
+
+    let (_, encoding) = decode_html_document(&input, &headers);
+
+    assert_eq!(encoding, "windows-1252");
+}
+
 fn utf16be_bytes(input: &str) -> Vec<u8> {
     input
         .encode_utf16()

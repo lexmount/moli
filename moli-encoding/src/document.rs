@@ -119,10 +119,10 @@ impl HtmlDocumentStreamingDecoder {
         if !finishing && bytes_could_still_be_bom_prefix(&self.sniff_buffer) {
             return None;
         }
-        if let Some(encoding) = encoding_for_document_xml_declaration(&self.sniff_buffer) {
+        if let Some(encoding) = self.transport_encoding {
             return Some(encoding);
         }
-        if let Some(encoding) = self.transport_encoding {
+        if let Some(encoding) = encoding_for_document_xml_declaration(&self.sniff_buffer) {
             return Some(encoding);
         }
         let meta_scan = self.feed_meta_charset_prescan(finishing);
