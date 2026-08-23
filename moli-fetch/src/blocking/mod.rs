@@ -827,7 +827,7 @@ fn enforce_request_target_policy(config: &FetchConfig, request_url: &Url) -> Res
         .port_or_known_default()
         .ok_or_else(|| anyhow!("could not determine port for request url `{request_url}`"))?;
 
-    let resolved_ips = resolve_target_ips(host, port)
+    let resolved_ips = resolve_target_ips(config, host, port)
         .with_context(|| anyhow!("failed to resolve request host `{host}` for `{request_url}`"))?;
     for ip in resolved_ips {
         if config.block_private_networks() && is_private_or_internal_ip(ip) {
@@ -841,11 +841,58 @@ fn enforce_request_target_policy(config: &FetchConfig, request_url: &Url) -> Res
     Ok(())
 }
 
-fn resolve_target_ips(host: &str, port: u16) -> Result<Vec<IpAddr>> {
+fn resolve_target_ips(config: &FetchConfig, host: &str, port: u16) -> Result<Vec<IpAddr>> {
     if let Ok(ip) = host.parse::<IpAddr>() {
         return Ok(vec![ip]);
     }
 
+    if let Some(resolved_ips) =
+        resolve_host_resolve_override_ips(config.http_host_resolve(), host, port)?
+    {
+        return Ok(resolved_ips);
+    }
+
+    resolve_system_target_ips(host, port)
+}
+
+fn resolve_host_resolve_override_ips(
+    entries: &[String],
+    host: &str,
+    port: u16,
+) -> Result<Option<Vec<IpAddr>>> {
+    let mut exact_match: Option<Vec<IpAddr>> = None;
+    let mut wildcard_match: Option<Vec<IpAddr>> = None;
+    for entry in entries {
+        match parse_http_host_resolve_entry(entry)? {
+            HttpHostResolveEntry::Add {
+                host: entry_host,
+                port: entry_port,
+                addresses,
+            } if entry_port == port => {
+                if entry_host == "*" {
+                    wildcard_match = Some(addresses);
+                } else if entry_host.eq_ignore_ascii_case(host) {
+                    exact_match = Some(addresses);
+                }
+            }
+            HttpHostResolveEntry::Remove {
+                host: entry_host,
+                port: entry_port,
+            } if entry_port == port => {
+                if entry_host == "*" {
+                    wildcard_match = None;
+                } else if entry_host.eq_ignore_ascii_case(host) {
+                    exact_match = None;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(exact_match.or(wildcard_match))
+}
+
+fn resolve_system_target_ips(host: &str, port: u16) -> Result<Vec<IpAddr>> {
     let mut resolved = Vec::new();
     for addr in (host, port).to_socket_addrs()? {
         let ip = addr.ip();
@@ -857,6 +904,117 @@ fn resolve_target_ips(host: &str, port: u16) -> Result<Vec<IpAddr>> {
         bail!("no addresses resolved");
     }
     Ok(resolved)
+}
+
+enum HttpHostResolveEntry {
+    Add {
+        host: String,
+        port: u16,
+        addresses: Vec<IpAddr>,
+    },
+    Remove {
+        host: String,
+        port: u16,
+    },
+}
+
+fn parse_http_host_resolve_entry(entry: &str) -> Result<HttpHostResolveEntry> {
+    let entry = entry.trim();
+    if let Some(entry) = entry.strip_prefix('-') {
+        let (host, port) = split_http_host_resolve_remove_entry(entry)?;
+        return Ok(HttpHostResolveEntry::Remove {
+            host: normalize_http_host_resolve_host(host),
+            port: parse_http_host_resolve_port(port, entry)?,
+        });
+    }
+
+    let entry = entry.strip_prefix('+').unwrap_or(entry);
+    let (host, port, address) = split_http_host_resolve_add_entry(entry)?;
+    let port = parse_http_host_resolve_port(port, entry)?;
+    let mut addresses = Vec::new();
+    for address in address.split(',').map(str::trim) {
+        if address.is_empty() {
+            bail!("--http-host-resolve entries must not contain empty addresses");
+        }
+        let address = address.trim_matches(['[', ']']);
+        let address = address
+            .parse::<IpAddr>()
+            .with_context(|| format!("invalid --http-host-resolve address in `{entry}`"))?;
+        if !addresses.contains(&address) {
+            addresses.push(address);
+        }
+    }
+
+    Ok(HttpHostResolveEntry::Add {
+        host: normalize_http_host_resolve_host(host),
+        port,
+        addresses,
+    })
+}
+
+fn split_http_host_resolve_add_entry(entry: &str) -> Result<(&str, &str, &str)> {
+    if let Some(entry) = entry.strip_prefix('[') {
+        let Some(host_end) = entry.find(']') else {
+            bail!("--http-host-resolve must be in HOST:PORT:ADDR form");
+        };
+        let host = &entry[..host_end];
+        let remainder = &entry[host_end + 1..];
+        let Some(remainder) = remainder.strip_prefix(':') else {
+            bail!("--http-host-resolve must be in HOST:PORT:ADDR form");
+        };
+        let Some((port, address)) = remainder.split_once(':') else {
+            bail!("--http-host-resolve must be in HOST:PORT:ADDR form");
+        };
+        if host.trim().is_empty() || port.trim().is_empty() || address.trim().is_empty() {
+            bail!("--http-host-resolve must be in HOST:PORT:ADDR form");
+        }
+        return Ok((host.trim(), port.trim(), address.trim()));
+    }
+
+    let mut parts = entry.splitn(3, ':');
+    let host = parts.next().unwrap_or_default().trim();
+    let port = parts.next().unwrap_or_default().trim();
+    let address = parts.next().unwrap_or_default().trim();
+
+    if host.is_empty() || port.is_empty() || address.is_empty() {
+        bail!("--http-host-resolve must be in HOST:PORT:ADDR form");
+    }
+
+    Ok((host, port, address))
+}
+
+fn split_http_host_resolve_remove_entry(entry: &str) -> Result<(&str, &str)> {
+    if let Some(entry) = entry.strip_prefix('[') {
+        let Some(host_end) = entry.find(']') else {
+            bail!("--http-host-resolve removal must be in HOST:PORT form");
+        };
+        let host = &entry[..host_end];
+        let remainder = &entry[host_end + 1..];
+        let Some(port) = remainder.strip_prefix(':') else {
+            bail!("--http-host-resolve removal must be in HOST:PORT form");
+        };
+        if host.trim().is_empty() || port.trim().is_empty() {
+            bail!("--http-host-resolve removal must be in HOST:PORT form");
+        }
+        return Ok((host.trim(), port.trim()));
+    }
+
+    let Some((host, port)) = entry.split_once(':') else {
+        bail!("--http-host-resolve removal must be in HOST:PORT form");
+    };
+    if host.trim().is_empty() || port.trim().is_empty() {
+        bail!("--http-host-resolve removal must be in HOST:PORT form");
+    }
+    Ok((host.trim(), port.trim()))
+}
+
+fn parse_http_host_resolve_port(port: &str, entry: &str) -> Result<u16> {
+    port.parse::<u16>()
+        .with_context(|| format!("invalid --http-host-resolve port in `{entry}`"))
+}
+
+fn normalize_http_host_resolve_host(host: &str) -> String {
+    host.trim_matches(['[', ']', '+']).to_owned()
 }
 
 fn is_private_or_internal_ip(ip: IpAddr) -> bool {
