@@ -1,6 +1,7 @@
 use std::{
     cell::RefCell,
     collections::HashMap,
+    pin::pin,
     rc::{Rc, Weak},
     sync::{
         Arc,
@@ -26,6 +27,19 @@ thread_local! {
 }
 
 static NEXT_SESSION_EXECUTOR_ROUTE_ID: AtomicUsize = AtomicUsize::new(1);
+
+struct EnteredOwnerWakeIsolateGuard(*const v8::Isolate);
+
+impl Drop for EnteredOwnerWakeIsolateGuard {
+    fn drop(&mut self) {
+        // SAFETY: the owner wake enters this exact isolate immediately before
+        // constructing the guard, and all V8 scopes created afterwards have
+        // been dropped before this guard runs.
+        unsafe {
+            (*self.0).exit();
+        }
+    }
+}
 
 pub(super) fn allocate_session_executor_route_id() -> usize {
     NEXT_SESSION_EXECUTOR_ROUTE_ID
@@ -89,7 +103,21 @@ pub(crate) fn dispatch_inspector_io_owner_wake(wake: RendererInspectorIoOwnerWak
     };
     let isolate = unsafe { &mut *session_executor.isolate.get() };
     let isolate = unsafe { v8::Isolate::ref_from_raw_isolate_ptr_mut(isolate) };
-    with_scoped_inspector_microtasks(isolate, || {
+    // Unlike an interrupt or a nested pause-loop dispatch, an owner wake enters
+    // Inspector while no JavaScript callback is on the stack. Establish the V8
+    // handle boundary explicitly: Inspector commands may lazily allocate V8
+    // objects even when the inspected page itself is idle (for example, the
+    // regex context used by Debugger.setBreakpointByUrl).
+    // SAFETY: this wake is executed synchronously on the isolate's renderer
+    // owner thread. V8 permits re-entry and restores any previously entered
+    // isolate when the matching exit runs.
+    unsafe {
+        isolate.enter();
+    }
+    let _entered_isolate = EnteredOwnerWakeIsolateGuard(isolate);
+    let scope = pin!(v8::HandleScope::new(isolate));
+    let scope = &mut scope.init();
+    with_scoped_inspector_microtasks(scope, || {
         session_executor.dispatch_next_io_command_from_owner();
     });
 }
