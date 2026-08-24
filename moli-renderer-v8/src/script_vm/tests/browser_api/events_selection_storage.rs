@@ -7463,6 +7463,85 @@ fn message_port_is_not_constructible_and_channel_ports_keep_declared_state() {
     );
 }
 
+#[test]
+fn message_channel_construction_keeps_popup_realm_with_ambient_child_marker() {
+    let mut vm = new_storage_test_vm("https://message-channel-realm-binding.test/");
+    vm.eval(
+        r#"
+(() => {
+  const frame = document.createElement("iframe");
+  frame.srcdoc = "<!doctype html><body>child</body>";
+  (document.body || document.documentElement || document).appendChild(frame);
+  globalThis.__messageChannelRealmPopup = open(
+    "about:blank",
+    "message-channel-realm-popup"
+  );
+  return "ready";
+})()
+"#,
+    )
+    .expect("MessageChannel realm-binding setup should evaluate");
+
+    let (child_handle, popup_id, popup_owner) = {
+        let host = vm._context_host.borrow();
+        let child_handle = host.child_browsing_context_handles_in_document_order()[0];
+        let popup_id = host.open_lightweight_popup_ids()[0];
+        let local_window_id = host
+            .current_lightweight_popup_local_window_id(popup_id)
+            .expect("popup LocalWindow should exist");
+        (
+            child_handle,
+            popup_id,
+            crate::native_bridge::WindowExecutionContextOwner::LightweightPopup {
+                popup_id,
+                local_window_id,
+            },
+        )
+    };
+
+    let top_context_ptr = &vm.page_default_context as *const v8::Global<v8::Context>;
+    vm.with_context_scope_by_ptr(top_context_ptr, |scope, _host_ptr| {
+        let _previous_child =
+            crate::native_bridge::enter_active_child_window_scope(scope, Some(child_handle));
+        let _previous_popup =
+            crate::native_bridge::enter_active_lightweight_popup_scope(scope, popup_id);
+        Ok(())
+    })
+    .expect("overlapping ambient owner markers should install");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const channel = new MessageChannel();
+  return [
+    channel.port1 instanceof MessagePort,
+    channel.port2 instanceof MessagePort
+  ].join("|");
+})()
+"#,
+        )
+        .expect("MessageChannel should construct in the popup realm");
+
+    vm.with_context_scope_by_ptr(top_context_ptr, |scope, _host_ptr| {
+        let _previous_child = crate::native_bridge::enter_active_child_window_scope(scope, None);
+        let _previous_popup = crate::native_bridge::enter_top_level_lightweight_popup_scope(scope);
+        Ok(())
+    })
+    .expect("ambient owner markers should clear");
+
+    assert_eq!(result, "true|true");
+    let owners = vm
+        ._context_host
+        .borrow()
+        .message_port_execution_context_owners_for_test();
+    assert_eq!(owners.len(), 2);
+    assert!(
+        owners.iter().all(|(_, owner, _)| *owner == popup_owner),
+        "both MessagePorts must retain the constructor-entry popup realm"
+    );
+}
+
 #[tokio::test]
 async fn window_post_message_structured_clones_data_and_ports() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");

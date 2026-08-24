@@ -1,6 +1,6 @@
 use super::{
-    CHILD_BROWSING_CONTEXT_HANDLE_SLOT, current_message_port_owner,
-    ensure_message_port_wrapper_for_id,
+    CHILD_BROWSING_CONTEXT_HANDLE_SLOT, MessagePortRealmBinding,
+    ensure_message_port_wrapper_for_id_in_realm,
     events::{clear_event_dispatch_fields, set_event_dispatch_fields},
     invoke_simple_event_listener,
     navigation_serialize::{
@@ -324,7 +324,7 @@ fn shared_worker_constructor_callback_inner<'s>(
         }
     };
     let message_port_registry = context.browser_context_runtime.message_port_registry();
-    let Some(client_port_owner) = current_message_port_owner(scope) else {
+    let Some(message_port_realm) = MessagePortRealmBinding::current(scope) else {
         throw_type_error(
             scope,
             "Failed to construct 'SharedWorker': Window execution context is unavailable.",
@@ -332,9 +332,11 @@ fn shared_worker_constructor_callback_inner<'s>(
         return;
     };
     let (client_port_id, worker_port_id) =
-        message_port_registry.create_entangled_message_port_pair(client_port_owner);
+        message_port_registry.create_entangled_message_port_pair(message_port_realm.owner());
     message_port_registry.detach_message_port_owner_for_transfer(worker_port_id);
-    let Some(client_port) = ensure_message_port_wrapper_for_id(scope, client_port_id) else {
+    let Some(client_port) =
+        ensure_message_port_wrapper_for_id_in_realm(scope, client_port_id, &message_port_realm)
+    else {
         message_port_registry.close_message_port(client_port_id);
         message_port_registry.close_message_port(worker_port_id);
         throw_type_error(

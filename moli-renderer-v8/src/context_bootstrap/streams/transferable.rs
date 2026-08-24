@@ -10,9 +10,9 @@ use super::*;
 use crate::{
     context_bootstrap::{
         message_ports::{
-            close_message_port_object, current_message_port_owner, current_message_port_registry,
-            discard_message_port_channel, schedule_message_port_delivery,
-            set_internal_message_port_handlers,
+            MessagePortRealmBinding, close_message_port_object, current_message_port_registry,
+            discard_message_port_channel, ensure_message_port_wrapper_for_id_in_realm,
+            schedule_message_port_delivery, set_internal_message_port_handlers,
         },
         stream_adapter::{
             EnqueueChunkError, READABLE_STREAM_ALGORITHM_CANCEL_INDEX,
@@ -195,16 +195,19 @@ pub(crate) fn prepare_readable_stream_transfer<'s>(
         unreachable!("transfer admission already rejected a locked stream")
     };
 
-    let Some(registry) = current_message_port_registry(scope) else {
-        throw_transfer_data_clone_error(scope, "ReadableStream transfer has no port registry.");
+    let Some(realm) = MessagePortRealmBinding::current(scope) else {
+        throw_transfer_data_clone_error(
+            scope,
+            "ReadableStream transfer has no execution-context port binding.",
+        );
         return None;
     };
-    let Some(owner) = current_message_port_owner(scope) else {
-        throw_transfer_data_clone_error(scope, "ReadableStream transfer has no port owner.");
-        return None;
-    };
-    let (sender_port_id, receiver_port_id) = registry.create_entangled_message_port_pair(owner);
-    let Some(sender_port) = ensure_message_port_wrapper_for_id(scope, sender_port_id) else {
+    let registry = realm.registry().clone();
+    let (sender_port_id, receiver_port_id) =
+        registry.create_entangled_message_port_pair(realm.owner());
+    let Some(sender_port) =
+        ensure_message_port_wrapper_for_id_in_realm(scope, sender_port_id, &realm)
+    else {
         discard_prepared_port_pair(scope, &registry, None, sender_port_id);
         return None;
     };
@@ -248,16 +251,19 @@ pub(crate) fn prepare_writable_stream_transfer<'s>(
         return None;
     }
 
-    let Some(registry) = current_message_port_registry(scope) else {
-        throw_transfer_data_clone_error(scope, "WritableStream transfer has no port registry.");
+    let Some(realm) = MessagePortRealmBinding::current(scope) else {
+        throw_transfer_data_clone_error(
+            scope,
+            "WritableStream transfer has no execution-context port binding.",
+        );
         return None;
     };
-    let Some(owner) = current_message_port_owner(scope) else {
-        throw_transfer_data_clone_error(scope, "WritableStream transfer has no port owner.");
-        return None;
-    };
-    let (sender_port_id, receiver_port_id) = registry.create_entangled_message_port_pair(owner);
-    let Some(sender_port) = ensure_message_port_wrapper_for_id(scope, sender_port_id) else {
+    let registry = realm.registry().clone();
+    let (sender_port_id, receiver_port_id) =
+        registry.create_entangled_message_port_pair(realm.owner());
+    let Some(sender_port) =
+        ensure_message_port_wrapper_for_id_in_realm(scope, sender_port_id, &realm)
+    else {
         discard_prepared_port_pair(scope, &registry, None, sender_port_id);
         return None;
     };

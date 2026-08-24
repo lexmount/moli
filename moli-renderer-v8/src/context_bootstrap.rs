@@ -305,12 +305,12 @@ pub(crate) use self::media_queries::{
 use self::message_ports::schedule_host_callback;
 pub(crate) use self::message_ports::{
     MessagePortDeliveryRunResult, MessagePortEventListenerId, MessagePortEventListenerSnapshot,
-    PreparedMessagePortEventListener, PreparedMessagePortEventListenerCallback,
-    WindowMessagePortEventListenerRegistry, WorkerMessagePortEventListenerRegistry,
-    current_message_port_owner, detach_message_port_owner_for_transfer,
+    MessagePortRealmBinding, PreparedMessagePortEventListener,
+    PreparedMessagePortEventListenerCallback, WindowMessagePortEventListenerRegistry,
+    WorkerMessagePortEventListenerRegistry, detach_message_port_owner_for_transfer,
     detach_transferred_message_port, dispatch_message_port_events_for_port_collecting_errors,
     dispatch_one_authorized_message_port_event, ensure_message_port_wrapper_for_id,
-    message_port_id_from_object,
+    ensure_message_port_wrapper_for_id_in_realm, message_port_id_from_object,
 };
 pub(crate) use self::microtask_checkpoint::{
     install_agent_microtask_checkpoint_tasks, run_end_of_microtask_checkpoint_tasks,

@@ -12,6 +12,108 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 const MESSAGE_PORT_ID_SLOT: &str = "__lmMessagePortId";
 
+/// Operation-entry binding for one Window or Worker realm.
+///
+/// Port-pair creation and wrapper publication must use one captured binding.
+/// Re-resolving ambient child or lightweight-popup markers midway through the
+/// operation can select a different owner and expose a partially initialized
+/// `MessageChannel` receiver.
+pub(crate) enum MessagePortRealmBinding {
+    Page {
+        registry: SharedMessagePortRegistry,
+        owner: MessagePortOwner,
+        identity: crate::native_bridge::WindowExecutionContextIdentity,
+    },
+    Worker {
+        registry: SharedMessagePortRegistry,
+        owner: MessagePortOwner,
+    },
+}
+
+impl MessagePortRealmBinding {
+    pub(crate) fn current(scope: &mut v8::PinScope<'_, '_>) -> Option<Self> {
+        if let Some(host) = crate::util::context_host_from_global_bridge(scope) {
+            let identity = host.current_runtime_window_execution_context_identity(scope)?;
+            let owner = MessagePortOwner::Page(
+                host.page_message_port_delivery_sender()
+                    .bind_execution_context(identity),
+            );
+            return Some(Self::Page {
+                registry: host.message_port_registry(),
+                owner,
+                identity,
+            });
+        }
+        Some(Self::Worker {
+            registry: worker_message_port_registry(scope)?,
+            owner: MessagePortOwner::Worker(worker_message_port_wake_sender(scope)?),
+        })
+    }
+
+    pub(crate) fn registry(&self) -> &SharedMessagePortRegistry {
+        match self {
+            Self::Page { registry, .. } | Self::Worker { registry, .. } => registry,
+        }
+    }
+
+    pub(crate) fn owner(&self) -> MessagePortOwner {
+        match self {
+            Self::Page { owner, .. } | Self::Worker { owner, .. } => owner.clone(),
+        }
+    }
+
+    fn register_wrapper(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        port_id: MessagePortId,
+        port: v8::Local<'_, v8::Object>,
+    ) -> bool {
+        match self {
+            Self::Page { identity, .. } => {
+                if crate::native_bridge::current_runtime_observable_context_token(scope)
+                    != Some(identity.realm_token())
+                {
+                    return false;
+                }
+                let Some(host) = crate::util::context_host_from_global_bridge(scope) else {
+                    return false;
+                };
+                if !host.window_execution_context_owner_is_current(
+                    identity.owner(),
+                    identity.dispatch_scope(),
+                ) {
+                    return false;
+                }
+                host.register_message_port_wrapper(scope, port_id, port, *identity);
+            }
+            Self::Worker { .. } => {
+                if context_host_ptr_from_global_bridge(scope).is_some() {
+                    return false;
+                }
+                register_worker_message_port_wrapper(scope, port_id, port);
+            }
+        }
+        true
+    }
+
+    fn forget_wrapper(&self, scope: &mut v8::PinScope<'_, '_>, port_id: MessagePortId) {
+        match self {
+            Self::Page { .. } => {
+                if let Some(host) = crate::util::context_host_from_global_bridge(scope) {
+                    host.forget_message_port_wrapper(port_id);
+                }
+            }
+            Self::Worker { .. } => forget_worker_message_port_wrapper(scope, port_id),
+        }
+    }
+
+    pub(crate) fn discard_channel(&self, scope: &mut v8::PinScope<'_, '_>, port_id: MessagePortId) {
+        for discarded_port_id in self.registry().discard_message_port_channel(port_id) {
+            self.forget_wrapper(scope, discarded_port_id);
+        }
+    }
+}
+
 #[derive(WebApiObject)]
 #[webapi(interface = "Object")]
 struct MessagePortObjectDeclaration<'scope> {
@@ -149,11 +251,12 @@ const MESSAGE_CHANNEL_ATTRIBUTE_SLOTS: &[&str] =
 pub(in crate::context_bootstrap::message_ports) fn new_message_port_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     port_id: MessagePortId,
+    realm: &MessagePortRealmBinding,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let port = message_port_object_declaration(scope, port_id)?
         .bind(scope)
         .ok()?;
-    if !register_message_port_wrapper(scope, port_id, port) {
+    if !realm.register_wrapper(scope, port_id, port) {
         return None;
     }
     Some(port)
@@ -191,10 +294,22 @@ pub(crate) fn ensure_message_port_wrapper_for_id<'s>(
     if let Some(port) = message_port_wrapper_for_id(scope, port_id) {
         return Some(port);
     }
-    let registry = current_message_port_registry(scope)?;
-    let owner = current_message_port_owner(scope)?;
-    let port = new_message_port_object(scope, port_id)?;
-    registry.attach_message_port_owner(port_id, owner);
+    let realm = MessagePortRealmBinding::current(scope)?;
+    ensure_message_port_wrapper_for_id_in_realm(scope, port_id, &realm)
+}
+
+pub(crate) fn ensure_message_port_wrapper_for_id_in_realm<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    port_id: MessagePortId,
+    realm: &MessagePortRealmBinding,
+) -> Option<v8::Local<'s, v8::Object>> {
+    if let Some(port) = message_port_wrapper_for_id(scope, port_id) {
+        return Some(port);
+    }
+    let port = new_message_port_object(scope, port_id, realm)?;
+    realm
+        .registry()
+        .attach_message_port_owner(port_id, realm.owner());
     Some(port)
 }
 
@@ -235,22 +350,6 @@ pub(in crate::context_bootstrap) fn close_message_port_object<'s>(
     set_message_port_bool_slot(scope, port, MESSAGE_PORT_CLOSED_SLOT, true);
 }
 
-pub(crate) fn current_message_port_owner(
-    scope: &mut v8::PinScope<'_, '_>,
-) -> Option<MessagePortOwner> {
-    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-        let host = unsafe { &*host_ptr };
-        let identity = host.current_runtime_window_execution_context_identity(scope)?;
-        let producer = host
-            .page_message_port_delivery_sender()
-            .bind_execution_context(identity);
-        return Some(MessagePortOwner::Page(producer));
-    }
-    Some(MessagePortOwner::Worker(worker_message_port_wake_sender(
-        scope,
-    )?))
-}
-
 pub(in crate::context_bootstrap) fn current_message_port_registry(
     scope: &mut v8::PinScope<'_, '_>,
 ) -> Option<SharedMessagePortRegistry> {
@@ -277,38 +376,6 @@ pub(in crate::context_bootstrap::message_ports) fn message_port_wrapper_for_id<'
         return unsafe { &mut *host_ptr }.message_port_wrapper(scope, port_id);
     }
     worker_message_port_wrapper(scope, port_id)
-}
-
-pub(in crate::context_bootstrap::message_ports) fn register_message_port_wrapper(
-    scope: &mut v8::PinScope<'_, '_>,
-    port_id: MessagePortId,
-    port: v8::Local<'_, v8::Object>,
-) -> bool {
-    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-        let dispatch_scope =
-            crate::context_bootstrap::current_child_browsing_context_handle_for_runtime_scope(
-                scope,
-            )
-            .map(crate::native_bridge::OwnerDispatchScope::Child)
-            .or_else(|| {
-                crate::native_bridge::active_lightweight_popup_id(scope)
-                    .map(crate::native_bridge::OwnerDispatchScope::LightweightPopup)
-            })
-            .unwrap_or(crate::native_bridge::OwnerDispatchScope::Top);
-        let host = unsafe { &mut *host_ptr };
-        let Some(identity) = host.current_runtime_window_execution_context_identity(scope) else {
-            host.message_port_registry().close_message_port(port_id);
-            return false;
-        };
-        if identity.dispatch_scope() != dispatch_scope {
-            host.message_port_registry().close_message_port(port_id);
-            return false;
-        }
-        host.register_message_port_wrapper(scope, port_id, port, identity);
-        return true;
-    }
-    register_worker_message_port_wrapper(scope, port_id, port);
-    true
 }
 
 pub(in crate::context_bootstrap::message_ports) fn forget_message_port_wrapper(

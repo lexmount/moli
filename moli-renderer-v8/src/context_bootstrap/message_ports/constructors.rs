@@ -23,22 +23,31 @@ pub(in crate::context_bootstrap) fn message_channel_constructor_callback<'s>(
         return;
     }
 
-    let Some(owner) = current_message_port_owner(scope) else {
-        rv.set_undefined();
+    let Some(realm) = MessagePortRealmBinding::current(scope) else {
+        throw_type_error(
+            scope,
+            "Failed to construct 'MessageChannel': Execution context is unavailable.",
+        );
         return;
     };
-    let Some(registry) = current_message_port_registry(scope) else {
-        rv.set_undefined();
-        return;
-    };
-    let (port1_id, port2_id) = registry.create_entangled_message_port_pair(owner);
+    let (port1_id, port2_id) = realm
+        .registry()
+        .create_entangled_message_port_pair(realm.owner());
 
-    let Some(port1) = new_message_port_object(scope, port1_id) else {
-        rv.set_undefined();
+    let Some(port1) = new_message_port_object(scope, port1_id, &realm) else {
+        realm.discard_channel(scope, port1_id);
+        throw_type_error(
+            scope,
+            "Failed to construct 'MessageChannel': MessagePort initialization failed.",
+        );
         return;
     };
-    let Some(port2) = new_message_port_object(scope, port2_id) else {
-        rv.set_undefined();
+    let Some(port2) = new_message_port_object(scope, port2_id, &realm) else {
+        realm.discard_channel(scope, port1_id);
+        throw_type_error(
+            scope,
+            "Failed to construct 'MessageChannel': MessagePort initialization failed.",
+        );
         return;
     };
 
