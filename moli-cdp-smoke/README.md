@@ -104,6 +104,16 @@ The current suite is a strong core smoke gate, not a complete Playwright compati
 
 Covered well:
 
+- The default raw `debugger-breakpoints`, `runtime-exception`, and
+  `file-chooser` groups preserve six raw-CDP contracts covering seven Lexbench
+  task regressions at the public process boundary, and add two multi-attachment
+  Runtime exception contracts. They dispatch `Debugger.getPossibleBreakpoints`,
+  `setBreakpoint`, `removeBreakpoint`, and `setBreakpointByUrl` while the Page
+  is normally running, require an uncaught timer error to publish
+  `Runtime.exceptionThrown` without a follow-up command, verify that each
+  Runtime-enabled attachment receives the target-owned exception while a
+  disabled peer does not, and require a user-gesture file-input activation to
+  publish the session-scoped `Page.fileChooserOpened` event.
 - The default raw `url-policy` group holds the hosted local-file boundary at the
   public process edge. It requires an exact session-routed `Page.navigate`
   `-32000` error with no lifecycle or document replacement, verifies page

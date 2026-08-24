@@ -26,6 +26,9 @@ class GroupSelectionTests(unittest.TestCase):
             DEFAULT_GROUP_NAMES,
         )
         self.assertEqual(DEFAULT_GROUP_NAMES, tuple(group.name for group in DEFAULT_GROUPS))
+        self.assertIn("debugger-breakpoints", DEFAULT_GROUP_NAMES)
+        self.assertIn("runtime-exception", DEFAULT_GROUP_NAMES)
+        self.assertIn("file-chooser", DEFAULT_GROUP_NAMES)
         self.assertIn("inspector-routing", DEFAULT_GROUP_NAMES)
         self.assertIn("navigation-outcomes", DEFAULT_GROUP_NAMES)
         self.assertIn("puppeteer", DEFAULT_GROUP_NAMES)

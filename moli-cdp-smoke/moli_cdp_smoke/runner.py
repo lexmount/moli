@@ -51,6 +51,11 @@ from .groups.navigation_outcomes import run_navigation_outcomes_group
 from .groups.pdf import run_pdf_group
 from .groups.playwright_compat import run_playwright_compat_group
 from .groups.protocol import run_raw_protocol_group
+from .groups.protocol_regressions import (
+    run_debugger_breakpoints_group,
+    run_file_chooser_group,
+    run_runtime_exception_group,
+)
 from .groups.proxy_auth import run_proxy_auth_group
 from .groups.puppeteer import run_puppeteer_group
 from .groups.stagehand import run_stagehand_group
@@ -95,6 +100,24 @@ async def _await_group(group: SmokeGroup, awaitable: Awaitable[None]) -> None:
 
 
 RAW_GROUPS: tuple[SmokeGroup, ...] = (
+    SmokeGroup(
+        "debugger-breakpoints",
+        "Raw Debugger breakpoint commands dispatched while the page is normally running.",
+        "raw",
+        run_debugger_breakpoints_group,
+    ),
+    SmokeGroup(
+        "runtime-exception",
+        "Raw asynchronous Runtime.exceptionThrown delivery without a follow-up command.",
+        "raw",
+        run_runtime_exception_group,
+    ),
+    SmokeGroup(
+        "file-chooser",
+        "Raw intercepted file-input activation and Page.fileChooserOpened delivery.",
+        "raw",
+        run_file_chooser_group,
+    ),
     SmokeGroup(
         "inspector-routing",
         "Chromium-calibrated Page/Worker active-JS interrupt, nested Main receiver, per-session FIFO, and non-V8 IO boundaries.",
