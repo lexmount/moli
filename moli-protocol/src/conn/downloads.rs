@@ -6,11 +6,11 @@ use std::{
     sync::Arc,
 };
 
-use content_disposition::parse_content_disposition;
 use http::HeaderName;
 use moli_core::network::ResourceRequestClient;
 use moli_core::page::RendererPendingDownloadActivation;
 use moli_fetch::{FetchCancelHandle, Request};
+use moli_header_field::{split_outside_quoted_strings, unquote_parameter_value};
 use moli_web_mime::response_headers_indicate_attachment_download;
 use parking_lot::Mutex;
 use sanitize_filename::Options;
@@ -1373,34 +1373,45 @@ fn filename_from_headers(headers: &[(String, String)]) -> Option<String> {
 }
 
 fn filename_from_content_disposition(value: &str) -> Option<String> {
+    let mut plain = None;
     let mut extended = None;
     let mut saw_extended = false;
-    let mut saw_plain = false;
 
-    for part in value.split(';').skip(1) {
+    // A `;` inside a quoted string does not start a new parameter. Splitting on
+    // every `;` let text inside a quoted `filename` be read as a parameter of
+    // its own, so a site that echoes an attacker-supplied name into the header
+    // could smuggle a `filename*` and choose the extension the file is saved
+    // under.
+    for part in split_outside_quoted_strings(value, ';').into_iter().skip(1) {
         let part = part.trim();
-        if let Some(raw) = part.strip_prefix("filename*=") {
+        if let Some(raw) = strip_parameter_name(part, "filename*") {
             saw_extended = true;
             extended = decode_extended_filename(raw);
-            continue;
-        }
-        if part.strip_prefix("filename=").is_some() {
-            saw_plain = true;
+        } else if let Some(raw) = strip_parameter_name(part, "filename") {
+            plain = Some(unquote_parameter_value(raw.trim()).into_owned());
         }
     }
 
     if extended.is_some() {
         return extended;
     }
-    if saw_extended && !saw_plain {
+    if saw_extended && plain.is_none() {
         return None;
     }
 
-    parse_content_disposition(value)
-        .params
-        .get("filename")
-        .and_then(|filename| non_empty_filename(filename))
+    plain
+        .as_deref()
+        .and_then(non_empty_filename)
         .map(sanitize_filename)
+}
+
+/// Strips a case-insensitive `name=` prefix from one parameter.
+fn strip_parameter_name<'a>(part: &'a str, name: &str) -> Option<&'a str> {
+    let rest = part
+        .get(..name.len())?
+        .eq_ignore_ascii_case(name)
+        .then(|| &part[name.len()..])?;
+    rest.trim_start().strip_prefix('=')
 }
 
 fn decode_extended_filename(raw: &str) -> Option<String> {
@@ -1875,6 +1886,31 @@ mod tests {
             content_length_from_headers(&[("content-length".to_owned(), "bad".to_owned())]),
             None
         );
+    }
+
+    #[test]
+    fn content_disposition_ignores_filename_star_inside_a_quoted_filename() {
+        // RFC 6266: the whole quoted string is the `filename` value, and there
+        // is no `filename*` parameter here at all. Reading the inner text as
+        // one let a site that echoes an attacker-supplied name into the header
+        // choose the extension the file is saved under.
+        let filename = filename_from_content_disposition(
+            "attachment; filename=\"a;filename*=UTF-8''evil.exe\"",
+        );
+
+        // The saved name is the quoted string itself, with `*` removed by
+        // the Windows-safe sanitizer rather than by the parameter scan.
+        assert_ne!(filename.as_deref(), Some("evil.exe"));
+        assert_eq!(filename.as_deref(), Some("a;filename=UTF-8''evil.exe"));
+    }
+
+    #[test]
+    fn content_disposition_still_reads_a_real_filename_star_after_a_quoted_filename() {
+        let filename = filename_from_content_disposition(
+            "attachment; filename=\"plain;name.txt\"; filename*=UTF-8''%E4%B8%AD%E6%96%87.txt",
+        );
+
+        assert_eq!(filename.as_deref(), Some("中文.txt"));
     }
 
     #[test]

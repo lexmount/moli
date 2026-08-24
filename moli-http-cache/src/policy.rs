@@ -1,4 +1,5 @@
 use httpdate::parse_http_date;
+use moli_header_field::{split_outside_quoted_strings, unquote_parameter_value};
 use url::Url;
 
 /// Cache storage and freshness policy derived from response headers.
@@ -20,11 +21,18 @@ pub fn response_cache_policy(headers: &[(String, String)]) -> HttpCacheResponseP
 
     for (name, value) in headers {
         if name.eq_ignore_ascii_case("cache-control") {
-            for directive in value.split(',').map(str::trim) {
+            // A quoted directive argument may contain `,`, as in
+            // `private="Set-Cookie, X-Auth"`, so splitting on every comma
+            // would read the argument's own text as further directives.
+            for directive in split_outside_quoted_strings(value, ',')
+                .into_iter()
+                .map(str::trim)
+            {
                 let (directive_name, directive_value) = directive
                     .split_once('=')
-                    .map(|(name, value)| (name.trim(), Some(value.trim().trim_matches('"'))))
+                    .map(|(name, value)| (name.trim(), Some(unquote_parameter_value(value.trim()))))
                     .unwrap_or((directive, None));
+                let directive_value = directive_value.as_deref();
                 if directive_name.eq_ignore_ascii_case("no-store")
                     || directive_name.eq_ignore_ascii_case("private")
                 {
@@ -139,7 +147,7 @@ fn cached_response_is_fresh_immutable_at(
         && headers
             .iter()
             .filter(|(name, _)| name.eq_ignore_ascii_case("cache-control"))
-            .flat_map(|(_, value)| value.split(','))
+            .flat_map(|(_, value)| split_outside_quoted_strings(value, ','))
             .map(str::trim)
             .any(|directive| {
                 directive
@@ -161,19 +169,22 @@ pub fn request_header_requires_validation(name: &str, value: &str) -> bool {
 }
 
 pub fn request_cache_control_requires_validation(value: &str) -> bool {
-    value.split(',').map(str::trim).any(|directive| {
-        let (name, value) = directive
-            .split_once('=')
-            .map(|(name, value)| (name.trim(), Some(value.trim().trim_matches('"'))))
-            .unwrap_or((directive, None));
-        name.eq_ignore_ascii_case("no-cache")
-            || (name.eq_ignore_ascii_case("max-age") && value == Some("0"))
-    })
+    split_outside_quoted_strings(value, ',')
+        .into_iter()
+        .map(str::trim)
+        .any(|directive| {
+            let (name, value) = directive
+                .split_once('=')
+                .map(|(name, value)| (name.trim(), Some(unquote_parameter_value(value.trim()))))
+                .unwrap_or((directive, None));
+            name.eq_ignore_ascii_case("no-cache")
+                || (name.eq_ignore_ascii_case("max-age") && value.as_deref() == Some("0"))
+        })
 }
 
 pub fn request_pragma_requires_validation(value: &str) -> bool {
-    value
-        .split(',')
+    split_outside_quoted_strings(value, ',')
+        .into_iter()
         .map(str::trim)
         .any(|directive| directive.eq_ignore_ascii_case("no-cache"))
 }
@@ -229,5 +240,59 @@ mod tests {
             &immutable_headers,
             Some(100)
         ));
+    }
+
+    #[test]
+    fn quoted_directive_arguments_do_not_leak_further_directives() {
+        // RFC 9111 lets `private` and `no-cache` carry a quoted field list,
+        // and that list may contain commas. Splitting on every comma read the
+        // list's own text as further directives.
+        assert!(!request_cache_control_requires_validation(
+            "max-age=600, private=\"Set-Cookie, X-Auth\""
+        ));
+        assert!(request_cache_control_requires_validation(
+            "max-age=600, no-cache=\"Set-Cookie, X-Auth\""
+        ));
+        // A directive name appearing inside a quoted argument is not a
+        // directive of its own.
+        assert!(!request_cache_control_requires_validation(
+            "max-age=600, private=\"a, no-cache, b\""
+        ));
+    }
+
+    #[test]
+    fn response_policy_ignores_directives_inside_a_quoted_argument() {
+        let headers = vec![(
+            "Cache-Control".to_owned(),
+            "max-age=600, community=\"x, no-store, y\"".to_owned(),
+        )];
+
+        assert!(response_cache_policy(&headers).store);
+    }
+
+    #[test]
+    fn response_policy_still_honours_real_directives() {
+        for value in [
+            "no-store",
+            "private",
+            "max-age=0, no-store",
+            "no-store, max-age=600",
+        ] {
+            let headers = vec![("Cache-Control".to_owned(), value.to_owned())];
+            assert!(!response_cache_policy(&headers).store, "value={value}");
+        }
+        let headers = vec![(
+            "Cache-Control".to_owned(),
+            "private=\"Set-Cookie\"".to_owned(),
+        )];
+        assert!(!response_cache_policy(&headers).store);
+    }
+
+    #[test]
+    fn quoted_pragma_arguments_do_not_leak_directives() {
+        assert!(!request_pragma_requires_validation(
+            "token=\"a, no-cache, b\""
+        ));
+        assert!(request_pragma_requires_validation("no-cache"));
     }
 }

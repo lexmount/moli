@@ -7,6 +7,7 @@ edition = "2024"
 [dependencies]
 encoding_rs = "0.8"
 moli-charset-parser = { path = "../moli-charset-parser" }
+moli-header-field = { path = "../moli-header-field" }
 
 [lints]
 workspace = true

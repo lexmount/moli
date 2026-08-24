@@ -15,6 +15,7 @@ base64 = "0.22"
 indexmap = "2.6"
 moli-bounded-buffer = { path = "../moli-bounded-buffer" }
 moli-core = { path = "../moli-core" }
+moli-header-field = { path = "../moli-header-field" }
 moli-page-types = { path = "../moli-page-types" }
 moli-browser-profile = { path = "../moli-browser-profile" }
 moli-cookie-jar = { path = "../moli-cookie-jar" }
@@ -43,7 +44,6 @@ v8 = "146.8.0"
 time = "0.3"
 chromiumoxide_cdp = "0.9.1"
 data-url = "0.3.2"
-content_disposition = "0.4.0"
 moli-crypto = { path = "../moli-crypto" }
 http = "1"
 sanitize-filename = "=0.6.0"

@@ -665,3 +665,71 @@ fn bom_less_utf16be_truncated_not_detected() {
     assert_eq!(encoding, "windows-1252");
     assert_eq!(text, "\0<\0?");
 }
+
+#[test]
+fn header_charset_stays_inside_another_parameters_quoted_string() {
+    assert_eq!(
+        charset_from_content_type("text/html; boundary=\"; charset=gbk\""),
+        None
+    );
+    let headers = vec![(
+        "Content-Type".to_owned(),
+        "text/html; boundary=\"; charset=gbk\"".to_owned(),
+    )];
+    assert_eq!(
+        decode_html_document(b"<p>hi</p>", &headers).1,
+        "windows-1252"
+    );
+}
+
+#[test]
+fn header_charset_is_not_displaced_by_an_escaped_quote() {
+    assert_eq!(
+        charset_from_content_type("text/html; name=\"a\\\"; charset=gbk\"; charset=utf-8")
+            .as_deref(),
+        Some("utf-8")
+    );
+}
+
+#[test]
+fn header_charset_removes_quoting_backslashes() {
+    assert_eq!(
+        charset_from_content_type("text/html; charset=\"utf\\-8\"").as_deref(),
+        Some("utf-8")
+    );
+    let headers = vec![(
+        "Content-Type".to_owned(),
+        "text/html; charset=\"utf\\-8\"".to_owned(),
+    )];
+    assert_eq!(decode_html_document(b"<p>hi</p>", &headers).1, "UTF-8");
+}
+
+#[test]
+fn header_charset_keeps_its_existing_tolerances() {
+    for header in [
+        "text/html; charset=utf-8",
+        "text/html;charset=utf-8",
+        "TEXT/HTML; CHARSET=UTF-8",
+        "text/html; charset = utf-8 ",
+        "text/html; charset=\"utf-8\"",
+        "text/html;charset=utf-8;",
+        "text/html; charset='utf-8'",
+        "text/html; charset=\"utf-8",
+    ] {
+        assert_eq!(
+            charset_from_content_type(header)
+                .as_deref()
+                .and_then(encoding_for_label)
+                .map(Encoding::name),
+            Some("UTF-8"),
+            "header={header}"
+        );
+    }
+    assert_eq!(charset_from_content_type("text/html"), None);
+    assert_eq!(charset_from_content_type("text/html; charset="), None);
+    assert_eq!(charset_from_content_type("charset=utf-8"), None);
+    assert_eq!(
+        charset_from_content_type("text/html; charset=gbk; boundary=x").as_deref(),
+        Some("gbk")
+    );
+}
