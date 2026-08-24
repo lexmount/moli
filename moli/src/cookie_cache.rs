@@ -22,6 +22,16 @@ pub fn load_browser_cookie_file(browser: &Browser, path: impl AsRef<Path>) -> Re
     browser.import_cookies(load_cookie_file(path)?)
 }
 
+pub fn save_browser_cookie_file(
+    browser: &Browser,
+    path: impl AsRef<Path>,
+) -> Result<moli_cookie_cache::CookieFileSaveReport> {
+    let cookies = browser
+        .cookies()
+        .context("failed to snapshot browser cookies for cookie jar")?;
+    moli_cookie_cache::save_cookie_file(path, cookies)
+}
+
 pub fn save_browser_cookie_cache(browser: &Browser, path: impl AsRef<Path>) -> Result<()> {
     save_cookie_cache(
         path,

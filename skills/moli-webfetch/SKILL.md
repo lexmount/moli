@@ -119,8 +119,9 @@ unrelated actions.
   authorized intranet task.
 - Keep TLS verification enabled. Do not bypass authentication, paywalls,
   CAPTCHAs, or access controls.
-- Use `--cookie-file` or `--profile-dir` only for state the user is authorized
-  to use. Never expose headers, cookies, or tokens in the response.
+- Use `--cookie-file`, `--cookie-jar`, or `--profile-dir` only for state the
+  user is authorized to use. Treat cookie inputs and outputs as sensitive;
+  never expose headers, cookies, or tokens in the response.
 - Remember that `-H/--header` applies to the initial navigation, not every
   subresource.
 - Treat stdout as the requested artifact. Redirect screenshot, full-document

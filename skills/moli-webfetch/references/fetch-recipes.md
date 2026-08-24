@@ -145,6 +145,10 @@ For a crawl rather than a single lookup:
 
 - Add initial navigation headers with repeated `-H 'Name: Value'`.
 - Import cookie files with repeated `--cookie-file`.
+- Write final unpartitioned cookies as an interoperable Netscape file with
+  `--cookie-jar PATH`. The output can be imported by a later `--cookie-file`;
+  use `--profile-dir` when partitioned cookies or richer browser state must be
+  preserved.
 - Use `--profile-dir` when state must persist across invocations; it also
   provides the default HTTP cache location unless `--http-cache-dir` is set.
 - Use `--http-proxy`, `--http-no-proxy`, or

@@ -194,7 +194,7 @@ Dans Moli, les opérations coûteuses du navigateur ne sont jamais activées par
 | `--layout` | `LayoutPolicy::OnDemand` — véritables mise en page, géométrie, hit-testing, entrées par coordonnées, captures d'écran et screencast |
 | `--resource` | Récupère l'ensemble des familles de ressources optionnelles (visuelles et multimédias) |
 | `--image`, `--font`, `--audio`, `--video`, `--media`, `--text-track` | Active une famille spécifique de ressources optionnelles |
-| `--profile-dir`, `--http-cache-dir`, `--cookie-file` | Active, au cas par cas, la persistance dont la charge de travail a besoin |
+| `--profile-dir`, `--http-cache-dir`, `--cookie-file`, `--cookie-jar` | Active, au cas par cas, la persistance dont la charge de travail a besoin |
 
 Le résultat de la mise en page est un instantané produit à la demande, pas un état maintenu en continu : la première requête de géométrie (« à froid ») construit un arbre de travail temporaire à partir du DOM et des styles courants, fige sa géométrie canonique dans un `FrozenLayoutTree` immuable et indépendant du DOM, puis ne conserve que ce dernier. Les lectures de géométrie ultérieures peuvent réutiliser cet arbre figé, même si la page a changé entre-temps. Les captures d'écran reconstruisent toujours et remplacent l'arbre figé. Chaque abonnement de screencast ne mémorise qu'un jeton opaque d'état visuel : un jeton inchangé supprime le travail, tandis qu'un changement produit une image fraîche. Les résultats de rendu ne sont jamais réutilisés.
 

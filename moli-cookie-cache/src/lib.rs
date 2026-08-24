@@ -9,7 +9,7 @@ mod cache;
 mod netscape;
 
 pub use cache::{load_cookie_cache, save_cookie_cache};
-pub use netscape::load_cookie_file;
+pub use netscape::{CookieFileSaveReport, load_cookie_file, save_cookie_file};
 
 #[cfg(test)]
 mod tests;

@@ -194,7 +194,7 @@ En Moli, las operaciones caras del navegador hay que activarlas explícitamente:
 | `--layout` | `LayoutPolicy::OnDemand`: layout real, geometría, hit-testing, inputs por coordenadas, capturas de pantalla y screencast |
 | `--resource` | Descarga todas las familias opcionales de recursos visuales y multimedia |
 | `--image`, `--font`, `--audio`, `--video`, `--media`, `--text-track` | Activa por separado una familia concreta de recursos opcionales |
-| `--profile-dir`, `--http-cache-dir`, `--cookie-file` | Activa de forma selectiva la persistencia que necesite tu carga de trabajo |
+| `--profile-dir`, `--http-cache-dir`, `--cookie-file`, `--cookie-jar` | Activa de forma selectiva la persistencia que necesite tu carga de trabajo |
 
 El resultado del layout es una instantánea tomada bajo demanda, no un estado que se mantiene todo el tiempo: la primera petición de geometría (cold start) construye un árbol de trabajo temporal a partir del DOM y los estilos actuales, congela su geometría canónica en un `FrozenLayoutTree` inmutable e independiente del DOM, y se queda solo con ese árbol, el más reciente. Las lecturas de geometría normales pueden reutilizarlo aunque la página haya cambiado entretanto. Las capturas de pantalla siempre reconstruyen y sustituyen el árbol congelado. Cada suscripción de screencast solo conserva un token opaco del estado visual: un token sin cambios evita el trabajo, mientras que un cambio genera un frame nuevo. Los resultados de pintado nunca se reutilizan.
 

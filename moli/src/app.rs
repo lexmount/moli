@@ -58,7 +58,7 @@ pub async fn run_cli_with_config<W: Write>(
             let fetched_document = match fetch_result {
                 Ok(document) => document,
                 Err(error) => {
-                    finalize_fetch_browser(browser);
+                    finalize_fetch_browser_after_failure(browser, args.cookie_jar.as_deref());
                     return Err(with_fetch_context(error, &args.url));
                 }
             };
@@ -67,7 +67,7 @@ pub async fn run_cli_with_config<W: Write>(
                 FetchedDocument::Page(page) => page,
                 FetchedDocument::Raw(raw_document) => {
                     if readiness.has_page_waits() || args.delay_ms > 0 {
-                        finalize_fetch_browser(browser);
+                        finalize_fetch_browser_after_failure(browser, args.cookie_jar.as_deref());
                         return Err(with_fetch_context(
                             anyhow!(
                                 "raw non-HTML document fetch does not support page wait options"
@@ -83,7 +83,8 @@ pub async fn run_cli_with_config<W: Write>(
                         .context("failed to write raw fetch output")
                         .map_err(|error| with_fetch_context(error, &args.url))?;
                     let _ = stdout.flush();
-                    finalize_fetch_browser(browser);
+                    finalize_fetch_browser(browser, args.cookie_jar.as_deref())
+                        .map_err(|error| with_fetch_context(error, &args.url))?;
                     return Ok(());
                 }
             };
@@ -95,7 +96,7 @@ pub async fn run_cli_with_config<W: Write>(
                         "failed to close fetched page after readiness failure"
                     );
                 }
-                finalize_fetch_browser(browser);
+                finalize_fetch_browser_after_failure(browser, args.cookie_jar.as_deref());
                 return Err(with_fetch_context(error, &args.url));
             }
 
@@ -118,7 +119,8 @@ pub async fn run_cli_with_config<W: Write>(
             if let Err(error) = page.close_async().await {
                 tracing::warn!(error = %error, "failed to close fetched page before browser shutdown");
             }
-            finalize_fetch_browser(browser);
+            finalize_fetch_browser(browser, args.cookie_jar.as_deref())
+                .map_err(|error| with_fetch_context(error, &args.url))?;
         }
         Commands::Serve(_) => {
             if config.browser.fetch().obey_robots() {
@@ -232,12 +234,34 @@ fn load_cookie_state_cookies(config: &AppConfig) -> Result<Vec<moli_cookie_jar::
     Ok(cookies)
 }
 
-fn finalize_fetch_browser(browser: Browser) {
+fn finalize_fetch_browser_after_failure(browser: Browser, cookie_jar: Option<&str>) {
+    if let Err(error) = finalize_fetch_browser(browser, cookie_jar) {
+        tracing::warn!(
+            error = %error,
+            "failed to finalize cookie jar after fetch failure"
+        );
+    }
+}
+
+fn finalize_fetch_browser(browser: Browser, cookie_jar: Option<&str>) -> Result<()> {
+    let save_result = cookie_jar.map_or(Ok(()), |path| -> Result<()> {
+        let report = cookie_cache::save_browser_cookie_file(&browser, path)
+            .with_context(|| format!("failed to save cookie jar `{path}`"))?;
+        if report.skipped_partitioned > 0 {
+            tracing::warn!(
+                path,
+                skipped = report.skipped_partitioned,
+                "omitted partitioned cookies from Netscape cookie jar"
+            );
+        }
+        Ok(())
+    });
     // Fetch is a one-shot CLI path, but the browser must still be dropped in an
     // orderly way. Letting network threads survive until process exit can race
     // OpenSSL global cleanup with libcurl transfers still in progress.
     // Browser::drop owns profile cookie writeback when --profile-dir is set.
     drop(browser);
+    save_result
 }
 
 #[cfg(test)]

@@ -192,7 +192,7 @@ Moli 是 Lexmount 旗下的开源无头浏览器；Lexmount Browser 则是围绕
 | `--layout` | `LayoutPolicy::OnDemand`——提供真实的布局、几何信息、命中测试、坐标输入、截图和屏幕串流 |
 | `--resource` | 拉取所有可选的视觉/媒体资源类别 |
 | `--image`、`--font`、`--audio`、`--video`、`--media`、`--text-track` | 单独启用某一类可选资源 |
-| `--profile-dir`、`--http-cache-dir`、`--cookie-file` | 按工作负载需要，选择性开启持久化能力 |
+| `--profile-dir`、`--http-cache-dir`、`--cookie-file`、`--cookie-jar` | 按工作负载需要，选择性开启持久化能力 |
 
 布局结果是按需采样的一份快照，而不是持续维护的状态：第一次几何请求（冷启动）会根据当前 DOM/样式构建临时工作布局树，再把工作树丢弃后无法重算的几何冻结成一棵与 DOM 无关、不可变的 `FrozenLayoutTree`，长期只保留最新的这一棵树。在此之后，即便页面发生了变化，普通几何读取也可能复用旧树。截图始终重新构建并替换冻结树。每个屏幕串流订阅只记录一个不透明的视觉状态 token：状态未变时不产帧，状态变化时才新鲜渲染一帧；绘制结果不会被复用。
 

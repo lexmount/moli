@@ -47,6 +47,10 @@ pub struct FetchArgs {
     #[arg(short = 'H', long = "header", value_name = "HEADER", value_parser = parse_request_header_arg)]
     pub headers: Vec<RequestHeaderArg>,
 
+    /// Write final unpartitioned cookies to a Netscape cookie file.
+    #[arg(long, value_name = "PATH")]
+    pub cookie_jar: Option<String>,
+
     #[arg(long)]
     pub noscript: bool,
 

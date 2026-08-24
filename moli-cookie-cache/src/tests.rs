@@ -188,6 +188,87 @@ fn netscape_cookie_parser_imports_httponly_tailmatch_cookie() -> Result<()> {
 }
 
 #[test]
+fn netscape_cookie_writer_round_trips_representable_cookies() -> Result<()> {
+    let temp = TempDir::new("netscape-write-roundtrip");
+    let target = temp.path.join("cookies.txt");
+    let mut domain_cookie = stored_cookie("session", "fixture");
+    domain_cookie.host_only = false;
+    domain_cookie.path = "/account/".to_owned();
+    domain_cookie.secure = true;
+    domain_cookie.http_only = true;
+    domain_cookie.expires = Some(OffsetDateTime::now_utc() + time::Duration::days(1));
+    let host_cookie = stored_cookie("host", "session value");
+
+    let report = save_cookie_file(&target, vec![domain_cookie, host_cookie])?;
+
+    assert_eq!(report.written, 2);
+    assert_eq!(report.skipped_expired, 0);
+    assert_eq!(report.skipped_partitioned, 0);
+    let contents = fs::read_to_string(&target)?;
+    assert!(contents.starts_with("# Netscape HTTP Cookie File\n"));
+    assert!(contents.contains("#HttpOnly_.example.com\tTRUE\t/account/\tTRUE\t"));
+    let loaded = load_cookie_file(&target)?;
+    assert_eq!(loaded.len(), 2);
+    assert_eq!(loaded[0].domain, "example.com");
+    assert!(!loaded[0].host_only);
+    assert_eq!(loaded[0].path, "/account/");
+    assert!(loaded[0].secure);
+    assert!(loaded[0].http_only);
+    assert_eq!(loaded[0].name, "session");
+    assert_eq!(loaded[0].value, "fixture");
+    assert!(loaded[0].expires.is_some());
+    assert!(loaded[1].host_only);
+    assert_eq!(loaded[1].name, "host");
+    assert_eq!(loaded[1].value, "session value");
+    assert_eq!(loaded[1].expires, None);
+    Ok(())
+}
+
+#[test]
+fn netscape_cookie_writer_omits_expired_and_partitioned_cookies() -> Result<()> {
+    let temp = TempDir::new("netscape-write-filter");
+    let target = temp.path.join("cookies.txt");
+    let mut expired = stored_cookie("expired", "gone");
+    expired.expires = Some(OffsetDateTime::now_utc() - time::Duration::days(1));
+    let mut partitioned = stored_cookie("partitioned", "scoped");
+    partitioned.partition_key = Some(StoredCookiePartitionKey::site(
+        "https://top.example".to_owned(),
+        false,
+    ));
+
+    let report = save_cookie_file(
+        &target,
+        vec![expired, partitioned, stored_cookie("plain", "kept")],
+    )?;
+
+    assert_eq!(report.written, 1);
+    assert_eq!(report.skipped_expired, 1);
+    assert_eq!(report.skipped_partitioned, 1);
+    let loaded = load_cookie_file(&target)?;
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded[0].name, "plain");
+    Ok(())
+}
+
+#[test]
+fn netscape_cookie_writer_rejects_unrepresentable_fields() {
+    let temp = TempDir::new("netscape-write-invalid");
+    let target = temp.path.join("cookies.txt");
+    let cookie = stored_cookie("session", "line\tbreak");
+
+    let error = save_cookie_file(&target, vec![cookie])
+        .expect_err("tabs cannot be encoded in Netscape cookie records");
+
+    assert!(
+        error
+            .to_string()
+            .contains("cookie value cannot be represented"),
+        "error={error:#}"
+    );
+    assert!(!target.exists());
+}
+
+#[test]
 fn netscape_cookie_parser_preserves_trailing_slash_path_scope() -> Result<()> {
     let cookies = parse_netscape_cookie_file(std::io::Cursor::new(
         "example.com\tFALSE\t/account/\tFALSE\t0\ttoken\tvalue",
