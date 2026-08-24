@@ -165,6 +165,7 @@ pub(crate) fn outgoing_request_headers_for_url(
     cookie_header: Option<&str>,
 ) -> Vec<(String, String)> {
     let mut outgoing = Vec::new();
+    let request_origin_matches = same_origin(&request.url, request_url);
 
     if let Some(proxy_bearer_token) = config.proxy_bearer_token() {
         outgoing.push((
@@ -185,6 +186,9 @@ pub(crate) fn outgoing_request_headers_for_url(
     }
 
     for (name, value) in &request.request_headers {
+        if !request_origin_matches && is_origin_bound_request_header(name) {
+            continue;
+        }
         if cookie_header.is_some() && name.eq_ignore_ascii_case("cookie") {
             continue;
         }
@@ -215,20 +219,6 @@ pub(crate) fn outgoing_request_headers_for_url(
     }
 
     if let Some(auth) = request.auth()
-        && auth.target == RequestAuthTarget::Server
-        && auth.scheme == RequestAuthScheme::Basic
-        && !header_present(&outgoing, "authorization")
-    {
-        outgoing.push((
-            "Authorization".to_owned(),
-            format!(
-                "Basic {}",
-                encode_basic_auth(&auth.username, &auth.password)
-            ),
-        ));
-    }
-
-    if let Some(auth) = request.auth()
         && auth.target == RequestAuthTarget::ProxyHeader
         && !header_present(&outgoing, "proxy-authorization")
     {
@@ -242,6 +232,10 @@ pub(crate) fn outgoing_request_headers_for_url(
     }
 
     outgoing
+}
+
+fn is_origin_bound_request_header(name: &str) -> bool {
+    name.eq_ignore_ascii_case("authorization") || name.eq_ignore_ascii_case("cookie")
 }
 
 pub(crate) fn network_request_extra_info_from_headers(
@@ -661,8 +655,23 @@ pub(crate) fn configure_easy<H: Handler>(
     easy.url(request_url.as_str())
         .with_context(|| anyhow!("failed to set curl request url to {}", request_url))?;
 
+    if request.method.eq_ignore_ascii_case("HEAD") && request.body.is_some() {
+        bail!("HEAD request bodies are not supported");
+    }
+
     match request.method.as_str() {
-        "GET" => easy.get(true).context("failed to configure GET request")?,
+        "GET" if request.body.is_none() => {
+            easy.get(true).context("failed to configure GET request")?
+        }
+        "GET" => {
+            // CURLOPT_HTTPGET resets libcurl's upload state. Use a custom GET
+            // method when a body is present so CURLOPT_POSTFIELDS remains on
+            // the wire while response handling retains normal GET semantics.
+            easy.custom_request("GET")
+                .context("failed to configure GET request with body")?;
+            easy.post_fields_copy(request.body.as_deref().unwrap_or_default())
+                .context("failed to set GET body")?;
+        }
         "HEAD" => easy
             .nobody(true)
             .context("failed to configure HEAD request")?,
@@ -739,13 +748,16 @@ pub(crate) fn configure_easy<H: Handler>(
             has_headers = true;
         }
     }
-    if request.method.eq_ignore_ascii_case("POST") && !has_content_type_header {
-        // libcurl otherwise synthesizes `Content-Type: application/x-www-form-urlencoded`
-        // for POST bodies. Browser fetch/sendBeacon only send Content-Type when
-        // BodyInit or caller headers produce one, so suppress curl's transport default.
+    if (request.method.eq_ignore_ascii_case("POST")
+        || request.method.eq_ignore_ascii_case("GET") && request.body.is_some())
+        && !has_content_type_header
+    {
+        // CURLOPT_POSTFIELDS otherwise makes libcurl synthesize
+        // `Content-Type: application/x-www-form-urlencoded`, including for a
+        // custom GET. A generic Moli request body has no implied media type.
         headers
             .append("Content-Type:")
-            .context("failed to suppress curl default POST content-type")?;
+            .context("failed to suppress curl default request body content-type")?;
         has_headers = true;
     }
 
@@ -756,6 +768,7 @@ pub(crate) fn configure_easy<H: Handler>(
 
     if let Some(auth) = request.auth()
         && request.auth_requires_buffered_transport()
+        && (auth.target != RequestAuthTarget::Server || same_origin(&request.url, request_url))
     {
         let mut methods = Auth::new();
         match auth.scheme {
@@ -943,7 +956,7 @@ fn effective_connect_timeout(config: &FetchConfig, request: &Request) -> Option<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::RequestMode;
+    use crate::{RequestAuth, RequestMode};
 
     fn url(value: &str) -> Url {
         Url::parse(value).expect("valid URL")
@@ -1021,6 +1034,124 @@ mod tests {
             effective_connect_timeout(&config, &subresource),
             Some(Duration::from_millis(1_234))
         );
+    }
+
+    #[test]
+    fn explicit_authorization_and_cookie_headers_follow_only_the_original_origin() {
+        let config = FetchConfig::default();
+        let original_url = url("https://app.test/start");
+        let cross_host_url = url("https://cdn.test/final");
+        let cross_port_url = url("https://app.test:444/final");
+        let downgrade_url = url("http://app.test/final");
+        let returned_url = url("https://app.test/final");
+        let explicit_default_port_url = url("https://app.test:443/final");
+        let request = Request::new(
+            "GET",
+            original_url.as_str(),
+            None,
+            vec![
+                ("aUtHoRiZaTiOn".to_owned(), "Bearer secret".to_owned()),
+                ("cOoKiE".to_owned(), "manual=secret".to_owned()),
+                ("X-Trace".to_owned(), "keep-me".to_owned()),
+            ],
+        )
+        .unwrap();
+
+        let cases = [
+            ("initial request", original_url.clone(), Vec::new(), true),
+            (
+                "same-origin redirect",
+                returned_url.clone(),
+                vec![redirect(&original_url, &returned_url)],
+                true,
+            ),
+            (
+                "same origin with an explicit default port",
+                explicit_default_port_url.clone(),
+                vec![redirect(&original_url, &explicit_default_port_url)],
+                true,
+            ),
+            (
+                "cross-host redirect",
+                cross_host_url.clone(),
+                vec![redirect(&original_url, &cross_host_url)],
+                false,
+            ),
+            (
+                "cross-port redirect",
+                cross_port_url.clone(),
+                vec![redirect(&original_url, &cross_port_url)],
+                false,
+            ),
+            (
+                "scheme downgrade",
+                downgrade_url.clone(),
+                vec![redirect(&original_url, &downgrade_url)],
+                false,
+            ),
+            (
+                "return to original origin",
+                returned_url.clone(),
+                vec![
+                    redirect(&original_url, &cross_host_url),
+                    redirect(&cross_host_url, &returned_url),
+                ],
+                true,
+            ),
+        ];
+
+        for (name, request_url, redirect_chain, keeps_sensitive_headers) in cases {
+            let headers = outgoing_request_headers_for_url(
+                &config,
+                &request,
+                &request_url,
+                &redirect_chain,
+                None,
+            );
+            assert_eq!(
+                header_value(&headers, "authorization").is_some(),
+                keeps_sensitive_headers,
+                "{name}",
+            );
+            assert_eq!(
+                header_value(&headers, "cookie").is_some(),
+                keeps_sensitive_headers,
+                "{name}",
+            );
+            assert_eq!(
+                header_value(&headers, "x-trace").as_deref(),
+                Some("keep-me"),
+                "ordinary explicit headers should survive {name}",
+            );
+        }
+    }
+
+    #[test]
+    fn request_basic_auth_is_not_recreated_for_a_cross_origin_redirect() {
+        let config = FetchConfig::default();
+        let original_url = url("https://app.test/start");
+        let cross_origin_url = url("https://api.test/final");
+        let request = Request::new("GET", original_url.as_str(), None, Vec::new())
+            .unwrap()
+            .with_auth(RequestAuth {
+                target: RequestAuthTarget::Server,
+                scheme: RequestAuthScheme::Basic,
+                username: "user".to_owned(),
+                password: "password".to_owned(),
+            });
+
+        let initial =
+            outgoing_request_headers_for_url(&config, &request, &original_url, &Vec::new(), None);
+        assert!(header_value(&initial, "authorization").is_some());
+
+        let redirected = outgoing_request_headers_for_url(
+            &config,
+            &request,
+            &cross_origin_url,
+            &[redirect(&original_url, &cross_origin_url)],
+            None,
+        );
+        assert_eq!(header_value(&redirected, "authorization"), None);
     }
 
     #[test]

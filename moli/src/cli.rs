@@ -47,6 +47,21 @@ pub struct FetchArgs {
     #[arg(short = 'H', long = "header", value_name = "HEADER", value_parser = parse_request_header_arg)]
     pub headers: Vec<RequestHeaderArg>,
 
+    /// HTTP method for the initial document request.
+    #[arg(
+        short = 'X',
+        long,
+        value_name = "METHOD",
+        default_value = "GET",
+        value_parser = parse_request_method
+    )]
+    pub method: String,
+
+    /// UTF-8 body for the initial document request. GET bodies are sent;
+    /// HEAD bodies are rejected.
+    #[arg(long, value_name = "TEXT")]
+    pub body: Option<String>,
+
     #[arg(long)]
     pub noscript: bool,
 
@@ -312,6 +327,33 @@ fn parse_request_header_arg(raw: &str) -> Result<RequestHeaderArg, String> {
         name: name.to_owned(),
         value: value.to_owned(),
     })
+}
+
+fn parse_request_method(raw: &str) -> Result<String, String> {
+    let is_token_byte = |byte: u8| {
+        byte.is_ascii_alphanumeric()
+            || matches!(
+                byte,
+                b'!' | b'#'
+                    | b'$'
+                    | b'%'
+                    | b'&'
+                    | b'\''
+                    | b'*'
+                    | b'+'
+                    | b'-'
+                    | b'.'
+                    | b'^'
+                    | b'_'
+                    | b'`'
+                    | b'|'
+                    | b'~'
+            )
+    };
+    if raw.is_empty() || !raw.bytes().all(is_token_byte) {
+        return Err("HTTP method must be a non-empty RFC 9110 token".to_owned());
+    }
+    Ok(raw.to_owned())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Args)]

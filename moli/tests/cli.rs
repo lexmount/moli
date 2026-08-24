@@ -74,6 +74,8 @@ fn parses_explicit_fetch_command_with_compatibility_flags() {
         cli.command,
         Commands::Fetch(Box::new(FetchArgs {
             dump: Some(DumpFormat::SemanticTree),
+            method: "GET".to_owned(),
+            body: None,
             headers: vec![
                 RequestHeaderArg {
                     name: "X-Test".to_owned(),
@@ -412,6 +414,8 @@ fn infers_fetch_mode_from_bare_url() {
         cli.command,
         Commands::Fetch(Box::new(FetchArgs {
             dump: None,
+            method: "GET".to_owned(),
+            body: None,
             headers: vec![],
             noscript: false,
             with_base: false,
@@ -452,6 +456,8 @@ fn parses_bare_dump_with_explicit_fetch_command_and_defaults_to_html() {
         cli.command,
         Commands::Fetch(Box::new(FetchArgs {
             dump: Some(DumpFormat::Html),
+            method: "GET".to_owned(),
+            body: None,
             headers: vec![],
             noscript: false,
             with_base: false,
@@ -493,6 +499,8 @@ fn parses_header_flag_with_explicit_fetch_command() {
         cli.command,
         Commands::Fetch(Box::new(FetchArgs {
             dump: None,
+            method: "GET".to_owned(),
+            body: None,
             headers: vec![RequestHeaderArg {
                 name: "X-Test".to_owned(),
                 value: "one".to_owned(),
@@ -800,6 +808,40 @@ fn app_config_preserves_repeatable_request_headers() {
         ]
     );
     assert!(config.browser.fetch().default_request_headers().is_empty());
+}
+
+#[test]
+fn parses_initial_request_method_and_body() {
+    let cli = Cli::try_parse_from(normalize_args_for_compat([
+        "moli",
+        "fetch",
+        "-X",
+        "POST",
+        "--body",
+        "hello=moli",
+        "https://example.com",
+    ]))
+    .unwrap();
+
+    let Commands::Fetch(args) = cli.command else {
+        panic!("expected fetch command");
+    };
+    assert_eq!(args.method, "POST");
+    assert_eq!(args.body.as_deref(), Some("hello=moli"));
+}
+
+#[test]
+fn rejects_invalid_initial_request_method() {
+    let error = Cli::try_parse_from(normalize_args_for_compat([
+        "moli",
+        "fetch",
+        "--method",
+        "NOT VALID",
+        "https://example.com",
+    ]))
+    .unwrap_err();
+
+    assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
 }
 
 struct TempWebBotAuthKeyFile {

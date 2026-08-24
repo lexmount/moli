@@ -148,6 +148,11 @@ For a crawl rather than a single lookup:
 ## Request State and Policy
 
 - Add initial navigation headers with repeated `-H 'Name: Value'`.
+- Set the initial navigation method with `-X/--method METHOD`; add a UTF-8 body
+  with `--body TEXT`. Normal HTTP redirect rules apply, including method/body
+  preservation across 307 and 308 responses. GET bodies are supported; HEAD
+  bodies are rejected. Explicit `Authorization` and `Cookie` headers remain on
+  the initial origin when redirects cross an origin boundary.
 - Import cookie files with repeated `--cookie-file`.
 - Use `--profile-dir` when state must persist across invocations; it also
   provides the default HTTP cache location unless `--http-cache-dir` is set.

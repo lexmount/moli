@@ -2776,6 +2776,133 @@ fn cli_http_redirect_with_location_does_not_consume_redirect_wait() -> Result<()
     Ok(())
 }
 
+fn assert_cli_request_redirect_preserves_method_body_and_headers(
+    status: u16,
+    method: &str,
+) -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let server = runtime.block_on(FixtureServer::spawn())?;
+    let url = server.url(&format!("/request-redirect/{status}"));
+    let body = format!("payload-{status}");
+    let content_type = format!("application/x-moli-{status}");
+    let content_type_header = format!("Content-Type: {content_type}");
+    let marker = format!("redirect-{status}");
+    let marker_header = format!("X-Moli-Redirect-Test: {marker}");
+    let output = run_fetch_cli_with_dump_and_args(
+        &url,
+        "html",
+        &[
+            "--method",
+            method,
+            "--body",
+            &body,
+            "--header",
+            &content_type_header,
+            "--header",
+            &marker_header,
+        ],
+    )?;
+    runtime.block_on(server.shutdown());
+
+    assert!(
+        output.status.success(),
+        "moli fetch failed: stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = clean_output(&output.stdout);
+    assert!(
+        stdout.contains(&format!("method={method}")),
+        "stdout={stdout}"
+    );
+    assert!(stdout.contains(&format!("body={body}")), "stdout={stdout}");
+    assert!(
+        stdout.contains(&format!("content-type={content_type}")),
+        "stdout={stdout}"
+    );
+    assert!(
+        stdout.contains(&format!("marker={marker}")),
+        "stdout={stdout}"
+    );
+    Ok(())
+}
+
+#[test]
+fn cli_307_redirect_preserves_initial_request_method_body_and_headers() -> Result<()> {
+    assert_cli_request_redirect_preserves_method_body_and_headers(307, "POST")
+}
+
+#[test]
+fn cli_308_redirect_preserves_initial_request_method_body_and_headers() -> Result<()> {
+    assert_cli_request_redirect_preserves_method_body_and_headers(308, "POST")
+}
+
+#[test]
+fn cli_get_sends_an_inline_utf8_body() -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let server = runtime.block_on(FixtureServer::spawn())?;
+    let url = server.url("/request-redirect/final");
+    let output = run_fetch_cli_with_dump_and_args(
+        &url,
+        "html",
+        &[
+            "--method",
+            "GET",
+            "--body",
+            "direct-get-世界",
+            "--header",
+            "Content-Type: text/plain; charset=utf-8",
+        ],
+    )?;
+    runtime.block_on(server.shutdown());
+
+    assert!(
+        output.status.success(),
+        "moli fetch failed: stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = clean_output(&output.stdout);
+    assert!(stdout.contains("method=GET"), "stdout={stdout}");
+    assert!(stdout.contains("body=direct-get-世界"), "stdout={stdout}");
+    assert!(
+        stdout.contains("content-type=text/plain; charset=utf-8"),
+        "stdout={stdout}",
+    );
+    Ok(())
+}
+
+#[test]
+fn cli_307_redirect_preserves_get_body_and_headers() -> Result<()> {
+    assert_cli_request_redirect_preserves_method_body_and_headers(307, "GET")
+}
+
+#[test]
+fn cli_308_redirect_preserves_get_body_and_headers() -> Result<()> {
+    assert_cli_request_redirect_preserves_method_body_and_headers(308, "GET")
+}
+
+#[test]
+fn cli_head_body_fails_instead_of_silently_dropping_the_body() -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let server = runtime.block_on(FixtureServer::spawn())?;
+    let url = server.url("/request-redirect/final");
+    let output = run_fetch_cli_with_dump_and_args(
+        &url,
+        "html",
+        &["--method", "HEAD", "--body", "must-not-disappear"],
+    )?;
+    runtime.block_on(server.shutdown());
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("HEAD request bodies are not supported"),
+        "stderr={stderr}",
+    );
+    Ok(())
+}
+
 #[test]
 fn cli_dump_json_includes_title_headers_and_redirect_chain() -> Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;

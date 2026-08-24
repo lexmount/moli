@@ -2466,6 +2466,12 @@ pub(super) fn build_router() -> Router {
             get(asset_parser_image_fetch_policy_css),
         )
         .route("/redirect", get(redirect_page))
+        .route("/request-redirect/307", any(initial_request_redirect_307))
+        .route("/request-redirect/308", any(initial_request_redirect_308))
+        .route(
+            "/request-redirect/final",
+            any(initial_request_redirect_final),
+        )
         .route("/redirect-cookie", get(redirect_cookie_page))
         .route("/cookie", get(cookie_page))
         .route("/cookie-location-gate", get(cookie_location_gate_page))

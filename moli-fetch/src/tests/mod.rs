@@ -1441,6 +1441,210 @@ async fn fetch_raw_stream_finishes_null_body_status_without_connection_close() -
 }
 
 #[tokio::test]
+async fn fetch_get_sends_its_utf8_body_on_the_wire() -> Result<()> {
+    let server = ScriptedHttpServer::spawn(vec![ScriptedResponse::ok("get-body-ok")]);
+    let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+    let body = "payload=hello-世界";
+    let response = client
+        .fetch(Request::new(
+            "GET",
+            &server.url_path("/get-body"),
+            Some(body.to_owned()),
+            vec![("X-Request-Marker".to_owned(), "get-body".to_owned())],
+        )?)
+        .await?;
+
+    assert_eq!(response.body_text(), "get-body-ok");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    let request = &requests[0];
+    assert!(request.starts_with("GET /get-body HTTP/1.1"), "{request}");
+    assert!(
+        request.contains(&format!("Content-Length: {}", body.len())),
+        "{request}",
+    );
+    assert!(request.contains("X-Request-Marker: get-body"), "{request}");
+    assert_eq!(
+        request
+            .split_once("\r\n\r\n")
+            .map(|(_, request_body)| request_body),
+        Some(body),
+    );
+    assert!(
+        !request.to_ascii_lowercase().contains("content-type:"),
+        "a generic GET body must not acquire libcurl's form content type: {request}",
+    );
+
+    server.shutdown();
+    Ok(())
+}
+
+#[tokio::test]
+async fn fetch_get_preserves_an_explicit_empty_body() -> Result<()> {
+    let server = ScriptedHttpServer::spawn(vec![ScriptedResponse::ok("empty-get-body-ok")]);
+    let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+    client
+        .fetch(Request::new(
+            "GET",
+            &server.url_path("/empty-get-body"),
+            Some(String::new()),
+            Vec::new(),
+        )?)
+        .await?;
+
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    let request = &requests[0];
+    assert!(
+        request.starts_with("GET /empty-get-body HTTP/1.1"),
+        "{request}"
+    );
+    assert!(request.contains("Content-Length: 0"), "{request}");
+    assert_eq!(
+        request
+            .split_once("\r\n\r\n")
+            .map(|(_, request_body)| request_body),
+        Some(""),
+    );
+
+    server.shutdown();
+    Ok(())
+}
+
+#[tokio::test]
+async fn fetch_head_rejects_a_body_instead_of_silently_dropping_it() -> Result<()> {
+    let server = ScriptedHttpServer::spawn(vec![ScriptedResponse::ok("unexpected")]);
+    let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+    let error = client
+        .fetch(Request::new(
+            "HEAD",
+            &server.url_path("/head-body"),
+            Some("payload".to_owned()),
+            Vec::new(),
+        )?)
+        .await
+        .expect_err("HEAD with a body must fail before transfer");
+
+    assert!(
+        format!("{error:#}").contains("HEAD request bodies are not supported"),
+        "{error:#}",
+    );
+    assert_eq!(server.hits(), 0);
+
+    server.shutdown();
+    Ok(())
+}
+
+#[tokio::test]
+async fn fetch_307_and_308_preserve_get_method_body_and_body_headers() -> Result<()> {
+    for (status, reason) in [(307, "Temporary Redirect"), (308, "Permanent Redirect")] {
+        let server = ScriptedHttpServer::spawn(vec![
+            ScriptedResponse::status(status, reason).with_header("Location", "/final"),
+            ScriptedResponse::ok("final-body"),
+        ]);
+        let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+        let body = format!("get-payload-{status}");
+        let response = client
+            .fetch(Request::new(
+                "GET",
+                &server.url_path("/redirect"),
+                Some(body.clone()),
+                vec![("Content-Type".to_owned(), "text/plain".to_owned())],
+            )?)
+            .await?;
+
+        assert_eq!(response.body_text(), "final-body");
+        let requests = server.requests();
+        assert_eq!(requests.len(), 2);
+        for (index, request) in requests.iter().enumerate() {
+            let expected_path = if index == 0 { "/redirect" } else { "/final" };
+            assert!(
+                request.starts_with(&format!("GET {expected_path} HTTP/1.1")),
+                "status={status} request={request}",
+            );
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("content-type: text/plain"),
+                "status={status} request={request}",
+            );
+            assert_eq!(
+                request
+                    .split_once("\r\n\r\n")
+                    .map(|(_, request_body)| request_body),
+                Some(body.as_str()),
+                "status={status} request={request}",
+            );
+        }
+
+        server.shutdown();
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn cross_origin_redirect_strips_manual_credentials_but_preserves_get_body() -> Result<()> {
+    let destination = ScriptedHttpServer::spawn(vec![ScriptedResponse::ok("destination-body")]);
+    let origin = ScriptedHttpServer::spawn(vec![
+        ScriptedResponse::status(307, "Temporary Redirect")
+            .with_header("Location", &destination.url_path("/final")),
+    ]);
+    let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+    let response = client
+        .fetch(Request::new(
+            "GET",
+            &origin.url_path("/start"),
+            Some("cross-origin-payload".to_owned()),
+            vec![
+                ("Authorization".to_owned(), "Bearer secret".to_owned()),
+                ("Cookie".to_owned(), "manual=secret".to_owned()),
+                ("Content-Type".to_owned(), "text/plain".to_owned()),
+                ("X-Trace".to_owned(), "preserved".to_owned()),
+            ],
+        )?)
+        .await?;
+
+    assert_eq!(response.body_text(), "destination-body");
+    let origin_requests = origin.requests();
+    let destination_requests = destination.requests();
+    assert_eq!(origin_requests.len(), 1);
+    assert_eq!(destination_requests.len(), 1);
+    let initial = origin_requests[0].to_ascii_lowercase();
+    assert!(
+        initial.contains("authorization: bearer secret"),
+        "{initial}"
+    );
+    assert!(initial.contains("cookie: manual=secret"), "{initial}");
+
+    let redirected = &destination_requests[0];
+    let redirected_lower = redirected.to_ascii_lowercase();
+    assert!(
+        redirected.starts_with("GET /final HTTP/1.1"),
+        "{redirected}"
+    );
+    assert!(!redirected_lower.contains("authorization:"), "{redirected}");
+    assert!(!redirected_lower.contains("cookie:"), "{redirected}");
+    assert!(
+        redirected_lower.contains("x-trace: preserved"),
+        "{redirected}"
+    );
+    assert!(
+        redirected_lower.contains("content-type: text/plain"),
+        "{redirected}",
+    );
+    assert_eq!(
+        redirected
+            .split_once("\r\n\r\n")
+            .map(|(_, request_body)| request_body),
+        Some("cross-origin-payload"),
+    );
+
+    origin.shutdown();
+    destination.shutdown();
+    Ok(())
+}
+
+#[tokio::test]
 async fn fetch_redirect_303_rewrites_post_to_get_and_drops_body_headers() -> Result<()> {
     let server = ScriptedHttpServer::spawn(vec![
         ScriptedResponse::status(303, "See Other").with_header("Location", "/final"),

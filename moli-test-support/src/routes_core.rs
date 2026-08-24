@@ -5551,6 +5551,45 @@ pub(super) async fn redirect_page() -> Redirect {
     Redirect::temporary("/static")
 }
 
+pub(super) async fn initial_request_redirect_307() -> Response {
+    Response::builder()
+        .status(StatusCode::TEMPORARY_REDIRECT)
+        .header("location", "/request-redirect/final")
+        .body(Body::empty())
+        .expect("307 redirect response should build")
+}
+
+pub(super) async fn initial_request_redirect_308() -> Response {
+    Response::builder()
+        .status(StatusCode::PERMANENT_REDIRECT)
+        .header("location", "/request-redirect/final")
+        .body(Body::empty())
+        .expect("308 redirect response should build")
+}
+
+pub(super) async fn initial_request_redirect_final(request: AxumRequest) -> Html<String> {
+    let method = request.method().as_str().to_owned();
+    let content_type = request
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    let marker = request
+        .headers()
+        .get("x-moli-redirect-test")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    let body = axum::body::to_bytes(request.into_body(), 1024 * 1024)
+        .await
+        .expect("redirect test request body should be readable");
+    let body = String::from_utf8_lossy(&body);
+    Html(format!(
+        "<!doctype html><html><body><main id=\"request-redirect-result\">method={method};body={body};content-type={content_type};marker={marker}</main></body></html>"
+    ))
+}
+
 pub(super) async fn redirect_cookie_page() -> Response {
     (
         [(SET_COOKIE, "session=fixture; Path=/; HttpOnly")],

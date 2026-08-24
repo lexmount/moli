@@ -887,9 +887,8 @@ fn handle_scripted_connection(
     requests: Arc<Mutex<Vec<String>>>,
     responses: Arc<Mutex<VecDeque<ScriptedResponse>>>,
 ) {
-    let mut request = [0; 1024];
-    let bytes_read = stream.read(&mut request).unwrap_or(0);
-    let request_text = String::from_utf8_lossy(&request[..bytes_read]).into_owned();
+    let request = read_scripted_http_request(&mut stream);
+    let request_text = String::from_utf8_lossy(&request).into_owned();
     requests.lock().push(request_text);
     let _ = hits.fetch_add(1, Ordering::SeqCst) + 1;
     let response_spec = {
@@ -908,6 +907,47 @@ fn handle_scripted_connection(
     if response_spec.hold_open_ms > 0 {
         thread::sleep(Duration::from_millis(response_spec.hold_open_ms));
     }
+}
+
+fn read_scripted_http_request(stream: &mut std::net::TcpStream) -> Vec<u8> {
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
+    let mut request = Vec::new();
+    let mut expected_len = None;
+    let mut buffer = [0; 1024];
+
+    loop {
+        let bytes_read = match stream.read(&mut buffer) {
+            Ok(0) | Err(_) => break,
+            Ok(bytes_read) => bytes_read,
+        };
+        request.extend_from_slice(&buffer[..bytes_read]);
+
+        if expected_len.is_none()
+            && let Some(head_end) = request
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")
+                .map(|offset| offset + 4)
+        {
+            let content_length = std::str::from_utf8(&request[..head_end])
+                .ok()
+                .and_then(|head| {
+                    head.lines().find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().ok())
+                            .flatten()
+                    })
+                })
+                .unwrap_or(0);
+            expected_len = Some(head_end.saturating_add(content_length));
+        }
+
+        if expected_len.is_some_and(|expected_len| request.len() >= expected_len) {
+            break;
+        }
+    }
+
+    request
 }
 
 fn scripted_http_response_bytes(response_spec: &ScriptedResponse) -> Vec<u8> {
