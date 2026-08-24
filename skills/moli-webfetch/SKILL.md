@@ -123,7 +123,6 @@ unrelated actions.
   to use. Never expose headers, cookies, or tokens in the response.
 - Remember that `-H/--header` applies to the initial navigation, not every
   subresource.
-- Pair `--trace-network` with an explicit `--dump json`.
 - Treat stdout as the requested artifact. Redirect screenshot, full-document
   screenshot, and PDF output to files, verify that they are non-empty and have
   the expected type, and never print their binary bytes into a text response.
