@@ -47,7 +47,7 @@ curl --proto '=https' --tlsv1.2 -fsSL \
 Windows の場合は、PowerShell で次のコマンドを実行します：
 
 ```powershell
-irm https://github.com/lexmount/moli/releases/latest/download/moli-installer.ps1 | iex
+powershell -ExecutionPolicy ByPass -c "irm https://github.com/lexmount/moli/releases/latest/download/moli-installer.ps1 | iex"
 ```
 
 ## 動作例

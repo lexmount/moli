@@ -24,7 +24,7 @@ structure-first; enable layout only when the result needs pixels or pagination.
    On Windows, use PowerShell:
 
    ```powershell
-   irm https://github.com/lexmount/moli/releases/latest/download/moli-installer.ps1 | iex
+   powershell -ExecutionPolicy ByPass -c "irm https://github.com/lexmount/moli/releases/latest/download/moli-installer.ps1 | iex"
    ```
 
    Resolve the installed binary again and run `moli --version`. The default
