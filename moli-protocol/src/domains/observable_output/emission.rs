@@ -153,8 +153,9 @@ impl ObservableActivityEmissionPlan {
         prepared_outputs: Option<&mut ObservablePreparedOutputs>,
     ) -> Option<Self> {
         if let Some(prepared_outputs) = prepared_outputs
-            && let Some(items) = prepared_outputs.take_runtime_observable_items()
-            && runtime_observable_prepared_items_match_owner(conn, session_id, &items)
+            && let Some(prepared) =
+                prepared_outputs.take_runtime_observable_items_for_session(session_id)
+            && let Some((_event_session_id, items)) = prepared.materialize_for_owner(conn)
         {
             return Some(Self::from_runtime_prepared_items(items));
         }
@@ -312,28 +313,25 @@ pub(crate) async fn emit_pending_observable_activity_background_events_async(
         }
         return;
     }
+    if step == ObservableOutputProjectionStep::RuntimeObservable {
+        let Some(prepared_outputs) = prepared_outputs else {
+            return;
+        };
+        for prepared in prepared_outputs.take_runtime_observable_items() {
+            let Some((event_session_id, items)) = prepared.materialize_for_owner(conn) else {
+                continue;
+            };
+            ObservableActivityEmissionPlan::from_runtime_prepared_items(items)
+                .emit_background_events(conn, out, event_session_id.as_deref());
+        }
+        return;
+    }
     if let Some(plan) =
         ObservableActivityEmissionPlan::prepare_async(step, conn, session_id, prepared_outputs)
             .await
     {
         plan.emit_background_events(conn, out, session_id);
     }
-}
-
-fn runtime_observable_prepared_items_match_owner(
-    conn: &CdpConnection,
-    session_id: Option<&str>,
-    items: &ObservableRuntimePreparedItems,
-) -> bool {
-    let Some(url) = conn.runtime_session_owner_target_url(session_id) else {
-        return false;
-    };
-    let Ok(runtime_slot) = conn.runtime_session_owner_slot(session_id) else {
-        return false;
-    };
-    runtime_slot
-        .page_attachment_id()
-        .is_some_and(|attachment_id| items.matches_source_identity(&url, attachment_id))
 }
 
 #[cfg(test)]

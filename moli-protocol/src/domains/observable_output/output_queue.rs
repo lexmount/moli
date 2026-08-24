@@ -6,6 +6,7 @@ use crate::conn::DevToolsConsoleOutputSessionState;
 use crate::conn::TargetRuntimeSlot;
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, TargetOwnerState, TargetPageAttachmentId,
+    TargetPageProtocolAttachmentIdentity,
 };
 use crate::domains::activity::ProtocolOutputSink;
 use crate::domains::audits_output_state::TargetAuditsOutputCursor;
@@ -28,7 +29,7 @@ pub(crate) struct ObservablePreparedOutputs {
     audits: Vec<ObservableSessionAuditsPreparedRange>,
     console: Option<ObservableConsoleLogPreparedRange>,
     log: Vec<ObservableSessionLogPreparedRange>,
-    runtime_observable_items: Option<ObservableRuntimePreparedItems>,
+    runtime_observable_items: Vec<ObservableSessionRuntimePreparedItems>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -63,6 +64,12 @@ pub(in crate::domains::observable_output) struct ObservableSessionAuditsPrepared
     page_attachment_id: TargetPageAttachmentId,
     issues: Vec<moli_core::page::InspectorIssueSnapshot>,
     cursor: TargetAuditsOutputCursor,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::domains::observable_output) struct ObservableSessionRuntimePreparedItems {
+    attachment: TargetPageProtocolAttachmentIdentity,
+    items: ObservableRuntimePreparedItems,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -108,8 +115,8 @@ impl ObservablePreparedOutputs {
         for range in other.log {
             self.push_log(range.session_id.as_deref(), range.range);
         }
-        if let Some(items) = other.runtime_observable_items {
-            self.push_runtime_observable_items(items);
+        for prepared in other.runtime_observable_items {
+            self.push_runtime_observable_items(prepared.attachment, prepared.items);
         }
     }
 
@@ -117,7 +124,7 @@ impl ObservablePreparedOutputs {
         self.audits.is_empty()
             && self.console.is_none()
             && self.log.is_empty()
-            && self.runtime_observable_items.is_none()
+            && self.runtime_observable_items.is_empty()
     }
 
     pub(in crate::domains) fn append_to_output_sink(
@@ -185,8 +192,19 @@ impl ObservablePreparedOutputs {
 
     pub(in crate::domains::observable_output) fn take_runtime_observable_items(
         &mut self,
-    ) -> Option<ObservableRuntimePreparedItems> {
-        self.runtime_observable_items.take()
+    ) -> Vec<ObservableSessionRuntimePreparedItems> {
+        std::mem::take(&mut self.runtime_observable_items)
+    }
+
+    pub(in crate::domains::observable_output) fn take_runtime_observable_items_for_session(
+        &mut self,
+        session_id: Option<&str>,
+    ) -> Option<ObservableSessionRuntimePreparedItems> {
+        let index = self
+            .runtime_observable_items
+            .iter()
+            .position(|prepared| prepared.session_id() == session_id)?;
+        Some(self.runtime_observable_items.remove(index))
     }
 
     pub(in crate::domains::observable_output) fn has_console(&self) -> bool {
@@ -202,7 +220,7 @@ impl ObservablePreparedOutputs {
     }
 
     pub(in crate::domains::observable_output) fn has_runtime_observable(&self) -> bool {
-        self.runtime_observable_items.is_some()
+        !self.runtime_observable_items.is_empty()
     }
 
     pub(in crate::domains::observable_output) fn push_console(
@@ -249,9 +267,18 @@ impl ObservablePreparedOutputs {
 
     pub(in crate::domains::observable_output) fn push_runtime_observable_items(
         &mut self,
+        attachment: TargetPageProtocolAttachmentIdentity,
         items: ObservableRuntimePreparedItems,
     ) {
-        self.runtime_observable_items.get_or_insert(items);
+        if self
+            .runtime_observable_items
+            .iter()
+            .any(|prepared| prepared.attachment == attachment)
+        {
+            return;
+        }
+        self.runtime_observable_items
+            .push(ObservableSessionRuntimePreparedItems { attachment, items });
     }
 }
 
@@ -328,6 +355,30 @@ impl ObservableSessionAuditsPreparedRange {
             })
             .collect();
         (items, self.cursor)
+    }
+}
+
+impl ObservableSessionRuntimePreparedItems {
+    pub(in crate::domains::observable_output) fn session_id(&self) -> Option<&str> {
+        self.attachment.session_id()
+    }
+
+    pub(in crate::domains::observable_output) fn materialize_for_owner(
+        self,
+        conn: &CdpConnection,
+    ) -> Option<(Option<String>, ObservableRuntimePreparedItems)> {
+        if !conn.target_page_protocol_attachment_identity_is_current(&self.attachment) {
+            return None;
+        }
+        let session_id = self.attachment.session_id().map(str::to_owned);
+        let url = conn.runtime_session_owner_target_url(session_id.as_deref())?;
+        let runtime_slot = conn
+            .runtime_session_owner_slot(session_id.as_deref())
+            .ok()?;
+        runtime_slot
+            .page_attachment_id()
+            .is_some_and(|attachment_id| self.items.matches_source_identity(&url, attachment_id))
+            .then_some((session_id, self.items))
     }
 }
 
@@ -968,11 +1019,28 @@ mod tests {
         ObservableConsoleLogDomain, ObservableConsoleLogPreparedRange, ObservablePreparedOutputs,
         TargetObservableOutputQueue,
     };
-    use crate::conn::{BrowserContext, TargetPageAttachmentId, TargetRuntimeSlot};
+    use crate::conn::{
+        BrowserContext, TargetPageAttachmentId, TargetPageProtocolAttachmentIdentity,
+        TargetPageResidenceIdentity, TargetRuntimeSlot,
+    };
     use crate::domains::log_output_state::TargetLogOutputCursor;
 
     fn page_attachment_id(raw: u64) -> TargetPageAttachmentId {
         TargetPageAttachmentId::from_raw_for_test(raw)
+    }
+
+    fn protocol_attachment(
+        session_id: Option<&str>,
+        raw: u64,
+    ) -> TargetPageProtocolAttachmentIdentity {
+        TargetPageProtocolAttachmentIdentity::new(
+            TargetPageResidenceIdentity::new(
+                "BID-observable-output".to_owned(),
+                Some("TID-observable-output".to_owned()),
+                page_attachment_id(raw),
+            ),
+            session_id.map(str::to_owned),
+        )
     }
 
     fn renderer_source_snapshot(
@@ -1433,7 +1501,7 @@ mod tests {
         assert!(
             prepared.take_console_range().is_none()
                 && prepared.take_log_range().is_none()
-                && prepared.take_runtime_observable_items().is_none(),
+                && prepared.take_runtime_observable_items().is_empty(),
             "empty captured outputs should not expose projection payload slots"
         );
 
@@ -1483,7 +1551,10 @@ mod tests {
         );
         prepared.push_console(console_range.clone());
         prepared.push_log(None, log_range.clone());
-        prepared.push_runtime_observable_items(runtime_items.clone());
+        prepared.push_runtime_observable_items(
+            protocol_attachment(Some("SID-runtime"), 1),
+            runtime_items.clone(),
+        );
 
         assert_eq!(
             prepared.take_console_range(),
@@ -1496,7 +1567,9 @@ mod tests {
             "captured Log slot should expose only its projection payload"
         );
         assert_eq!(
-            prepared.take_runtime_observable_items(),
+            prepared
+                .take_runtime_observable_items_for_session(Some("SID-runtime"))
+                .map(|prepared| prepared.items),
             Some(runtime_items),
             "captured RuntimeObservable slot should expose only concrete projection items"
         );
@@ -1504,7 +1577,7 @@ mod tests {
         assert!(
             prepared.take_console_range().is_none()
                 && prepared.take_log_range().is_none()
-                && prepared.take_runtime_observable_items().is_none(),
+                && prepared.take_runtime_observable_items().is_empty(),
             "taking prepared slots should clear the payload container"
         );
     }

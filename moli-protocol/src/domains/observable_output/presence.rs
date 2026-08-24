@@ -9,6 +9,12 @@ use super::output_queue::{
 };
 use crate::conn::CdpConnection;
 
+#[derive(Clone, Copy)]
+enum RuntimeObservableAudience {
+    SourceSession,
+    EnabledTargetAttachments,
+}
+
 #[cfg(test)]
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(in crate::domains) struct ObservableActivityOutputs {
@@ -84,7 +90,14 @@ pub(in crate::domains) fn runtime_console_message_prepared_outputs(
     else {
         return prepared;
     };
-    push_runtime_observable_tail_prepared_outputs(&mut prepared, conn, &source, session_id, true);
+    push_runtime_observable_tail_prepared_outputs(
+        &mut prepared,
+        conn,
+        &source,
+        session_id,
+        true,
+        RuntimeObservableAudience::SourceSession,
+    );
     prepared
 }
 
@@ -103,7 +116,14 @@ pub(in crate::domains) fn runtime_lifecycle_error_prepared_outputs(
     ) else {
         return prepared;
     };
-    push_runtime_observable_tail_prepared_outputs(&mut prepared, conn, &source, session_id, true);
+    push_runtime_observable_tail_prepared_outputs(
+        &mut prepared,
+        conn,
+        &source,
+        session_id,
+        true,
+        RuntimeObservableAudience::EnabledTargetAttachments,
+    );
     prepared
 }
 
@@ -192,7 +212,14 @@ fn push_runtime_observable_source_prepared_outputs(
     else {
         return;
     };
-    push_runtime_observable_tail_prepared_outputs(prepared, conn, &source, session_id, false);
+    push_runtime_observable_tail_prepared_outputs(
+        prepared,
+        conn,
+        &source,
+        session_id,
+        false,
+        RuntimeObservableAudience::SourceSession,
+    );
 }
 
 fn push_runtime_observable_tail_prepared_outputs(
@@ -201,6 +228,7 @@ fn push_runtime_observable_tail_prepared_outputs(
     source: &super::TargetRuntimeObservableSourceOutput,
     session_id: Option<&str>,
     deliver_log_to_enabled_sessions: bool,
+    runtime_audience: RuntimeObservableAudience,
 ) {
     let owner_state = conn
         .target_owner_state_for_session(session_id)
@@ -219,17 +247,31 @@ fn push_runtime_observable_tail_prepared_outputs(
         deliver_log_to_enabled_sessions,
     );
 
-    let include_runtime_console_api_messages =
-        !renderer_runtime_agent_owns_page_console_api_events(conn, session_id);
-    if conn
-        .target_runtime_session_state_for_session(session_id)
-        .is_some_and(|state| state.runtime_frontend_enabled)
-        && let Some(items) = source.source_items_prepared_for_state(
+    let attachments = match runtime_audience {
+        RuntimeObservableAudience::SourceSession => conn
+            .target_page_protocol_attachment_identity_for_session(session_id)
+            .into_iter()
+            .collect(),
+        RuntimeObservableAudience::EnabledTargetAttachments => conn
+            .runtime_event_protocol_attachments_for_session_owner(session_id)
+            .unwrap_or_default(),
+    };
+    for attachment in attachments {
+        let event_session_id = attachment.session_id();
+        if !conn
+            .target_runtime_session_state_for_session(event_session_id)
+            .is_some_and(|state| state.runtime_frontend_enabled)
+        {
+            continue;
+        }
+        let include_runtime_console_api_messages =
+            !renderer_runtime_agent_owns_page_console_api_events(conn, event_session_id);
+        if let Some(items) = source.source_items_prepared_for_state(
             &owner_state.runtime_observable_state,
             include_runtime_console_api_messages,
-        )
-    {
-        prepared.push_runtime_observable_items(items);
+        ) {
+            prepared.push_runtime_observable_items(attachment, items);
+        }
     }
 }
 
@@ -518,8 +560,45 @@ mod tests {
     use super::{
         ObservableOutputProjectionStep,
         observable_backlog_activity_outputs_for_session_owner as observable_backlog_activity_outputs,
-        observable_source_activity_outputs,
+        observable_source_activity_outputs, runtime_lifecycle_error_prepared_outputs,
     };
+
+    fn runtime_lifecycle_error_audience(enabled_session_ids: &[&str]) -> Vec<Option<String>> {
+        let mut conn = crate::conn::CdpConnection::default();
+        let mut bc = BrowserContext::new("BID-runtime-lifecycle".to_owned());
+        bc.set_active_target_id("TID-runtime-lifecycle".to_owned());
+        bc.set_target_url("https://example.test/runtime-lifecycle".to_owned());
+        bc.attach_active_session("SID-runtime-a".to_owned());
+        assert!(bc.assign_auxiliary_session_to_target(
+            "TID-runtime-lifecycle",
+            "SID-runtime-b".to_owned(),
+        ));
+        assert!(bc.assign_auxiliary_session_to_target(
+            "TID-runtime-lifecycle",
+            "SID-runtime-disabled".to_owned(),
+        ));
+        bc.active_target
+            .runtime_slot
+            .set_page_attachment_id_for_test(17);
+        conn.browser_context = Some(bc);
+        for session_id in enabled_session_ids {
+            conn.with_target_devtools_session_state_for_session_mut(Some(session_id), |state| {
+                state.runtime_session_state.runtime_frontend_enabled = true
+            })
+            .expect("Runtime audience session should be mutable");
+        }
+
+        runtime_lifecycle_error_prepared_outputs(
+            &mut conn,
+            "uncaught timer error".to_owned(),
+            Some(7),
+            Some("SID-runtime-a"),
+        )
+        .take_runtime_observable_items()
+        .into_iter()
+        .map(|prepared| prepared.session_id().map(str::to_owned))
+        .collect()
+    }
 
     #[test]
     fn observable_source_outputs_own_runtime_observable_presence() {
@@ -548,6 +627,23 @@ mod tests {
             .runtime_observable_outputs(),
             &[ObservableOutputProjectionStep::RuntimeObservable],
             "RuntimeObservable source presence should be part of the observable output queue batch"
+        );
+    }
+
+    #[test]
+    fn runtime_lifecycle_error_freezes_every_enabled_attachment_only() {
+        assert_eq!(
+            runtime_lifecycle_error_audience(&["SID-runtime-b"]),
+            vec![Some("SID-runtime-b".to_owned())],
+            "a disabled source attachment must not hide its enabled peer"
+        );
+        assert_eq!(
+            runtime_lifecycle_error_audience(&["SID-runtime-a", "SID-runtime-b"]),
+            vec![
+                Some("SID-runtime-a".to_owned()),
+                Some("SID-runtime-b".to_owned()),
+            ],
+            "one target-owned exception must freeze all Runtime-enabled attachments"
         );
     }
 

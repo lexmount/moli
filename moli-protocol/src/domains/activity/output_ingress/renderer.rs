@@ -193,7 +193,7 @@ async fn project_renderer_output_records_for_route(
                 barriers
                     .route_publication_outputs(
                         conn,
-                        session_id,
+                        action_session_id.as_deref(),
                         renderer_cause.as_ref(),
                         Some(cursor),
                         outputs,

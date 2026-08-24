@@ -3403,6 +3403,37 @@ impl CdpConnection {
         .then_some(attachments)
     }
 
+    /// Captures every exact attachment that had enabled the CDP `Runtime`
+    /// domain when one target-owned Runtime fact was ingested.
+    ///
+    /// The renderer publishes asynchronous exceptions once per target, not
+    /// once per Inspector session. Freeze the audience at ingress so a later
+    /// detach, target replacement, or `Runtime.enable` cannot retarget that
+    /// historical fact.
+    pub(crate) fn runtime_event_protocol_attachments_for_session_owner(
+        &self,
+        session_id: Option<&str>,
+    ) -> Option<Vec<crate::conn::TargetPageProtocolAttachmentIdentity>> {
+        let source = self.target_page_protocol_attachment_identity_for_session(session_id)?;
+        let attachments = self
+            .page_event_session_ids_for_session_owner(session_id)
+            .into_iter()
+            .filter(|event_session_id| {
+                self.target_runtime_session_state_for_session(event_session_id.as_deref())
+                    .is_some_and(|state| state.runtime_frontend_enabled)
+            })
+            .map(|event_session_id| {
+                self.target_page_protocol_attachment_identity_for_session(
+                    event_session_id.as_deref(),
+                )
+            })
+            .collect::<Option<Vec<_>>>()?;
+        attachments
+            .iter()
+            .all(|attachment| attachment.page_owner() == source.page_owner())
+            .then_some(attachments)
+    }
+
     pub(crate) fn runtime_session_owner_target_url(
         &self,
         session_id: Option<&str>,
@@ -4810,6 +4841,60 @@ mod tests {
                 Some("SID-page-enabled".to_owned()),
             ],
             "Page events should fan out only to Page-enabled sessions on the same target"
+        );
+    }
+
+    #[test]
+    fn runtime_event_attachments_include_every_enabled_session_on_the_exact_page() {
+        let mut conn = CdpConnection::default();
+        let mut browser_context = BrowserContext::new("BID-runtime-events".to_owned());
+        browser_context.set_active_target_id("TID-runtime-events".to_owned());
+        browser_context.attach_active_session("SID-runtime-a".to_owned());
+        assert!(
+            browser_context.assign_auxiliary_session_to_target(
+                "TID-runtime-events",
+                "SID-runtime-b".to_owned(),
+            )
+        );
+        assert!(browser_context.assign_auxiliary_session_to_target(
+            "TID-runtime-events",
+            "SID-runtime-disabled".to_owned(),
+        ));
+        browser_context
+            .active_target
+            .runtime_slot
+            .set_page_attachment_id_for_test(41);
+        conn.browser_context = Some(browser_context);
+
+        conn.with_target_devtools_session_state_for_session_mut(Some("SID-runtime-b"), |state| {
+            state.runtime_session_state.runtime_frontend_enabled = true
+        })
+        .expect("Runtime-enabled auxiliary session should be mutable");
+        assert_eq!(
+            conn.runtime_event_protocol_attachments_for_session_owner(Some("SID-runtime-a"))
+                .expect("the current Page should expose its Runtime audience")
+                .into_iter()
+                .map(|attachment| attachment.session_id().map(str::to_owned))
+                .collect::<Vec<_>>(),
+            vec![Some("SID-runtime-b".to_owned())],
+            "a disabled primary must not hide the enabled peer attachment"
+        );
+
+        conn.with_target_devtools_session_state_for_session_mut(Some("SID-runtime-a"), |state| {
+            state.runtime_session_state.runtime_frontend_enabled = true
+        })
+        .expect("Runtime-enabled primary session should be mutable");
+        assert_eq!(
+            conn.runtime_event_protocol_attachments_for_session_owner(Some("SID-runtime-b"))
+                .expect("the current Page should expose its Runtime audience")
+                .into_iter()
+                .map(|attachment| attachment.session_id().map(str::to_owned))
+                .collect::<Vec<_>>(),
+            vec![
+                Some("SID-runtime-a".to_owned()),
+                Some("SID-runtime-b".to_owned()),
+            ],
+            "one target-owned Runtime fact must freeze every enabled attachment"
         );
     }
 
