@@ -1421,6 +1421,52 @@ async fn rust_cdp_chromium_target_send_message_to_target_wraps_nested_result() {
     .expect("nested protocol JSON");
     assert_eq!(nested["id"], 1);
     assert_eq!(nested["result"]["result"]["value"], 3, "{nested}");
+
+    for (outer_id, nested) in [
+        (
+            260_044,
+            json!({
+                "id": 2,
+                "method": "Emulation.setScriptExecutionDisabled",
+                "params": { "value": true }
+            }),
+        ),
+        (
+            260_045,
+            json!({ "id": 3, "method": "Performance.enable", "params": {} }),
+        ),
+        (
+            260_046,
+            json!({ "id": 4, "method": "Performance.getMetrics", "params": {} }),
+        ),
+    ] {
+        ctx.process_async(json!({
+            "id": outer_id,
+            "method": "Target.sendMessageToTarget",
+            "params": {
+                "sessionId": "SID-active",
+                "message": nested.to_string(),
+            }
+        }))
+        .await;
+        let messages = ctx.take_all();
+        assert_eq!(response(&messages, outer_id)["result"], json!({}));
+        let received = event(&messages, "Target.receivedMessageFromTarget");
+        let nested_response: Value = serde_json::from_str(
+            received["params"]["message"]
+                .as_str()
+                .expect("nested protocol message"),
+        )
+        .expect("nested protocol JSON");
+        assert_eq!(nested_response["id"], nested["id"]);
+        assert!(nested_response.get("result").is_some(), "{nested_response}");
+        if nested["method"] == "Performance.getMetrics" {
+            assert!(
+                nested_response["result"]["metrics"].is_array(),
+                "{nested_response}"
+            );
+        }
+    }
 }
 
 // Chromium source:

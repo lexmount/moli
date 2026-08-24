@@ -8075,6 +8075,8 @@ fn replay_policy_command_rotates_lease_and_completes_on_replacement_attachment()
             )
             .expect("register replay command");
         let (old_correlation, old_sender, response_receiver) = prepared.into_parts();
+        let response_receiver = response_receiver
+            .expect("a synthesized CommandReply call must allocate a response receiver");
 
         ctx.process_async(json!({
             "id": 9_022,

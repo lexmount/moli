@@ -6705,6 +6705,8 @@ mod tests {
             .expect("attached shared worker session")
             .expect("non-await renderer call should register");
         let (correlation, old_sender, terminal_receiver) = prepared.into_parts();
+        let terminal_receiver = terminal_receiver
+            .expect("a synthesized CommandReply call must allocate a response receiver");
 
         let outputs =
             remove_shared_worker_target(&mut conn, "BID-1", SharedWorkerInstanceId::from_u64(15))

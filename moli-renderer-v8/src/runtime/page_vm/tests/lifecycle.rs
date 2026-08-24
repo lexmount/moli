@@ -2321,7 +2321,7 @@ async fn runtime_document_close_response_does_not_wait_for_replacement_lifecycle
                 let call_id = 710_220;
                 let (response_tx, mut response_rx) = tokio::sync::oneshot::channel();
                 let messages = page_vm
-                    .dispatch_runtime_protocol_message_for_inspector_session_with_deferred_response(
+                    .dispatch_frontend_runtime_protocol_message_for_inspector_session_with_deferred_response(
                         None,
                         &serde_json::json!({
                             "id": call_id,
@@ -2378,7 +2378,11 @@ async fn runtime_document_close_response_does_not_wait_for_replacement_lifecycle
                     response_rx.try_recv(),
                     Err(tokio::sync::oneshot::error::TryRecvError::Closed)
                 ));
-                let output = page_vm.take_runtime_command_output();
+                let (output, session_response) = page_vm.take_runtime_command_settlement();
+                assert!(
+                    session_response.is_none(),
+                    "CommandReply delivery must not park a DevTools session response"
+                );
                 assert_eq!(
                     output
                         .protocol_response(call_id)

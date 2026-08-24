@@ -27,10 +27,13 @@ enum PendingRuntimeInspectorCommandDispatchKind {
     Io(PendingDevToolsIoCommandDispatch),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CompletedDevToolsIoCommandDispatch {
     Dispatched,
-    Canceled,
+    SessionResponse {
+        predecessor: RendererOutputFence,
+        response_succeeded: bool,
+    },
 }
 
 /// Identifies which execution owner consumed one routable Inspector command.
@@ -40,8 +43,16 @@ pub enum CompletedDevToolsIoCommandDispatch {
 /// re-enter that Page before exposing the Inspector response.
 pub enum CompletedRuntimeInspectorCommandDispatch {
     Owner(Box<CompletedPageCommand>),
+    OwnerSessionResponse {
+        completion: Box<CompletedPageCommand>,
+        response_succeeded: bool,
+    },
+    OwnerSessionErrorSettled(RendererOutputFence),
     Inspector,
-    Canceled,
+    InspectorSessionResponse {
+        predecessor: RendererOutputFence,
+        response_succeeded: bool,
+    },
 }
 
 pub struct CompletedPageCommand {
@@ -416,11 +427,44 @@ impl PendingRuntimeInspectorCommandDispatch {
                     RendererRuntimeInspectorMainCommandCompletion::Inspector => {
                         Ok(CompletedRuntimeInspectorCommandDispatch::Inspector)
                     }
+                    RendererRuntimeInspectorMainCommandCompletion::InspectorSessionResponse {
+                        predecessor,
+                        response_succeeded,
+                    } => Ok(
+                        CompletedRuntimeInspectorCommandDispatch::InspectorSessionResponse {
+                            predecessor,
+                            response_succeeded,
+                        },
+                    ),
+                    RendererRuntimeInspectorMainCommandCompletion::OwnerSessionResponse {
+                        mut output,
+                        response_succeeded,
+                    } => {
+                        if let Some(attachment_id) = renderer_agent_attachment_id {
+                            output.bind_renderer_agent_attachment(attachment_id);
+                        }
+                        Ok(
+                            CompletedRuntimeInspectorCommandDispatch::OwnerSessionResponse {
+                                completion: Box::new(CompletedPageCommand {
+                                    output: *output,
+                                    renderer_agent_attachment_id,
+                                }),
+                                response_succeeded,
+                            },
+                        )
+                    }
+                    RendererRuntimeInspectorMainCommandCompletion::OwnerSessionErrorSettled(
+                        predecessor,
+                    ) => Ok(
+                        CompletedRuntimeInspectorCommandDispatch::OwnerSessionErrorSettled(
+                            predecessor,
+                        ),
+                    ),
                     RendererRuntimeInspectorMainCommandCompletion::Page(_) => Err(anyhow::anyhow!(
                         "a Runtime Inspector command entered nested non-V8 Page dispatch"
                     )),
-                    RendererRuntimeInspectorMainCommandCompletion::Canceled => {
-                        Ok(CompletedRuntimeInspectorCommandDispatch::Canceled)
+                    RendererRuntimeInspectorMainCommandCompletion::Canceled(message) => {
+                        Err(anyhow::anyhow!(message))
                     }
                 }
             }
@@ -429,9 +473,15 @@ impl PendingRuntimeInspectorCommandDispatch {
                     CompletedDevToolsIoCommandDispatch::Dispatched => {
                         Ok(CompletedRuntimeInspectorCommandDispatch::Inspector)
                     }
-                    CompletedDevToolsIoCommandDispatch::Canceled => {
-                        Ok(CompletedRuntimeInspectorCommandDispatch::Canceled)
-                    }
+                    CompletedDevToolsIoCommandDispatch::SessionResponse {
+                        predecessor,
+                        response_succeeded,
+                    } => Ok(
+                        CompletedRuntimeInspectorCommandDispatch::InspectorSessionResponse {
+                            predecessor,
+                            response_succeeded,
+                        },
+                    ),
                 }
             }
         }
@@ -449,8 +499,15 @@ impl PendingDevToolsIoCommandDispatch {
             RendererRuntimeInspectorIoCommandClaim::Dispatched => {
                 Ok(CompletedDevToolsIoCommandDispatch::Dispatched)
             }
-            RendererRuntimeInspectorIoCommandClaim::Canceled => {
-                Ok(CompletedDevToolsIoCommandDispatch::Canceled)
+            RendererRuntimeInspectorIoCommandClaim::SessionResponse {
+                predecessor,
+                response_succeeded,
+            } => Ok(CompletedDevToolsIoCommandDispatch::SessionResponse {
+                predecessor,
+                response_succeeded,
+            }),
+            RendererRuntimeInspectorIoCommandClaim::Canceled(message) => {
+                Err(anyhow::anyhow!(message))
             }
         }
     }

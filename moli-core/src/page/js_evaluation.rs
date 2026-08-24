@@ -1,5 +1,4 @@
 use anyhow::{Result, anyhow};
-use moli_page_types::RendererInspectorResponseDelivery;
 use serde_json::{Value, json};
 
 use super::Page;
@@ -517,7 +516,6 @@ impl Page {
         owner_context_resolution_action: Option<String>,
         raw_json: String,
         deferred_response: RendererRuntimeInspectorResponseSender,
-        response_delivery: RendererInspectorResponseDelivery,
     ) -> Result<PendingRuntimeInspectorCommandDispatch> {
         match inspector_route {
             RendererInspectorCommandRoute::MainThread => {
@@ -531,7 +529,6 @@ impl Page {
                         owner_context_resolution_action,
                         raw_json,
                         deferred_response,
-                        response_delivery,
                     ),
                 );
                 Ok(Self::pending_main_ingress_runtime_inspector_command_dispatch(route))
@@ -551,7 +548,6 @@ impl Page {
                         ),
                         raw_json,
                         Some(deferred_response),
-                        response_delivery,
                     ),
                 );
                 Ok(Self::pending_io_runtime_inspector_command_dispatch(route))
@@ -573,7 +569,6 @@ impl Page {
                 ),
                 raw_json,
                 None,
-                RendererInspectorResponseDelivery::CommandReply,
             ),
         );
         Ok(Self::pending_io_runtime_inspector_command_dispatch(route))

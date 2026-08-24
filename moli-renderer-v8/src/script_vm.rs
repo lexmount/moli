@@ -1342,6 +1342,15 @@ impl ScriptVm {
         )
     }
 
+    pub(super) fn route_frontend_runtime_inspector_response(
+        &self,
+        inspector_session_id: Option<&str>,
+        response: RendererRuntimeInspectorResponseSender,
+    ) -> Result<RendererRuntimeInspectorResponseSender> {
+        self.page_inspector
+            .route_frontend_response(inspector_session_id, response)
+    }
+
     fn dispatch_internal_runtime_evaluate_protocol_message(
         &mut self,
         raw_json: &str,
@@ -1726,7 +1735,7 @@ impl ScriptVm {
                             outbound.begin_runtime_command_output(command_output);
                         }
                         if let Some(callback) = deferred_response {
-                            outbound.register_response_callback(callback);
+                            outbound.register_frontend_response_callback(callback);
                         }
                         let _internal_response_capture = internal_dispatch_call_id
                             .map(|call_id| outbound.capture_internal_dispatch_response(call_id));

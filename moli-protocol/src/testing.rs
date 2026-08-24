@@ -530,6 +530,8 @@ impl TestContext {
     ) -> TestCommandResponseFlushPermit {
         let command = ParsedCdpCommand::from_serializable(msg)
             .expect("test message must be a valid serialisable CDP command");
+        let command_id = command.request().id();
+        let response_start = self.sent.len();
         let (response_flush_permit, response_flush_context) =
             self.conn.begin_command_response_flush_permit();
         let mut command_context = CommandDispatchContext::new(response_flush_context);
@@ -555,6 +557,7 @@ impl TestContext {
         protocol_events.extend(command_context.take_post_response_events());
         scheduler_events.extend(self.conn.take_scheduler_events());
         Box::pin(self.route_test_scheduler_causal_batch(protocol_events, scheduler_events)).await;
+        Box::pin(self.route_ready_test_command_response(command_id, response_start)).await;
         TestCommandResponseFlushPermit {
             response_flush: response_flush_permit,
             runtime_output_barrier,
@@ -586,6 +589,10 @@ impl TestContext {
         step: CdpCommandTaskStep,
     ) -> (Vec<Value>, Vec<CdpSchedulerEvent>) {
         let sent_start = self.sent.len();
+        let command_id = match &step {
+            CdpCommandTaskStep::Pending(pending) => pending.command_id(),
+            CdpCommandTaskStep::Complete(_) => None,
+        };
         let mut protocol_events = Vec::new();
         let mut scheduler_events = Vec::new();
         let mut runtime_output_barrier = None;
@@ -598,10 +605,30 @@ impl TestContext {
         ))
         .await;
         if completed {
-            return (
-                protocol_events_into_messages(protocol_events),
-                scheduler_events,
-            );
+            let mut messages = protocol_events_into_messages(protocol_events);
+            if let Some(command_id) = command_id
+                && !messages
+                    .iter()
+                    .any(|message| message.get("id").and_then(Value::as_u64) == Some(command_id))
+            {
+                // Synchronous renderer-owned Runtime commands publish their
+                // terminal response through the DevTools-session output
+                // transport. The command completion only proves that the
+                // publication was committed; admit that independently
+                // transported response just as `process_async` does, while
+                // leaving sibling renderer events in the scheduler queue.
+                Box::pin(self.route_ready_test_command_response(command_id, sent_start)).await;
+                if let Some(position) = self.sent.get(sent_start..).and_then(|sent| {
+                    sent.iter()
+                        .position(|message| {
+                            message.get("id").and_then(Value::as_u64) == Some(command_id)
+                        })
+                        .map(|position| sent_start + position)
+                }) {
+                    messages.push(self.sent.remove(position));
+                }
+            }
+            return (messages, scheduler_events);
         }
 
         Box::pin(self.route_test_scheduler_causal_batch(protocol_events, scheduler_events)).await;
@@ -1257,10 +1284,13 @@ impl TestContext {
             }
         })
         .await;
-        assert!(
-            response.is_ok(),
-            "timed out waiting for CDP command `{command_id}` response"
-        );
+        if response.is_err() {
+            panic!(
+                "timed out waiting for CDP command `{command_id}` response; sent={:?}; diagnostics={}",
+                self.sent,
+                self.conn.moli_memory_diagnostics()
+            );
+        }
     }
 
     async fn route_ready_test_command_response(&mut self, command_id: u64, response_start: usize) {
@@ -1757,7 +1787,12 @@ impl TestContext {
             .sent
             .iter()
             .position(|message| message["id"] == json!(id))
-            .unwrap_or_else(|| panic!("expected a response with id {id}"));
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected a response with id {id} in sent queue: {:?}",
+                    self.sent
+                )
+            });
         self.sent.remove(pos)
     }
 

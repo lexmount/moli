@@ -574,12 +574,23 @@ impl RendererPageCommandPending {
                     match route.wait_for_completion().await? {
                         RendererRuntimeInspectorMainCommandCompletion::Owner(output) => Ok(*output),
                         RendererRuntimeInspectorMainCommandCompletion::Page(output) => Ok(*output),
-                        RendererRuntimeInspectorMainCommandCompletion::Inspector => Err(anyhow!(
+                        RendererRuntimeInspectorMainCommandCompletion::Inspector
+                        | RendererRuntimeInspectorMainCommandCompletion::InspectorSessionResponse {
+                            ..
+                        } => Err(anyhow!(
                             "an owner-only Inspector Main command entered nested dispatch"
                         )),
-                        RendererRuntimeInspectorMainCommandCompletion::Canceled => Err(anyhow!(
-                            "Inspector Main command was canceled before owner dispatch"
+                        RendererRuntimeInspectorMainCommandCompletion::OwnerSessionResponse {
+                            ..
+                        }
+                        | RendererRuntimeInspectorMainCommandCompletion::OwnerSessionErrorSettled(
+                            _,
+                        ) => Err(anyhow!(
+                            "an owner-only Page command settled a DevTools session response"
                         )),
+                        RendererRuntimeInspectorMainCommandCompletion::Canceled(message) => {
+                            Err(anyhow!(message))
+                        }
                     }
                 }
             }

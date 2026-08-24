@@ -346,6 +346,7 @@ impl CommandResponseFlushContext {
 #[derive(Clone, Default)]
 pub struct CommandDispatchContext {
     response_flush: CommandResponseFlushContext,
+    terminal_response_delivery_override: Option<moli_page_types::RendererInspectorResponseDelivery>,
     protocol_events: Vec<BackgroundProtocolEvent>,
     post_renderer_output_events: Vec<BackgroundProtocolEvent>,
     renderer_output_boundary: Option<moli_core::RendererOutputFence>,
@@ -357,6 +358,7 @@ impl CommandDispatchContext {
     pub fn new(response_flush: CommandResponseFlushContext) -> Self {
         Self {
             response_flush,
+            terminal_response_delivery_override: None,
             protocol_events: Vec::new(),
             post_renderer_output_events: Vec::new(),
             renderer_output_boundary: None,
@@ -367,6 +369,19 @@ impl CommandDispatchContext {
 
     pub(crate) fn response_flush(&self) -> &CommandResponseFlushContext {
         &self.response_flush
+    }
+
+    pub(crate) fn set_terminal_response_delivery_override(
+        &mut self,
+        response_delivery: moli_page_types::RendererInspectorResponseDelivery,
+    ) {
+        self.terminal_response_delivery_override = Some(response_delivery);
+    }
+
+    pub(crate) const fn terminal_response_delivery_override(
+        &self,
+    ) -> Option<moli_page_types::RendererInspectorResponseDelivery> {
+        self.terminal_response_delivery_override
     }
 
     pub(crate) fn push_protocol_event(&mut self, event: BackgroundProtocolEvent) {

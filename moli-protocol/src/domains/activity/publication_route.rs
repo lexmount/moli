@@ -148,42 +148,81 @@ impl RendererPublicationOwner {
                 .chain(conn.inactive_browser_contexts.iter())
                 .filter(|browser_context| browser_context.id == *browser_context_id)
                 .find_map(|browser_context| {
-                    let (runtime_slot, route_target_id, session_id) = if target_id.is_none()
+                    let projection_for = |runtime_slot: &crate::conn::TargetRuntimeSlot| {
+                        if runtime_slot.routes_current_renderer_page_owner(
+                            *renderer_page,
+                            page_owner.page_attachment_id(),
+                        ) {
+                            Some(RendererPublicationProjection::CurrentPage)
+                        } else if runtime_slot.routes_retiring_renderer_page_owner(
+                            *renderer_page,
+                            page_owner.page_attachment_id(),
+                        ) {
+                            Some(RendererPublicationProjection::RetiringNetworkOnly)
+                        } else {
+                            None
+                        }
+                    };
+                    let route_for =
+                        |runtime_slot: &crate::conn::TargetRuntimeSlot,
+                         route_target_id: Option<String>,
+                         session_id: Option<String>| {
+                            projection_for(runtime_slot).map(|projection| {
+                                RendererPublicationRoute::for_target(
+                                    browser_context.id.clone(),
+                                    route_target_id,
+                                    session_id,
+                                    projection,
+                                )
+                            })
+                        };
+
+                    // Prefer the target route captured when the renderer stream
+                    // was bound. This disambiguates the brief handoff window in
+                    // which active and parked state can both refer to one Page.
+                    let frozen_route = if target_id.is_none()
                         || browser_context.active_target_id() == target_id.as_deref()
                     {
-                        (
+                        route_for(
                             &browser_context.active_target.runtime_slot,
                             None,
                             browser_context.active_session_id_owned(),
                         )
                     } else {
-                        let target_id = target_id.as_deref()?;
-                        let target = browser_context.background_target(target_id)?;
-                        (
-                            target.runtime_slot(),
-                            Some(target_id.to_owned()),
-                            target.session_id().map(str::to_owned),
-                        )
+                        target_id.as_deref().and_then(|target_id| {
+                            let target = browser_context.background_target(target_id)?;
+                            route_for(
+                                target.runtime_slot(),
+                                Some(target_id.to_owned()),
+                                target.session_id().map(str::to_owned),
+                            )
+                        })
                     };
-                    let projection = if runtime_slot.routes_current_renderer_page_owner(
-                        *renderer_page,
-                        page_owner.page_attachment_id(),
+                    if frozen_route.is_some() {
+                        return frozen_route;
+                    }
+
+                    // A target can acquire its externally visible id after its
+                    // initial Page was installed. The Page residence and Page
+                    // attachment id remain stable across that rename, so use
+                    // those identities to recover the current concrete route.
+                    if let Some(route) = route_for(
+                        &browser_context.active_target.runtime_slot,
+                        None,
+                        browser_context.active_session_id_owned(),
                     ) {
-                        RendererPublicationProjection::CurrentPage
-                    } else if runtime_slot.routes_retiring_renderer_page_owner(
-                        *renderer_page,
-                        page_owner.page_attachment_id(),
-                    ) {
-                        RendererPublicationProjection::RetiringNetworkOnly
-                    } else {
-                        return None;
-                    };
-                    Some(RendererPublicationRoute::for_target(
-                        browser_context.id.clone(),
-                        route_target_id,
-                        session_id,
-                        projection,
-                    ))
+                        return Some(route);
+                    }
+                    browser_context
+                        .background_targets
+                        .iter()
+                        .find_map(|target| {
+                            route_for(
+                                target.runtime_slot(),
+                                Some(target.target_id().to_owned()),
+                                target.session_id().map(str::to_owned),
+                            )
+                        })
                 }),
         }
     }

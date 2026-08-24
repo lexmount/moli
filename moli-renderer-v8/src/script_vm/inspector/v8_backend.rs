@@ -234,10 +234,14 @@ impl RendererInspectorSessionExecutorLocal {
         self.dispatch_io_command_to_session(command, session);
     }
 
-    fn dispatch_main_command(&self, context_group_id: i32, command: RendererInspectorMainCommand) {
+    fn dispatch_main_command(
+        &self,
+        context_group_id: i32,
+        mut command: RendererInspectorMainCommand,
+    ) {
         match command.nested_dispatch() {
             RendererDevToolsMainNestedDispatch::PageAgent => {
-                let first_dispatch = self.target.main_ref().first_dispatch_guard(&command);
+                let first_dispatch = self.target.main_ref().first_dispatch_guard(&mut command);
                 let (page_command, reply_tx) = command.into_nested_page_parts();
                 let result = dispatch_nested_main_page_command(page_command, first_dispatch)
                     .map(|output| RendererOwnerReply::AsyncPageCommandRan(Box::new(output)));
@@ -292,18 +296,19 @@ impl RendererInspectorSessionExecutorLocal {
 
     fn dispatch_main_command_to_session(
         &self,
-        command: RendererInspectorMainCommand,
+        mut command: RendererInspectorMainCommand,
         session: Option<RendererInspectorSessionRoute>,
     ) {
-        let mut first_dispatch = self.target.main_ref().first_dispatch_guard(&command);
+        let mut first_dispatch = self.target.main_ref().first_dispatch_guard(&mut command);
         let Some(session) = session else {
-            let (_, _, response) = command.into_protocol_parts();
-            send_inspector_dispatch_error(Some(response), "Inspector session is not available");
+            first_dispatch.reject("Inspector session is not available");
             return;
         };
         let Some(v8_session) = session.session.upgrade() else {
             let (_, _, response) = command.into_protocol_parts();
+            let response = session.outbound.route_frontend_response(response);
             send_inspector_dispatch_error(Some(response), "Inspector session has been detached");
+            first_dispatch.release();
             return;
         };
         let _command_dispatch = self.target.pause_ref().begin_command_dispatch(
@@ -312,11 +317,10 @@ impl RendererInspectorSessionExecutorLocal {
             command.pause_effect(),
             Some(command.response().call_id()),
         );
-        let response_delivery = command.inspector_response_delivery();
         let (_, raw_json, response) = command.into_protocol_parts();
         session
             .outbound
-            .register_frontend_response_callback(response, response_delivery);
+            .register_frontend_response_callback(response);
         let _post_dispatch_wake = first_dispatch.release_for_dispatch();
         v8_session.dispatch_protocol_message(v8::inspector::StringView::from(raw_json.as_bytes()));
         self.target.pause_ref().record_v8_state_update(
@@ -341,14 +345,12 @@ impl RendererInspectorSessionExecutorLocal {
                 };
                 if let Some(response) = response {
                     let Some(session) = session else {
-                        send_inspector_dispatch_error(
-                            Some(response),
-                            "Inspector session is not available",
-                        );
+                        drop(response);
+                        first_dispatch.reject("Inspector session is not available");
                         return;
                     };
                     let call_id = response.call_id();
-                    session.outbound.publish_devtools_session_response(
+                    session.outbound.publish_frontend_response(
                         response,
                         json!({ "id": call_id, "result": result }),
                     );
@@ -366,7 +368,8 @@ impl RendererInspectorSessionExecutorLocal {
                     unreachable!("Emulation IO command kind must carry an Emulation payload")
                 };
                 if response.is_some() && session.is_none() {
-                    send_inspector_dispatch_error(response, "Inspector session is not available");
+                    drop(response);
+                    first_dispatch.reject("Inspector session is not available");
                     return;
                 }
                 control.set_disabled(disabled);
@@ -375,7 +378,7 @@ impl RendererInspectorSessionExecutorLocal {
                     session
                         .expect("a checked frontend Emulation command must have a session")
                         .outbound
-                        .publish_devtools_session_response(
+                        .publish_frontend_response(
                             response,
                             json!({ "id": call_id, "result": {} }),
                         );
@@ -386,17 +389,16 @@ impl RendererInspectorSessionExecutorLocal {
             RendererDevToolsIoCommandKind::Inspector => {}
         }
         let Some(session) = session else {
-            send_inspector_dispatch_error(
-                command.take_response(),
-                "Inspector session is not available",
-            );
+            drop(command.take_response());
+            first_dispatch.reject("Inspector session is not available");
             return;
         };
         let Some(v8_session) = session.session.upgrade() else {
-            send_inspector_dispatch_error(
-                command.take_response(),
-                "Inspector session has been detached",
-            );
+            let response = command
+                .take_response()
+                .map(|response| session.outbound.route_frontend_response(response));
+            send_inspector_dispatch_error(response, "Inspector session has been detached");
+            first_dispatch.release();
             return;
         };
         let _command_dispatch = self.target.pause_ref().begin_command_dispatch(
@@ -405,11 +407,10 @@ impl RendererInspectorSessionExecutorLocal {
             command.pause_effect(),
             command.response().map(|response| response.call_id()),
         );
-        let response_delivery = command.response_delivery();
         if let Some(response) = command.take_response() {
             session
                 .outbound
-                .register_frontend_response_callback(response, response_delivery);
+                .register_frontend_response_callback(response);
         }
         let _post_dispatch_wake = first_dispatch.release_for_dispatch();
         v8_session.dispatch_protocol_message(v8::inspector::StringView::from(

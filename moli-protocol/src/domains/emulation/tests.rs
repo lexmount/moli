@@ -20,15 +20,11 @@ use tokio::{
 
 async fn complete_pending_command_task_for_test(
     ctx: &mut TestContext,
-    mut pending: PendingCdpCommandDispatch,
+    pending: PendingCdpCommandDispatch,
 ) -> Vec<serde_json::Value> {
-    loop {
-        let completed = pending.wait().await;
-        match ctx.conn.complete_pending_command_dispatch(completed).await {
-            CdpCommandTaskStep::Pending(next) => pending = *next,
-            CdpCommandTaskStep::Complete(outcome) => return outcome.into_parts().0,
-        }
-    }
+    ctx.complete_command_task_step_for_test(CdpCommandTaskStep::Pending(Box::new(pending)))
+        .await
+        .0
 }
 
 async fn loaded_page_html_for_test(ctx: &mut TestContext) -> String {

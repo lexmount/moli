@@ -1362,36 +1362,41 @@ async fn set_auto_attach_sweep_chain_promotes_multiple_existing_background_targe
 async fn set_auto_attach_prefers_existing_background_target_with_parked_loaded_runtime() {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-9", "TID-000000000E");
-    let parked_page = ctx
-        .conn
-        .load_page_via_runtime_async(
-            "data:text/html,<title>parked</title><div id='ok'>parked runtime</div>",
-        )
-        .await
-        .expect("parked background page should initialize");
-    let bc = ctx.conn.browser_context.as_mut().unwrap();
-    bc.background_targets
-        .push(crate::conn::BackgroundTarget::new(
-            "TID-000000000F".into(),
-            None,
-            crate::conn::TargetIdentityState::new(
-                "about:blank#metadata-only".into(),
-                crate::conn::URL_BASE.into(),
-                "Secure".into(),
-            ),
-            crate::conn::TargetPageSlot::empty_for_test_fixture(),
-        ));
-    bc.background_targets
-        .push(crate::conn::BackgroundTarget::new(
+    {
+        let bc = ctx.conn.browser_context.as_mut().unwrap();
+        bc.background_targets
+            .push(crate::conn::BackgroundTarget::new(
+                "TID-000000000F".into(),
+                None,
+                crate::conn::TargetIdentityState::new(
+                    "about:blank#metadata-only".into(),
+                    crate::conn::URL_BASE.into(),
+                    "Secure".into(),
+                ),
+                crate::conn::TargetPageSlot::empty_for_test_fixture(),
+            ));
+        bc.stage_active_target_demoting_current(
             "TID-0000000010".into(),
             None,
-            crate::conn::TargetIdentityState::new(
-                "about:blank#parked".into(),
-                "null".into(),
-                "Secure".into(),
-            ),
-            crate::conn::TargetPageSlot::with_loaded_page_for_test(parked_page),
-        ));
+            "about:blank#parked".into(),
+            Some("about:blank".into()),
+        );
+    }
+    ctx.install_navigation_fixture_for_session_owner(
+        "data:text/html,<title>parked</title><div id='ok'>parked runtime</div>",
+        None,
+    )
+    .await;
+    assert!(
+        ctx.conn
+            .browser_context
+            .as_mut()
+            .unwrap()
+            .promote_background_target_to_active_slot_async("TID-000000000E")
+            .await
+            .expect("restoring the original active target should succeed"),
+        "the original active target should remain parked during fixture setup"
+    );
 
     ctx.process_async(json!({
         "id": 17023,

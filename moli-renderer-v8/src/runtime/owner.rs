@@ -295,6 +295,11 @@ pub enum RendererOwnerReply {
     PreparedRendererDocumentCommitConfigurationUpdated,
     PreparedRendererDocumentCanceled,
     AsyncPageCommandRan(Box<RendererCommandTurnOutput>),
+    RuntimeInspectorSessionResponseSettled {
+        output: Box<RendererCommandTurnOutput>,
+        response_succeeded: bool,
+    },
+    RuntimeInspectorSessionErrorSettled(RendererOutputFence),
     RuntimeInspectorSessionDetachFinalized(bool),
     PageRemoved,
     TestingCurrentPageState(Arc<RendererPageState>),
@@ -4564,7 +4569,8 @@ impl RendererOwnerHandle {
         post_response_continuation: Option<RendererPageCommandPostResponseContinuation>,
         capture_policy: super::RendererPageStateCapturePolicy,
     ) -> RenderRuntimeDispatchOutcome {
-        let runtime_command_output = entry.page_vm_mut().take_runtime_command_output();
+        let (runtime_command_output, runtime_session_response) =
+            entry.page_vm_mut().take_runtime_command_settlement();
         let command_produced_records = !turn_records.is_empty();
         entry.page_vm().append_renderer_output_records(turn_records);
         let (mut entry, page_state_result) = commit_page_state_on_entry_via_local_task_with_policy(
@@ -4598,18 +4604,65 @@ impl RendererOwnerHandle {
         if let Some(output) = concrete_output {
             self.publish_renderer_output(output);
         }
-        match page_state_result {
+        let completion = match page_state_result {
             Ok(page_state) => match RendererCommandTurnOutput::new(
                 reply,
                 page_state,
                 runtime_command_output,
                 post_response_continuation,
-                renderer_output_predecessor,
+                renderer_output_predecessor.clone(),
             ) {
-                Ok(output) => Ok(RendererOwnerReply::AsyncPageCommandRan(Box::new(output))).into(),
-                Err(error) => Err(error).into(),
+                Ok(output) => Ok(output),
+                Err(error) => Err(error),
             },
-            Err(error) => Err(error).into(),
+            Err(error) => Err(error),
+        };
+        match (completion, runtime_session_response) {
+            (Ok(mut output), Some(publication)) => {
+                match publication.commit(renderer_output_predecessor) {
+                    Ok(Some(settlement)) => {
+                        let (response_predecessor, response_succeeded) = settlement.into_parts();
+                        output.merge_renderer_output_predecessor(response_predecessor);
+                        Ok(RendererOwnerReply::RuntimeInspectorSessionResponseSettled {
+                            output: Box::new(output),
+                            response_succeeded,
+                        })
+                        .into()
+                    }
+                    Ok(None) => unreachable!(
+                        "a DevTools session publication must return its concrete response fence"
+                    ),
+                    Err(completion) => Err(anyhow!(
+                        "Runtime response output closed before call {} was published",
+                        completion.call_id
+                    ))
+                    .into(),
+                }
+            }
+            (Err(error), Some(publication)) => {
+                match publication.commit_error(error.to_string(), renderer_output_predecessor) {
+                    Ok(Some(settlement)) => {
+                        let (response_predecessor, response_succeeded) = settlement.into_parts();
+                        debug_assert!(!response_succeeded);
+                        Ok(RendererOwnerReply::RuntimeInspectorSessionErrorSettled(
+                            response_predecessor,
+                        ))
+                        .into()
+                    }
+                    Ok(None) => unreachable!(
+                        "a DevTools session publication must return its concrete response fence"
+                    ),
+                    Err(completion) => Err(anyhow!(
+                        "Runtime error output closed before call {} was published",
+                        completion.call_id
+                    ))
+                    .into(),
+                }
+            }
+            (Ok(output), None) => {
+                Ok(RendererOwnerReply::AsyncPageCommandRan(Box::new(output))).into()
+            }
+            (Err(error), None) => Err(error).into(),
         }
     }
 

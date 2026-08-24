@@ -740,7 +740,8 @@ mod tests {
                 Some(SESSION_ID),
                 agent_token,
                 &observation,
-            );
+            )
+            .await;
         let mut command_context = CommandDispatchContext::default();
 
         barriers

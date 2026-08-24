@@ -4,10 +4,7 @@ use crate::runtime::{
     RendererInspectorPageCommand, RendererPageCommand, RendererRuntimeInspectorResponseSender,
 };
 use crate::script_execution_control::RendererScriptExecutionControl;
-use moli_page_types::{
-    DevToolsSessionKey, RendererAgentAttachmentId, RendererDevToolsCommandId,
-    RendererInspectorResponseDelivery,
-};
+use moli_page_types::{DevToolsSessionKey, RendererAgentAttachmentId, RendererDevToolsCommandId};
 use serde_json::Value;
 
 /// Chromium routes Page DevTools work through separate main-thread and IO
@@ -18,15 +15,6 @@ use serde_json::Value;
 pub enum RendererInspectorCommandRoute {
     MainThread,
     Io,
-}
-
-/// The command owns its receiver dispatch slot until its first access to the
-/// target agent. Protocol response completion is not part of this lifetime:
-/// V8 may complete a response asynchronously, and holding the slot for that
-/// response could prevent a later resume command from running.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RendererInspectorFirstDispatchLifecycle {
-    OrderedUntilFirstDispatch,
 }
 
 /// Pause-loop transition owned by an Inspector command. This is derived once
@@ -129,12 +117,8 @@ impl RendererInspectorIngressTicket {
 /// envelope.
 pub struct RendererInspectorCommandEnvelope {
     ticket: RendererInspectorIngressTicket,
-    first_dispatch: RendererInspectorFirstDispatchLifecycle,
     pause_effect: RendererInspectorPauseCommandEffect,
     main_dispatch_boundary: RendererInspectorMainDispatchBoundary,
-    /// Terminal sink when an Inspector session directly claims this command.
-    /// A Main command claimed by the Page owner keeps its typed reply sink.
-    inspector_response_delivery: RendererInspectorResponseDelivery,
     payload: RendererInspectorCommandPayload,
 }
 
@@ -254,10 +238,6 @@ impl RendererDevToolsIoCommandEnvelope {
         &self.ticket
     }
 
-    pub(crate) fn first_dispatch_lifecycle(&self) -> RendererInspectorFirstDispatchLifecycle {
-        RendererInspectorFirstDispatchLifecycle::OrderedUntilFirstDispatch
-    }
-
     pub(crate) fn kind(&self) -> RendererDevToolsIoCommandKind {
         match &self.payload {
             RendererDevToolsIoCommandPayload::Inspector(_) => {
@@ -285,6 +265,16 @@ impl RendererDevToolsIoCommandEnvelope {
         match &mut self.payload {
             RendererDevToolsIoCommandPayload::Inspector(envelope) => Some(envelope),
             _ => None,
+        }
+    }
+
+    pub(crate) fn response(&self) -> Option<&RendererRuntimeInspectorResponseSender> {
+        match &self.payload {
+            RendererDevToolsIoCommandPayload::Inspector(envelope) => envelope.response(),
+            RendererDevToolsIoCommandPayload::PerformanceGetMetrics { response, .. }
+            | RendererDevToolsIoCommandPayload::SetScriptExecutionDisabled { response, .. } => {
+                response.as_ref()
+            }
         }
     }
 
@@ -340,10 +330,6 @@ impl RendererDevToolsMainCommandEnvelope {
         &self.ticket
     }
 
-    pub(crate) fn first_dispatch_lifecycle(&self) -> RendererInspectorFirstDispatchLifecycle {
-        RendererInspectorFirstDispatchLifecycle::OrderedUntilFirstDispatch
-    }
-
     pub(crate) fn nested_dispatch(&self) -> RendererDevToolsMainNestedDispatch {
         match self.payload.as_ref() {
             RendererPageCommand::Inspector(envelope)
@@ -363,6 +349,11 @@ impl RendererDevToolsMainCommandEnvelope {
         }
     }
 
+    pub(crate) fn response(&self) -> Option<&RendererRuntimeInspectorResponseSender> {
+        self.inspector_envelope()
+            .and_then(RendererInspectorCommandEnvelope::response)
+    }
+
     pub(crate) fn into_nested_inspector_envelope(self) -> RendererInspectorCommandEnvelope {
         assert_eq!(
             self.nested_dispatch(),
@@ -373,13 +364,6 @@ impl RendererDevToolsMainCommandEnvelope {
             unreachable!("nested Inspector dispatch kind requires an Inspector payload")
         };
         envelope
-    }
-
-    pub(crate) fn into_inspector_envelope(self) -> Option<RendererInspectorCommandEnvelope> {
-        match *self.payload {
-            RendererPageCommand::Inspector(envelope) => Some(envelope),
-            _ => None,
-        }
     }
 
     pub(crate) fn into_nested_page_command(self) -> RendererPageCommand {
@@ -415,10 +399,8 @@ impl RendererInspectorCommandEnvelope {
                 inspector_session_id,
                 RendererInspectorCommandRoute::MainThread,
             ),
-            first_dispatch: RendererInspectorFirstDispatchLifecycle::OrderedUntilFirstDispatch,
             pause_effect: RendererInspectorPauseCommandEffect::None,
             main_dispatch_boundary: RendererInspectorMainDispatchBoundary::PageOwner,
-            inspector_response_delivery: RendererInspectorResponseDelivery::CommandReply,
             payload: RendererInspectorCommandPayload::MainThread(command),
         }
     }
@@ -429,7 +411,6 @@ impl RendererInspectorCommandEnvelope {
         owner_context_resolution_action: Option<String>,
         raw_json: String,
         response: RendererRuntimeInspectorResponseSender,
-        inspector_response_delivery: RendererInspectorResponseDelivery,
     ) -> Self {
         assert_eq!(
             ticket.route(),
@@ -458,10 +439,8 @@ impl RendererInspectorCommandEnvelope {
         };
         Self {
             ticket,
-            first_dispatch: RendererInspectorFirstDispatchLifecycle::OrderedUntilFirstDispatch,
             pause_effect: RendererInspectorPauseCommandEffect::from_message(message.as_ref()),
             main_dispatch_boundary,
-            inspector_response_delivery,
             payload: RendererInspectorCommandPayload::MainThread(command),
         }
     }
@@ -471,7 +450,6 @@ impl RendererInspectorCommandEnvelope {
         ticket: RendererInspectorIngressTicket,
         raw_json: String,
         response: Option<RendererRuntimeInspectorResponseSender>,
-        response_delivery: RendererInspectorResponseDelivery,
     ) -> Self {
         assert_eq!(
             ticket.route(),
@@ -481,10 +459,8 @@ impl RendererInspectorCommandEnvelope {
         let message = serde_json::from_str::<Value>(&raw_json).ok();
         Self {
             ticket,
-            first_dispatch: RendererInspectorFirstDispatchLifecycle::OrderedUntilFirstDispatch,
             pause_effect: RendererInspectorPauseCommandEffect::from_message(message.as_ref()),
             main_dispatch_boundary: RendererInspectorMainDispatchBoundary::InspectorSession,
-            inspector_response_delivery: response_delivery,
             payload: RendererInspectorCommandPayload::Io { raw_json, response },
         }
     }
@@ -493,16 +469,25 @@ impl RendererInspectorCommandEnvelope {
         &self.ticket
     }
 
-    pub fn first_dispatch_lifecycle(&self) -> RendererInspectorFirstDispatchLifecycle {
-        self.first_dispatch
-    }
-
     pub(crate) fn pause_effect(&self) -> RendererInspectorPauseCommandEffect {
         self.pause_effect
     }
 
-    pub(crate) fn inspector_response_delivery(&self) -> RendererInspectorResponseDelivery {
-        self.inspector_response_delivery
+    pub(crate) fn response(&self) -> Option<&RendererRuntimeInspectorResponseSender> {
+        match &self.payload {
+            RendererInspectorCommandPayload::MainThread(
+                RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithDeferredResponse {
+                    deferred_response,
+                    ..
+                }
+                | RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithContextResolutionAndDeferredResponse {
+                    deferred_response,
+                    ..
+                },
+            ) => Some(deferred_response),
+            RendererInspectorCommandPayload::Io { response, .. } => response.as_ref(),
+            RendererInspectorCommandPayload::MainThread(_) => None,
+        }
     }
 
     pub(crate) fn can_dispatch_at_nested_inspector_session_boundary(&self) -> bool {
@@ -529,17 +514,6 @@ impl RendererInspectorCommandEnvelope {
         command
     }
 
-    pub(crate) fn is_main_protocol_command_with_deferred_response(&self) -> bool {
-        matches!(
-            self.main_thread_payload(),
-            RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithDeferredResponse {
-                ..
-            } | RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithContextResolutionAndDeferredResponse {
-                ..
-            }
-        )
-    }
-
     #[cfg(test)]
     pub(crate) fn main_protocol_raw_json(&self) -> &str {
         match self.main_thread_payload() {
@@ -556,17 +530,8 @@ impl RendererInspectorCommandEnvelope {
     }
 
     pub(crate) fn main_protocol_response(&self) -> &RendererRuntimeInspectorResponseSender {
-        match self.main_thread_payload() {
-            RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithDeferredResponse {
-                deferred_response,
-                ..
-            }
-            | RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithContextResolutionAndDeferredResponse {
-                deferred_response,
-                ..
-            } => deferred_response,
-            _ => panic!("only a deferred Main protocol command can enter the nested receiver"),
-        }
+        self.response()
+            .expect("only a deferred Main protocol command can enter the nested receiver")
     }
 
     pub(crate) fn into_main_protocol_parts(
@@ -602,20 +567,6 @@ impl RendererInspectorCommandEnvelope {
             panic!("a MainThread Inspector envelope cannot enter IO dispatch");
         };
         raw_json
-    }
-
-    pub(crate) fn io_response(&self) -> Option<&RendererRuntimeInspectorResponseSender> {
-        let RendererInspectorCommandPayload::Io { response, .. } = &self.payload else {
-            panic!("a MainThread Inspector envelope cannot enter IO dispatch");
-        };
-        response.as_ref()
-    }
-
-    pub(crate) fn io_response_delivery(&self) -> RendererInspectorResponseDelivery {
-        let RendererInspectorCommandPayload::Io { .. } = &self.payload else {
-            panic!("a MainThread Inspector envelope cannot enter IO dispatch");
-        };
-        self.inspector_response_delivery
     }
 
     pub(crate) fn take_io_response(&mut self) -> Option<RendererRuntimeInspectorResponseSender> {

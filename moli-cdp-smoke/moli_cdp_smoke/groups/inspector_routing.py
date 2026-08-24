@@ -1049,6 +1049,57 @@ async def _nested_v8_main_receiver_matrix(
     if not isinstance(call_frame_id, str) or not call_frame_id:
         raise SmokeError(f"auxiliary pause has no callFrameId: {call_frames[0]}")
 
+    cross_session_ids: dict[str, list[int]] = {
+        page.primary_session_id: [],
+        page.auxiliary_session_id: [],
+    }
+    cross_session_expected_values: dict[int, int] = {}
+    for index in range(32):
+        for session_id, base in (
+            (page.primary_session_id, 1000),
+            (page.auxiliary_session_id, 2000),
+        ):
+            message_id = await client.send(
+                "Runtime.evaluate",
+                {
+                    "expression": str(base + index),
+                    "returnByValue": True,
+                },
+                session_id=session_id,
+            )
+            cross_session_ids[session_id].append(message_id)
+            cross_session_expected_values[message_id] = base + index
+    cross_session_expected_ids = set(cross_session_expected_values)
+    cross_session_responses, cross_session_seen = await _recv_responses(
+        client,
+        cross_session_expected_ids,
+        timeout=10,
+    )
+    cross_session_seen.extend(await _recv_for(client, 0.1))
+    for session_id, message_ids in cross_session_ids.items():
+        response_order = [
+            message["id"]
+            for message in cross_session_seen
+            if message.get("id") in message_ids
+        ]
+        assert_equal(
+            response_order,
+            message_ids,
+            f"nested Main per-session response order for {session_id}",
+        )
+        for message_id in message_ids:
+            response = cross_session_responses[message_id]
+            assert_equal(
+                response.get("sessionId"),
+                session_id,
+                f"nested Main response session for {message_id}",
+            )
+            assert_equal(
+                response.get("result", {}).get("result", {}).get("value"),
+                cross_session_expected_values[message_id],
+                f"nested Main cross-session value for {message_id}",
+            )
+
     fifo_ids = [
         await client.send(
             "Runtime.evaluate",
@@ -1089,12 +1140,26 @@ async def _nested_v8_main_receiver_matrix(
     if not isinstance(remote_object_id, str) or not remote_object_id:
         raise SmokeError(f"nested Main object evaluate returned no objectId: {object_response}")
 
-    properties_id = await client.send(
-        "Runtime.getProperties",
-        {"objectId": remote_object_id, "ownProperties": True},
-        session_id=page.auxiliary_session_id,
+    property_ids = [
+        await client.send(
+            "Runtime.getProperties",
+            {"objectId": remote_object_id, "ownProperties": True},
+            session_id=page.auxiliary_session_id,
+        )
+        for _ in range(256)
+    ]
+    property_responses, property_seen = await _recv_responses(
+        client, set(property_ids), timeout=10
     )
-    properties, _ = await client.recv_until_id(properties_id, timeout=5)
+    property_response_order = [
+        message["id"] for message in property_seen if message.get("id") in property_ids
+    ]
+    assert_equal(
+        property_response_order,
+        property_ids,
+        "nested Main Runtime.getProperties completion burst order",
+    )
+    properties = property_responses[property_ids[0]]
     descriptors = properties.get("result", {}).get("result", [])
     if not any(
         descriptor.get("name") == "answer"
@@ -1103,6 +1168,53 @@ async def _nested_v8_main_receiver_matrix(
         if isinstance(descriptor, dict)
     ):
         raise SmokeError(f"nested Main getProperties missed answer=42: {properties}")
+
+    mixed_property_ids: list[int] = []
+    mixed_property_should_succeed: dict[int, bool] = {}
+    for index in range(128):
+        should_succeed = index % 2 == 0
+        message_id = await client.send(
+            "Runtime.getProperties",
+            {
+                "objectId": (
+                    remote_object_id
+                    if should_succeed
+                    else f"missing-object-{index}"
+                ),
+                "ownProperties": True,
+            },
+            session_id=page.auxiliary_session_id,
+        )
+        mixed_property_ids.append(message_id)
+        mixed_property_should_succeed[message_id] = should_succeed
+    mixed_property_responses, mixed_property_seen = await _recv_responses(
+        client,
+        set(mixed_property_ids),
+        timeout=10,
+    )
+    mixed_property_seen.extend(await _recv_for(client, 0.1))
+    mixed_property_response_order = [
+        message["id"]
+        for message in mixed_property_seen
+        if message.get("id") in mixed_property_should_succeed
+    ]
+    assert_equal(
+        mixed_property_response_order,
+        mixed_property_ids,
+        "nested Main mixed-success getProperties response order",
+    )
+    for message_id in mixed_property_ids:
+        response = mixed_property_responses[message_id]
+        if mixed_property_should_succeed[message_id]:
+            if "error" in response:
+                raise SmokeError(
+                    f"valid mixed getProperties command failed: {response}"
+                )
+            continue
+        if "error" not in response:
+            raise SmokeError(
+                f"invalid mixed getProperties command unexpectedly succeeded: {response}"
+            )
 
     call_id = await client.send(
         "Runtime.callFunctionOn",
@@ -1120,21 +1232,40 @@ async def _nested_v8_main_receiver_matrix(
         "nested Main object-targeted callFunctionOn",
     )
 
-    frame_evaluate_id = await client.send(
-        "Debugger.evaluateOnCallFrame",
-        {
-            "callFrameId": call_frame_id,
-            "expression": "40 + 2",
-            "returnByValue": True,
-        },
-        session_id=page.auxiliary_session_id,
+    frame_evaluate_ids = [
+        await client.send(
+            "Debugger.evaluateOnCallFrame",
+            {
+                "callFrameId": call_frame_id,
+                "expression": "40 + 2",
+                "returnByValue": True,
+            },
+            session_id=page.auxiliary_session_id,
+        )
+        for _ in range(64)
+    ]
+    frame_evaluate_responses, frame_evaluate_seen = await _recv_responses(
+        client, set(frame_evaluate_ids), timeout=10
     )
-    frame_evaluate, _ = await client.recv_until_id(frame_evaluate_id, timeout=5)
+    frame_evaluate_response_order = [
+        message["id"]
+        for message in frame_evaluate_seen
+        if message.get("id") in frame_evaluate_ids
+    ]
     assert_equal(
-        frame_evaluate.get("result", {}).get("result", {}).get("value"),
-        42,
-        "nested Main Debugger.evaluateOnCallFrame",
+        frame_evaluate_response_order,
+        frame_evaluate_ids,
+        "nested Main Debugger.evaluateOnCallFrame completion burst order",
     )
+    for frame_evaluate_id in frame_evaluate_ids:
+        assert_equal(
+            frame_evaluate_responses[frame_evaluate_id]
+            .get("result", {})
+            .get("result", {})
+            .get("value"),
+            42,
+            "nested Main Debugger.evaluateOnCallFrame",
+        )
 
     context_evaluate_id = await client.send(
         "Runtime.evaluate",
@@ -1197,14 +1328,21 @@ async def _nested_v8_main_receiver_matrix(
         ),
         source="Chromium nested main-thread RunLoop executable probe",
         commands=[
-            "Runtime.evaluate",
-            "Runtime.getProperties",
+            "Runtime.evaluate (cross-session burst)",
+            "Runtime.getProperties (success and error bursts)",
             "Runtime.callFunctionOn",
             "Debugger.evaluateOnCallFrame",
             "Debugger.resume",
         ],
         observed={
             "fifoResponseOrder": fifo_response_order,
+            "crossSessionBurstCounts": {
+                session_id: len(message_ids)
+                for session_id, message_ids in cross_session_ids.items()
+            },
+            "getPropertiesBurstCount": len(property_response_order),
+            "mixedGetPropertiesBurstCount": len(mixed_property_response_order),
+            "evaluateOnCallFrameBurstCount": len(frame_evaluate_response_order),
             "resumedSessions": sorted(
                 session
                 for session in resumed_sessions

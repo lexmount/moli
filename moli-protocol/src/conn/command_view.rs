@@ -1,5 +1,6 @@
 use std::str::FromStr;
 
+use moli_page_types::RendererInspectorResponseDelivery;
 use moli_protocol_cdp::{CdpRendererCommandPolicy, ParsedCdpCommand};
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -30,6 +31,10 @@ pub struct Cmd<'a> {
     /// command's policy. Domain dispatchers consume it through
     /// [`Self::renderer_policy`].
     renderer_policy: CdpRendererCommandPolicy,
+    /// Explicit terminal-response destination for a command synthesized by an
+    /// internal protocol adapter. Ordinary frontend commands use the domain's
+    /// Chromium-compatible default.
+    terminal_response_delivery_override: Option<RendererInspectorResponseDelivery>,
 }
 
 impl<'a> Cmd<'a> {
@@ -46,7 +51,16 @@ impl<'a> Cmd<'a> {
             session_id: request.session_id(),
             json: command.json(),
             renderer_policy: command.renderer_policy(),
+            terminal_response_delivery_override: None,
         })
+    }
+
+    pub(crate) fn with_terminal_response_delivery_override(
+        mut self,
+        response_delivery: Option<RendererInspectorResponseDelivery>,
+    ) -> Self {
+        self.terminal_response_delivery_override = response_delivery;
+        self
     }
 
     /// Build a low-level domain-test view while keeping method and renderer
@@ -84,11 +98,19 @@ impl<'a> Cmd<'a> {
             session_id,
             json,
             renderer_policy: parsed.renderer_policy(),
+            terminal_response_delivery_override: None,
         }
     }
 
     pub const fn renderer_policy(&self) -> CdpRendererCommandPolicy {
         self.renderer_policy
+    }
+
+    pub(crate) fn terminal_response_delivery(
+        &self,
+        default: RendererInspectorResponseDelivery,
+    ) -> RendererInspectorResponseDelivery {
+        self.terminal_response_delivery_override.unwrap_or(default)
     }
 
     /// Build the protocol-neutral command context for shared DevTools command

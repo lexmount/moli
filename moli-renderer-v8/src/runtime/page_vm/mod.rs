@@ -1542,7 +1542,7 @@ pub(crate) struct PageVm {
     pub(super) page_id: PageId,
     pub(super) creation_id: u64,
     pub(super) document_lifecycle: RendererDocumentLifecycleJournalHandle,
-    pub(super) runtime_command_output: RendererRuntimeCommandOutput,
+    pub(super) runtime_command_settlement: super::RendererRuntimeCommandOutputSettlement,
     pub(super) pending_runtime_command_output: Option<PageVmRuntimeCommandOutputScope>,
     pub(super) next_runtime_command_output_scope_id: u64,
     pub(super) vm: Option<ScriptVm>,
@@ -4095,8 +4095,13 @@ impl PageVm {
         Ok(snapshot)
     }
 
-    pub(super) fn take_runtime_command_output(&mut self) -> RendererRuntimeCommandOutput {
-        std::mem::take(&mut self.runtime_command_output)
+    pub(super) fn take_runtime_command_settlement(
+        &mut self,
+    ) -> (
+        RendererRuntimeCommandOutput,
+        Option<super::RendererRuntimeInspectorResponsePublication>,
+    ) {
+        std::mem::take(&mut self.runtime_command_settlement).into_parts()
     }
 
     fn refresh_document_url_from_location(&mut self) {
@@ -4256,7 +4261,7 @@ impl PageVm {
             page_id,
             creation_id,
             document_lifecycle,
-            runtime_command_output: RendererRuntimeCommandOutput::default(),
+            runtime_command_settlement: super::RendererRuntimeCommandOutputSettlement::default(),
             pending_runtime_command_output: None,
             next_runtime_command_output_scope_id: 1,
             vm: Some(vm),

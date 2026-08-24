@@ -187,12 +187,15 @@ impl RendererTurnOutputJournal {
     /// A DevTools session response is a terminal renderer observation, not a
     /// command-side acknowledgement. Admitting it through the same journal as
     /// that session's notifications keeps their producer order without a
-    /// second completion sequencer. `false` means the exact attachment stream
-    /// was already closed before it could take ownership of the records.
-    pub(crate) fn try_publish_records(
+    /// second completion sequencer. The returned fence names the terminal
+    /// batch itself so the command completion cannot release post-response
+    /// owner actions before protocol ingress admits that batch. `None` means
+    /// the exact attachment stream was already closed before it could take
+    /// ownership of the records.
+    pub(crate) fn try_publish_records_and_declare_fence(
         &self,
         records: impl IntoIterator<Item = PendingRendererOutputRecord>,
-    ) -> bool {
+    ) -> Option<RendererOutputFence> {
         let records = records.into_iter().collect::<Vec<_>>();
         assert!(
             !records.is_empty(),
@@ -200,11 +203,12 @@ impl RendererTurnOutputJournal {
         );
         let mut state = self.state.lock();
         if state.closed {
-            return false;
+            return None;
         }
         state.records.extend(records);
         let publication = Self::settle_locked(&mut state)
             .expect("newly appended renderer output records must settle");
+        let cursor = publication.cursor();
         if let Some(transport) = state.transport.as_ref() {
             // Admission failure means the protocol owner has retired or its
             // bounded stream is terminal. The journal has nevertheless taken
@@ -214,7 +218,10 @@ impl RendererTurnOutputJournal {
         } else {
             state.deferred_publications.push(publication);
         }
-        true
+        Some(RendererOutputFence::declare(
+            cursor,
+            state.transport.clone(),
+        ))
     }
 
     fn settle_locked(

@@ -33,9 +33,8 @@ pub(crate) use self::v8_backend::{
 };
 use crate::devtools::target::RendererDevToolsTargetHandle;
 #[cfg(test)]
-use crate::runtime::{
-    RendererRuntimeCommandOutputRecorder, RendererRuntimeInspectorResponseSender,
-};
+use crate::runtime::RendererRuntimeCommandOutputRecorder;
+use crate::runtime::RendererRuntimeInspectorResponseSender;
 use crate::{
     frame_owner_model::FrameRealmId,
     protocol_types::RuntimeBindingRegistration,
@@ -44,8 +43,8 @@ use crate::{
 };
 use anyhow::Result;
 use moli_page_types::{
-    DevToolsSessionKey, RendererDevToolsAgentToken, RendererInspectorSessionRestoreSnapshot,
-    V8InspectorSessionState,
+    DevToolsSessionKey, RendererDevToolsAgentToken, RendererInspectorResponseDelivery,
+    RendererInspectorSessionRestoreSnapshot, V8InspectorSessionState,
 };
 use serde_json::{Value, json};
 use std::{cell::RefCell, collections::HashMap};
@@ -143,6 +142,22 @@ impl DocumentInspectorBinding {
                 self.agent.with_frontend(backend, session_key, op)
             }
         }
+    }
+
+    pub(super) fn route_frontend_response(
+        &self,
+        inspector_session_id: Option<&str>,
+        response: RendererRuntimeInspectorResponseSender,
+    ) -> Result<RendererRuntimeInspectorResponseSender> {
+        if response.response_delivery() == RendererInspectorResponseDelivery::CommandReply {
+            return Ok(response);
+        }
+        let session_key = inspector_session_key(inspector_session_id);
+        let outbound = self
+            .agent
+            .frontend_outbound(&session_key)
+            .ok_or_else(|| anyhow::anyhow!("Inspector frontend session is not available"))?;
+        Ok(outbound.route_frontend_response(response))
     }
 
     pub(super) fn v8_session_state(

@@ -558,7 +558,10 @@ impl CdpConnection {
             );
         }
         let cmd = Cmd::from_parsed(command)
-            .expect("validated domain-qualified command must produce a command view");
+            .expect("validated domain-qualified command must produce a command view")
+            .with_terminal_response_delivery_override(
+                command_context.terminal_response_delivery_override(),
+            );
         self.record_tracing_command(cmd.method, cmd.session_id);
         let step = match domain {
             "Browser" => Some(
@@ -1307,8 +1310,28 @@ impl CdpConnection {
         &mut self,
         raw: &str,
     ) -> CdpRendererOwnerTurnOutcome {
+        self.process_message_with_terminal_response_delivery_async(raw, None)
+            .await
+    }
+
+    pub(crate) async fn process_message_with_command_reply_turn_outcome_async(
+        &mut self,
+        raw: &str,
+    ) -> CdpRendererOwnerTurnOutcome {
+        self.process_message_with_terminal_response_delivery_async(
+            raw,
+            Some(moli_page_types::RendererInspectorResponseDelivery::CommandReply),
+        )
+        .await
+    }
+
+    async fn process_message_with_terminal_response_delivery_async(
+        &mut self,
+        raw: &str,
+        response_delivery_override: Option<moli_page_types::RendererInspectorResponseDelivery>,
+    ) -> CdpRendererOwnerTurnOutcome {
         let outcome = self
-            .process_message_through_command_dispatch_async(raw)
+            .process_message_through_command_dispatch_async(raw, response_delivery_override)
             .await;
         let (
             protocol_events,
@@ -1338,7 +1361,7 @@ impl CdpConnection {
     #[cfg(test)]
     pub async fn process_message_messages_only_for_test(&mut self, raw: &str) -> Vec<Value> {
         let outcome = self
-            .process_message_through_command_dispatch_async(raw)
+            .process_message_through_command_dispatch_async(raw, None)
             .await;
         outcome.into_parts().0
     }
@@ -1346,6 +1369,7 @@ impl CdpConnection {
     async fn process_message_through_command_dispatch_async(
         &mut self,
         raw: &str,
+        response_delivery_override: Option<moli_page_types::RendererInspectorResponseDelivery>,
     ) -> CdpRendererOwnerTurnOutcome {
         let command = ParsedCdpCommand::parse_str(raw.to_owned());
         let output_session_id = command
@@ -1359,6 +1383,9 @@ impl CdpConnection {
         let mut scheduler_events = Vec::new();
         let mut renderer_output_predecessor: Option<moli_core::RendererOutputFence> = None;
         let mut command_context = CommandDispatchContext::default();
+        if let Some(response_delivery) = response_delivery_override {
+            command_context.set_terminal_response_delivery_override(response_delivery);
+        }
         let mut step = match command.as_ref() {
             Ok(command) => {
                 self.start_parsed_command_dispatch_with_context(command, &mut command_context)

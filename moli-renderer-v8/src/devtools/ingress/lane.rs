@@ -47,11 +47,12 @@ impl<C> Default for RendererDevToolsSessionLane<C> {
     }
 }
 
-/// Route-local per-session admission state.
+/// Main-receiver admission state for all frontend sessions on one target.
 ///
-/// Main and IO each own a distinct instance under a distinct mutex. Sharing
-/// this implementation keeps their FIFO, cancellation and first-dispatch
-/// invariants aligned without creating a shared cross-route queue.
+/// Chromium gives each session its own ordered Main receiver. The active slot
+/// ends when a command first reaches the target agent; asynchronous response
+/// completion is deliberately outside that lifetime so a later resume command
+/// can enter a nested pause loop.
 pub(crate) struct RendererDevToolsSessionLanes<C> {
     sessions: BTreeMap<RendererDevToolsSessionLaneKey, RendererDevToolsSessionLane<C>>,
     ready_sessions: VecDeque<RendererDevToolsSessionLaneKey>,

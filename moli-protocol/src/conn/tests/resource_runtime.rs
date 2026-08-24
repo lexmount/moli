@@ -1892,23 +1892,12 @@ async fn direct_runtime_evaluate_self_popup_does_not_navigate_active_target_for_
     active.set_target_url("https://active.example/current".to_owned());
     ctx.conn.browser_context = Some(active);
 
-    let mut page = ctx
-        .conn
-        .load_page_via_runtime_async("data:text/html,<!doctype html><title>self-popup</title>")
-        .await
-        .expect("background page should load");
-    let _ = page
-        .dispatch_runtime_protocol_message_async(
-            &json!({"id": 9007, "method": "Runtime.enable", "params": {}}).to_string(),
-        )
-        .await
-        .expect("Runtime.enable should create the owner inspector context");
-    let mut background = BackgroundTarget::with_url(
+    let page_url = "data:text/html,<!doctype html><title>self-popup</title>";
+    let background = BackgroundTarget::with_url(
         "TID-self-popup-background".to_owned(),
         Some("SID-self-popup-background".to_owned()),
-        page.final_url().as_str().to_owned(),
+        page_url.to_owned(),
     );
-    background.replace_loaded_page(Some(page));
 
     let mut inactive = BrowserContext::new("BID-self-popup-background".into());
     inactive.background_targets.push(background);
@@ -1919,6 +1908,8 @@ async fn direct_runtime_evaluate_self_popup_does_not_navigate_active_target_for_
             .runtime_frontend_enabled = true;
     });
     ctx.conn.inactive_browser_contexts.push(inactive);
+    ctx.install_navigation_fixture_for_session_owner(page_url, Some("SID-self-popup-background"))
+        .await;
 
     ctx.sent.clear();
     ctx.process_async(json!({

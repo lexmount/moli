@@ -367,7 +367,12 @@ fn start_script_execution_disabled_command(
     };
     let renderer_inspector_session_id =
         conn.target_renderer_runtime_inspector_session_id_for_session(cmd.session_id);
-    let Some(command_id) = cmd.id else {
+    let response_delivery = cmd.terminal_response_delivery(
+        moli_page_types::RendererInspectorResponseDelivery::DevToolsSession,
+    );
+    if cmd.id.is_none()
+        || response_delivery == moli_page_types::RendererInspectorResponseDelivery::CommandReply
+    {
         let page = loaded_page_mut_for_session(conn, cmd.session_id)
             .expect("the captured Emulation Page must remain loaded synchronously");
         let pending = page.start_set_script_execution_disabled_from_io(params.value);
@@ -376,11 +381,15 @@ fn start_script_execution_disabled_command(
             session_id: cmd.session_id.map(str::to_owned),
             pending: PendingEmulationRendererDispatch::IoCommandReply(pending),
         });
-    };
+    }
+    let command_id = cmd
+        .id
+        .expect("session output requires a frontend command id");
     let descriptor = RendererCommandDescriptor::set_script_execution_disabled(
         cmd.json.to_owned(),
         cmd.renderer_policy(),
         params.value,
+        response_delivery,
     );
     let prepared = match conn.try_register_renderer_call_for_session_owner(
         cmd.session_id,
@@ -394,7 +403,10 @@ fn start_script_execution_disabled_command(
         }
     };
     let (correlation, response, response_rx) = prepared.into_parts();
-    drop(response_rx);
+    debug_assert!(
+        response_rx.is_none(),
+        "Emulation session output must not allocate a command-reply receiver",
+    );
     let pending = loaded_page_mut_for_session(conn, cmd.session_id)
         .filter(|page| page.renderer_agent_attachment_id() == Some(attachment_id))
         .ok_or_else(|| "Emulation renderer attachment changed before IO dispatch".to_owned())
@@ -2447,16 +2459,23 @@ pub(crate) fn complete_pending_emulation_command(
                 Ok(CompletedDevToolsIoCommandDispatch::Dispatched) => {
                     CommandOutputPlan::result(json!({}))
                 }
-                Ok(CompletedDevToolsIoCommandDispatch::Canceled) => {
-                    CommandOutputPlan::error(-32000, "Emulation IO command was canceled")
+                Ok(CompletedDevToolsIoCommandDispatch::SessionResponse { .. }) => {
+                    CommandOutputPlan::error(
+                        -32000,
+                        "command-reply Emulation dispatch used session output",
+                    )
                 }
                 Err(error) => CommandOutputPlan::error(-32000, error),
             };
         }
         CompletedEmulationRendererDispatch::IoSessionOutput {
-            completed: Ok(CompletedDevToolsIoCommandDispatch::Dispatched),
+            completed: Ok(CompletedDevToolsIoCommandDispatch::SessionResponse { predecessor, .. }),
             ..
-        } => return CommandOutputPlan::default(),
+        } => {
+            let mut plan = CommandOutputPlan::default();
+            plan.set_renderer_output_predecessor(predecessor);
+            return plan;
+        }
         CompletedEmulationRendererDispatch::IoSessionOutput {
             completed,
             correlation,
@@ -2468,10 +2487,11 @@ pub(crate) fn complete_pending_emulation_command(
                 return CommandOutputPlan::default();
             }
             return match completed {
-                Ok(CompletedDevToolsIoCommandDispatch::Canceled) => {
-                    CommandOutputPlan::error(-32000, "Emulation IO command was canceled")
-                }
-                Ok(CompletedDevToolsIoCommandDispatch::Dispatched) => unreachable!(),
+                Ok(CompletedDevToolsIoCommandDispatch::Dispatched) => CommandOutputPlan::error(
+                    -32000,
+                    "Emulation IO dispatch completed without publishing its session response",
+                ),
+                Ok(CompletedDevToolsIoCommandDispatch::SessionResponse { .. }) => unreachable!(),
                 Err(error) => CommandOutputPlan::error(-32000, error),
             };
         }

@@ -1171,7 +1171,7 @@ impl PageVm {
                 raw_json,
                 deferred_response,
             } => self
-                .dispatch_runtime_protocol_message_for_inspector_session_with_deferred_response(
+                .dispatch_frontend_runtime_protocol_message_for_inspector_session_with_deferred_response(
                     inspector_session_id,
                     &raw_json,
                     deferred_response,
@@ -1194,7 +1194,7 @@ impl PageVm {
                 raw_json,
                 deferred_response,
             } => self
-                .dispatch_runtime_protocol_message_for_inspector_session_with_context_resolution_and_deferred_response(
+                .dispatch_frontend_runtime_protocol_message_for_inspector_session_with_context_resolution_and_deferred_response(
                     inspector_session_id,
                     &action,
                     &raw_json,

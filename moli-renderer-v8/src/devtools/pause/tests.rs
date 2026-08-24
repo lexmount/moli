@@ -63,7 +63,6 @@ fn enqueue_command(
                 ),
                 raw_json,
                 Some(response),
-                moli_page_types::RendererInspectorResponseDelivery::CommandReply,
             ),
         ),
     )
@@ -446,16 +445,9 @@ async fn dropping_io_route_cancels_the_unclaimed_command() {
         io_ingress.claim_for_owner().is_none(),
         "a canceled frontend route must remove its queued IO command"
     );
-    let completion = response_rx
-        .await
-        .expect("route cancellation should explicitly fail the deferred response");
-    let response = completion
-        .output
-        .protocol_response(8)
-        .expect("route cancellation response");
-    assert_eq!(
-        response["error"]["message"],
-        json!("Runtime inspector IO route was canceled before dispatch")
+    assert!(
+        response_rx.await.is_err(),
+        "abandoning the frontend route must close its obsolete command-reply capability"
     );
 }
 

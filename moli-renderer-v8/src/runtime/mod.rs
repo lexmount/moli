@@ -368,7 +368,8 @@ pub use self::page_surface::{
 pub(crate) use self::page_surface::{
     RendererCommandTurnOutputRecorder, RendererDevToolsSessionOutputHost,
     RendererInspectorPageCommand, RendererRuntimeCommandOutputRecorder,
-    RendererRuntimeInspectorResponsePublication, RendererRuntimeObservableSourceQueue,
+    RendererRuntimeCommandOutputSettlement, RendererRuntimeInspectorResponsePublication,
+    RendererRuntimeInspectorSessionResponseSettlement, RendererRuntimeObservableSourceQueue,
 };
 pub(crate) use self::page_vm::PageVm;
 use self::page_vm::PageVmDropTracker;
@@ -413,7 +414,7 @@ pub use self::service_worker_run::RendererServiceWorkerRunIdentity;
 pub use crate::devtools::command::{
     RendererDevToolsIoCommandEnvelope, RendererDevToolsMainCommandEnvelope,
     RendererInspectorCommandEnvelope, RendererInspectorCommandRoute,
-    RendererInspectorFirstDispatchLifecycle, RendererInspectorIngressTicket,
+    RendererInspectorIngressTicket,
 };
 pub(crate) use crate::devtools::command::{
     RendererDevToolsIoCommandKind, RendererDevToolsIoCommandPayload,

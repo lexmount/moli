@@ -5,7 +5,6 @@ use std::sync::{
 
 use moli_page_types::{DevToolsSessionKey, RendererDevToolsAgentToken};
 use parking_lot::Mutex;
-use serde_json::json;
 
 use crate::{
     devtools::{
@@ -23,6 +22,7 @@ use crate::{
         RendererInspectorCommandRoute, RendererInspectorIngressTicket,
         RendererInspectorPauseCommandEffect, RendererOwnerReply, RendererPageCommand,
         RendererPageStateCapturePolicy, RendererPageToken, RendererRuntimeInspectorResponseSender,
+        RendererRuntimeInspectorSessionResponseSettlement,
     },
 };
 
@@ -32,19 +32,28 @@ pub(crate) enum RendererInspectorMainCommandConsumer {
     Pause,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum RendererInspectorMainCommandClaim {
     Owner,
     Inspector,
     Page,
-    Canceled,
+    Canceled(String),
 }
 
 pub enum RendererRuntimeInspectorMainCommandCompletion {
     Owner(Box<RendererCommandTurnOutput>),
+    OwnerSessionResponse {
+        output: Box<RendererCommandTurnOutput>,
+        response_succeeded: bool,
+    },
+    OwnerSessionErrorSettled(crate::runtime::RendererOutputFence),
     Inspector,
+    InspectorSessionResponse {
+        predecessor: crate::runtime::RendererOutputFence,
+        response_succeeded: bool,
+    },
     Page(Box<RendererCommandTurnOutput>),
-    Canceled,
+    Canceled(String),
 }
 
 pub(crate) struct RendererInspectorMainCommand {
@@ -67,12 +76,6 @@ impl RendererInspectorMainCommand {
         self.envelope.ticket()
     }
 
-    pub(crate) fn first_dispatch_lifecycle(
-        &self,
-    ) -> crate::runtime::RendererInspectorFirstDispatchLifecycle {
-        self.envelope.first_dispatch_lifecycle()
-    }
-
     #[cfg(test)]
     pub(crate) fn raw_json(&self) -> &str {
         self.envelope
@@ -93,15 +96,6 @@ impl RendererInspectorMainCommand {
             .inspector_envelope()
             .expect("an Inspector pause effect requires an Inspector payload")
             .pause_effect()
-    }
-
-    pub(crate) fn inspector_response_delivery(
-        &self,
-    ) -> moli_page_types::RendererInspectorResponseDelivery {
-        self.envelope
-            .inspector_envelope()
-            .expect("an Inspector response delivery requires an Inspector payload")
-            .inspector_response_delivery()
     }
 
     pub(crate) fn nested_dispatch(&self) -> RendererDevToolsMainNestedDispatch {
@@ -151,6 +145,8 @@ pub struct RendererRuntimeInspectorMainCommandRoute {
     ticket: RendererInspectorIngressTicket,
     claim_rx: Option<tokio::sync::oneshot::Receiver<RendererInspectorMainCommandClaim>>,
     owner_reply_rx: Option<tokio::sync::oneshot::Receiver<anyhow::Result<RendererOwnerReply>>>,
+    session_response_settlement_rx:
+        Option<tokio::sync::oneshot::Receiver<RendererRuntimeInspectorSessionResponseSettlement>>,
     ingress: RendererInspectorMainIngress,
 }
 
@@ -162,33 +158,87 @@ impl RendererRuntimeInspectorMainCommandRoute {
     pub async fn wait_for_completion(
         mut self,
     ) -> anyhow::Result<RendererRuntimeInspectorMainCommandCompletion> {
-        let claim = self
+        let claim = match self
             .claim_rx
             .take()
             .expect("runtime inspector Main command claim receiver should only be awaited once")
             .await
-            .map_err(|_| anyhow::anyhow!("runtime inspector Main command claim channel closed"))?;
+        {
+            Ok(claim) => claim,
+            Err(_) => {
+                if let Some(completion) = self.take_replayed_session_response().await {
+                    return Ok(completion);
+                }
+                return Err(anyhow::anyhow!(
+                    "runtime inspector Main command claim channel closed"
+                ));
+            }
+        };
         match claim {
             RendererInspectorMainCommandClaim::Owner => {
-                let reply = self
+                let reply = match self
                     .owner_reply_rx
                     .take()
                     .expect("an owner-claimed Main command must retain its owner reply receiver")
                     .await
-                    .map_err(|_| {
-                        anyhow::anyhow!("runtime inspector Main owner reply channel closed")
-                    })??;
+                {
+                    Ok(Ok(reply)) => reply,
+                    Ok(Err(error)) => {
+                        if let Some(completion) = self.take_replayed_session_response().await {
+                            return Ok(completion);
+                        }
+                        return Err(error);
+                    }
+                    Err(_) => {
+                        if let Some(completion) = self.take_replayed_session_response().await {
+                            return Ok(completion);
+                        }
+                        return Err(anyhow::anyhow!(
+                            "runtime inspector Main owner reply channel closed"
+                        ));
+                    }
+                };
                 match reply {
                     RendererOwnerReply::AsyncPageCommandRan(output) => {
                         Ok(RendererRuntimeInspectorMainCommandCompletion::Owner(output))
                     }
+                    RendererOwnerReply::RuntimeInspectorSessionResponseSettled {
+                        output,
+                        response_succeeded,
+                    } => Ok(
+                        RendererRuntimeInspectorMainCommandCompletion::OwnerSessionResponse {
+                            output,
+                            response_succeeded,
+                        },
+                    ),
+                    RendererOwnerReply::RuntimeInspectorSessionErrorSettled(predecessor) => Ok(
+                        RendererRuntimeInspectorMainCommandCompletion::OwnerSessionErrorSettled(
+                            predecessor,
+                        ),
+                    ),
                     _ => Err(anyhow::anyhow!(
                         "runtime inspector Main owner returned an unexpected renderer reply"
                     )),
                 }
             }
             RendererInspectorMainCommandClaim::Inspector => {
-                Ok(RendererRuntimeInspectorMainCommandCompletion::Inspector)
+                let Some(session_response_settlement_rx) =
+                    self.session_response_settlement_rx.take()
+                else {
+                    return Ok(RendererRuntimeInspectorMainCommandCompletion::Inspector);
+                };
+                let (predecessor, response_succeeded) = session_response_settlement_rx
+                    .await
+                    .map_err(|_| {
+                        anyhow::anyhow!("runtime Inspector Main session response was not published")
+                    })?
+                    .into_parts();
+                Ok(
+                    RendererRuntimeInspectorMainCommandCompletion::InspectorSessionResponse {
+                        predecessor,
+                        response_succeeded,
+                    },
+                )
             }
             RendererInspectorMainCommandClaim::Page => {
                 let reply = self
@@ -206,10 +256,33 @@ impl RendererRuntimeInspectorMainCommandRoute {
                     )),
                 }
             }
-            RendererInspectorMainCommandClaim::Canceled => {
-                Ok(RendererRuntimeInspectorMainCommandCompletion::Canceled)
+            RendererInspectorMainCommandClaim::Canceled(message) => {
+                if let Some(completion) = self.take_replayed_session_response().await {
+                    Ok(completion)
+                } else {
+                    Ok(RendererRuntimeInspectorMainCommandCompletion::Canceled(
+                        message,
+                    ))
+                }
             }
         }
+    }
+
+    async fn take_replayed_session_response(
+        &mut self,
+    ) -> Option<RendererRuntimeInspectorMainCommandCompletion> {
+        let (predecessor, response_succeeded) = self
+            .session_response_settlement_rx
+            .take()?
+            .await
+            .ok()?
+            .into_parts();
+        Some(
+            RendererRuntimeInspectorMainCommandCompletion::InspectorSessionResponse {
+                predecessor,
+                response_succeeded,
+            },
+        )
     }
 }
 
@@ -253,6 +326,7 @@ struct RendererInspectorMainState {
 pub(crate) struct RendererInspectorMainFirstDispatchGuard {
     ingress: RendererInspectorMainIngress,
     active: Option<(RendererDevToolsSessionLaneKey, u64)>,
+    claim_tx: Option<tokio::sync::oneshot::Sender<RendererInspectorMainCommandClaim>>,
 }
 
 pub(crate) struct RendererInspectorMainPostDispatchWakeGuard {
@@ -289,21 +363,45 @@ impl RendererInspectorMainOwnerDispatch {
 
 impl Drop for RendererInspectorMainFirstDispatchGuard {
     fn drop(&mut self) {
-        self.release();
+        if let Some(claim_tx) = self.claim_tx.take() {
+            let _ = claim_tx.send(RendererInspectorMainCommandClaim::Canceled(
+                "Inspector Main command was abandoned before first dispatch".to_owned(),
+            ));
+        }
+        if self.release_lane() {
+            self.ingress.notify_execution_opportunities();
+        }
     }
 }
 
 impl RendererInspectorMainFirstDispatchGuard {
     pub(crate) fn release(&mut self) {
+        self.publish_first_dispatch();
         if self.release_lane() {
             self.ingress.notify_execution_opportunities();
         }
     }
 
     pub(crate) fn release_for_dispatch(&mut self) -> RendererInspectorMainPostDispatchWakeGuard {
+        self.publish_first_dispatch();
         let has_ready = self.release_lane();
         RendererInspectorMainPostDispatchWakeGuard {
             ingress: has_ready.then(|| self.ingress.clone()),
+        }
+    }
+
+    pub(crate) fn reject(&mut self, message: impl Into<String>) {
+        if let Some(claim_tx) = self.claim_tx.take() {
+            let _ = claim_tx.send(RendererInspectorMainCommandClaim::Canceled(message.into()));
+        }
+        if self.release_lane() {
+            self.ingress.notify_execution_opportunities();
+        }
+    }
+
+    fn publish_first_dispatch(&mut self) {
+        if let Some(claim_tx) = self.claim_tx.take() {
+            let _ = claim_tx.send(RendererInspectorMainCommandClaim::Inspector);
         }
     }
 
@@ -418,6 +516,9 @@ impl RendererInspectorMainIngress {
         );
         let (claim_tx, claim_rx) = tokio::sync::oneshot::channel();
         let (owner_reply_tx, owner_reply_rx) = tokio::sync::oneshot::channel();
+        let session_response_settlement_rx = envelope.response().and_then(
+            RendererRuntimeInspectorResponseSender::take_session_response_settlement_receiver,
+        );
         let mut state = self.shared.state.lock();
         let lane_key =
             RendererDevToolsSessionLaneKey::new(agent_token, envelope.ticket().session().clone());
@@ -452,6 +553,7 @@ impl RendererInspectorMainIngress {
             ticket,
             claim_rx: Some(claim_rx),
             owner_reply_rx: Some(owner_reply_rx),
+            session_response_settlement_rx,
             ingress: self.clone(),
         }
     }
@@ -479,23 +581,23 @@ impl RendererInspectorMainIngress {
                 || command.nested_dispatch() != RendererDevToolsMainNestedDispatch::OwnerOnly
         })?;
         command.claimed_by = Some(consumer);
-        if let Some(claim_tx) = command.claim_tx.take() {
-            let claim = match consumer {
-                RendererInspectorMainCommandConsumer::Owner => {
-                    RendererInspectorMainCommandClaim::Owner
+        let claim = match consumer {
+            RendererInspectorMainCommandConsumer::Owner => {
+                Some(RendererInspectorMainCommandClaim::Owner)
+            }
+            RendererInspectorMainCommandConsumer::Pause => match command.nested_dispatch() {
+                RendererDevToolsMainNestedDispatch::InspectorSession => None,
+                RendererDevToolsMainNestedDispatch::PageAgent => {
+                    Some(RendererInspectorMainCommandClaim::Page)
                 }
-                RendererInspectorMainCommandConsumer::Pause => match command.nested_dispatch() {
-                    RendererDevToolsMainNestedDispatch::InspectorSession => {
-                        RendererInspectorMainCommandClaim::Inspector
-                    }
-                    RendererDevToolsMainNestedDispatch::PageAgent => {
-                        RendererInspectorMainCommandClaim::Page
-                    }
-                    RendererDevToolsMainNestedDispatch::OwnerOnly => {
-                        unreachable!("owner-only commands are skipped by pause claim")
-                    }
-                },
-            };
+                RendererDevToolsMainNestedDispatch::OwnerOnly => {
+                    unreachable!("owner-only commands are skipped by pause claim")
+                }
+            },
+        };
+        if let Some(claim) = claim
+            && let Some(claim_tx) = command.claim_tx.take()
+        {
             let _ = claim_tx.send(claim);
         }
         if consumer == RendererInspectorMainCommandConsumer::Pause
@@ -508,17 +610,13 @@ impl RendererInspectorMainIngress {
 
     pub(crate) fn first_dispatch_guard(
         &self,
-        command: &RendererInspectorMainCommand,
+        command: &mut RendererInspectorMainCommand,
     ) -> RendererInspectorMainFirstDispatchGuard {
         let lane_key = RendererDevToolsSessionLaneKey::new(
             command.agent_token,
             command.ticket().session().clone(),
         );
         let state = self.shared.state.lock();
-        assert_eq!(
-            command.first_dispatch_lifecycle(),
-            crate::runtime::RendererInspectorFirstDispatchLifecycle::OrderedUntilFirstDispatch,
-        );
         state.lanes.assert_active(
             &lane_key,
             command.command_id,
@@ -528,6 +626,7 @@ impl RendererInspectorMainIngress {
         RendererInspectorMainFirstDispatchGuard {
             ingress: self.clone(),
             active: Some((lane_key, command.command_id)),
+            claim_tx: command.claim_tx.take(),
         }
     }
 
@@ -540,7 +639,8 @@ impl RendererInspectorMainIngress {
             Some(RendererInspectorMainCommandConsumer::Owner),
             "only an owner-claimed Main command can enter a Page owner turn"
         );
-        let first_dispatch = self.first_dispatch_guard(&command);
+        let mut command = command;
+        let first_dispatch = self.first_dispatch_guard(&mut command);
         let RendererInspectorMainCommand {
             page_token,
             capture_policy,
@@ -634,26 +734,14 @@ fn fail_main_command(command: RendererInspectorMainCommand, message: &str) {
         ..
     } = command;
     if let Some(claim_tx) = claim_tx {
-        let _ = claim_tx.send(RendererInspectorMainCommandClaim::Canceled);
+        let _ = claim_tx.send(RendererInspectorMainCommandClaim::Canceled(
+            message.to_owned(),
+        ));
     }
     if let Some(owner_reply_tx) = owner_reply_tx {
         let _ = owner_reply_tx.send(Err(anyhow::anyhow!(message.to_owned())));
     }
-    let Some(envelope) = envelope.into_inspector_envelope() else {
-        return;
-    };
-    if !envelope.is_main_protocol_command_with_deferred_response() {
-        return;
-    }
-    let (_, _, response) = envelope.into_main_protocol_parts();
-    let call_id = response.call_id();
-    let _ = response.send(json!({
-        "id": call_id,
-        "error": {
-            "code": -32000,
-            "message": message,
-        },
-    }));
+    drop(envelope);
 }
 
 impl std::fmt::Debug for RendererInspectorMainIngress {
@@ -675,9 +763,12 @@ mod tests {
     use crate::{
         devtools::pause::RendererInspectorPauseBridge,
         runtime::{
-            RendererInspectorIngressTicket, RendererPageReply, RendererPageState,
+            RendererDevToolsSessionOutputHost, RendererInspectorIngressTicket,
+            RendererOutputStreamIdentity, RendererPageReply, RendererPageState,
             RendererPerformanceMetricSnapshot, RendererRuntimeCommandOutput,
-            RendererRuntimeInspectorAsyncCompletion,
+            RendererRuntimeInspectorAsyncCompletion, RendererRuntimeInspectorMessage,
+            RendererRuntimeInspectorResponseChannel, RendererTurnOutputJournal,
+            renderer_output_transport_channel,
         },
         types::ScriptExecutionReport,
     };
@@ -740,7 +831,6 @@ mod tests {
                 action.map(str::to_owned),
                 raw_json.to_owned(),
                 RendererRuntimeInspectorResponseSender::new(1, response_tx),
-                moli_page_types::RendererInspectorResponseDelivery::CommandReply,
             ),
         )
     }
@@ -791,7 +881,7 @@ mod tests {
             r#"{"id":3,"method":"Runtime.getProperties","params":{"objectId":"b1"}}"#,
         );
 
-        let first = ingress.claim_for_owner().expect("first ready Main session");
+        let mut first = ingress.claim_for_owner().expect("first ready Main session");
         assert!(first.raw_json().contains(r#""a1""#));
         let second = ingress
             .claim_for_pause()
@@ -799,7 +889,7 @@ mod tests {
         assert!(second.raw_json().contains(r#""b1""#));
         assert!(ingress.claim_for_owner().is_none());
 
-        ingress.first_dispatch_guard(&first).release();
+        ingress.first_dispatch_guard(&mut first).release();
         let third = ingress.claim_for_pause().expect("a2 after a1 dispatch");
         assert!(third.raw_json().contains(r#""a2""#));
     }
@@ -820,10 +910,10 @@ mod tests {
             Some("session-detaching"),
             r#"{"id":2,"method":"Runtime.getProperties","params":{"objectId":"queued"}}"#,
         );
-        let active = ingress
+        let mut active = ingress
             .claim_for_owner()
             .expect("the session head should become active");
-        let mut first_dispatch = ingress.first_dispatch_guard(&active);
+        let mut first_dispatch = ingress.first_dispatch_guard(&mut active);
 
         ingress.detach_session(
             agent,
@@ -831,7 +921,7 @@ mod tests {
         );
         assert!(matches!(
             queued_route.wait_for_completion().await,
-            Ok(RendererRuntimeInspectorMainCommandCompletion::Canceled)
+            Ok(RendererRuntimeInspectorMainCommandCompletion::Canceled(_))
         ));
 
         let late_route = enqueue(
@@ -842,7 +932,7 @@ mod tests {
         );
         assert!(matches!(
             late_route.wait_for_completion().await,
-            Ok(RendererRuntimeInspectorMainCommandCompletion::Canceled)
+            Ok(RendererRuntimeInspectorMainCommandCompletion::Canceled(_))
         ));
 
         first_dispatch.release();
@@ -861,6 +951,171 @@ mod tests {
             ingress.claim_for_owner().is_some(),
             "a later attachment may create a fresh lane for the same wire session id"
         );
+    }
+
+    #[tokio::test]
+    async fn direct_inspector_rejection_reports_error_before_releasing_next_main_command() {
+        let ingress = ingress();
+        let agent = RendererDevToolsAgentToken::allocate();
+        let rejected = enqueue(
+            &ingress,
+            agent,
+            Some("session-reject"),
+            r#"{"id":1,"method":"Runtime.getProperties","params":{"objectId":"missing"}}"#,
+        );
+        let _following = enqueue(
+            &ingress,
+            agent,
+            Some("session-reject"),
+            r#"{"id":2,"method":"Runtime.getProperties","params":{"objectId":"next"}}"#,
+        );
+        let mut command = ingress
+            .claim_for_pause()
+            .expect("the direct Inspector command should be claimable");
+        assert!(
+            ingress.claim_for_owner().is_none(),
+            "the following command must remain behind the unresolved first-dispatch boundary"
+        );
+        let mut first_dispatch = ingress.first_dispatch_guard(&mut command);
+        first_dispatch.reject("Inspector session is not available");
+
+        assert!(matches!(
+            rejected.wait_for_completion().await,
+            Ok(RendererRuntimeInspectorMainCommandCompletion::Canceled(message))
+                if message == "Inspector session is not available"
+        ));
+        assert!(
+            ingress.claim_for_owner().is_some(),
+            "rejecting first dispatch must release the next command in the same session"
+        );
+    }
+
+    #[tokio::test]
+    async fn claimed_owner_failure_waits_for_replacement_session_response() {
+        let ingress = ingress();
+        let agent = RendererDevToolsAgentToken::allocate();
+        let attachment = moli_page_types::RendererAgentAttachmentId::allocate();
+        let session = DevToolsSessionKey::Attached("session-replay".to_owned());
+        let (channel, response_rx) = RendererRuntimeInspectorResponseChannel::new_for_delivery(
+            moli_page_types::RendererInspectorResponseDelivery::DevToolsSession,
+        );
+        assert!(response_rx.is_none());
+        let old_response = channel.activate_sender(1, Some(attachment));
+        let route = ingress.enqueue_command(
+            RendererPageToken::new_for_testing(crate::runtime::PageId::new_for_testing(1)),
+            agent,
+            RendererInspectorCommandEnvelope::new_main_protocol(
+                RendererInspectorIngressTicket::new(
+                    Some(attachment),
+                    session.wire_session_id().map(str::to_owned),
+                    RendererInspectorCommandRoute::MainThread,
+                ),
+                None,
+                r#"{"id":1,"method":"Runtime.evaluate","params":{"expression":"1"}}"#.to_owned(),
+                old_response,
+            ),
+        );
+        let claimed = ingress
+            .claim_for_owner()
+            .expect("the original command should be claimed by the owner");
+        let owner_dispatch = ingress.prepare_owner_dispatch(claimed);
+
+        let stream = RendererOutputStreamIdentity::new_page_for_protocol_test(
+            crate::runtime::PageId::new_for_testing(2),
+        );
+        let (transport, _transport_rx) = renderer_output_transport_channel();
+        let replacement_response = channel
+            .activate_sender(2, Some(attachment))
+            .route_to_devtools_session_output(RendererDevToolsSessionOutputHost::new(
+                agent,
+                session,
+                attachment,
+                RendererTurnOutputJournal::new_with_transport(stream, transport),
+            ));
+        drop(owner_dispatch);
+        replacement_response
+            .send_output(RendererRuntimeCommandOutput::from_inspector_message(
+                RendererRuntimeInspectorMessage::protocol(serde_json::json!({
+                    "id": 2,
+                    "result": {}
+                })),
+            ))
+            .expect("the replacement route should publish the terminal response");
+
+        assert!(matches!(
+            route.wait_for_completion().await,
+            Ok(
+                RendererRuntimeInspectorMainCommandCompletion::InspectorSessionResponse {
+                    response_succeeded: true,
+                    ..
+                }
+            )
+        ));
+    }
+
+    #[tokio::test]
+    async fn direct_inspector_error_completes_from_the_session_response() {
+        let ingress = ingress();
+        let agent = RendererDevToolsAgentToken::allocate();
+        let attachment = moli_page_types::RendererAgentAttachmentId::allocate();
+        let session = DevToolsSessionKey::Attached("session-direct-error".to_owned());
+        let (channel, response_rx) = RendererRuntimeInspectorResponseChannel::new_for_delivery(
+            moli_page_types::RendererInspectorResponseDelivery::DevToolsSession,
+        );
+        assert!(response_rx.is_none());
+        let stream = RendererOutputStreamIdentity::new_page_for_protocol_test(
+            crate::runtime::PageId::new_for_testing(35),
+        );
+        let (transport, _transport_rx) = renderer_output_transport_channel();
+        let response = channel
+            .activate_sender(35, Some(attachment))
+            .route_to_devtools_session_output(RendererDevToolsSessionOutputHost::new(
+                agent,
+                session.clone(),
+                attachment,
+                RendererTurnOutputJournal::new_with_transport(stream, transport),
+            ));
+        let publisher = response.clone();
+        let route = ingress.enqueue_command(
+            RendererPageToken::new_for_testing(crate::runtime::PageId::new_for_testing(35)),
+            agent,
+            RendererInspectorCommandEnvelope::new_main_protocol(
+                RendererInspectorIngressTicket::new(
+                    Some(attachment),
+                    session.wire_session_id().map(str::to_owned),
+                    RendererInspectorCommandRoute::MainThread,
+                ),
+                None,
+                r#"{"id":35,"method":"Runtime.getProperties","params":{"objectId":"missing"}}"#
+                    .to_owned(),
+                response,
+            ),
+        );
+        let mut command = ingress
+            .claim_for_pause()
+            .expect("the direct Inspector command must reach nested Main");
+        ingress.first_dispatch_guard(&mut command).release();
+        publisher
+            .send_output(RendererRuntimeCommandOutput::from_inspector_message(
+                RendererRuntimeInspectorMessage::protocol(serde_json::json!({
+                    "id": 35,
+                    "error": {
+                        "code": -32000,
+                        "message": "Cannot find object with given id",
+                    },
+                })),
+            ))
+            .expect("the direct Inspector error must publish");
+
+        assert!(matches!(
+            route.wait_for_completion().await,
+            Ok(
+                RendererRuntimeInspectorMainCommandCompletion::InspectorSessionResponse {
+                    response_succeeded: false,
+                    ..
+                }
+            )
+        ));
     }
 
     #[test]
@@ -883,7 +1138,7 @@ mod tests {
             r#"{"id":2,"method":"Runtime.getProperties","params":{"objectId":"v8"}}"#,
         );
 
-        let page = ingress
+        let mut page = ingress
             .claim_for_pause()
             .expect("the Page agent command should be first");
         assert_eq!(
@@ -903,7 +1158,7 @@ mod tests {
             None,
         )
         .expect("test Page-agent output")
-        .hold_until_protocol_handoff(ingress.first_dispatch_guard(&page));
+        .hold_until_protocol_handoff(ingress.first_dispatch_guard(&mut page));
         assert!(
             ingress.claim_for_pause().is_none(),
             "settled Page output must retain the lane until protocol consumes it"
@@ -993,7 +1248,6 @@ mod tests {
                 RendererInspectorIngressTicket::new(None, None, RendererInspectorCommandRoute::Io),
                 r#"{"id":1,"method":"Runtime.terminateExecution"}"#.to_owned(),
                 None,
-                moli_page_types::RendererInspectorResponseDelivery::CommandReply,
             ),
         );
     }

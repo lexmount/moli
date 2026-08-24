@@ -416,30 +416,27 @@ impl InspectorOutbound {
     pub(in crate::script_vm) fn register_frontend_response_callback(
         &self,
         callback: RendererRuntimeInspectorResponseSender,
-        delivery: RendererInspectorResponseDelivery,
     ) {
-        let callback = self.route_frontend_response(callback, delivery);
+        let callback = self.route_frontend_response(callback);
         self.register_response_callback(callback);
     }
 
-    /// Publishes a synchronous non-V8 agent response through this concrete
-    /// frontend session's attachment-scoped output capability.
-    pub(in crate::script_vm) fn publish_devtools_session_response(
+    /// Publishes a synchronous non-V8 agent response through the terminal
+    /// destination selected when the frontend call was registered.
+    pub(in crate::script_vm) fn publish_frontend_response(
         &self,
         callback: RendererRuntimeInspectorResponseSender,
         message: Value,
     ) {
-        let callback = self
-            .route_frontend_response(callback, RendererInspectorResponseDelivery::DevToolsSession);
+        let callback = self.route_frontend_response(callback);
         let _ = callback.send(message);
     }
 
-    fn route_frontend_response(
+    pub(in crate::script_vm) fn route_frontend_response(
         &self,
         callback: RendererRuntimeInspectorResponseSender,
-        delivery: RendererInspectorResponseDelivery,
     ) -> RendererRuntimeInspectorResponseSender {
-        match delivery {
+        match callback.response_delivery() {
             RendererInspectorResponseDelivery::CommandReply => callback,
             RendererInspectorResponseDelivery::DevToolsSession => {
                 let host = self

@@ -406,7 +406,7 @@ impl RendererOwnerWakeSender {
                 else {
                     unreachable!("runtime response send must return its exact wake payload")
                 };
-                publication.commit(None)
+                publication.commit(None).map(|_| ())
             }
         }
     }

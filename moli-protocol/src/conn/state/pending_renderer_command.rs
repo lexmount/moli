@@ -53,11 +53,12 @@ impl RendererCommandDescriptor {
     pub(crate) fn performance_get_metrics(
         frontend_payload: String,
         policy: CdpRendererCommandPolicy,
+        response_delivery: RendererInspectorResponseDelivery,
     ) -> Self {
         Self {
             replacement: policy.replacement(),
             replay: RendererCommandReplay::PerformanceGetMetrics,
-            response_delivery: RendererInspectorResponseDelivery::DevToolsSession,
+            response_delivery,
             frontend_payload,
         }
     }
@@ -66,11 +67,12 @@ impl RendererCommandDescriptor {
         frontend_payload: String,
         policy: CdpRendererCommandPolicy,
         disabled: bool,
+        response_delivery: RendererInspectorResponseDelivery,
     ) -> Self {
         Self {
             replacement: policy.replacement(),
             replay: RendererCommandReplay::SetScriptExecutionDisabled { disabled },
-            response_delivery: RendererInspectorResponseDelivery::DevToolsSession,
+            response_delivery,
             frontend_payload,
         }
     }
@@ -200,7 +202,8 @@ impl RendererCommandCorrelation {
 pub(crate) struct PreparedRendererCallDispatch {
     correlation: RendererCommandCorrelation,
     response_sender: RendererRuntimeInspectorResponseSender,
-    response_receiver: tokio::sync::oneshot::Receiver<RendererRuntimeInspectorAsyncCompletion>,
+    response_receiver:
+        Option<tokio::sync::oneshot::Receiver<RendererRuntimeInspectorAsyncCompletion>>,
 }
 
 impl PreparedRendererCallDispatch {
@@ -213,7 +216,7 @@ impl PreparedRendererCallDispatch {
     ) -> (
         RendererCommandCorrelation,
         RendererRuntimeInspectorResponseSender,
-        tokio::sync::oneshot::Receiver<RendererRuntimeInspectorAsyncCompletion>,
+        Option<tokio::sync::oneshot::Receiver<RendererRuntimeInspectorAsyncCompletion>>,
     ) {
         (
             self.correlation,
@@ -351,7 +354,9 @@ impl<T> PendingRendererCommandRegistry<T> {
         let renderer_call_id = self
             .allocate_renderer_call_id()
             .map_err(RegisterRendererCallError::Exhausted)?;
-        let (response_channel, response_receiver) = RendererRuntimeInspectorResponseChannel::new();
+        let response_delivery = descriptor.response_delivery();
+        let (response_channel, response_receiver) =
+            RendererRuntimeInspectorResponseChannel::new_for_delivery(response_delivery);
         let response_sender =
             response_channel.activate_sender(renderer_call_id.get(), dispatched_attachment_id);
         let previous_renderer_call = self.renderer_calls_by_frontend.insert(
@@ -945,6 +950,7 @@ mod tests {
         let performance_descriptor = RendererCommandDescriptor::performance_get_metrics(
             performance.json().to_owned(),
             performance.renderer_policy(),
+            RendererInspectorResponseDelivery::DevToolsSession,
         );
         assert_eq!(
             performance_descriptor.replay(),
@@ -963,6 +969,7 @@ mod tests {
             emulation.json().to_owned(),
             emulation.renderer_policy(),
             true,
+            RendererInspectorResponseDelivery::DevToolsSession,
         );
         assert_eq!(
             emulation_descriptor.replay(),
@@ -975,7 +982,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn replay_rotates_renderer_id_attachment_and_response_lease() {
+    async fn session_replay_rotates_renderer_id_and_lease_without_command_reply_receiver() {
         let frontend_id = FrontendCommandId::new(41);
         let old_attachment = RendererAgentAttachmentId::allocate();
         let new_attachment = RendererAgentAttachmentId::allocate();
@@ -1001,6 +1008,10 @@ mod tests {
             )
             .unwrap();
         let (old_correlation, old_sender, response_receiver) = prepared.into_parts();
+        assert!(
+            response_receiver.is_none(),
+            "DevToolsSession delivery must not allocate a command-reply receiver"
+        );
 
         let mut replays = registry
             .prepare_replays_from_attachment(old_attachment, new_attachment)
@@ -1035,15 +1046,16 @@ mod tests {
                 .is_err(),
             "rotating the registry lease must invalidate the old sender"
         );
-        replay
-            .into_response_sender()
-            .send(serde_json::json!({
-                "id": new_correlation.renderer_call_id().get(),
-                "result": { "current": true },
-            }))
-            .unwrap();
-        let completion = response_receiver.await.unwrap();
-        assert_eq!(completion.call_id, new_correlation.renderer_call_id().get());
+        assert!(
+            replay
+                .into_response_sender()
+                .send(serde_json::json!({
+                    "id": new_correlation.renderer_call_id().get(),
+                    "result": { "current": true },
+                }))
+                .is_err(),
+            "a session response cannot publish until its concrete output host is bound"
+        );
         assert_eq!(
             registry.take_frontend_command_for_renderer_if_attachment_matches(
                 old_correlation.renderer_call_id(),
@@ -1074,6 +1086,8 @@ mod tests {
             )
             .unwrap();
         let (correlation, sender, response_receiver) = prepared.into_parts();
+        let response_receiver = response_receiver
+            .expect("a synthesized CommandReply call must allocate a response receiver");
         sender
             .send(serde_json::json!({
                 "id": correlation.renderer_call_id().get(),
@@ -1117,6 +1131,8 @@ mod tests {
             )
             .unwrap();
         let (old_correlation, old_sender, response_receiver) = prepared.into_parts();
+        let response_receiver = response_receiver
+            .expect("a synthesized CommandReply call must allocate a response receiver");
 
         let mut terminations = registry
             .prepare_terminations_from_attachment(old_attachment, new_attachment)
@@ -1204,6 +1220,10 @@ mod tests {
             .unwrap();
         let (_, first_sender, first_receiver) = first.into_parts();
         let (_, second_sender, second_receiver) = second.into_parts();
+        let first_receiver = first_receiver
+            .expect("a synthesized CommandReply call must allocate a response receiver");
+        let second_receiver = second_receiver
+            .expect("a synthesized CommandReply call must allocate a response receiver");
 
         let terminated = registry.terminate_all_renderer_calls("Inspector detached");
 

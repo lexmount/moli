@@ -301,6 +301,17 @@ impl RendererDevToolsAgent {
         self.state.borrow().sessions.frontend_routes()
     }
 
+    pub(super) fn frontend_outbound(
+        &self,
+        session_key: &DevToolsSessionKey,
+    ) -> Option<InspectorOutbound> {
+        self.state
+            .borrow()
+            .sessions
+            .frontend_session_and_outbound(session_key)
+            .map(|(_, outbound)| outbound)
+    }
+
     pub(super) fn deactivate_all_routes(&self) {
         self.state.borrow().sessions.deactivate_all();
     }

@@ -155,18 +155,17 @@ mod tests {
                 None,
                 r#"{"id":1,"method":"Runtime.evaluate"}"#.to_owned(),
                 RendererRuntimeInspectorResponseSender::new(1, response_tx),
-                moli_page_types::RendererInspectorResponseDelivery::CommandReply,
             ),
         );
 
         target.crash_from_io();
-        assert_eq!(
+        assert!(matches!(
             io_route.wait_for_first_dispatch().await,
-            Ok(RendererRuntimeInspectorIoCommandClaim::Canceled)
-        );
+            Ok(RendererRuntimeInspectorIoCommandClaim::Canceled(_))
+        ));
         assert!(matches!(
             main_route.wait_for_completion().await,
-            Ok(RendererRuntimeInspectorMainCommandCompletion::Canceled)
+            Ok(RendererRuntimeInspectorMainCommandCompletion::Canceled(_))
         ));
 
         let late = io.enqueue_command(
@@ -179,9 +178,11 @@ mod tests {
                 ),
             ),
         );
-        assert_eq!(
-            late.wait_for_first_dispatch().await,
-            Ok(RendererRuntimeInspectorIoCommandClaim::Canceled),
+        assert!(
+            matches!(
+                late.wait_for_first_dispatch().await,
+                Ok(RendererRuntimeInspectorIoCommandClaim::Canceled(_))
+            ),
             "terminal Page.crash must reject late ordinary IO work"
         );
     }

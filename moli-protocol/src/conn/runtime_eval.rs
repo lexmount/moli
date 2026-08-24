@@ -10,7 +10,8 @@ use crate::devtools_runtime::{
     DevToolsResultOwnership, DevToolsTargetId, RuntimeExecutionContextEvent, ScriptMessageEvent,
 };
 use moli_core::{
-    RendererRuntimeCommandCausalIdentity, RendererRuntimeInspectorResponseSender,
+    RendererOutputFence, RendererRuntimeCommandCausalIdentity,
+    RendererRuntimeInspectorResponseSender,
     page::{
         DocumentNodeObjectSnapshot, DocumentNodeRuntimeObjectResolution,
         MAX_INSPECTOR_PROTOCOL_VALUE_DEPTH, RendererAgentAttachmentId, RendererCommandTurnOutput,
@@ -335,13 +336,71 @@ pub struct PendingRuntimeProtocolMessageDispatch {
     session_id: Option<String>,
     route: RuntimeProtocolMessagePageRoute,
     pending: PendingRuntimeProtocolMessageDispatchKind,
-    deferred_response_rx: Option<RuntimeInspectorResponseReceiver>,
-    // Main commands that fall back to the Page owner still complete through
-    // the typed per-command reply capability.
-    owner_response_delivery: RendererInspectorResponseDelivery,
-    // A command claimed directly by the nested/IO Inspector receiver may use
-    // the attachment-scoped DevTools session output capability instead.
-    inspector_response_delivery: RendererInspectorResponseDelivery,
+    response_route: RuntimeProtocolResponseRoute,
+}
+
+enum RuntimeProtocolResponseRoute {
+    // The receiver is consumed before renderer completion is projected. It is
+    // absent for fire-and-forget commands and for replay, where the original
+    // dispatch still owns the command-reply waiter.
+    CommandReply(Option<RuntimeInspectorResponseReceiver>),
+    DevToolsSession,
+}
+
+impl RuntimeProtocolResponseRoute {
+    fn for_registered_delivery(
+        delivery: RendererInspectorResponseDelivery,
+        receiver: Option<RuntimeInspectorResponseReceiver>,
+    ) -> Self {
+        match delivery {
+            RendererInspectorResponseDelivery::CommandReply => Self::CommandReply(Some(
+                receiver.expect("a registered command-reply route must allocate its receiver"),
+            )),
+            RendererInspectorResponseDelivery::DevToolsSession => {
+                assert!(
+                    receiver.is_none(),
+                    "a DevTools session response cannot retain a command-reply receiver"
+                );
+                Self::DevToolsSession
+            }
+        }
+    }
+
+    const fn without_local_receiver_for_delivery(
+        delivery: RendererInspectorResponseDelivery,
+    ) -> Self {
+        match delivery {
+            RendererInspectorResponseDelivery::CommandReply => Self::CommandReply(None),
+            RendererInspectorResponseDelivery::DevToolsSession => Self::DevToolsSession,
+        }
+    }
+
+    const fn command_reply_without_receiver() -> Self {
+        Self::CommandReply(None)
+    }
+
+    const fn delivery(&self) -> RendererInspectorResponseDelivery {
+        match self {
+            Self::CommandReply(_) => RendererInspectorResponseDelivery::CommandReply,
+            Self::DevToolsSession => RendererInspectorResponseDelivery::DevToolsSession,
+        }
+    }
+
+    fn take_command_reply_receiver(&mut self) -> Option<RuntimeInspectorResponseReceiver> {
+        match self {
+            Self::CommandReply(receiver) => receiver.take(),
+            Self::DevToolsSession => None,
+        }
+    }
+
+    fn into_command_reply_receiver(self) -> Option<RuntimeInspectorResponseReceiver> {
+        match self {
+            Self::CommandReply(receiver) => receiver,
+            Self::DevToolsSession => {
+                panic!("a DevTools session response cannot become a command reply")
+            }
+        }
+    }
 }
 
 enum PendingRuntimeProtocolMessageDispatchKind {
@@ -392,8 +451,7 @@ pub struct CompletedRuntimeProtocolMessageDispatch {
     session_id: Option<String>,
     route: RuntimeProtocolMessagePageRoute,
     completion: moli_core::page::CompletedRuntimeInspectorCommandDispatch,
-    deferred_response_rx: Option<RuntimeInspectorResponseReceiver>,
-    response_delivery: RendererInspectorResponseDelivery,
+    response_route: RuntimeProtocolResponseRoute,
 }
 
 pub struct CompletedSharedWorkerRuntimeProtocolMessageDispatch {
@@ -542,20 +600,11 @@ impl PendingRuntimeProtocolMessageDispatch {
                 .await
                 .map_err(|error| format!("runtime inspector dispatch failed: {error}"))?,
         };
-        let response_delivery = if matches!(
-            completion,
-            moli_core::page::CompletedRuntimeInspectorCommandDispatch::Inspector
-        ) {
-            self.inspector_response_delivery
-        } else {
-            self.owner_response_delivery
-        };
         Ok(CompletedRuntimeProtocolMessageDispatch {
             session_id: self.session_id,
             route: self.route,
             completion,
-            deferred_response_rx: self.deferred_response_rx,
-            response_delivery,
+            response_route: self.response_route,
         })
     }
 }
@@ -589,17 +638,59 @@ impl CompletedRuntimeProtocolMessageDispatch {
         matches!(
             self.completion,
             moli_core::page::CompletedRuntimeInspectorCommandDispatch::Owner(_)
+                | moli_core::page::CompletedRuntimeInspectorCommandDispatch::OwnerSessionResponse {
+                    ..
+                }
+                | moli_core::page::CompletedRuntimeInspectorCommandDispatch::OwnerSessionErrorSettled(
+                    _
+                )
         )
+    }
+
+    pub(crate) fn session_response_succeeded(&self) -> Option<bool> {
+        match &self.completion {
+            moli_core::page::CompletedRuntimeInspectorCommandDispatch::OwnerSessionResponse {
+                response_succeeded,
+                ..
+            }
+            | moli_core::page::CompletedRuntimeInspectorCommandDispatch::InspectorSessionResponse {
+                response_succeeded,
+                ..
+            } => Some(*response_succeeded),
+            moli_core::page::CompletedRuntimeInspectorCommandDispatch::OwnerSessionErrorSettled(
+                _,
+            ) => Some(false),
+            moli_core::page::CompletedRuntimeInspectorCommandDispatch::Owner(_)
+            | moli_core::page::CompletedRuntimeInspectorCommandDispatch::Inspector => None,
+        }
+    }
+
+    pub(crate) fn session_response_predecessor(&self) -> Option<RendererOutputFence> {
+        match &self.completion {
+            moli_core::page::CompletedRuntimeInspectorCommandDispatch::OwnerSessionResponse {
+                completion,
+                ..
+            } => completion.renderer_output_predecessor(),
+            moli_core::page::CompletedRuntimeInspectorCommandDispatch::OwnerSessionErrorSettled(
+                predecessor,
+            ) => Some(predecessor.clone()),
+            moli_core::page::CompletedRuntimeInspectorCommandDispatch::InspectorSessionResponse {
+                predecessor,
+                ..
+            } => Some(predecessor.clone()),
+            moli_core::page::CompletedRuntimeInspectorCommandDispatch::Owner(_)
+            | moli_core::page::CompletedRuntimeInspectorCommandDispatch::Inspector => None,
+        }
     }
 
     pub(crate) fn take_deferred_response_receiver(
         &mut self,
     ) -> Option<RuntimeInspectorResponseReceiver> {
-        self.deferred_response_rx.take()
+        self.response_route.take_command_reply_receiver()
     }
 
     pub(crate) const fn response_delivery(&self) -> RendererInspectorResponseDelivery {
-        self.response_delivery
+        self.response_route.delivery()
     }
 }
 
@@ -834,7 +925,7 @@ impl CdpConnection {
         .map_err(|error| error.to_string())
     }
 
-    fn take_renderer_call_for_frontend_for_session_owner(
+    pub(crate) fn take_renderer_call_for_frontend_for_session_owner(
         &mut self,
         session_id: Option<&str>,
         cdp_request_id: u64,
@@ -994,8 +1085,7 @@ impl CdpConnection {
             RendererCommandCorrelation,
             String,
             RendererRuntimeInspectorResponseSender,
-            RuntimeInspectorResponseReceiver,
-            RendererInspectorResponseDelivery,
+            RuntimeProtocolResponseRoute,
         ),
         String,
     > {
@@ -1022,8 +1112,10 @@ impl CdpConnection {
                     correlation,
                     raw_json,
                     response_sender,
-                    response_receiver,
-                    response_delivery,
+                    RuntimeProtocolResponseRoute::for_registered_delivery(
+                        response_delivery,
+                        response_receiver,
+                    ),
                 ))
             }
             Err(error) => {
@@ -3021,18 +3113,17 @@ impl CdpConnection {
             let Some(renderer_call_id) = message.renderer_call_id() else {
                 return true;
             };
-            let result_object_group = self
+            let descriptor = self
                 .renderer_command_descriptor_for_renderer_if_attachment_matches_for_session_owner(
                     session_id,
                     renderer_call_id,
                     dispatched_attachment_id,
+                );
+            let result_object_group = descriptor.as_ref().and_then(|descriptor| {
+                self.runtime_result_object_group_for_renderer_command_descriptor(
+                    session_id, descriptor,
                 )
-                .and_then(|descriptor| {
-                    self.runtime_result_object_group_for_renderer_command_descriptor(
-                        session_id,
-                        &descriptor,
-                    )
-                });
+            });
             let Some(correlation) = self
                 .take_frontend_command_for_renderer_if_attachment_matches_for_session_owner(
                     session_id,
@@ -3076,7 +3167,7 @@ impl CdpConnection {
         let method = command.get("method")?.as_str()?;
         let params = command.get("params")?.as_object()?;
         match method {
-            "Runtime.evaluate" => params
+            "Runtime.evaluate" | "Runtime.runScript" => params
                 .get("objectGroup")
                 .and_then(Value::as_str)
                 .map(str::to_owned),
@@ -3088,6 +3179,24 @@ impl CdpConnection {
                     self.runtime_remote_object_group_for_session_owner(
                         session_id,
                         params.get("objectId")?.as_str()?,
+                    )
+                }),
+            "Runtime.getProperties" => self.runtime_remote_object_group_for_session_owner(
+                session_id,
+                params.get("objectId")?.as_str()?,
+            ),
+            "Runtime.awaitPromise" => self.runtime_remote_object_group_for_session_owner(
+                session_id,
+                params.get("promiseObjectId")?.as_str()?,
+            ),
+            "Runtime.queryObjects" => params
+                .get("objectGroup")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .or_else(|| {
+                    self.runtime_remote_object_group_for_session_owner(
+                        session_id,
+                        params.get("prototypeObjectId")?.as_str()?,
                     )
                 }),
             _ => None,
@@ -3900,13 +4009,16 @@ impl CdpConnection {
         command_id: u64,
     ) -> Result<PendingSharedWorkerRuntimeProtocolMessageDispatch, String> {
         self.shared_worker_runtime_target_for_session(session_id)?;
-        let (correlation, raw_json, response_sender, response_receiver, response_delivery) =
+        let (correlation, raw_json, response_sender, response_route) =
             self.prepare_renderer_call_for_session_owner(session_id, descriptor, command_id, None)?;
         debug_assert_eq!(
-            response_delivery,
+            response_route.delivery(),
             RendererInspectorResponseDelivery::CommandReply,
             "worker responses have not migrated to the page DevTools session output"
         );
+        let response_receiver = response_route
+            .into_command_reply_receiver()
+            .expect("CommandReply worker dispatch must allocate a response receiver");
         let result = self.start_shared_worker_runtime_protocol_message_for_session_with_optional_deferred_response(
             session_id,
             raw_json,
@@ -4053,13 +4165,16 @@ impl CdpConnection {
         command_id: u64,
     ) -> Result<PendingServiceWorkerRuntimeProtocolMessageDispatch, String> {
         self.service_worker_runtime_target_for_session(session_id)?;
-        let (correlation, raw_json, response_sender, response_receiver, response_delivery) =
+        let (correlation, raw_json, response_sender, response_route) =
             self.prepare_renderer_call_for_session_owner(session_id, descriptor, command_id, None)?;
         debug_assert_eq!(
-            response_delivery,
+            response_route.delivery(),
             RendererInspectorResponseDelivery::CommandReply,
             "worker responses have not migrated to the page DevTools session output"
         );
+        let response_receiver = response_route
+            .into_command_reply_receiver()
+            .expect("CommandReply worker dispatch must allocate a response receiver");
         let result = self.start_service_worker_runtime_protocol_message_for_session_with_optional_deferred_response(
             session_id,
             raw_json,
@@ -4455,9 +4570,7 @@ impl CdpConnection {
             session_id: session_id.map(str::to_owned),
             route,
             pending,
-            deferred_response_rx: None,
-            owner_response_delivery: RendererInspectorResponseDelivery::CommandReply,
-            inspector_response_delivery: RendererInspectorResponseDelivery::CommandReply,
+            response_route: RuntimeProtocolResponseRoute::command_reply_without_receiver(),
         })
     }
 
@@ -4497,13 +4610,13 @@ impl CdpConnection {
         inspector_route: RendererInspectorCommandRoute,
     ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
         let route = self.runtime_protocol_message_page_route_for_session_owner(session_id)?;
-        let (correlation, raw_json, response_sender, response_receiver, response_delivery) = self
+        let (correlation, raw_json, response_sender, response_route) = self
             .prepare_renderer_call_for_session_owner(
-            session_id,
-            descriptor,
-            command_id,
-            Some(route.renderer_agent_attachment_id),
-        )?;
+                session_id,
+                descriptor,
+                command_id,
+                Some(route.renderer_agent_attachment_id),
+            )?;
         let inspector_session_id =
             self.target_renderer_runtime_inspector_session_id_for_session(session_id);
         let page_result = match inspector_route {
@@ -4529,7 +4642,6 @@ impl CdpConnection {
             None,
             raw_json,
             response_sender,
-            response_delivery,
         ) {
             Ok(pending) => pending,
             Err(error) => {
@@ -4543,9 +4655,7 @@ impl CdpConnection {
             session_id: session_id.map(str::to_owned),
             route,
             pending: PendingRuntimeProtocolMessageDispatchKind::Routable(pending),
-            deferred_response_rx: Some(response_receiver),
-            owner_response_delivery: response_delivery,
-            inspector_response_delivery: response_delivery,
+            response_route,
         })
     }
 
@@ -4572,9 +4682,7 @@ impl CdpConnection {
             session_id: session_id.map(str::to_owned),
             route,
             pending: PendingRuntimeProtocolMessageDispatchKind::Page(pending),
-            deferred_response_rx: None,
-            owner_response_delivery: RendererInspectorResponseDelivery::CommandReply,
-            inspector_response_delivery: RendererInspectorResponseDelivery::CommandReply,
+            response_route: RuntimeProtocolResponseRoute::command_reply_without_receiver(),
         })
     }
 
@@ -4585,32 +4693,14 @@ impl CdpConnection {
         descriptor: RendererCommandDescriptor,
         command_id: u64,
     ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
-        let inspector_response_delivery = descriptor.response_delivery();
-        self.start_runtime_protocol_message_with_context_resolution_for_session_owner_with_deferred_response_and_nested_delivery(
-            session_id,
-            action,
-            descriptor,
-            command_id,
-            inspector_response_delivery,
-        )
-    }
-
-    pub(crate) fn start_runtime_protocol_message_with_context_resolution_for_session_owner_with_deferred_response_and_nested_delivery(
-        &mut self,
-        session_id: Option<&str>,
-        action: &str,
-        descriptor: RendererCommandDescriptor,
-        command_id: u64,
-        inspector_response_delivery: RendererInspectorResponseDelivery,
-    ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
         let route = self.runtime_protocol_message_page_route_for_session_owner(session_id)?;
-        let (correlation, raw_json, response_sender, response_receiver, response_delivery) = self
+        let (correlation, raw_json, response_sender, response_route) = self
             .prepare_renderer_call_for_session_owner(
-            session_id,
-            descriptor,
-            command_id,
-            Some(route.renderer_agent_attachment_id),
-        )?;
+                session_id,
+                descriptor,
+                command_id,
+                Some(route.renderer_agent_attachment_id),
+            )?;
         let inspector_session_id =
             self.target_renderer_runtime_inspector_session_id_for_session(session_id);
         let page = match self.runtime_session_owner_page_mut(session_id) {
@@ -4628,7 +4718,6 @@ impl CdpConnection {
             Some(action.to_owned()),
             raw_json,
             response_sender,
-            inspector_response_delivery,
         ) {
             Ok(pending) => pending,
             Err(error) => {
@@ -4642,9 +4731,7 @@ impl CdpConnection {
             session_id: session_id.map(str::to_owned),
             route,
             pending: PendingRuntimeProtocolMessageDispatchKind::Routable(pending),
-            deferred_response_rx: Some(response_receiver),
-            owner_response_delivery: response_delivery,
-            inspector_response_delivery,
+            response_route,
         })
     }
 
@@ -4657,8 +4744,17 @@ impl CdpConnection {
             moli_core::page::CompletedRuntimeInspectorCommandDispatch::Owner(completion) => {
                 *completion
             }
+            moli_core::page::CompletedRuntimeInspectorCommandDispatch::OwnerSessionResponse {
+                completion,
+                ..
+            } => *completion,
             moli_core::page::CompletedRuntimeInspectorCommandDispatch::Inspector
-            | moli_core::page::CompletedRuntimeInspectorCommandDispatch::Canceled => {
+            | moli_core::page::CompletedRuntimeInspectorCommandDispatch::InspectorSessionResponse {
+                ..
+            }
+            | moli_core::page::CompletedRuntimeInspectorCommandDispatch::OwnerSessionErrorSettled(
+                _,
+            ) => {
                 return Ok(None);
             }
         };
@@ -4788,17 +4884,12 @@ impl CdpConnection {
                         Err(error) => Err(error),
                     };
                     match completion {
-                        Ok(moli_core::page::CompletedDevToolsIoCommandDispatch::Dispatched) => {}
-                        Ok(moli_core::page::CompletedDevToolsIoCommandDispatch::Canceled) => {
-                            self.settle_renderer_replay_error(
-                                &mut events,
-                                frontend_session_id.as_deref(),
-                                response_delivery,
-                                &response_sender,
-                                correlation,
-                                "Inspected target navigated or closed",
-                            );
-                        }
+                        Ok(
+                            moli_core::page::CompletedDevToolsIoCommandDispatch::SessionResponse {
+                                ..
+                            },
+                        )
+                        | Ok(moli_core::page::CompletedDevToolsIoCommandDispatch::Dispatched) => {}
                         Err(error) => {
                             self.settle_renderer_replay_error(
                                 &mut events,
@@ -4833,17 +4924,12 @@ impl CdpConnection {
                         Err(error) => Err(error),
                     };
                     match completion {
-                        Ok(moli_core::page::CompletedDevToolsIoCommandDispatch::Dispatched) => {}
-                        Ok(moli_core::page::CompletedDevToolsIoCommandDispatch::Canceled) => {
-                            self.settle_renderer_replay_error(
-                                &mut events,
-                                frontend_session_id.as_deref(),
-                                response_delivery,
-                                &response_sender,
-                                correlation,
-                                "Inspected target navigated or closed",
-                            );
-                        }
+                        Ok(
+                            moli_core::page::CompletedDevToolsIoCommandDispatch::SessionResponse {
+                                ..
+                            },
+                        )
+                        | Ok(moli_core::page::CompletedDevToolsIoCommandDispatch::Dispatched) => {}
                         Err(error) => {
                             self.settle_renderer_replay_error(
                                 &mut events,
@@ -4926,7 +5012,6 @@ impl CdpConnection {
                             None,
                             raw_json,
                             dispatch_sender,
-                            response_delivery,
                         )
                         .map(PendingRuntimeProtocolMessageDispatchKind::Routable)
                     }
@@ -4937,9 +5022,10 @@ impl CdpConnection {
                     session_id: frontend_session_id.clone(),
                     route,
                     pending,
-                    deferred_response_rx: None,
-                    owner_response_delivery: response_delivery,
-                    inspector_response_delivery: response_delivery,
+                    response_route:
+                        RuntimeProtocolResponseRoute::without_local_receiver_for_delivery(
+                            response_delivery,
+                        ),
                 },
                 Err(error) => {
                     self.settle_renderer_replay_error(
@@ -4974,17 +5060,20 @@ impl CdpConnection {
                 moli_core::page::CompletedRuntimeInspectorCommandDispatch::Inspector => {
                     continue;
                 }
-                moli_core::page::CompletedRuntimeInspectorCommandDispatch::Canceled => {
-                    self.settle_renderer_replay_error(
-                        &mut events,
-                        frontend_session_id.as_deref(),
-                        response_delivery,
-                        &response_sender,
-                        correlation,
-                        "Inspected target navigated or closed",
-                    );
+                moli_core::page::CompletedRuntimeInspectorCommandDispatch::InspectorSessionResponse {
+                    ..
+                } => {
                     continue;
                 }
+                moli_core::page::CompletedRuntimeInspectorCommandDispatch::OwnerSessionErrorSettled(
+                    _,
+                ) => {
+                    continue;
+                }
+                moli_core::page::CompletedRuntimeInspectorCommandDispatch::OwnerSessionResponse {
+                    completion,
+                    ..
+                } => *completion,
             };
             let mut command_turn_output = match self
                 .consume_runtime_protocol_message_completion(&completed.route, completion)
@@ -6051,6 +6140,77 @@ mod tests {
     use moli_core::page::{MAX_INSPECTOR_PROTOCOL_VALUE_DEPTH, is_renderer_backend_node_id};
 
     #[test]
+    fn registered_command_reply_route_owns_exactly_one_receiver() {
+        let (_response_tx, response_rx) = tokio::sync::oneshot::channel();
+        let mut route = RuntimeProtocolResponseRoute::for_registered_delivery(
+            RendererInspectorResponseDelivery::CommandReply,
+            Some(response_rx),
+        );
+
+        assert_eq!(
+            route.delivery(),
+            RendererInspectorResponseDelivery::CommandReply
+        );
+        assert!(route.take_command_reply_receiver().is_some());
+        assert!(route.take_command_reply_receiver().is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "registered command-reply route must allocate its receiver")]
+    fn registered_command_reply_route_rejects_a_missing_receiver() {
+        let _ = RuntimeProtocolResponseRoute::for_registered_delivery(
+            RendererInspectorResponseDelivery::CommandReply,
+            None,
+        );
+    }
+
+    #[test]
+    fn registered_devtools_session_route_has_no_command_reply_receiver() {
+        let mut route = RuntimeProtocolResponseRoute::for_registered_delivery(
+            RendererInspectorResponseDelivery::DevToolsSession,
+            None,
+        );
+
+        assert_eq!(
+            route.delivery(),
+            RendererInspectorResponseDelivery::DevToolsSession
+        );
+        assert!(route.take_command_reply_receiver().is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "DevTools session response cannot retain a command-reply receiver")]
+    fn devtools_session_route_rejects_command_reply_receiver() {
+        let (_response_tx, response_rx) = tokio::sync::oneshot::channel();
+        let _ = RuntimeProtocolResponseRoute::for_registered_delivery(
+            RendererInspectorResponseDelivery::DevToolsSession,
+            Some(response_rx),
+        );
+    }
+
+    #[test]
+    fn replay_response_routes_never_claim_a_second_local_receiver() {
+        let mut command_reply = RuntimeProtocolResponseRoute::without_local_receiver_for_delivery(
+            RendererInspectorResponseDelivery::CommandReply,
+        );
+        let mut devtools_session =
+            RuntimeProtocolResponseRoute::without_local_receiver_for_delivery(
+                RendererInspectorResponseDelivery::DevToolsSession,
+            );
+
+        assert_eq!(
+            command_reply.delivery(),
+            RendererInspectorResponseDelivery::CommandReply
+        );
+        assert_eq!(
+            devtools_session.delivery(),
+            RendererInspectorResponseDelivery::DevToolsSession
+        );
+        assert!(command_reply.take_command_reply_receiver().is_none());
+        assert!(devtools_session.take_command_reply_receiver().is_none());
+    }
+
+    #[test]
     fn runtime_inspector_command_rewrites_large_frontend_id_to_renderer_call_id() {
         let frontend_command_id = FrontendCommandId::new(i32::MAX as u64 + 73);
         let raw_json = json!({
@@ -6224,6 +6384,195 @@ mod tests {
         .unwrap()
     }
 
+    fn register_devtools_session_response_for_test(
+        conn: &mut CdpConnection,
+        session_id: &str,
+        frontend_command_id: u64,
+        attachment_id: RendererAgentAttachmentId,
+        frontend_payload: &str,
+    ) -> RendererCommandCorrelation {
+        let frontend =
+            ParsedCdpCommand::parse_str(frontend_payload).expect("frontend command should parse");
+        let prepared = conn
+            .try_register_renderer_call_for_session_owner(
+                Some(session_id),
+                frontend_command_id,
+                Some(attachment_id),
+                RendererCommandDescriptor::from_frontend_policy(
+                    frontend.json().to_owned(),
+                    frontend.renderer_policy(),
+                    RendererInspectorResponseDelivery::DevToolsSession,
+                ),
+            )
+            .expect("frontend response correlation should register");
+        let (correlation, response_sender, response_receiver) = prepared.into_parts();
+        assert!(
+            response_receiver.is_none(),
+            "DevToolsSession delivery must not allocate a command-reply receiver"
+        );
+        drop(response_sender);
+        correlation
+    }
+
+    #[test]
+    fn devtools_session_output_wrong_attachment_does_not_consume_live_correlation() {
+        let mut conn = CdpConnection::default();
+        let mut browser_context = BrowserContext::new("BID-attachment-race".to_owned());
+        browser_context.set_active_target_id("TID-attachment-race".to_owned());
+        browser_context.attach_active_session("SID-attachment-race".to_owned());
+        conn.browser_context = Some(browser_context);
+
+        let live_attachment = RendererAgentAttachmentId::allocate();
+        let stale_attachment = RendererAgentAttachmentId::allocate();
+        let correlation = register_devtools_session_response_for_test(
+            &mut conn,
+            "SID-attachment-race",
+            70,
+            live_attachment,
+            r#"{"id":70,"method":"Runtime.evaluate","params":{"expression":"70"}}"#,
+        );
+        let response = || {
+            RendererRuntimeInspectorMessage::protocol(json!({
+                "id": correlation.renderer_call_id().get(),
+                "result": { "result": { "type": "number", "value": 70 } },
+            }))
+        };
+
+        let mut stale_messages = vec![response()];
+        conn.restore_frontend_command_ids_in_devtools_session_output(
+            Some("SID-attachment-race"),
+            stale_attachment,
+            &mut stale_messages,
+        );
+        assert!(
+            stale_messages.is_empty(),
+            "a response from the retired attachment must be dropped"
+        );
+        assert!(
+            conn.renderer_runtime_command_cause_for_frontend(Some("SID-attachment-race"), 70,)
+                .is_some(),
+            "the retired attachment must not consume the live correlation"
+        );
+
+        let mut live_messages = vec![response()];
+        conn.restore_frontend_command_ids_in_devtools_session_output(
+            Some("SID-attachment-race"),
+            live_attachment,
+            &mut live_messages,
+        );
+        let [RendererRuntimeInspectorMessage::Protocol(message)] = live_messages.as_slice() else {
+            panic!("the live attachment must publish exactly one response");
+        };
+        assert_eq!(message.value()["id"], json!(70));
+        assert!(
+            conn.renderer_runtime_command_cause_for_frontend(Some("SID-attachment-race"), 70,)
+                .is_none(),
+            "the live attachment must consume the correlation exactly once"
+        );
+    }
+
+    #[test]
+    fn devtools_session_output_keeps_first_of_duplicate_terminal_responses() {
+        let mut conn = CdpConnection::default();
+        let mut browser_context = BrowserContext::new("BID-duplicate-response".to_owned());
+        browser_context.set_active_target_id("TID-duplicate-response".to_owned());
+        browser_context.attach_active_session("SID-duplicate-response".to_owned());
+        conn.browser_context = Some(browser_context);
+
+        let attachment_id = RendererAgentAttachmentId::allocate();
+        let correlation = register_devtools_session_response_for_test(
+            &mut conn,
+            "SID-duplicate-response",
+            71,
+            attachment_id,
+            r#"{"id":71,"method":"Runtime.evaluate","params":{"expression":"71"}}"#,
+        );
+        let mut messages = vec![
+            RendererRuntimeInspectorMessage::protocol(json!({
+                "id": correlation.renderer_call_id().get(),
+                "result": { "result": { "type": "string", "value": "first" } },
+            })),
+            RendererRuntimeInspectorMessage::protocol(json!({
+                "id": correlation.renderer_call_id().get(),
+                "result": { "result": { "type": "string", "value": "duplicate" } },
+            })),
+        ];
+
+        conn.restore_frontend_command_ids_in_devtools_session_output(
+            Some("SID-duplicate-response"),
+            attachment_id,
+            &mut messages,
+        );
+
+        let [RendererRuntimeInspectorMessage::Protocol(message)] = messages.as_slice() else {
+            panic!("duplicate terminal responses must collapse to one frontend response");
+        };
+        assert_eq!(message.value()["id"], json!(71));
+        assert_eq!(message.value()["result"]["result"]["value"], json!("first"));
+    }
+
+    #[test]
+    fn devtools_session_output_restores_interleaved_calls_without_reordering() {
+        let mut conn = CdpConnection::default();
+        let mut browser_context = BrowserContext::new("BID-interleaved-response".to_owned());
+        browser_context.set_active_target_id("TID-interleaved-response".to_owned());
+        browser_context.attach_active_session("SID-interleaved-response".to_owned());
+        conn.browser_context = Some(browser_context);
+
+        let attachment_id = RendererAgentAttachmentId::allocate();
+        let first = register_devtools_session_response_for_test(
+            &mut conn,
+            "SID-interleaved-response",
+            80,
+            attachment_id,
+            r#"{"id":80,"method":"Runtime.evaluate","params":{"expression":"80"}}"#,
+        );
+        let second = register_devtools_session_response_for_test(
+            &mut conn,
+            "SID-interleaved-response",
+            81,
+            attachment_id,
+            r#"{"id":81,"method":"Runtime.evaluate","params":{"expression":"81"}}"#,
+        );
+        let mut messages = vec![
+            RendererRuntimeInspectorMessage::protocol(json!({
+                "id": second.renderer_call_id().get(),
+                "result": { "result": { "type": "number", "value": 81 } },
+            })),
+            RendererRuntimeInspectorMessage::protocol(json!({
+                "method": "Debugger.scriptParsed",
+                "params": { "scriptId": "interleaved" },
+            })),
+            RendererRuntimeInspectorMessage::protocol(json!({
+                "id": first.renderer_call_id().get(),
+                "result": { "result": { "type": "number", "value": 80 } },
+            })),
+        ];
+
+        conn.restore_frontend_command_ids_in_devtools_session_output(
+            Some("SID-interleaved-response"),
+            attachment_id,
+            &mut messages,
+        );
+
+        assert_eq!(messages.len(), 3);
+        let RendererRuntimeInspectorMessage::Protocol(second_response) = &messages[0] else {
+            panic!("the second call response must remain first");
+        };
+        let RendererRuntimeInspectorMessage::Protocol(notification) = &messages[1] else {
+            panic!("the notification must remain between the responses");
+        };
+        let RendererRuntimeInspectorMessage::Protocol(first_response) = &messages[2] else {
+            panic!("the first call response must remain last");
+        };
+        assert_eq!(second_response.value()["id"], json!(81));
+        assert_eq!(
+            notification.value()["method"],
+            json!("Debugger.scriptParsed")
+        );
+        assert_eq!(first_response.value()["id"], json!(80));
+    }
+
     #[tokio::test]
     async fn devtools_session_output_restores_only_the_exact_registered_frontend_response() {
         let mut conn = CdpConnection::default();
@@ -6250,6 +6599,10 @@ mod tests {
             )
             .expect("frontend response correlation should register");
         let (correlation, response_sender, response_receiver) = prepared.into_parts();
+        assert!(
+            response_receiver.is_none(),
+            "DevToolsSession delivery must not allocate a legacy command-reply receiver"
+        );
         drop(response_sender);
         let mut messages = vec![
             RendererRuntimeInspectorMessage::protocol(json!({
@@ -6299,9 +6652,64 @@ mod tests {
                 .is_none(),
             "publishing the session response must consume its exact correlation"
         );
-        assert!(
-            response_receiver.await.is_err(),
-            "the legacy reply receiver should close after session output takes ownership"
+    }
+
+    #[test]
+    fn devtools_session_output_preserves_remote_object_group_projection() {
+        let mut conn = CdpConnection::default();
+        let mut browser_context = BrowserContext::new("BID-session-projection".to_owned());
+        browser_context.set_active_target_id("TID-session-projection".to_owned());
+        browser_context.attach_active_session("SID-session-projection".to_owned());
+        conn.browser_context = Some(browser_context);
+        let session_id = Some("SID-session-projection");
+        let attachment_id = RendererAgentAttachmentId::allocate();
+
+        conn.register_runtime_remote_object_ids_from_value_for_session_owner_with_group(
+            session_id,
+            &json!({ "objectId": "nested-parent-object" }),
+            "nested-object-group",
+        );
+
+        let get_properties = ParsedCdpCommand::parse_str(
+            r#"{"id":45,"method":"Runtime.getProperties","params":{"objectId":"nested-parent-object","ownProperties":true}}"#,
+        )
+        .expect("getProperties command should parse");
+        let prepared = conn
+            .try_register_renderer_call_for_session_owner(
+                session_id,
+                45,
+                Some(attachment_id),
+                RendererCommandDescriptor::from_frontend_policy(
+                    get_properties.json().to_owned(),
+                    get_properties.renderer_policy(),
+                    RendererInspectorResponseDelivery::DevToolsSession,
+                ),
+            )
+            .expect("getProperties response correlation should register");
+        let (correlation, response_sender, response_receiver) = prepared.into_parts();
+        assert!(response_receiver.is_none());
+        drop(response_sender);
+        let mut messages = vec![RendererRuntimeInspectorMessage::protocol(json!({
+            "id": correlation.renderer_call_id().get(),
+            "result": {
+                "result": [{
+                    "name": "child",
+                    "value": {
+                        "type": "object",
+                        "objectId": "nested-child-object"
+                    }
+                }]
+            },
+        }))];
+        conn.restore_frontend_command_ids_in_devtools_session_output(
+            session_id,
+            attachment_id,
+            &mut messages,
+        );
+        assert_eq!(
+            conn.runtime_remote_object_group_for_session_owner(session_id, "nested-child-object",),
+            Some("nested-object-group".to_owned()),
+            "getProperties results must inherit the receiver object's group",
         );
     }
 
@@ -7032,6 +7440,8 @@ mod tests {
             )
             .expect("non-await command should register");
         let (correlation, old_sender, response_receiver) = prepared.into_parts();
+        let response_receiver = response_receiver
+            .expect("a synthesized CommandReply call must allocate a response receiver");
 
         let mut direct_events = Vec::new();
         let mut claimed_events = Vec::new();

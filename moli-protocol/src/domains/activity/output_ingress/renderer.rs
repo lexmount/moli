@@ -226,6 +226,7 @@ async fn project_renderer_output_records_for_route(
                         cursor.stream().renderer_agent(),
                         &observation,
                     )
+                    .await
                 };
                 barriers
                     .route_publication_outputs(

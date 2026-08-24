@@ -1031,8 +1031,16 @@ fn start_main_runtime_inspector_command(
             ));
         }
     };
-    let pending = match start_pending_runtime_routable_inspector_dispatch(conn, cmd, inspector_json)
-    {
+    let pending = match start_pending_runtime_routable_inspector_dispatch(
+        conn,
+        cmd,
+        inspector_json,
+        if await_promise {
+            RendererInspectorResponseDelivery::CommandReply
+        } else {
+            cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession)
+        },
+    ) {
         Ok(pending) => pending,
         Err(message) => {
             forget_pre_registered_runtime_await(conn, pre_registered_await, cmd.session_id);
@@ -1088,15 +1096,17 @@ pub(crate) fn start_profiler_inspector_command_dispatch(
     }
 
     let action = dispatch.protocol_method();
-    let pending =
-        match start_pending_runtime_inspector_dispatch(conn, cmd, dispatch.into_inspector_json()) {
-            Ok(pending) => pending,
-            Err(message) => {
-                return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(
-                    cmd.id, message,
-                ));
-            }
-        };
+    let pending = match start_pending_runtime_inspector_dispatch_with_delivery(
+        conn,
+        cmd,
+        dispatch.into_inspector_json(),
+        cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession),
+    ) {
+        Ok(pending) => pending,
+        Err(message) => {
+            return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(cmd.id, message));
+        }
+    };
 
     RuntimeCommandTaskStep::Pending(Box::new(PendingRuntimeCommandDispatch {
         command_id: cmd.id,
@@ -1173,7 +1183,12 @@ pub(crate) fn start_heap_profiler_inspector_command_dispatch(
 
     let method = heap_profiler_action_protocol_method(action);
     let object_group = heap_profiler_object_group_for_command_result(cmd, action);
-    let pending = match start_pending_runtime_inspector_dispatch(conn, cmd, cmd.json.to_owned()) {
+    let pending = match start_pending_runtime_inspector_dispatch_with_delivery(
+        conn,
+        cmd,
+        cmd.json.to_owned(),
+        RendererInspectorResponseDelivery::CommandReply,
+    ) {
         Ok(pending) => pending,
         Err(message) => {
             return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(cmd.id, message));
@@ -1220,11 +1235,19 @@ pub(crate) fn start_debugger_inspector_command_dispatch(
 
     let pending = match cmd.renderer_policy().access() {
         CdpRendererCommandAccess::MainThread => {
-            start_pending_runtime_inspector_dispatch(conn, cmd, inspector_json)
+            start_pending_runtime_inspector_dispatch_with_delivery(
+                conn,
+                cmd,
+                inspector_json,
+                cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession),
+            )
         }
-        CdpRendererCommandAccess::Io => {
-            start_pending_runtime_io_inspector_dispatch(conn, cmd, inspector_json)
-        }
+        CdpRendererCommandAccess::Io => start_pending_runtime_io_inspector_dispatch(
+            conn,
+            cmd,
+            inspector_json,
+            cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession),
+        ),
         CdpRendererCommandAccess::OwnerIndependent => Err(
             "an owner-independent command cannot enter the Debugger Inspector dispatcher"
                 .to_owned(),
@@ -1427,7 +1450,12 @@ pub(crate) fn start_console_inspector_command_dispatch(
         ));
     }
 
-    let pending = match start_pending_runtime_inspector_dispatch(conn, cmd, cmd.json.to_owned()) {
+    let pending = match start_pending_runtime_inspector_dispatch_with_delivery(
+        conn,
+        cmd,
+        cmd.json.to_owned(),
+        cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession),
+    ) {
         Ok(pending) => pending,
         Err(message) => {
             return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(cmd.id, message));
@@ -1817,9 +1845,12 @@ fn try_start_pending_runtime_binding_command(
             action_label,
             cmd.json.to_owned(),
         ),
-        RuntimeBindingCommand::Remove => {
-            start_pending_runtime_inspector_dispatch(conn, cmd, cmd.json.to_owned())
-        }
+        RuntimeBindingCommand::Remove => start_pending_runtime_inspector_dispatch_with_delivery(
+            conn,
+            cmd,
+            cmd.json.to_owned(),
+            RendererInspectorResponseDelivery::CommandReply,
+        ),
     };
     let pending = match pending {
         Ok(pending) => pending,
@@ -1851,14 +1882,23 @@ fn start_pending_runtime_routable_inspector_dispatch(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
     inspector_json: String,
+    response_delivery: RendererInspectorResponseDelivery,
 ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
     match cmd.renderer_policy().access() {
         CdpRendererCommandAccess::MainThread => {
-            start_pending_runtime_inspector_dispatch(conn, cmd, inspector_json)
+            start_pending_runtime_inspector_dispatch_with_delivery(
+                conn,
+                cmd,
+                inspector_json,
+                response_delivery,
+            )
         }
-        CdpRendererCommandAccess::Io => {
-            start_pending_runtime_io_inspector_dispatch(conn, cmd, inspector_json)
-        }
+        CdpRendererCommandAccess::Io => start_pending_runtime_io_inspector_dispatch(
+            conn,
+            cmd,
+            inspector_json,
+            response_delivery,
+        ),
         CdpRendererCommandAccess::OwnerIndependent => Err(
             "an owner-independent command cannot enter the Runtime Inspector dispatcher".to_owned(),
         ),
@@ -1869,12 +1909,13 @@ fn start_pending_runtime_io_inspector_dispatch(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
     inspector_json: String,
+    response_delivery: RendererInspectorResponseDelivery,
 ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
     if let Some(command_id) = cmd.id {
         let descriptor = RendererCommandDescriptor::from_frontend_policy(
             inspector_json,
             cmd.renderer_policy(),
-            RendererInspectorResponseDelivery::DevToolsSession,
+            response_delivery,
         );
         conn.start_runtime_io_protocol_message_for_session_owner_with_deferred_response(
             cmd.session_id,
@@ -1906,21 +1947,20 @@ fn start_pending_runtime_context_resolved_inspector_dispatch_with_delivery(
     cmd: &Cmd<'_>,
     action: &'static str,
     inspector_json: String,
-    nested_response_delivery: RendererInspectorResponseDelivery,
+    response_delivery: RendererInspectorResponseDelivery,
 ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
     if let Some(command_id) = cmd.id {
         let descriptor = RendererCommandDescriptor::from_frontend_policy(
             inspector_json,
             cmd.renderer_policy(),
-            RendererInspectorResponseDelivery::CommandReply,
+            response_delivery,
         );
-        conn.start_runtime_protocol_message_with_context_resolution_for_session_owner_with_deferred_response_and_nested_delivery(
-                cmd.session_id,
-                action,
-                descriptor,
-                command_id,
-                nested_response_delivery,
-            )
+        conn.start_runtime_protocol_message_with_context_resolution_for_session_owner_with_deferred_response(
+            cmd.session_id,
+            action,
+            descriptor,
+            command_id,
+        )
     } else {
         conn.start_runtime_protocol_message_with_context_resolution_for_session_owner(
             cmd.session_id,
@@ -1930,16 +1970,17 @@ fn start_pending_runtime_context_resolved_inspector_dispatch_with_delivery(
     }
 }
 
-fn start_pending_runtime_inspector_dispatch(
+fn start_pending_runtime_inspector_dispatch_with_delivery(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
     inspector_json: String,
+    response_delivery: RendererInspectorResponseDelivery,
 ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
     if let Some(command_id) = cmd.id {
         let descriptor = RendererCommandDescriptor::from_frontend_policy(
             inspector_json,
             cmd.renderer_policy(),
-            RendererInspectorResponseDelivery::CommandReply,
+            response_delivery,
         );
         conn.start_runtime_protocol_message_for_session_owner_with_deferred_response(
             cmd.session_id,
@@ -2041,7 +2082,7 @@ fn start_cdp_devtools_script_runtime_command(
         if await_promise {
             RendererInspectorResponseDelivery::CommandReply
         } else {
-            RendererInspectorResponseDelivery::DevToolsSession
+            cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession)
         },
     )
 }
@@ -8186,25 +8227,69 @@ async fn complete_pending_runtime_inspector_command(
     timing_started: Option<std::time::Instant>,
     response_flush: &crate::conn::CommandResponseFlushContext,
 ) -> RuntimeCommandTaskStep {
-    let (messages, mut renderer_response_rx, page_owner_access_allowed, response_delivery) =
-        match completed_inspector {
-            Ok(mut completed_protocol) => {
-                let page_owner_access_allowed = completed_protocol.page_owner_access_allowed();
-                let response_delivery = completed_protocol.response_delivery();
-                let renderer_response_rx = completed_protocol.take_deferred_response_receiver();
-                match conn
-                    .complete_runtime_protocol_message_for_session_owner_async(completed_protocol)
-                    .await
-                {
-                    Ok(messages) => (
-                        messages,
-                        renderer_response_rx,
-                        page_owner_access_allowed,
-                        response_delivery,
-                    ),
-                    Err(message) => {
+    let (
+        messages,
+        mut renderer_response_rx,
+        page_owner_access_allowed,
+        response_delivery,
+        session_response_predecessor,
+        session_response_succeeded,
+    ) = match completed_inspector {
+        Ok(mut completed_protocol) => {
+            let page_owner_access_allowed = completed_protocol.page_owner_access_allowed();
+            let session_response_succeeded = completed_protocol.session_response_succeeded();
+            let session_response_predecessor = completed_protocol.session_response_predecessor();
+            let response_delivery = completed_protocol.response_delivery();
+            let renderer_response_rx = completed_protocol.take_deferred_response_receiver();
+            match conn
+                .complete_runtime_protocol_message_for_session_owner_async(completed_protocol)
+                .await
+            {
+                Ok(messages) => (
+                    messages,
+                    renderer_response_rx,
+                    page_owner_access_allowed,
+                    response_delivery,
+                    session_response_predecessor,
+                    session_response_succeeded,
+                ),
+                Err(message) => {
+                    if let Some(command_id) = completed.command_id {
+                        conn.forget_pending_inspector_await(command_id, completed.session_id());
+                    }
+                    if session_response_succeeded.is_some() {
+                        tracing::debug!(
+                            command_id = completed.command_id,
+                            session_id = completed.session_id(),
+                            error = %message,
+                            "ignored browser-side completion error after the renderer session settled the terminal response"
+                        );
+                        (
+                            None,
+                            renderer_response_rx,
+                            page_owner_access_allowed,
+                            response_delivery,
+                            session_response_predecessor,
+                            session_response_succeeded,
+                        )
+                    } else {
                         if let Some(command_id) = completed.command_id {
-                            conn.forget_pending_inspector_await(command_id, completed.session_id());
+                            let correlation = conn
+                                .take_renderer_call_for_frontend_for_session_owner(
+                                    completed.session_id(),
+                                    command_id,
+                                );
+                            if correlation.is_none() {
+                                tracing::debug!(
+                                    command_id,
+                                    session_id = completed.session_id(),
+                                    error = %message,
+                                    "ignored renderer completion error after another route settled the frontend call"
+                                );
+                                return RuntimeCommandTaskStep::Complete(
+                                    CommandOutputPlan::default(),
+                                );
+                            }
                         }
                         return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(
                             completed.command_id,
@@ -8213,16 +8298,30 @@ async fn complete_pending_runtime_inspector_command(
                     }
                 }
             }
-            Err(message) => {
-                if let Some(command_id) = completed.command_id {
-                    conn.forget_pending_inspector_await(command_id, completed.session_id());
+        }
+        Err(message) => {
+            if let Some(command_id) = completed.command_id {
+                conn.forget_pending_inspector_await(command_id, completed.session_id());
+                let correlation = conn.take_renderer_call_for_frontend_for_session_owner(
+                    completed.session_id(),
+                    command_id,
+                );
+                if correlation.is_none() {
+                    tracing::debug!(
+                        command_id,
+                        session_id = completed.session_id(),
+                        error = %message,
+                        "ignored canceled renderer route after another route settled the frontend call"
+                    );
+                    return RuntimeCommandTaskStep::Complete(CommandOutputPlan::default());
                 }
-                return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(
-                    completed.command_id,
-                    message,
-                ));
             }
-        };
+            return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(
+                completed.command_id,
+                message,
+            ));
+        }
+    };
     let initial_message_count = messages.as_ref().map_or(0, |messages| {
         messages
             .runtime_inspector_output()
@@ -8240,6 +8339,9 @@ async fn complete_pending_runtime_inspector_command(
 
     let mut plan = CommandOutputPlan::default();
     let mut routed_output = RuntimeInspectorRoutedOutput::default();
+    if let Some(predecessor) = session_response_predecessor {
+        routed_output.set_renderer_output_predecessor(predecessor);
+    }
     let mut saw_current_response = if let Some(messages) = messages {
         route_renderer_command_turn_output_into_routed_output(
             conn,
@@ -8316,7 +8418,8 @@ async fn complete_pending_runtime_inspector_command(
             page_owner_access_allowed,
         );
     }
-    let succeeded = routed_output.command_response_succeeded(completed.command_id);
+    let succeeded = session_response_succeeded
+        .unwrap_or_else(|| routed_output.command_response_succeeded(completed.command_id));
     if succeeded {
         routed_output.register_object_group_for_success(
             conn,
@@ -8328,10 +8431,20 @@ async fn complete_pending_runtime_inspector_command(
         if let Some(console_action) = console_action_from_protocol_method(completed.action)
             && !apply_console_output_state_for_session(conn, completed.session_id(), console_action)
         {
-            return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(
-                completed.command_id,
-                format!("ConsoleCommandCompletionFailed: {}", completed.action),
-            ));
+            let message = format!("ConsoleCommandCompletionFailed: {}", completed.action);
+            if session_response_succeeded.is_some() {
+                tracing::warn!(
+                    command_id = completed.command_id,
+                    session_id = completed.session_id(),
+                    error = %message,
+                    "could not apply browser projection after the terminal renderer response was published"
+                );
+            } else {
+                return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(
+                    completed.command_id,
+                    message,
+                ));
+            }
         }
         if completed.action == "discardConsoleEntries" {
             advance_runtime_observable_cursors_to_current_for_session_owner(
@@ -8343,19 +8456,37 @@ async fn complete_pending_runtime_inspector_command(
             if let Err(message) =
                 apply_runtime_disable_projection_after_success(conn, completed.session_id())
             {
-                return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(
-                    completed.command_id,
-                    message,
-                ));
+                if session_response_succeeded.is_some() {
+                    tracing::warn!(
+                        command_id = completed.command_id,
+                        session_id = completed.session_id(),
+                        error = %message,
+                        "could not apply browser projection after the terminal renderer response was published"
+                    );
+                } else {
+                    return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(
+                        completed.command_id,
+                        message,
+                    ));
+                }
             }
             if let Err(message) = conn
                 .apply_runtime_binding_state_for_session_owner_async(completed.session_id())
                 .await
             {
-                return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(
-                    completed.command_id,
-                    message,
-                ));
+                if session_response_succeeded.is_some() {
+                    tracing::warn!(
+                        command_id = completed.command_id,
+                        session_id = completed.session_id(),
+                        error = %message,
+                        "could not apply browser projection after the terminal renderer response was published"
+                    );
+                } else {
+                    return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(
+                        completed.command_id,
+                        message,
+                    ));
+                }
             }
         }
         if !completed.release_object_ids.is_empty() {
@@ -10163,7 +10294,12 @@ fn start_pending_runtime_disable_command(
         return RuntimeCommandTaskStep::Complete(disable_command_output_plan_sync(conn, cmd));
     }
 
-    let pending = match start_pending_runtime_inspector_dispatch(conn, cmd, cmd.json.to_owned()) {
+    let pending = match start_pending_runtime_inspector_dispatch_with_delivery(
+        conn,
+        cmd,
+        cmd.json.to_owned(),
+        cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession),
+    ) {
         Ok(pending) => pending,
         Err(message) => {
             return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(cmd.id, message));
@@ -10194,7 +10330,12 @@ fn start_runtime_run_if_waiting_for_debugger_command(
         return RuntimeCommandTaskStep::Complete(CommandOutputPlan::success());
     }
 
-    let pending = match start_pending_runtime_inspector_dispatch(conn, cmd, cmd.json.to_owned()) {
+    let pending = match start_pending_runtime_inspector_dispatch_with_delivery(
+        conn,
+        cmd,
+        cmd.json.to_owned(),
+        cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession),
+    ) {
         Ok(pending) => pending,
         Err(message) if message == "NoDocumentLoaded" => {
             return RuntimeCommandTaskStep::Complete(CommandOutputPlan::success());
@@ -10249,7 +10390,12 @@ fn start_runtime_discard_console_entries_command(
         advance_runtime_observable_cursors_to_current_for_session_owner(conn, cmd.session_id);
         return RuntimeCommandTaskStep::Complete(CommandOutputPlan::success());
     }
-    let pending = match start_pending_runtime_inspector_dispatch(conn, cmd, cmd.json.to_owned()) {
+    let pending = match start_pending_runtime_inspector_dispatch_with_delivery(
+        conn,
+        cmd,
+        cmd.json.to_owned(),
+        cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession),
+    ) {
         Ok(pending) => pending,
         Err(message) => {
             return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(cmd.id, message));
@@ -10284,6 +10430,7 @@ mod protocol_neutral_tests {
         BrowserContext, CdpConnection, CdpSessionRoute, Cmd, SharedWorkerTargetState,
     };
     use crate::domains::actions::ConsoleAction;
+    use crate::testing::TestContext;
 
     use super::super::bidi_nodes::{
         BidiIncludeShadowTree, BidiNodeSerializationOptions,
@@ -11353,16 +11500,18 @@ mod protocol_neutral_tests {
 
     #[tokio::test]
     async fn duplicate_non_await_v8_command_preserves_original_completion_owner() {
-        let mut conn = CdpConnection::new();
+        let mut ctx = TestContext::new();
         let mut browser_context = BrowserContext::new("BID-console-duplicate".to_owned());
         browser_context.set_active_target_id("TID-console-duplicate".to_owned());
         browser_context.attach_active_session("SID-console-duplicate".to_owned());
-        conn.browser_context = Some(browser_context);
-        let page = conn
+        ctx.conn.browser_context = Some(browser_context);
+        let page = ctx
+            .conn
             .load_page_via_runtime_async("data:text/html,<p>console duplicate</p>")
             .await
             .expect("page should load");
-        conn.browser_context
+        ctx.conn
+            .browser_context
             .as_mut()
             .expect("browser context")
             .active_target
@@ -11378,7 +11527,7 @@ mod protocol_neutral_tests {
             r#"{"id":78,"method":"Console.enable","sessionId":"SID-console-duplicate"}"#,
         );
         let RuntimeCommandTaskStep::Pending(original) =
-            start_console_inspector_command_dispatch(&mut conn, &enable, ConsoleAction::Enable)
+            start_console_inspector_command_dispatch(&mut ctx.conn, &enable, ConsoleAction::Enable)
         else {
             panic!("first Console command should own a renderer correlation");
         };
@@ -11391,7 +11540,11 @@ mod protocol_neutral_tests {
             r#"{"id":78,"method":"Console.disable","sessionId":"SID-console-duplicate"}"#,
         );
         let RuntimeCommandTaskStep::Complete(duplicate_plan) =
-            start_console_inspector_command_dispatch(&mut conn, &disable, ConsoleAction::Disable)
+            start_console_inspector_command_dispatch(
+                &mut ctx.conn,
+                &disable,
+                ConsoleAction::Disable,
+            )
         else {
             panic!("duplicate Console command must fail before renderer dispatch");
         };
@@ -11410,13 +11563,19 @@ mod protocol_neutral_tests {
         );
 
         let completed = original.wait().await;
-        let RuntimeCommandTaskStep::Complete(original_plan) =
-            super::complete_pending_runtime_command(&mut conn, completed).await
+        let RuntimeCommandTaskStep::Complete(mut original_plan) =
+            super::complete_pending_runtime_command(&mut ctx.conn, completed).await
         else {
             panic!("original Console command should still complete");
         };
+        let predecessor = original_plan
+            .take_renderer_output_predecessor()
+            .expect("original Console command should publish a session response");
+        ctx.route_direct_command_renderer_predecessor_for_test(predecessor)
+            .await;
         let mut original_output = Vec::new();
         original_plan.emit_into(&mut original_output, enable.id, enable.session_id);
+        original_output.push(ctx.take_response_by_id(78));
         assert_eq!(original_output.len(), 1);
         assert_eq!(original_output[0]["id"], json!(78));
         assert_eq!(

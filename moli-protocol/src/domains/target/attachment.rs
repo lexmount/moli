@@ -454,7 +454,7 @@ async fn send_message_to_target_inner_async(
     }
 
     let nested_outcome =
-        Box::pin(conn.process_message_with_turn_outcome_async(&params.message)).await;
+        Box::pin(conn.process_message_with_command_reply_turn_outcome_async(&params.message)).await;
     let (
         nested_events,
         post_renderer_output_events,

@@ -730,7 +730,7 @@ impl PageVm {
         Ok(messages)
     }
 
-    pub(crate) fn dispatch_runtime_protocol_message_for_inspector_session_with_deferred_response(
+    pub(crate) fn dispatch_frontend_runtime_protocol_message_for_inspector_session_with_deferred_response(
         &mut self,
         inspector_session_id: Option<&str>,
         raw_json: &str,
@@ -771,7 +771,7 @@ impl PageVm {
         Ok(messages)
     }
 
-    pub(crate) fn dispatch_runtime_protocol_message_for_inspector_session_with_context_resolution_and_deferred_response(
+    pub(crate) fn dispatch_frontend_runtime_protocol_message_for_inspector_session_with_context_resolution_and_deferred_response(
         &mut self,
         inspector_session_id: Option<&str>,
         action: &str,
@@ -782,14 +782,27 @@ impl PageVm {
             && let Some(messages) = self.try_dispatch_child_default_runtime_evaluate(raw_json)?
         {
             let call_id = deferred_response.call_id();
-            if let Some(message) = messages.into_iter().next()
-                && let Err(message) = deferred_response.send(message.into_v8_inspector_message())
-            {
-                tracing::debug!(
-                    call_id,
-                    message = ?message,
-                    "dropping child-frame runtime response because deferred receiver was closed"
-                );
+            if let Some(message) = messages.into_iter().next() {
+                if deferred_response.response_delivery()
+                    == moli_page_types::RendererInspectorResponseDelivery::DevToolsSession
+                {
+                    let deferred_response = self.vm().route_frontend_runtime_inspector_response(
+                        inspector_session_id,
+                        deferred_response,
+                    )?;
+                    let settlement = deferred_response.finalize_output(
+                        RendererRuntimeCommandOutput::from_inspector_message(message),
+                    );
+                    self.append_runtime_command_output_settlement(settlement);
+                } else if let Err(message) =
+                    deferred_response.send(message.into_v8_inspector_message())
+                {
+                    tracing::debug!(
+                        call_id,
+                        message = ?message,
+                        "dropping child-frame runtime response because deferred receiver was closed"
+                    );
+                }
             }
             return Ok(Vec::new());
         }
@@ -811,6 +824,10 @@ impl PageVm {
         ensure!(
             self.pending_runtime_command_output.is_none(),
             "renderer runtime command output scopes cannot overlap"
+        );
+        ensure!(
+            !self.runtime_command_settlement.has_session_response(),
+            "a previous runtime session response must settle at its owner boundary before another command starts"
         );
         // A V8 Inspector response can settle after this command's physical
         // Page turn. Commit it through the Page owner so the response carries
@@ -875,7 +892,7 @@ impl PageVm {
 
     fn capture_runtime_inspector_v8_state(&mut self, inspector_session_id: Option<&str>) {
         if let Some(state) = self.vm().inspector_v8_session_state(inspector_session_id) {
-            self.runtime_command_output.set_v8_state_update(state);
+            self.runtime_command_settlement.set_v8_state_update(state);
         }
     }
 
@@ -963,18 +980,27 @@ impl PageVm {
                 scope.recorder.call_id(),
             );
         }
-        let output = match error_message {
-            Some(message) if had_response => Some(scope.recorder.finish_with_error(message)),
+        let settlement = match error_message {
+            Some(message) if had_response => {
+                Some(scope.recorder.finish_with_error_for_page(message))
+            }
             Some(_) => {
                 let _ = scope.recorder.finish();
                 None
             }
-            None => Some(scope.recorder.finish()),
+            None => Some(scope.recorder.finish_for_page()),
         };
-        if let Some(output) = output {
-            self.runtime_command_output.append(output);
+        if let Some(settlement) = settlement {
+            self.append_runtime_command_output_settlement(settlement);
         }
         had_response
+    }
+
+    fn append_runtime_command_output_settlement(
+        &mut self,
+        settlement: super::RendererRuntimeCommandOutputSettlement,
+    ) {
+        self.runtime_command_settlement.append(settlement);
     }
 
     fn record_runtime_inspector_protocol_configuration_command(

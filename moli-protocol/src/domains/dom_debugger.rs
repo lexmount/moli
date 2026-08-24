@@ -415,6 +415,9 @@ mod tests {
         evaluate: Value,
         resumes: Vec<Value>,
     ) {
+        let evaluate_id = evaluate["id"]
+            .as_u64()
+            .expect("Runtime.evaluate test command must have a numeric id");
         // Keep the pending Runtime.evaluate receiver alive while the test
         // scheduler observes the real renderer publication. Dispatching the
         // interruptible resume before that publication is racy: the interrupt
@@ -477,6 +480,21 @@ mod tests {
         .await
         .expect("resumed Runtime.evaluate should complete");
         assert!(scheduler_events.is_empty(), "{scheduler_events:?}");
+        if !evaluate_messages
+            .iter()
+            .any(|message| message["id"] == json!(evaluate_id))
+        {
+            if !ctx
+                .sent
+                .iter()
+                .any(|message| message["id"] == json!(evaluate_id))
+            {
+                let response_start = ctx.sent.len();
+                ctx.wait_for_test_command_response(evaluate_id, response_start)
+                    .await;
+            }
+            evaluate_messages.push(ctx.take_response_by_id(evaluate_id));
+        }
         messages.append(&mut evaluate_messages);
         ctx.sent.extend(messages);
     }

@@ -81,9 +81,9 @@ impl PendingPerformanceCommandDispatch {
                     Ok(CompletedDevToolsIoCommandDispatch::Dispatched) => Ok(
                         CompletedPerformanceRendererCommand::IoCommandReply(snapshot),
                     ),
-                    Ok(CompletedDevToolsIoCommandDispatch::Canceled) => {
-                        Err(anyhow::anyhow!("Performance IO command was canceled"))
-                    }
+                    Ok(CompletedDevToolsIoCommandDispatch::SessionResponse { .. }) => Err(
+                        anyhow::anyhow!("command-reply Performance dispatch used session output"),
+                    ),
                     Err(error) => Err(error),
                 }
             }
@@ -254,7 +254,12 @@ pub(crate) fn try_start_performance_command_dispatch(
                 page.cached_performance_metric_snapshot(),
             )
         };
-        let Some(command_id) = cmd.id else {
+        let response_delivery = cmd.terminal_response_delivery(
+            moli_page_types::RendererInspectorResponseDelivery::DevToolsSession,
+        );
+        if cmd.id.is_none()
+            || response_delivery == moli_page_types::RendererInspectorResponseDelivery::CommandReply
+        {
             let page = loaded_page_mut_for_renderer_access(conn, cmd.session_id, renderer_access)
                 .expect("the captured Performance Page must remain loaded synchronously");
             let (pending, snapshot) = page.start_performance_metric_snapshot_from_io();
@@ -268,7 +273,10 @@ pub(crate) fn try_start_performance_command_dispatch(
                     snapshot,
                 }),
             });
-        };
+        }
+        let command_id = cmd
+            .id
+            .expect("session output requires a frontend command id");
         let Some(attachment_id) = attachment_id else {
             return PerformanceCommandTaskStep::Complete(default_metrics_command_output_plan());
         };
@@ -278,6 +286,7 @@ pub(crate) fn try_start_performance_command_dispatch(
         let descriptor = RendererCommandDescriptor::performance_get_metrics(
             cmd.json.to_owned(),
             cmd.renderer_policy(),
+            response_delivery,
         );
         let prepared = match conn.try_register_renderer_call_for_session_owner(
             cmd.session_id,
@@ -293,7 +302,10 @@ pub(crate) fn try_start_performance_command_dispatch(
             }
         };
         let (correlation, response, response_rx) = prepared.into_parts();
-        drop(response_rx);
+        debug_assert!(
+            response_rx.is_none(),
+            "Performance session output must not allocate a command-reply receiver",
+        );
         let pending = loaded_page_mut_for_renderer_access(conn, cmd.session_id, renderer_access)
             .ok()
             .filter(|page| {
@@ -420,11 +432,12 @@ pub(crate) async fn complete_pending_performance_command(
             completed,
             correlation,
         }) => {
-            if matches!(
-                completed,
-                Ok(CompletedDevToolsIoCommandDispatch::Dispatched)
-            ) {
-                return CommandOutputPlan::default();
+            if let Ok(CompletedDevToolsIoCommandDispatch::SessionResponse { predecessor, .. }) =
+                completed
+            {
+                let mut plan = CommandOutputPlan::default();
+                plan.set_renderer_output_predecessor(predecessor);
+                return plan;
             }
             if !owner_scope
                 .conn_mut()
@@ -706,27 +719,16 @@ mod tests {
         command_id: u64,
     ) -> Vec<Value> {
         let response_start = ctx.sent.len();
-        let mut step = step;
-        loop {
-            match step {
-                CdpCommandTaskStep::Pending(pending) => {
-                    let completed = pending.wait().await;
-                    step = ctx.conn.complete_pending_command_dispatch(completed).await;
-                }
-                CdpCommandTaskStep::Complete(outcome) => {
-                    let mut messages = outcome.into_parts().0;
-                    if !messages
-                        .iter()
-                        .any(|message| message["id"] == json!(command_id))
-                    {
-                        ctx.wait_for_test_command_response(command_id, response_start)
-                            .await;
-                        messages.push(ctx.take_response_by_id(command_id));
-                    }
-                    return messages;
-                }
-            }
+        let (mut messages, _) = ctx.complete_command_task_step_for_test(step).await;
+        if !messages
+            .iter()
+            .any(|message| message["id"] == json!(command_id))
+        {
+            ctx.wait_for_test_command_response(command_id, response_start)
+                .await;
+            messages.push(ctx.take_response_by_id(command_id));
         }
+        messages
     }
 
     fn complete_immediate_command_task_step_for_test(step: CdpCommandTaskStep) -> Vec<Value> {
