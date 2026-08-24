@@ -1951,7 +1951,7 @@ dependencies = [
 
 [[package]]
 name = "moli"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "anyhow",
  "axum",
