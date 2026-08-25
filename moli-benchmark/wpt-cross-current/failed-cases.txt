@@ -10,7 +10,9 @@ compat/webkit-box-item-shrink-002.html
 compat/webkit-box-vertically-centered.html
 content-security-policy/embedded-enforcement/iframe-csp-attribute.html
 content-security-policy/frame-ancestors/frame-ancestors-from-serviceworker.https.html
-content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-cross-star-allow.html
+content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-cross-none-block.html
+content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-cross-self-block.html
+content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-cross-url-block.html
 content-security-policy/frame-ancestors/frame-ancestors-nested-same-in-cross-star-allow.html
 content-security-policy/frame-ancestors/frame-ancestors-nested-same-in-cross-url-allow.html
 content-security-policy/frame-ancestors/frame-ancestors-nested-same-in-same-none-block.html
@@ -609,8 +611,6 @@ css/css-grid/abspos/positioned-grid-descendants-001.html
 css/css-grid/abspos/positioned-grid-descendants-002.html
 css/css-grid/abspos/positioned-grid-descendants-004.html
 css/css-grid/abspos/positioned-grid-descendants-007.html
-css/css-grid/abspos/positioned-grid-descendants-008.html
-css/css-grid/abspos/positioned-grid-descendants-013.html
 css/css-grid/abspos/positioned-grid-items-020.html
 css/css-grid/abspos/positioned-grid-items-021.html
 css/css-grid/abspos/positioned-grid-items-024.html
@@ -3372,7 +3372,6 @@ html/semantics/interactive-elements/the-dialog-element/non-modal-dialog-layout.h
 html/semantics/interactive-elements/the-dialog-element/toggle-events.html
 html/semantics/interactive-elements/the-dialog-element/top-layer-position.html
 html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_noopener.html
-html/semantics/links/links-created-by-a-and-area-elements/rel-attribute-clearing.html
 html/semantics/menu/tentative/button-invoke-menulist.html
 html/semantics/menu/tentative/checkable.html
 html/semantics/menu/tentative/menubar-invoke-menulist.html
@@ -3456,7 +3455,6 @@ html/semantics/selectors/pseudo-classes/autofill.html
 html/semantics/selectors/pseudo-classes/dir.html
 html/semantics/selectors/pseudo-classes/readwrite-readonly.html
 html/semantics/selectors/pseudo-classes/valid-invalid.html
-html/semantics/tabular-data/processing-model-1/col-span-limits.html
 html/semantics/tabular-data/processing-model-1/rowspan-0-quirks.html
 html/semantics/tabular-data/processing-model-1/rowspan-0.html
 html/semantics/text-level-semantics/historical.html
@@ -3482,7 +3480,6 @@ html/syntax/parsing/html5lib_innerHTML_tests_innerHTML_1.html
 html/syntax/parsing/html5lib_webkit02.html?run_type=uri
 html/syntax/parsing/html5lib_webkit02.html?run_type=write
 html/syntax/parsing/html5lib_webkit02.html?run_type=write_single
-html/syntax/parsing/inhead-noscript-head.html
 html/syntax/parsing/template/additions-to-the-in-body-insertion-mode/ignore-body-token.html
 html/syntax/parsing/template/additions-to-the-in-body-insertion-mode/ignore-head-token.html
 html/syntax/parsing/template/creating-an-element-for-the-token/template-owner-document.html
@@ -3540,7 +3537,6 @@ html/webappapis/structured-clone/structured-clone-cross-realm-method.html
 import-maps/csp/hash-failure.html
 import-maps/csp/nonce-failure.html
 import-maps/dynamic-integrity.html
-import-maps/multiple-import-maps/resolution-consistency-in-module-tree.html
 import-maps/no-referencing-script-integrity.html
 import-maps/static-integrity.html
 inert/dynamic-inert-on-focused-element.html
@@ -3906,15 +3902,7 @@ svg/types/scripted/SVGAnimatedNumber-initial-values.html
 svg/types/scripted/SVGAnimatedNumber.html
 svg/types/scripted/SVGAnimatedPreserveAspectRatio.html
 svg/types/scripted/SVGAnimatedRect.html
-svg/types/scripted/SVGGeometryElement.getTotalLength-02.html
-svg/types/scripted/SVGGraphicsElement.getBBox-01.html
-svg/types/scripted/SVGGraphicsElement.getBBox-02.html
-svg/types/scripted/SVGGraphicsElement.getBBox-03.html
-svg/types/scripted/SVGGraphicsElement.getBBox-04.html
 svg/types/scripted/SVGGraphicsElement.getBBox-05.html
-svg/types/scripted/SVGGraphicsElement.getBBox-06.html
-svg/types/scripted/SVGGraphicsElement.getBBox-07.html
-svg/types/scripted/SVGGraphicsElement.getBBox-08.html
 svg/types/scripted/SVGGraphicsElement.getBBox-09.html
 svg/types/scripted/SVGGraphicsElement.getCTM-empty-viewBox.html
 svg/types/scripted/SVGGraphicsElement.getScreenCTM.html
@@ -3932,7 +3920,6 @@ svg/types/scripted/SVGLengthList-appendItem.html
 svg/types/scripted/SVGLengthList-basics.html
 svg/types/scripted/SVGList-parse-invalid-clears-items.html
 svg/types/scripted/SVGMatrix-tentative.html
-svg/types/scripted/SVGPathElement.getTotalLength-01.html
 svg/types/scripted/SVGPoint.html
 svg/types/scripted/SVGRect.html
 touch-events/touch-globaleventhandler-interface.html

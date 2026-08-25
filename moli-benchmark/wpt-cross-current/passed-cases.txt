@@ -30,10 +30,8 @@ compat/webkit-text-fill-color-currentColor.html
 content-security-policy/default-src/default-src-strict_dynamic_and_unsafe_inline.html
 content-security-policy/font-src/font-self-allowed.html
 content-security-policy/form-action/form-action-src-javascript-prevented.html
-content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-cross-none-block.html
-content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-cross-self-block.html
+content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-cross-star-allow.html
 content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-cross-url-allow.html
-content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-cross-url-block.html
 content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-same-none-block.html
 content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-same-self-block.html
 content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-same-star-allow.html
@@ -1413,10 +1411,12 @@ css/css-grid/abspos/orthogonal-positioned-grid-items-017.html
 css/css-grid/abspos/positioned-grid-descendants-003.html
 css/css-grid/abspos/positioned-grid-descendants-005.html
 css/css-grid/abspos/positioned-grid-descendants-006.html
+css/css-grid/abspos/positioned-grid-descendants-008.html
 css/css-grid/abspos/positioned-grid-descendants-009.html
 css/css-grid/abspos/positioned-grid-descendants-010.html
 css/css-grid/abspos/positioned-grid-descendants-011.html
 css/css-grid/abspos/positioned-grid-descendants-012.html
+css/css-grid/abspos/positioned-grid-descendants-013.html
 css/css-grid/abspos/positioned-grid-descendants-014.html
 css/css-grid/abspos/positioned-grid-descendants-015.html
 css/css-grid/abspos/positioned-grid-descendants-016.html
@@ -5720,6 +5720,7 @@ html/semantics/interfaces.html
 html/semantics/links/links-created-by-a-and-area-elements/anchor-src-encoding.html
 html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_attribute-getter-setter.html
 html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_getter.html
+html/semantics/links/links-created-by-a-and-area-elements/rel-attribute-clearing.html
 html/semantics/links/links-created-by-a-and-area-elements/target_blank_implicit_noopener.html
 html/semantics/popovers/hide-other-popover-side-effects.html
 html/semantics/popovers/popover-active-document.html
@@ -6018,6 +6019,7 @@ html/semantics/selectors/pseudo-classes/required-optional.html
 html/semantics/selectors/pseudo-classes/valid-invalid-fieldset-disconnected.html
 html/semantics/tabular-data/attributes-common-to-td-and-th-elements/cellIndex.html
 html/semantics/tabular-data/historical.html
+html/semantics/tabular-data/processing-model-1/col-span-limits.html
 html/semantics/tabular-data/processing-model-1/span-limits.html
 html/semantics/tabular-data/the-caption-element/caption_001.html
 html/semantics/tabular-data/the-table-element/caption-methods.html
@@ -6243,6 +6245,7 @@ html/syntax/parsing/html5lib_webkit01.html?run_type=uri
 html/syntax/parsing/html5lib_webkit01.html?run_type=write
 html/syntax/parsing/html5lib_webkit01.html?run_type=write_single
 html/syntax/parsing/html_content_in_foreign_context.html
+html/syntax/parsing/inhead-noscript-head.html
 html/syntax/parsing/math-parse01.html
 html/syntax/parsing/math-parse03.html
 html/syntax/parsing/meta-inhead-insertion-mode.html
@@ -6471,6 +6474,7 @@ import-maps/module-map-key.html
 import-maps/multiple-import-maps/basic.html
 import-maps/multiple-import-maps/conflict-first-persists.html
 import-maps/multiple-import-maps/resolution-consistency-in-module-tree-inline.html
+import-maps/multiple-import-maps/resolution-consistency-in-module-tree.html
 import-maps/multiple-import-maps/scope-ordering-reverse.html
 import-maps/multiple-import-maps/scope-ordering.html
 import-maps/multiple-import-maps/url-resolution-conflict.html
@@ -6987,6 +6991,7 @@ requestidlecallback/deadline-max.html
 resource-timing/buffer-full-add-after-full-event.html
 resource-timing/buffer-full-add-entries-during-callback-that-drop.html
 resource-timing/buffer-full-decrease-buffer-during-callback.html
+resource-timing/buffer-full-eventually.html
 resource-timing/buffer-full-increase-buffer-during-callback.html
 resource-timing/buffer-full-set-to-current-buffer.html
 resource-timing/buffer-full-store-and-clear-during-callback.html
@@ -7081,7 +7086,6 @@ selection/toString-ff-bug-001.html
 selection/toString-user-select-none.html
 selection/type.html
 service-workers/cache-storage/cache-api-nested-worker.https.html
-service-workers/service-worker/Service-Worker-Allowed-header.https.html
 service-workers/service-worker/ServiceWorkerGlobalScope/isSecureContext.https.html
 service-workers/service-worker/ServiceWorkerGlobalScope/message-event-ports.https.html
 service-workers/service-worker/ServiceWorkerGlobalScope/postmessage.https.html
@@ -7468,9 +7472,18 @@ svg/svg-in-svg/svg-in-svg-circular-filter-reference-crash.html
 svg/types/scripted/SVGAnimatedLength.html
 svg/types/scripted/SVGAnimatedLengthList.html
 svg/types/scripted/SVGAnimatedNumberList.html
+svg/types/scripted/SVGGeometryElement.getTotalLength-02.html
+svg/types/scripted/SVGGraphicsElement.getBBox-01.html
+svg/types/scripted/SVGGraphicsElement.getBBox-02.html
+svg/types/scripted/SVGGraphicsElement.getBBox-03.html
+svg/types/scripted/SVGGraphicsElement.getBBox-04.html
+svg/types/scripted/SVGGraphicsElement.getBBox-06.html
+svg/types/scripted/SVGGraphicsElement.getBBox-07.html
+svg/types/scripted/SVGGraphicsElement.getBBox-08.html
 svg/types/scripted/SVGLength-zoom.html
 svg/types/scripted/SVGLengthList-appendItemFromClearedList.html
 svg/types/scripted/SVGLengthList-getItem.html
+svg/types/scripted/SVGPathElement.getTotalLength-01.html
 touch-events/expose-legacy-touch-event-apis.html
 touch-events/historical.html
 touch-events/touch-touchevent-constructor.html

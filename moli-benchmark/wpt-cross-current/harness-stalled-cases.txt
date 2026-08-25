@@ -30,6 +30,7 @@ html/browsers/the-window-object/window-open-windowfeatures-values.html
 html/browsers/windows/auxiliary-browsing-contexts/opener-setter.html
 html/semantics/embedded-content/the-img-element/decode/image-decode-iframe.html
 html/semantics/embedded-content/the-object-element/object-events.html
+html/semantics/forms/form-submission-target/rel-base-target.html
 navigation-api/navigate-event/intercept-cross-origin.html
 navigation-api/navigate-event/navigate-history-back-noop.html
 payment-method-basic-card/apply_the_modifiers.html

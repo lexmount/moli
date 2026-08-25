@@ -28,7 +28,6 @@ content-security-policy/unsafe-hashes/javascript_src_denied_missing_unsafe_hashe
 content-security-policy/unsafe-hashes/javascript_src_denied_wrong_hash-window_location.html
 content-security-policy/xslt/document-function-blocked.html
 content-security-policy/xslt/xsltprocessor-include-blocked.html
-cookiestore/serviceworker_cookieStore_cross_origin.https.sub.html
 css/css-cascade/all-prop-initial-xml.html
 css/css-flexbox/inline-flex-column-image-load.html
 css/css-values/dynamic-viewport-units-rule-cache.html
@@ -170,7 +169,6 @@ html/semantics/embedded-content/the-img-element/sizes/sizes-auto-dynamic-attribu
 html/semantics/embedded-content/the-img-element/sizes/sizes-auto-resize-observer-removes-auto.html
 html/semantics/embedded-content/the-img-element/sizes/sizes-auto.html
 html/semantics/embedded-content/the-img-element/srcset/srcset-w-reselect-on-resize.html
-html/semantics/forms/form-submission-target/rel-base-target.html
 html/semantics/forms/the-button-element/button-submit-remove-children.html
 html/semantics/links/links-created-by-a-and-area-elements/target_blank_implicit_noopener_base.html
 html/semantics/popovers/popover-document-open.html
@@ -244,6 +242,7 @@ resource-timing/tentative/initiator-url/post-message-shared-worker.html
 resource-timing/tentative/initiator-url/post-message-worker.html
 resource-timing/tentative/stylesheet-initiated.html
 scroll-to-text-fragment/find-range-from-text-directive-no-reveal.html
+service-workers/service-worker/Service-Worker-Allowed-header.https.html
 service-workers/service-worker/ServiceWorkerGlobalScope/close.https.html
 service-workers/service-worker/ServiceWorkerGlobalScope/extendable-message-event-constructor.https.html
 service-workers/service-worker/ServiceWorkerGlobalScope/extendable-message-event.https.html

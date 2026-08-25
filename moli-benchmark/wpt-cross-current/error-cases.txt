@@ -1,3 +1,4 @@
+cookiestore/serviceworker_cookieStore_cross_origin.https.sub.html
 css/selectors/invalidation/has-complexity.html
 dom/ranges/Range-insertNode.html
 dom/ranges/Range-mutations-dataChange.html
@@ -11,4 +12,3 @@ infrastructure/expected-fail/user-prompt.html?type=confirm
 infrastructure/expected-fail/user-prompt.html?type=confirm&wait
 infrastructure/expected-fail/user-prompt.html?type=prompt
 infrastructure/expected-fail/user-prompt.html?type=prompt&wait
-resource-timing/buffer-full-eventually.html
