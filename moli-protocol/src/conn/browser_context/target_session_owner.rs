@@ -2728,7 +2728,7 @@ impl CdpConnection {
             target_id,
             primary_session_id,
             auxiliary_session_ids,
-            promoted_target_id,
+            next_active_target_id,
             collected_network_data_artifacts,
         ) = {
             let browser_context = self.browser_context.as_mut()?;
@@ -2736,7 +2736,7 @@ impl CdpConnection {
             let primary_session_id = browser_context.active_session_id_owned();
             let auxiliary_session_ids =
                 browser_context.remove_auxiliary_sessions_for_target(&target_id);
-            let promoted_target_id = browser_context.last_promotable_background_target_id();
+            let next_active_target_id = browser_context.last_promotable_background_target_id();
             let collected_network_data_artifacts = browser_context
                 .active_target
                 .runtime_slot
@@ -2749,20 +2749,26 @@ impl CdpConnection {
                 target_id,
                 primary_session_id,
                 auxiliary_session_ids,
-                promoted_target_id,
+                next_active_target_id,
                 collected_network_data_artifacts,
             )
         };
         self.record_collected_network_data_artifacts(collected_network_data_artifacts);
-        if let Some(promoted_target_id) = promoted_target_id.as_deref() {
-            self.handoff_navigation_engine_for_target_activation(promoted_target_id);
+        if let Some(next_active_target_id) = next_active_target_id.as_deref() {
+            self.handoff_navigation_engine_for_target_activation(next_active_target_id);
         }
-        if let Some(browser_context) = self.browser_context.as_mut() {
-            let _ = browser_context
+        let promoted_target_id = if let Some(browser_context) = self.browser_context.as_mut() {
+            browser_context
                 .promote_last_background_target_to_active_async()
-                .await;
-        }
+                .await
+                .map(|target| target.target_id().to_owned())
+        } else {
+            None
+        };
         self.refresh_active_browser_context_loader_async().await;
+        if let Some(promoted_target_id) = promoted_target_id {
+            self.notify_target_host_activated(&promoted_target_id);
+        }
 
         Some(ClosedPageTarget {
             target_id,

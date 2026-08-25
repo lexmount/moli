@@ -29,14 +29,15 @@ pub(super) async fn json_version(State(state): State<AppState>) -> impl IntoResp
 }
 
 pub(super) async fn json_list(State(state): State<AppState>) -> impl IntoResponse {
-    let mut targets = vec![target_json(&state, DEFAULT_TARGET_URL)];
-    targets.extend(
-        state
-            .cdp_agent_host_directory
-            .page_target_infos()
+    let target_infos = state.cdp_agent_host_directory.page_target_infos();
+    let targets = if target_infos.is_empty() {
+        vec![target_json(&state, DEFAULT_TARGET_URL)]
+    } else {
+        target_infos
             .into_iter()
-            .filter_map(|target_info| dynamic_target_json(&state, target_info)),
-    );
+            .filter_map(|target_info| dynamic_target_json(&state, target_info))
+            .collect()
+    };
     axum::Json(json!(targets))
 }
 
@@ -107,10 +108,11 @@ pub(super) async fn json_activate_target(
     Path(target_id): Path<String>,
     State(state): State<AppState>,
 ) -> Response {
-    if target_id == DEFAULT_TARGET_ID {
+    let route = state.cdp_agent_host_directory.lookup_page(&target_id);
+    if target_id == DEFAULT_TARGET_ID && route.is_none() {
         return (StatusCode::OK, "Target activated").into_response();
     }
-    let Some(route) = state.cdp_agent_host_directory.lookup_page(&target_id) else {
+    let Some(route) = route else {
         return no_such_target_response(&target_id);
     };
     match route.endpoint.activate_target(target_id.clone()).await {

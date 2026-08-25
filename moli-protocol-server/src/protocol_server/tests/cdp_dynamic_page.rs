@@ -1,11 +1,9 @@
 use super::*;
 
-async fn create_dynamic_target(
-    browser: &mut tokio_tungstenite::WebSocketStream<
-        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-    >,
-    command_id: u64,
-) -> String {
+type TestCdpSocket =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+async fn create_dynamic_target(browser: &mut TestCdpSocket, command_id: u64) -> String {
     send_cdp_command(
         browser,
         command_id,
@@ -21,22 +19,14 @@ async fn create_dynamic_target(
     .to_owned()
 }
 
-async fn connect_dynamic_page(
-    addr: std::net::SocketAddr,
-    target_id: &str,
-) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
+async fn connect_dynamic_page(addr: std::net::SocketAddr, target_id: &str) -> TestCdpSocket {
     connect_async(format!("ws://{addr}/devtools/page/{target_id}"))
         .await
         .expect("dynamic page websocket should connect")
         .0
 }
 
-async fn wait_for_websocket_close(
-    socket: &mut tokio_tungstenite::WebSocketStream<
-        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-    >,
-    label: &str,
-) {
+async fn wait_for_websocket_close(socket: &mut TestCdpSocket, label: &str) {
     let wait_for_close = async {
         loop {
             match socket.next().await {
@@ -59,9 +49,7 @@ fn response_by_id(messages: &[serde_json::Value], id: u64) -> &serde_json::Value
 }
 
 async fn enable_runtime_and_expect_default_context(
-    socket: &mut tokio_tungstenite::WebSocketStream<
-        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-    >,
+    socket: &mut TestCdpSocket,
     command_id: u64,
     session_id: Option<&str>,
     label: &str,
@@ -97,9 +85,7 @@ async fn enable_runtime_and_expect_default_context(
 }
 
 async fn puppeteer_auto_attach_existing_page(
-    browser: &mut tokio_tungstenite::WebSocketStream<
-        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-    >,
+    browser: &mut TestCdpSocket,
     command_id: u64,
     page_target_id: &str,
 ) -> String {
@@ -221,6 +207,74 @@ async fn fetch_server_response(
         .and_then(|status| status.parse::<u16>().ok())
         .expect("HTTP response status");
     (status, response[header_end + 4..].to_vec())
+}
+
+async fn dispatch_primary_click(socket: &mut TestCdpSocket, command_id: u64, x: u32, y: u32) {
+    for (offset, event_type) in [(0, "mousePressed"), (1, "mouseReleased")] {
+        let response = send_cdp_command(
+            socket,
+            command_id + offset,
+            "Input.dispatchMouseEvent",
+            None,
+            json!({
+                "type": event_type,
+                "x": x,
+                "y": y,
+                "button": "left",
+                "clickCount": 1
+            }),
+        )
+        .await;
+        assert!(
+            response_by_id(&response, command_id + offset)
+                .get("result")
+                .is_some()
+        );
+    }
+}
+
+async fn evaluate_page_surface(socket: &mut TestCdpSocket, command_id: u64) -> serde_json::Value {
+    let response = send_cdp_command(
+        socket,
+        command_id,
+        "Runtime.evaluate",
+        None,
+        json!({
+            "expression": "({ href: location.href, hidden: document.hidden, visibility: document.visibilityState, focused: document.hasFocus() })",
+            "returnByValue": true
+        }),
+    )
+    .await;
+    response_by_id(&response, command_id)["result"]["result"]["value"].clone()
+}
+
+fn assert_page_surface_active(surface: &serde_json::Value, expected_active: bool) {
+    assert_eq!(surface["hidden"], json!(!expected_active));
+    assert_eq!(
+        surface["visibility"],
+        json!(if expected_active { "visible" } else { "hidden" })
+    );
+    assert_eq!(surface["focused"], json!(expected_active));
+}
+
+async fn wait_for_target_list(
+    addr: std::net::SocketAddr,
+    label: &str,
+    predicate: impl Fn(&[serde_json::Value]) -> bool,
+) -> Vec<serde_json::Value> {
+    timeout(Duration::from_secs(5), async {
+        loop {
+            let response = fetch_server_json(addr, "/json/list").await;
+            if let Some(targets) = response.as_array()
+                && predicate(targets)
+            {
+                return targets.clone();
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("{label}"))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -490,6 +544,80 @@ async fn websocket_cdp_dynamic_page_routes_to_existing_target_owner() {
             .get("sessionId")
             .is_none()
     );
+
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn foreground_blank_click_activates_popup_browser_surface() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut opener, _) = connect_async(format!("ws://{addr}/devtools/page/{DEFAULT_TARGET_ID}"))
+        .await
+        .expect("connect default page websocket");
+    let popup_url = "data:text/html,%3Ctitle%3EForeground%20Popup%3C/title%3E";
+    let opener_url = format!(
+        "data:text/html,<title>Popup Opener</title>\
+         <a id='popup' href='{popup_url}' \
+         target='_blank' style='display:block;width:200px;height:100px'>open</a>"
+    );
+
+    let navigation = send_cdp_command(
+        &mut opener,
+        1,
+        "Page.navigate",
+        None,
+        json!({ "url": &opener_url }),
+    )
+    .await;
+    assert!(response_by_id(&navigation, 1).get("result").is_some());
+    dispatch_primary_click(&mut opener, 2, 20, 20).await;
+
+    let targets = wait_for_target_list(
+        addr,
+        "foreground popup should become the first browser surface",
+        |targets| {
+            targets.len() == 2
+                && targets[0]["id"] != json!(DEFAULT_TARGET_ID)
+                && targets[0]["title"] == json!("Foreground Popup")
+                && targets[1]["title"] == json!("Popup Opener")
+        },
+    )
+    .await;
+    let popup_target_id = targets[0]["id"]
+        .as_str()
+        .expect("popup target id")
+        .to_owned();
+    assert_eq!(targets[0]["title"], json!("Foreground Popup"));
+    assert_eq!(targets[1]["id"], json!(DEFAULT_TARGET_ID));
+    assert_eq!(targets[1]["title"], json!("Popup Opener"));
+    assert_eq!(targets[1]["url"], json!(&opener_url));
+
+    let opener_surface = evaluate_page_surface(&mut opener, 4).await;
+    assert_eq!(opener_surface["href"], json!(&opener_url));
+    assert_page_surface_active(&opener_surface, false);
+
+    let mut popup = connect_dynamic_page(addr, &popup_target_id).await;
+    let popup_surface = evaluate_page_surface(&mut popup, 5).await;
+    assert_page_surface_active(&popup_surface, true);
+
+    let (activate_status, _) =
+        fetch_server_response(addr, "GET", "/json/activate/moli-default").await;
+    assert_eq!(activate_status, 200);
+    wait_for_target_list(
+        addr,
+        "activating the opener should restore it as the browser surface",
+        |targets| {
+            targets
+                .first()
+                .is_some_and(|target| target["id"] == json!(DEFAULT_TARGET_ID))
+        },
+    )
+    .await;
+
+    let restored_opener = evaluate_page_surface(&mut opener, 6).await;
+    assert_page_surface_active(&restored_opener, true);
+    let demoted_popup = evaluate_page_surface(&mut popup, 7).await;
+    assert_page_surface_active(&demoted_popup, false);
 
     abort_test_cdp_server(server).await;
 }

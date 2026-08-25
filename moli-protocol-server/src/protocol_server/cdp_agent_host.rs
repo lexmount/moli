@@ -14,8 +14,6 @@ use parking_lot::Mutex;
 
 use crate::cdp_frontend::CdpFrontendEndpoint;
 
-use super::DEFAULT_TARGET_ID;
-
 #[derive(Clone, Default)]
 pub(super) struct SharedCdpAgentHostDirectory {
     inner: Arc<Mutex<CdpAgentHostDirectoryState>>,
@@ -32,12 +30,44 @@ struct CdpPageAgentHost {
     owner_id: u64,
     target_info: DevToolsTargetInfo,
     endpoint: CdpFrontendEndpoint,
+    is_active: bool,
 }
 
 #[derive(Clone)]
 pub(super) struct CdpPageAgentHostRoute {
     pub(super) endpoint: CdpFrontendEndpoint,
     pub(super) target_info: DevToolsTargetInfo,
+}
+
+impl CdpPageAgentHost {
+    fn browser_context_id(&self) -> Option<&str> {
+        self.target_info
+            .browser_context_id
+            .as_ref()
+            .map(|id| id.as_str())
+    }
+}
+
+impl CdpAgentHostDirectoryState {
+    fn activate_page_host(&mut self, owner_id: u64, target_id: &str) {
+        let Some(browser_context_id) = self
+            .page_hosts
+            .get(target_id)
+            .filter(|host| host.owner_id == owner_id)
+            .map(|host| host.browser_context_id().map(str::to_owned))
+        else {
+            return;
+        };
+
+        for host in self.page_hosts.values_mut().filter(|host| {
+            host.owner_id == owner_id && host.browser_context_id() == browser_context_id.as_deref()
+        }) {
+            host.is_active = false;
+        }
+        if let Some(host) = self.page_hosts.get_mut(target_id) {
+            host.is_active = true;
+        }
+    }
 }
 
 impl SharedCdpAgentHostDirectory {
@@ -59,7 +89,7 @@ impl SharedCdpAgentHostDirectory {
     pub(super) fn lookup_page(&self, target_id: &str) -> Option<CdpPageAgentHostRoute> {
         let state = self.inner.lock();
         let host = state.page_hosts.get(target_id)?;
-        (host.target_info.kind == DevToolsTargetKind::Page).then(|| CdpPageAgentHostRoute {
+        Some(CdpPageAgentHostRoute {
             endpoint: host.endpoint.clone(),
             target_info: host.target_info.clone(),
         })
@@ -67,18 +97,17 @@ impl SharedCdpAgentHostDirectory {
 
     pub(super) fn page_target_infos(&self) -> Vec<DevToolsTargetInfo> {
         let state = self.inner.lock();
-        let mut target_infos = state
-            .page_hosts
-            .values()
-            .filter(|host| host.target_info.kind == DevToolsTargetKind::Page)
-            .map(|host| host.target_info.clone())
-            .collect::<Vec<_>>();
-        target_infos.sort_by(|left, right| {
-            let left_id = left.target_id.as_ref().map(|id| id.as_str()).unwrap_or("");
-            let right_id = right.target_id.as_ref().map(|id| id.as_str()).unwrap_or("");
-            left_id.cmp(right_id)
+        let mut hosts = state.page_hosts.iter().collect::<Vec<_>>();
+        hosts.sort_by(|(left_id, left), (right_id, right)| {
+            right
+                .is_active
+                .cmp(&left.is_active)
+                .then_with(|| left_id.cmp(right_id))
         });
-        target_infos
+        hosts
+            .into_iter()
+            .map(|(_, host)| host.target_info.clone())
+            .collect()
     }
 
     pub(super) fn remove_owner(&self, owner_id: u64) {
@@ -99,9 +128,6 @@ impl SharedCdpAgentHostDirectory {
                 let Some(target_id) = page_target_id(&target_info) else {
                     return;
                 };
-                if target_id == DEFAULT_TARGET_ID {
-                    return;
-                }
                 let mut state = self.inner.lock();
                 if let Some(existing) = state.page_hosts.get(&target_id)
                     && existing.owner_id != owner_id
@@ -120,6 +146,7 @@ impl SharedCdpAgentHostDirectory {
                         owner_id,
                         target_info,
                         endpoint: endpoint.clone(),
+                        is_active: false,
                     },
                 );
             }
@@ -133,6 +160,9 @@ impl SharedCdpAgentHostDirectory {
                 {
                     host.target_info = target_info;
                 }
+            }
+            CdpTargetHostLifecycleDelta::Activated { target_id } => {
+                self.inner.lock().activate_page_host(owner_id, &target_id);
             }
             CdpTargetHostLifecycleDelta::Destroyed { target_id } => {
                 let endpoint = {

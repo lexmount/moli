@@ -304,6 +304,9 @@ pub(super) fn execute_devtools_create_target_command(
         }
     }
     let tab_target_id = conn.register_top_level_page_target(&target_id);
+    if !creating_background_target {
+        conn.notify_target_host_activated(&target_id);
+    }
     let created_target_id = target_id.clone();
 
     let mut attached_tab_sessions = Vec::new();
@@ -2916,26 +2919,11 @@ pub(super) async fn execute_devtools_activate_target_command_async(
         Some((ref active_target_id, _)) if active_target_id == &target_id
     ) && bc.background_target(&target_id).is_some()
     {
-        conn.handoff_navigation_engine_for_target_activation(&target_id);
-        let promoted = match conn.browser_context.as_mut() {
-            Some(browser_context) => {
-                browser_context
-                    .promote_background_target_to_active_slot_async(&target_id)
-                    .await
-            }
-            None => {
-                restore_previously_active_browser_context(
-                    conn,
-                    previously_active_browser_context_id.as_deref(),
-                );
-                return Err(DevToolsError::new(
-                    DevToolsErrorKind::NoSuchTarget,
-                    "BrowserContextNotLoaded",
-                ));
-            }
-        };
-        match promoted {
-            Ok(true) => conn.refresh_active_browser_context_loader_async().await,
+        match conn
+            .promote_background_target_to_active_for_connection_async(&target_id)
+            .await
+        {
+            Ok(true) => {}
             Ok(false) => {
                 restore_previously_active_browser_context(
                     conn,

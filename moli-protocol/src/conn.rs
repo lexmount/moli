@@ -120,6 +120,7 @@ pub use moli_protocol_cdp::{
 pub enum CdpTargetHostLifecycleDelta {
     Created(DevToolsTargetInfo),
     InfoChanged(DevToolsTargetInfo),
+    Activated { target_id: String },
     Destroyed { target_id: String },
 }
 
@@ -2652,6 +2653,7 @@ impl CdpConnection {
             .await?;
         if promoted {
             self.refresh_active_browser_context_loader_async().await;
+            self.notify_target_host_activated(target_id);
         }
         Ok(promoted)
     }
@@ -3851,6 +3853,7 @@ impl CdpConnection {
         self.insert_browser_context(browser_context);
         let default_target_id = self.default_target_id().to_owned();
         self.register_top_level_page_target(&default_target_id);
+        self.notify_target_host_activated(&default_target_id);
     }
 
     pub fn enable_default_target_on_auto_attach(&mut self) {
@@ -3933,6 +3936,12 @@ impl CdpConnection {
         if let Some(observer) = self.target_host_lifecycle_observer.as_ref() {
             observer.notify(delta);
         }
+    }
+
+    pub(crate) fn notify_target_host_activated(&self, target_id: &str) {
+        self.notify_target_host_lifecycle(CdpTargetHostLifecycleDelta::Activated {
+            target_id: target_id.to_owned(),
+        });
     }
 }
 

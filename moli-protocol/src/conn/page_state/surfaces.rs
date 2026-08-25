@@ -1,7 +1,7 @@
 use super::super::cookie_manager_surface::BrowserContextCookieManagerSurfaceSnapshot;
 use super::super::{
     BrowserContext, DocumentStartScript, EmulatedDeviceMetrics, EmulatedGeolocationOverrideState,
-    EmulatedNetworkConditions, EmulatedViewportSurface, ParkedPageSessionState,
+    EmulatedNetworkConditions, EmulatedViewportSurface, ParkedPageSessionState, TargetRuntimeSlot,
     viewport_surface_install_script,
 };
 #[cfg(test)]
@@ -358,6 +358,13 @@ impl BrowserContext {
             default_state = ParkedPageSessionState::default();
             &default_state
         };
+        self.generated_surface_override_script_for_parked_state(state)
+    }
+
+    fn generated_surface_override_script_for_parked_state(
+        &self,
+        state: &ParkedPageSessionState,
+    ) -> Option<DocumentStartScript> {
         Self::generated_surface_override_script_from_inputs(&SurfaceOverrideInputs::from_parked(
             state,
             self.default_network_conditions
@@ -367,6 +374,22 @@ impl BrowserContext {
                 .or_else(|| self.global_geolocation_override.clone()),
             self.default_emulated_device_metrics.clone(),
         ))
+    }
+
+    pub(crate) async fn apply_parked_surface_overrides_to_loaded_page_async(
+        &self,
+        runtime_slot: &mut TargetRuntimeSlot,
+        state: &ParkedPageSessionState,
+    ) -> Result<(), String> {
+        let Some(script) = self.generated_surface_override_script_for_parked_state(state) else {
+            return Ok(());
+        };
+        let Some(page) = runtime_slot.loaded_page_mut() else {
+            return Ok(());
+        };
+        page.run_page_surface_override_script_async(&script.source)
+            .await
+            .map_err(|error| format!("failed to hide demoted page surface: {error}"))
     }
 
     pub(crate) fn generated_surface_override_script_for_active_target(
