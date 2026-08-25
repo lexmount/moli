@@ -3675,6 +3675,153 @@ fn anchor_download_synthetic_click_records_pending_download_without_navigation()
 }
 
 #[test]
+fn trusted_alt_click_downloads_an_anchor_without_a_download_attribute() {
+    let mut vm = new_parsed_test_vm(
+        "https://anchor-alt-download.test/path/index.html",
+        r#"<!doctype html><html><head><style>
+            body { margin: 0; }
+            #download_link { display: block; width: 100px; height: 100px; }
+        </style></head><body>
+            <a id="download_link" href="/download.txt">download</a>
+        </body></html>"#,
+    );
+
+    vm.dispatch_mouse_event_at_point_with_pointer_and_modifiers(
+        20.0,
+        20.0,
+        "mousedown",
+        0,
+        None,
+        1,
+        0.0,
+        0.0,
+        crate::runtime::RendererPointerEventProperties::default(),
+        1,
+    )
+    .expect("alt mousedown should dispatch");
+    let outcome = vm
+        .dispatch_mouse_event_at_point_with_pointer_and_modifiers(
+            20.0,
+            20.0,
+            "mouseup",
+            0,
+            None,
+            1,
+            0.0,
+            0.0,
+            crate::runtime::RendererPointerEventProperties::default(),
+            1,
+        )
+        .expect("alt mouseup should dispatch");
+
+    let pending_download = outcome
+        .pending_download
+        .expect("trusted alt click should request a download");
+    assert_eq!(
+        pending_download.url,
+        "https://anchor-alt-download.test/download.txt"
+    );
+    assert!(pending_download.suggested_filename.is_none());
+    assert!(vm.take_pending_location_navigation_with_seed().is_none());
+    assert!(vm.take_pending_popup_activations().is_empty());
+}
+
+#[test]
+fn window_open_in_click_listener_uses_current_input_popup_disposition() {
+    #[cfg(target_os = "macos")]
+    let (platform_modifier, synthetic_modifier) = (4, "metaKey: true");
+    #[cfg(not(target_os = "macos"))]
+    let (platform_modifier, synthetic_modifier) = (2, "ctrlKey: true");
+
+    let mut trusted = new_storage_test_vm("https://window-open-input-policy.test/path/index.html");
+    trusted
+        .eval(
+            r#"
+(() => {
+  const html = document.createElement('html');
+  const body = document.createElement('body');
+  body.style.margin = '0';
+  const button = document.createElement('button');
+  button.id = 'go';
+  button.type = 'button';
+  button.style.cssText = 'display:block;width:100px;height:100px';
+  button.onclick = () => window.open('/trusted', '_blank');
+  body.appendChild(button);
+  html.appendChild(body);
+  document.appendChild(html);
+})()
+"#,
+        )
+        .expect("trusted window.open fixture should initialize");
+    trusted
+        .dispatch_mouse_event_at_point_with_pointer_and_modifiers(
+            20.0,
+            20.0,
+            "mousedown",
+            0,
+            None,
+            1,
+            0.0,
+            0.0,
+            crate::runtime::RendererPointerEventProperties::default(),
+            platform_modifier,
+        )
+        .expect("new-tab-modified mousedown should dispatch");
+    trusted
+        .dispatch_mouse_event_at_point_with_pointer_and_modifiers(
+            20.0,
+            20.0,
+            "mouseup",
+            0,
+            None,
+            1,
+            0.0,
+            0.0,
+            crate::runtime::RendererPointerEventProperties::default(),
+            platform_modifier,
+        )
+        .expect("new-tab-modified mouseup should dispatch");
+    let trusted_popups = trusted.take_pending_popup_activations();
+    assert_eq!(trusted_popups.len(), 1);
+    assert_eq!(
+        trusted_popups[0].disposition(),
+        crate::RendererPopupDisposition::Background
+    );
+
+    let mut synthetic =
+        new_storage_test_vm("https://window-open-synthetic-policy.test/path/index.html");
+    synthetic
+        .eval(
+            r#"
+(() => {
+  const html = document.createElement('html');
+  const body = document.createElement('body');
+  const button = document.createElement('button');
+  button.id = 'go';
+  button.type = 'button';
+  button.onclick = () => window.open('/synthetic', '_blank');
+  body.appendChild(button);
+  html.appendChild(body);
+  document.appendChild(html);
+})()
+"#,
+        )
+        .expect("synthetic window.open fixture should initialize");
+    synthetic
+        .eval(&format!(
+            "go.dispatchEvent(new MouseEvent('click', {{ button: 0, {synthetic_modifier} }})); 'done'"
+        ))
+        .expect("synthetic modified click should dispatch");
+    let synthetic_popups = synthetic.take_pending_popup_activations();
+    assert_eq!(synthetic_popups.len(), 1);
+    assert_eq!(
+        synthetic_popups[0].disposition(),
+        crate::RendererPopupDisposition::Foreground,
+        "a synthesized modifier cannot create a tab-under"
+    );
+}
+
+#[test]
 fn keyboard_activation_click_preserves_modifiers() {
     let mut vm = new_parsed_test_vm(
         "https://keyboard-activation-modifiers.test/path/index.html",

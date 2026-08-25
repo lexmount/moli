@@ -20464,6 +20464,10 @@ async fn service_worker_clients_open_window_request_records_popup_activation() {
         popups[0].source(),
         crate::RendererPopupActivationSource::BrowserContext
     ));
+    assert_eq!(
+        popups[0].disposition(),
+        crate::RendererPopupDisposition::Foreground
+    );
     assert!(vm.has_pending_lightweight_popup_document_loads());
 
     drain_service_worker_test_until_popup_loads_settle(

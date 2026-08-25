@@ -1052,6 +1052,18 @@ async fn window_open_hands_off_session_storage_snapshot_and_initial_storage_key(
 
     tokio::task::LocalSet::new().run_until(async {
     ctx.process_async(json!({
+        "id": 1200,
+        "method": "Target.attachToTarget",
+        "params": { "targetId": "TID-popup-storage-opener" }
+    }))
+    .await;
+    let opener_session_id = take_response_by_id(&mut ctx, 1200)["result"]["sessionId"]
+        .as_str()
+        .expect("opener session id")
+        .to_owned();
+    ctx.sent.clear();
+
+    ctx.process_async(json!({
         "id": 1201,
         "method": "Runtime.evaluate",
         "params": {
@@ -1133,8 +1145,9 @@ async fn window_open_hands_off_session_storage_snapshot_and_initial_storage_key(
         "attached popup cross-origin navigation commit",
         |conn| {
             conn.browser_context_by_id("BID-popup-storage")
-                .and_then(|browser_context| browser_context.background_target(&popup_target_id))
-                .and_then(|target| target.loaded_page())
+                .and_then(|browser_context| {
+                    loaded_page_for_target(browser_context, &popup_target_id)
+                })
                 .is_some_and(|page| page.final_url().as_str() == first_cross_origin_url)
         },
     )
@@ -1166,6 +1179,7 @@ async fn window_open_hands_off_session_storage_snapshot_and_initial_storage_key(
     ctx.process_async(json!({
         "id": 1204,
         "method": "Runtime.evaluate",
+        "sessionId": opener_session_id,
         "params": {
             "expression": format!(
                 "(() => {{ sessionStorage.setItem('cross-origin-secret', 'opener-only'); return window.open({cross_origin_url:?}, '_blank') !== null; }})()"
@@ -1182,7 +1196,7 @@ async fn window_open_hands_off_session_storage_snapshot_and_initial_storage_key(
                 "value": true
             }
         }),
-        None,
+        Some(&opener_session_id),
     );
     let cross_origin_created = ctx
         .sent
@@ -1252,9 +1266,8 @@ async fn window_open_hands_off_session_storage_snapshot_and_initial_storage_key(
         |conn| {
             conn.browser_context_by_id("BID-popup-storage")
                 .and_then(|browser_context| {
-                    browser_context.background_target(&cross_origin_target_id)
+                    loaded_page_for_target(browser_context, &cross_origin_target_id)
                 })
-                .and_then(|target| target.loaded_page())
                 .is_some_and(|page| page.final_url().as_str() == cross_origin_url)
         },
     )
@@ -1680,16 +1693,29 @@ async fn window_open_named_target_reuses_existing_popup_target() {
             )
             .await;
             ctx.process_async(json!({
-                "id": 13,
-                "method": "Page.enable"
+                "id": 12,
+                "method": "Target.attachToTarget",
+                "params": { "targetId": "TID-opener-name" }
             }))
             .await;
-            ctx.expect_result(13, json!({}), None);
+            let opener_session_id = take_response_by_id(&mut ctx, 12)["result"]["sessionId"]
+                .as_str()
+                .expect("opener session id")
+                .to_owned();
+            ctx.sent.clear();
+            ctx.process_async(json!({
+                "id": 13,
+                "method": "Page.enable",
+                "sessionId": opener_session_id
+            }))
+            .await;
+            ctx.expect_result(13, json!({}), Some(&opener_session_id));
             ctx.sent.clear();
 
             ctx.process_async(json!({
                 "id": 14,
                 "method": "Runtime.evaluate",
+                "sessionId": opener_session_id,
                 "params": {
                     "expression": "window.open('data:text/html,first-popup', 'reportWindow') !== null"
                 }
@@ -1719,6 +1745,7 @@ async fn window_open_named_target_reuses_existing_popup_target() {
             ctx.process_async(json!({
                 "id": 15,
                 "method": "Runtime.evaluate",
+                "sessionId": opener_session_id,
                 "params": {
                     "expression": "window.open('data:text/html,second-popup', 'reportWindow') !== null"
                 }
@@ -1761,11 +1788,22 @@ async fn window_open_named_target_reuses_existing_popup_target() {
                 changed["params"]["targetInfo"]["url"],
                 json!("data:text/html,second-popup")
             );
+            ctx.wait_until_scheduler_state("reused named popup remains selected", |conn| {
+                conn.browser_context_by_id("BID-popup-name")
+                    .is_some_and(|browser_context| {
+                        browser_context.active_target_id() == Some(target_id.as_str())
+                            && loaded_page_for_target(browser_context, &target_id).is_some_and(
+                                |page| {
+                                    page.final_url().as_str() == "data:text/html,second-popup"
+                                },
+                            )
+                    })
+            })
+            .await;
             let browser_context = ctx.conn.browser_context.as_ref().unwrap();
-            assert_eq!(browser_context.background_targets.len(), 1);
-            assert_eq!(browser_context.background_targets[0].target_id(), target_id);
+            assert_eq!(browser_context.active_target_id(), Some(target_id.as_str()));
             assert_eq!(
-                browser_context.background_targets[0].target_url(),
+                browser_context.target_url(),
                 "data:text/html,second-popup"
             );
         })
@@ -1958,6 +1996,215 @@ async fn anchor_blank_target_uses_implicit_noopener() {
         }),
         "anchor target=_blank should retain its DevTools creator while denying DOM opener access: {sent:?}"
     );
+}
+
+async fn dispatch_anchor_left_click(ctx: &mut TestContext, command_id: u64, modifiers: u8) {
+    for (offset, event_type, buttons) in [(0, "mousePressed", 1), (1, "mouseReleased", 0)] {
+        ctx.process_async(json!({
+            "id": command_id + offset,
+            "method": "Input.dispatchMouseEvent",
+            "params": {
+                "type": event_type,
+                "x": 20,
+                "y": 20,
+                "button": "left",
+                "buttons": buttons,
+                "clickCount": 1,
+                "modifiers": modifiers
+            }
+        }))
+        .await;
+        ctx.expect_result(command_id + offset, json!({}), None);
+    }
+}
+
+fn popup_target_id_for_url(messages: &[serde_json::Value], url: &str) -> String {
+    messages
+        .iter()
+        .find(|message| {
+            message["method"] == json!("Target.targetCreated")
+                && message["params"]["targetInfo"]["type"] == json!("page")
+                && message["params"]["targetInfo"]["url"] == json!(url)
+        })
+        .and_then(|message| message["params"]["targetInfo"]["targetId"].as_str())
+        .unwrap_or_else(|| panic!("anchor click should create an exact page target: {messages:#?}"))
+        .to_owned()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn anchor_left_click_promotes_blank_target_to_foreground() {
+    const POPUP_HREF: &str = "data:text/html,%3Cmain%3Eforeground-popup%3C/main%3E";
+    const POPUP_URL: &str = "data:text/html,<main>foreground-popup</main>";
+    let mut ctx = TestContext::new();
+    ctx.enable_background_navigation_scheduler_for_test();
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            load_bc_with_titled_page_async(
+                &mut ctx,
+                "BID-anchor-foreground",
+                "TID-anchor-foreground-opener",
+                &format!(
+                    "<a href='{POPUP_HREF}' target='_blank' style='position:absolute;left:0;top:0;width:100px;height:100px;display:block'>popup</a>"
+                ),
+            )
+            .await;
+            let _ = ctx.take_all();
+
+            dispatch_anchor_left_click(&mut ctx, 16_100, 0).await;
+
+            let sent = ctx.take_all();
+            let popup_target_id = popup_target_id_for_url(&sent, POPUP_URL);
+            let browser_context = ctx
+                .conn
+                .browser_context_by_id("BID-anchor-foreground")
+                .expect("anchor browser context should remain available");
+            assert_eq!(
+                browser_context.active_target_id(),
+                Some(popup_target_id.as_str())
+            );
+            assert!(
+                browser_context
+                    .background_target("TID-anchor-foreground-opener")
+                    .is_some(),
+                "foreground popup should demote its opener"
+            );
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn anchor_left_click_activates_popup_while_initial_navigation_waits_for_debugger() {
+    const POPUP_HREF: &str =
+        "data:text/html,%3Cmain%3Edebugger-waiting-foreground-popup%3C/main%3E";
+    const POPUP_URL: &str = "data:text/html,<main>debugger-waiting-foreground-popup</main>";
+    let mut ctx = TestContext::new();
+    ctx.enable_background_navigation_scheduler_for_test();
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            load_bc_with_titled_page_async(
+                &mut ctx,
+                "BID-anchor-debugger-wait",
+                "TID-anchor-debugger-wait-opener",
+                &format!(
+                    "<a href='{POPUP_HREF}' target='_blank' style='position:absolute;left:0;top:0;width:100px;height:100px;display:block'>popup</a>"
+                ),
+            )
+            .await;
+            let _ = ctx.take_all();
+            ctx.process_async(json!({
+                "id": 16_150,
+                "method": "Target.setAutoAttach",
+                "params": {
+                    "autoAttach": true,
+                    "waitForDebuggerOnStart": true,
+                    "flatten": true
+                }
+            }))
+            .await;
+            ctx.expect_result(16_150, json!({}), None);
+            let _ = ctx.take_all();
+
+            dispatch_anchor_left_click(&mut ctx, 16_151, 0).await;
+
+            let sent = ctx.take_all();
+            let popup_target_id = popup_target_id_for_url(&sent, POPUP_URL);
+            let popup_session_id = sent
+                .iter()
+                .find(|message| {
+                    message["method"] == json!("Target.attachedToTarget")
+                        && message["params"]["targetInfo"]["type"] == json!("page")
+                        && message["params"]["targetInfo"]["targetId"]
+                            == json!(popup_target_id)
+                })
+                .and_then(|message| message["params"]["sessionId"].as_str())
+                .unwrap_or_else(|| {
+                    panic!("foreground popup should be auto-attached: {sent:#?}")
+                })
+                .to_owned();
+            let browser_context = ctx
+                .conn
+                .browser_context_by_id("BID-anchor-debugger-wait")
+                .expect("anchor browser context should remain available");
+            assert_eq!(
+                browser_context.active_target_id(),
+                Some(popup_target_id.as_str()),
+                "foreground selection must not wait for initial navigation"
+            );
+            assert!(
+                browser_context
+                    .active_target
+                    .runtime_slot
+                    .loaded_page()
+                    .is_some_and(|page| moli_url::is_about_blank(page.final_url())),
+                "waitForDebuggerOnStart should retain the active popup's initial about:blank document"
+            );
+
+            ctx.process_async(json!({
+                "id": 16_153,
+                "method": "Runtime.runIfWaitingForDebugger",
+                "sessionId": popup_session_id
+            }))
+            .await;
+            ctx.expect_result(16_153, json!({}), Some(&popup_session_id));
+            ctx.wait_until_scheduler_state("resumed foreground popup navigation", |conn| {
+                conn.browser_context_by_id("BID-anchor-debugger-wait")
+                    .is_some_and(|browser_context| {
+                        browser_context.active_target_id() == Some(popup_target_id.as_str())
+                            && browser_context
+                                .active_target
+                                .runtime_slot
+                                .loaded_page()
+                                .is_some_and(|page| page.final_url().as_str() == POPUP_URL)
+                    })
+            })
+            .await;
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn anchor_platform_new_tab_click_keeps_blank_target_in_background() {
+    const POPUP_HREF: &str = "data:text/html,%3Cmain%3Ebackground-popup%3C/main%3E";
+    const POPUP_URL: &str = "data:text/html,<main>background-popup</main>";
+    let mut ctx = TestContext::new();
+    ctx.enable_background_navigation_scheduler_for_test();
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            load_bc_with_titled_page_async(
+                &mut ctx,
+                "BID-anchor-background",
+                "TID-anchor-background-opener",
+                &format!(
+                    "<a href='{POPUP_HREF}' target='_blank' style='position:absolute;left:0;top:0;width:100px;height:100px;display:block'>popup</a>"
+                ),
+            )
+            .await;
+            let _ = ctx.take_all();
+
+            #[cfg(target_os = "macos")]
+            let platform_new_tab_modifier = 4;
+            #[cfg(not(target_os = "macos"))]
+            let platform_new_tab_modifier = 2;
+            dispatch_anchor_left_click(&mut ctx, 16_200, platform_new_tab_modifier).await;
+
+            let sent = ctx.take_all();
+            let popup_target_id = popup_target_id_for_url(&sent, POPUP_URL);
+            let browser_context = ctx
+                .conn
+                .browser_context_by_id("BID-anchor-background")
+                .expect("anchor browser context should remain available");
+            assert_eq!(
+                browser_context.active_target_id(),
+                Some("TID-anchor-background-opener")
+            );
+            assert!(
+                browser_context
+                    .background_target(&popup_target_id)
+                    .is_some(),
+                "platform-new-tab-clicked popup should remain in the background"
+            );
+        })
+        .await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

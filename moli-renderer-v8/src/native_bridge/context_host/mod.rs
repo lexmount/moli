@@ -869,6 +869,7 @@ pub(crate) struct JsContextHost {
     timezone_override: Option<String>,
     idle_override: Option<crate::protocol_types::EmulatedIdleOverride>,
     protocol_user_gesture_activation_depth: usize,
+    current_input_popup_disposition: Option<crate::RendererPopupDisposition>,
     webdriver_bidi_file_prompt_handler_stack: Vec<String>,
     emulated_media: crate::protocol_types::EmulatedMediaOverrides,
     viewport_surface: Option<crate::protocol_types::ViewportSurface>,

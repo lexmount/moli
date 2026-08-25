@@ -209,6 +209,10 @@ impl CdpConnection {
                 )
                 .await
             }
+            ReadyProtocolSchedulerWork::PopupTargetActivationAction(action) => {
+                crate::domains::target::complete_popup_target_activation_action_async(self, action)
+                    .await
+            }
             ReadyProtocolSchedulerWork::PageTargetTerminationOwnerAction(action) => {
                 crate::domains::page::complete_page_target_termination_owner_action_async(
                     self, action,

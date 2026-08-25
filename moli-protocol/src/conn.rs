@@ -45,6 +45,7 @@ mod fetch_support;
 mod inspector_route;
 mod output;
 mod page_state;
+mod popup_activation_work;
 mod popup_navigation_work;
 mod protocol_output;
 mod renderer_command_turn;
@@ -499,6 +500,7 @@ pub(crate) use output::{
     build_command_success_response,
 };
 pub(crate) use page_state::{LoadedNavigationPageCommit, LoadedNavigationRendererAttachmentCommit};
+pub(crate) use popup_activation_work::PopupTargetActivationAction;
 pub(crate) use popup_navigation_work::{
     PopupTargetNavigationKind, PopupTargetNavigationOwnerAction,
 };
@@ -2731,6 +2733,21 @@ impl CdpConnection {
                 publish_sequence,
                 action,
             );
+        self.scheduler_state
+            .push_scheduler_event(CdpSchedulerEvent::ProtocolWorkPublished { work });
+    }
+
+    pub(crate) fn publish_popup_target_activation_action(
+        &mut self,
+        action: PopupTargetActivationAction,
+    ) {
+        let publish_sequence = self
+            .scheduler_state
+            .allocate_protocol_work_publish_sequence();
+        let work = crate::domains::activity::ProtocolSchedulerWork::popup_target_activation_action(
+            publish_sequence,
+            action,
+        );
         self.scheduler_state
             .push_scheduler_event(CdpSchedulerEvent::ProtocolWorkPublished { work });
     }

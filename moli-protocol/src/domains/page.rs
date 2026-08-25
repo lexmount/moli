@@ -2467,7 +2467,7 @@ mod producer_tests {
         RendererPageCreationArtifacts, RendererPendingDownloadActivation,
         RendererPendingFileChooserActivation, RendererPendingJavaScriptDialog,
         RendererPendingPopupActivation, RendererPendingSameDocumentNavigation,
-        RendererWindowDocumentSource, SubresourceResponseBody,
+        RendererPopupDisposition, RendererWindowDocumentSource, SubresourceResponseBody,
     };
     use serde_json::{Value, json};
 
@@ -2973,6 +2973,7 @@ mod producer_tests {
                         Some(POPUP_ID),
                         "about:blank".to_owned(),
                         "_blank".to_owned(),
+                        RendererPopupDisposition::Background,
                     )],
                 ),
             ));
@@ -3041,6 +3042,7 @@ mod producer_tests {
                         Some(POPUP_ID),
                         "about:blank".to_owned(),
                         "_blank".to_owned(),
+                        RendererPopupDisposition::Background,
                     )],
                 ),
             )
@@ -3196,6 +3198,7 @@ mod producer_tests {
                         Some(POPUP_ID),
                         "about:blank".to_owned(),
                         "_blank".to_owned(),
+                        RendererPopupDisposition::Background,
                     )],
                 ),
             )
@@ -3515,6 +3518,7 @@ mod producer_tests {
                         None,
                         "data:text/html,%3Cmain%3Eordered-popup%3C/main%3E".to_owned(),
                         "_blank".to_owned(),
+                        RendererPopupDisposition::Background,
                     )],
                 ),
             )
@@ -4736,6 +4740,7 @@ mod producer_tests {
                         None,
                         "data:text/html,%3Cmain%3Eprepared-popup%3C/main%3E".to_owned(),
                         "_blank".to_owned(),
+                        RendererPopupDisposition::Background,
                     )],
                 ),
             ));
@@ -4819,6 +4824,7 @@ mod producer_tests {
                         None,
                         "data:text/html,%3Cmain%3Eautomation-popup%3C/main%3E".to_owned(),
                         "_blank".to_owned(),
+                        RendererPopupDisposition::Background,
                     )],
                 ),
             ));
@@ -4865,6 +4871,7 @@ mod producer_tests {
             None,
             "https://example.test/self".to_owned(),
             "_self".to_owned(),
+            RendererPopupDisposition::Background,
         );
     }
 

@@ -1818,8 +1818,8 @@ impl CdpScheduler {
             let blocked_by_prior_residence = target_ids
                 .iter()
                 .any(|target_id| blocked_target_ids.contains(target_id));
-            let blocked_by_navigation =
-                self.protocol_targets_have_inflight_background_navigation(&target_ids);
+            let blocked_by_navigation = !residence.bypasses_inflight_navigation_gate()
+                && self.protocol_targets_have_inflight_background_navigation(&target_ids);
             if blocked_by_prior_residence || blocked_by_navigation {
                 if target_ids.is_empty() {
                     retained.push_back(residence);
@@ -1892,7 +1892,9 @@ impl CdpScheduler {
             {
                 continue;
             }
-            if self.protocol_targets_have_inflight_background_navigation(&target_ids) {
+            if !residence.bypasses_inflight_navigation_gate()
+                && self.protocol_targets_have_inflight_background_navigation(&target_ids)
+            {
                 if target_ids.is_empty() {
                     return None;
                 }

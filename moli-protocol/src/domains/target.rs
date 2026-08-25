@@ -22,7 +22,7 @@ mod worker_target;
 
 pub(in crate::domains) use browser_context::devtools_client_window_info_for_target;
 pub(crate) use lifecycle::{
-    PopupTargetCreation, PopupTargetOpenerIdentity,
+    PopupTargetCreation, PopupTargetOpenerIdentity, complete_popup_target_activation_action_async,
     complete_popup_target_navigation_owner_action_async,
     create_popup_target_from_renderer_output_background_events_async,
     emit_target_info_changed_for_session_owner_background_event,

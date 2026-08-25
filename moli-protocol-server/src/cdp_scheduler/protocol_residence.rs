@@ -108,6 +108,13 @@ pub(super) enum ClientTurnPredecessor {
 }
 
 impl ProtocolSchedulerResidence {
+    pub(super) fn bypasses_inflight_navigation_gate(&self) -> bool {
+        matches!(
+            self,
+            Self::ProtocolWork { work, .. } if work.bypasses_inflight_navigation_gate()
+        )
+    }
+
     pub(super) fn should_yield_to_client_turn(&self) -> bool {
         matches!(
             self,

@@ -24,6 +24,17 @@ pub enum RendererPopupActivationSource {
     BrowserContext,
 }
 
+/// Browser-owner selection policy for an accepted auxiliary browsing context.
+///
+/// This records only whether the target should become the active target. It
+/// deliberately does not distinguish tab and window chrome, which the
+/// renderer target model does not expose.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RendererPopupDisposition {
+    Foreground,
+    Background,
+}
+
 /// A renderer-accepted request to create or reuse an auxiliary browsing
 /// context.
 ///
@@ -34,6 +45,7 @@ pub enum RendererPopupActivationSource {
 #[derive(Debug, Clone)]
 pub struct RendererPendingPopupActivation {
     source: RendererPopupActivationSource,
+    disposition: RendererPopupDisposition,
     popup_id: Option<u64>,
     url: String,
     target_name: String,
@@ -49,6 +61,7 @@ impl RendererPendingPopupActivation {
         popup_id: Option<u64>,
         url: String,
         target_name: String,
+        disposition: RendererPopupDisposition,
     ) -> Self {
         assert!(
             !is_special_browsing_context_target(&target_name),
@@ -60,6 +73,7 @@ impl RendererPendingPopupActivation {
                 window,
                 exposes_opener,
             },
+            disposition,
             popup_id,
             url,
             target_name,
@@ -68,13 +82,19 @@ impl RendererPendingPopupActivation {
         }
     }
 
-    pub fn browser_context(popup_id: Option<u64>, url: String, target_name: String) -> Self {
+    pub fn browser_context(
+        popup_id: Option<u64>,
+        url: String,
+        target_name: String,
+        disposition: RendererPopupDisposition,
+    ) -> Self {
         assert!(
             !is_special_browsing_context_target(&target_name),
             "browser-context popup activation must not carry a special target"
         );
         Self {
             source: RendererPopupActivationSource::BrowserContext,
+            disposition,
             popup_id,
             url,
             target_name,
@@ -106,6 +126,10 @@ impl RendererPendingPopupActivation {
         &self.source
     }
 
+    pub fn disposition(&self) -> RendererPopupDisposition {
+        self.disposition
+    }
+
     pub fn popup_id(&self) -> Option<u64> {
         self.popup_id
     }
@@ -123,6 +147,7 @@ impl RendererPendingPopupActivation {
         self,
     ) -> (
         RendererPopupActivationSource,
+        RendererPopupDisposition,
         Option<u64>,
         String,
         String,
@@ -131,6 +156,7 @@ impl RendererPendingPopupActivation {
     ) {
         (
             self.source,
+            self.disposition,
             self.popup_id,
             self.url,
             self.target_name,
@@ -143,6 +169,7 @@ impl RendererPendingPopupActivation {
 impl PartialEq for RendererPendingPopupActivation {
     fn eq(&self, other: &Self) -> bool {
         self.source == other.source
+            && self.disposition == other.disposition
             && self.popup_id == other.popup_id
             && self.url == other.url
             && self.target_name == other.target_name

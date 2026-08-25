@@ -89,6 +89,7 @@ pub(super) async fn emit_prepared(
         } = prepared;
         let (
             source,
+            disposition,
             popup_id,
             url,
             target_name,
@@ -110,6 +111,7 @@ pub(super) async fn emit_prepared(
             target_name,
             opener,
             can_access_opener,
+            disposition,
             session_storage_store,
             initial_empty_document_storage_key,
         );
@@ -198,7 +200,7 @@ mod tests {
         PageId,
         page::{
             RendererDocumentLifecycleIdentity, RendererDocumentToken, RendererFrameToken,
-            RendererLifecycleEpoch,
+            RendererLifecycleEpoch, RendererPopupDisposition,
         },
     };
 
@@ -243,6 +245,7 @@ mod tests {
             popup_id,
             url.to_owned(),
             "_blank".to_owned(),
+            RendererPopupDisposition::Background,
         )
     }
 
@@ -457,6 +460,7 @@ mod tests {
                 Some(46),
                 "about:blank#removed-context".to_owned(),
                 "_blank".to_owned(),
+                RendererPopupDisposition::Background,
             )],
         )
         .await;

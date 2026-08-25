@@ -9,7 +9,7 @@ use crate::util::{
 };
 use crate::{
     RendererInputDispatchOutcome, RendererPendingDownloadActivation,
-    RendererPendingFileChooserActivation,
+    RendererPendingFileChooserActivation, RendererPopupDisposition,
     document_runtime::{DomHandle, EventTargetHandle},
     frame_owner_model::DocumentId,
     native_bridge::context_host::ChildBrowsingContextBootstrap,
@@ -742,6 +742,44 @@ fn click_handle_internal(
     modifiers: u8,
     user_initiated: bool,
 ) -> RendererInputDispatchOutcome {
+    let popup_disposition = current_click_popup_disposition(button, modifiers, user_initiated);
+    let previous_popup_disposition = unsafe { &mut *runtime_ptr }
+        .replace_current_input_popup_disposition(Some(popup_disposition));
+    let outcome = click_handle_internal_with_current_input(
+        scope,
+        runtime_ptr,
+        handle,
+        x,
+        y,
+        button,
+        buttons,
+        click_detail,
+        modifiers,
+        user_initiated,
+    );
+    let replaced_popup_disposition = unsafe { &mut *runtime_ptr }
+        .replace_current_input_popup_disposition(previous_popup_disposition);
+    assert_eq!(
+        replaced_popup_disposition,
+        Some(popup_disposition),
+        "the current click popup disposition must remain scoped to its activation"
+    );
+    outcome
+}
+
+#[allow(clippy::too_many_arguments)]
+fn click_handle_internal_with_current_input(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+    x: f64,
+    y: f64,
+    button: i32,
+    buttons: i32,
+    click_detail: i32,
+    modifiers: u8,
+    user_initiated: bool,
+) -> RendererInputDispatchOutcome {
     let runtime = unsafe { &*runtime_ptr };
     if is_disabled_form_control(runtime, handle) {
         return RendererInputDispatchOutcome {
@@ -815,6 +853,7 @@ fn click_handle_internal(
             handle,
             x,
             y,
+            button,
             modifiers,
             user_initiated,
             &pending_child_navigations_before_default,
@@ -875,6 +914,7 @@ fn click_handle_internal(
             handle,
             x,
             y,
+            button,
             modifiers,
             user_initiated,
             &pending_child_navigations_before_default,
@@ -922,6 +962,7 @@ fn click_handle_internal(
                         handle,
                         x,
                         y,
+                        button,
                         modifiers,
                         user_initiated,
                         &pending_child_navigations_before_click,
@@ -1147,8 +1188,19 @@ pub(crate) fn perform_click_default_action_for_dispatched_event(
     }
     let x = object_number_property(scope, event, "clientX").unwrap_or(0.0);
     let y = object_number_property(scope, event, "clientY").unwrap_or(0.0);
+    let button = object_number_property(scope, event, "button").unwrap_or(0.0) as i32;
     let modifiers = mouse_event_modifier_bits(scope, event);
-    let _ = perform_click_default_action(scope, runtime_ptr, handle, x, y, modifiers, false, &[]);
+    let _ = perform_click_default_action(
+        scope,
+        runtime_ptr,
+        handle,
+        x,
+        y,
+        button,
+        modifiers,
+        false,
+        &[],
+    );
 }
 
 pub(crate) enum DispatchedClickLegacyActivation {
@@ -1292,6 +1344,7 @@ fn perform_click_default_action(
     handle: DomHandle,
     x: f64,
     y: f64,
+    button: i32,
     modifiers: u8,
     user_initiated: bool,
     pending_child_navigations_before_default: &[(DomHandle, ChildBrowsingContextBootstrap)],
@@ -1302,6 +1355,8 @@ fn perform_click_default_action(
             scope,
             runtime_ptr,
             handle,
+            button,
+            modifiers,
             user_initiated,
             pending_child_navigations_before_default,
         );
@@ -1777,6 +1832,8 @@ fn anchor_click_default_action(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
+    button: i32,
+    modifiers: u8,
     user_initiated: bool,
     pending_child_navigations_before_default: &[(DomHandle, ChildBrowsingContextBootstrap)],
 ) -> Option<RendererPendingDownloadActivation> {
@@ -1787,31 +1844,41 @@ fn anchor_click_default_action(
     send_anchor_ping_requests(scope, runtime_ptr, handle, &resolved);
     let runtime = unsafe { &*runtime_ptr };
     if element_has_attribute(runtime, handle, "download") {
-        let download_request = element_attribute(runtime, handle, "download").unwrap_or_default();
-        let source_element = node_wrapper_from_handle(scope, handle);
-        let proceed = navigation_owner_window_for_handle(scope, runtime_ptr, handle).is_none_or(
-            |owner| {
-                crate::context_bootstrap::dispatch_cross_document_navigation_navigate_event_for_window(
-                    scope,
-                    owner,
-                    &resolved,
-                    source_element,
-                    user_initiated,
-                    Some(&download_request),
-                )
-            },
+        let suggested_filename =
+            element_attribute(runtime, handle, "download").filter(|value| !value.is_empty());
+        return anchor_download_activation(
+            scope,
+            runtime_ptr,
+            handle,
+            resolved,
+            user_initiated,
+            suggested_filename,
         );
-        if !proceed {
-            return None;
-        }
-        return Some(RendererPendingDownloadActivation {
-            url: resolved,
-            suggested_filename: (!download_request.is_empty()).then_some(download_request),
-            response: None,
-        });
     }
-    let target_name =
+    let navigation_policy = hyperlink_navigation_policy(button, modifiers, user_initiated);
+    if navigation_policy == HyperlinkNavigationPolicy::Download {
+        return anchor_download_activation(
+            scope,
+            runtime_ptr,
+            handle,
+            resolved,
+            user_initiated,
+            None,
+        );
+    }
+    let declared_target_name =
         element_attribute(runtime, handle, "target").filter(|value| !value.is_empty());
+    let (target_name, popup_disposition) = match navigation_policy {
+        HyperlinkNavigationPolicy::Auxiliary(disposition) => {
+            (Some("_blank".to_owned()), disposition)
+        }
+        HyperlinkNavigationPolicy::Current => {
+            (declared_target_name, RendererPopupDisposition::Foreground)
+        }
+        HyperlinkNavigationPolicy::Download => {
+            unreachable!("download hyperlink policy returned before target selection")
+        }
+    };
     let special_target = target_name
         .as_deref()
         .and_then(SpecialBrowsingContextTarget::parse);
@@ -1905,8 +1972,92 @@ fn anchor_click_default_action(
         target_name.as_deref(),
         &resolved,
         source_element,
+        popup_disposition,
     );
     None
+}
+
+fn anchor_download_activation(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+    resolved: String,
+    user_initiated: bool,
+    suggested_filename: Option<String>,
+) -> Option<RendererPendingDownloadActivation> {
+    let source_element = node_wrapper_from_handle(scope, handle);
+    let download_request = suggested_filename.as_deref().unwrap_or("");
+    let proceed =
+        navigation_owner_window_for_handle(scope, runtime_ptr, handle).is_none_or(|owner| {
+            crate::context_bootstrap::dispatch_cross_document_navigation_navigate_event_for_window(
+                scope,
+                owner,
+                &resolved,
+                source_element,
+                user_initiated,
+                Some(download_request),
+            )
+        });
+    proceed.then_some(RendererPendingDownloadActivation {
+        url: resolved,
+        suggested_filename,
+        response: None,
+    })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HyperlinkNavigationPolicy {
+    Current,
+    Download,
+    Auxiliary(RendererPopupDisposition),
+}
+
+fn hyperlink_navigation_policy(
+    button: i32,
+    modifiers: u8,
+    user_initiated: bool,
+) -> HyperlinkNavigationPolicy {
+    const ALT: u8 = 1;
+    const SHIFT: u8 = 8;
+
+    #[cfg(target_os = "macos")]
+    let platform_new_tab_modifier = 4;
+    #[cfg(not(target_os = "macos"))]
+    let platform_new_tab_modifier = 2;
+
+    let requests_new_tab = button == 1 || modifiers & platform_new_tab_modifier != 0;
+    let shift = modifiers & SHIFT != 0;
+    let alt = modifiers & ALT != 0;
+    if requests_new_tab {
+        let disposition = if shift || !user_initiated {
+            RendererPopupDisposition::Foreground
+        } else {
+            RendererPopupDisposition::Background
+        };
+        HyperlinkNavigationPolicy::Auxiliary(disposition)
+    } else if shift {
+        // The renderer target model has no separate window chrome. Preserve
+        // Chromium's selected-surface behavior by folding a new window into a
+        // foreground auxiliary target.
+        HyperlinkNavigationPolicy::Auxiliary(RendererPopupDisposition::Foreground)
+    } else if alt && user_initiated {
+        HyperlinkNavigationPolicy::Download
+    } else {
+        HyperlinkNavigationPolicy::Current
+    }
+}
+
+fn current_click_popup_disposition(
+    button: i32,
+    modifiers: u8,
+    user_initiated: bool,
+) -> RendererPopupDisposition {
+    match hyperlink_navigation_policy(button, modifiers, user_initiated) {
+        HyperlinkNavigationPolicy::Auxiliary(disposition) => disposition,
+        HyperlinkNavigationPolicy::Current | HyperlinkNavigationPolicy::Download => {
+            RendererPopupDisposition::Foreground
+        }
+    }
 }
 
 fn click_listener_changed_named_child_navigation(
@@ -2219,4 +2370,80 @@ pub(in crate::native_bridge) fn navigate_form_target_browsing_context(
         None,
         exposes_opener,
     )
+}
+
+#[cfg(test)]
+mod hyperlink_popup_disposition_tests {
+    use super::*;
+
+    const CTRL: u8 = 2;
+    const META: u8 = 4;
+    const SHIFT: u8 = 8;
+    const ALT: u8 = 1;
+
+    #[cfg(target_os = "macos")]
+    const PLATFORM_NEW_TAB_MODIFIER: u8 = META;
+    #[cfg(not(target_os = "macos"))]
+    const PLATFORM_NEW_TAB_MODIFIER: u8 = CTRL;
+
+    #[cfg(target_os = "macos")]
+    const NON_PLATFORM_NEW_TAB_MODIFIER: u8 = CTRL;
+    #[cfg(not(target_os = "macos"))]
+    const NON_PLATFORM_NEW_TAB_MODIFIER: u8 = META;
+
+    #[test]
+    fn ordinary_click_uses_the_declared_target() {
+        assert_eq!(
+            hyperlink_navigation_policy(0, 0, true),
+            HyperlinkNavigationPolicy::Current
+        );
+        assert_eq!(
+            hyperlink_navigation_policy(0, NON_PLATFORM_NEW_TAB_MODIFIER, true),
+            HyperlinkNavigationPolicy::Current
+        );
+    }
+
+    #[test]
+    fn trusted_new_context_input_matches_chromium_surface_selection() {
+        assert_eq!(
+            hyperlink_navigation_policy(1, 0, true),
+            HyperlinkNavigationPolicy::Auxiliary(RendererPopupDisposition::Background)
+        );
+        assert_eq!(
+            hyperlink_navigation_policy(0, PLATFORM_NEW_TAB_MODIFIER, true),
+            HyperlinkNavigationPolicy::Auxiliary(RendererPopupDisposition::Background)
+        );
+        assert_eq!(
+            hyperlink_navigation_policy(0, SHIFT, true),
+            HyperlinkNavigationPolicy::Auxiliary(RendererPopupDisposition::Foreground)
+        );
+        assert_eq!(
+            hyperlink_navigation_policy(1, SHIFT, true),
+            HyperlinkNavigationPolicy::Auxiliary(RendererPopupDisposition::Foreground)
+        );
+    }
+
+    #[test]
+    fn synthetic_new_tab_input_cannot_create_a_background_tab_under() {
+        assert_eq!(
+            hyperlink_navigation_policy(1, 0, false),
+            HyperlinkNavigationPolicy::Auxiliary(RendererPopupDisposition::Foreground)
+        );
+        assert_eq!(
+            hyperlink_navigation_policy(0, PLATFORM_NEW_TAB_MODIFIER, false),
+            HyperlinkNavigationPolicy::Auxiliary(RendererPopupDisposition::Foreground)
+        );
+    }
+
+    #[test]
+    fn only_trusted_alt_click_requests_a_download() {
+        assert_eq!(
+            hyperlink_navigation_policy(0, ALT, true),
+            HyperlinkNavigationPolicy::Download
+        );
+        assert_eq!(
+            hyperlink_navigation_policy(0, ALT, false),
+            HyperlinkNavigationPolicy::Current
+        );
+    }
 }

@@ -267,6 +267,7 @@ impl ScriptVm {
                     popup_id,
                     url.clone(),
                     "_blank".to_owned(),
+                    crate::RendererPopupDisposition::Foreground,
                 )
                 .with_initial_auxiliary_state(
                     session_storage_store,
@@ -348,6 +349,7 @@ impl ScriptVm {
                     popup_id,
                     url.clone(),
                     "_blank".to_owned(),
+                    crate::RendererPopupDisposition::Foreground,
                 )
                 .with_initial_auxiliary_state(
                     session_storage_store,

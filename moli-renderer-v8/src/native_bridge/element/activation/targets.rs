@@ -1,5 +1,5 @@
 use crate::{
-    RendererPendingPopupActivation, RendererPendingWindowOpenEvent,
+    RendererPendingPopupActivation, RendererPendingWindowOpenEvent, RendererPopupDisposition,
     context_bootstrap::dispatch_cross_document_navigation_navigate_event_for_window,
     document_runtime::{DocumentPolicyContainer, DomHandle},
     native_bridge::context_host::ChildBrowsingContextNavigationRequest,
@@ -89,6 +89,7 @@ fn queue_popup_target_navigation(
             None,
             resolved_url.to_owned(),
             target_name.to_owned(),
+            RendererPopupDisposition::Foreground,
         )
         .with_initial_auxiliary_state(None, None),
         Some(window_open_event),
@@ -176,6 +177,7 @@ fn navigate_hyperlink_popup_target(
     source_handle: DomHandle,
     target_name: &str,
     resolved_url: &str,
+    disposition: RendererPopupDisposition,
 ) -> bool {
     let relations = hyperlink_popup_relations(unsafe { &*runtime_ptr }, source_handle, target_name);
     let Some(dispatch_scope) =
@@ -203,6 +205,7 @@ fn navigate_hyperlink_popup_target(
                 None,
                 resolved_url.to_owned(),
                 target_name.to_owned(),
+                disposition,
             )
             .with_initial_auxiliary_state(None, None),
             Some(window_open_event),
@@ -239,6 +242,7 @@ fn navigate_hyperlink_popup_target(
                 None,
                 resolved_url.to_owned(),
                 target_name.to_owned(),
+                disposition,
             )
             .with_initial_auxiliary_state(None, None),
             Some(window_open_event),
@@ -261,6 +265,7 @@ fn navigate_hyperlink_popup_target(
             Some(popup_id),
             resolved_url.to_owned(),
             target_name.to_owned(),
+            disposition,
         )
         .with_initial_auxiliary_state(session_storage_store, initial_empty_document_storage_key),
         window_open_event,
@@ -485,6 +490,7 @@ pub(in crate::native_bridge) fn navigate_hyperlink_target_browsing_context<'s>(
     target_name: Option<&str>,
     resolved_url: &str,
     source_element: Option<v8::Local<'s, v8::Object>>,
+    popup_disposition: RendererPopupDisposition,
 ) -> bool {
     if !hyperlink_javascript_url_allowed_by_csp(scope, runtime_ptr, source_handle, resolved_url) {
         return true;
@@ -497,6 +503,7 @@ pub(in crate::native_bridge) fn navigate_hyperlink_target_browsing_context<'s>(
             source_handle,
             "_blank",
             resolved_url,
+            popup_disposition,
         );
     }
     if let Some(target_name) = target_name
@@ -514,6 +521,7 @@ pub(in crate::native_bridge) fn navigate_hyperlink_target_browsing_context<'s>(
             source_handle,
             target_name,
             resolved_url,
+            popup_disposition,
         );
     }
     let Some(dispatch_scope) =

@@ -668,8 +668,9 @@ async fn rust_cdp_chromium_target_window_open_auto_attached_popup_materializes_i
                 .expect("popup session id");
             ctx.wait_until_scheduler_state("auto-attached popup navigation commit", |conn| {
                 conn.browser_context_by_id("BID-popup-auto-load")
-                    .and_then(|browser_context| browser_context.background_target(popup_target_id))
-                    .and_then(|target| target.loaded_page())
+                    .and_then(|browser_context| {
+                        loaded_page_for_target(browser_context, popup_target_id)
+                    })
                     .is_some_and(|page| page.final_url().as_str() == popup_url)
             })
             .await;
@@ -677,8 +678,9 @@ async fn rust_cdp_chromium_target_window_open_auto_attached_popup_materializes_i
                 .conn
                 .browser_context
                 .as_ref()
-                .and_then(|browser_context| browser_context.background_target(popup_target_id))
-                .and_then(|target| target.loaded_page())
+                .and_then(|browser_context| {
+                    loaded_page_for_target(browser_context, popup_target_id)
+                })
                 .expect("window.open lifecycle should have loaded the popup document");
             assert_eq!(popup_page.final_url().as_str(), popup_url);
 
@@ -783,8 +785,9 @@ async fn rust_cdp_chromium_target_window_open_waiting_popup_routes_initial_docum
         ctx.conn
             .browser_context
             .as_ref()
-            .and_then(|browser_context| browser_context.background_target(popup_target_id))
-            .and_then(|target| target.loaded_page())
+            .and_then(|browser_context| {
+                loaded_page_for_target(browser_context, popup_target_id)
+            })
             .is_some_and(|page| page.final_url().as_str() == "about:blank"),
         "popup target lifecycle should already expose the initial about:blank document"
     );

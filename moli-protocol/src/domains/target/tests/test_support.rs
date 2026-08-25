@@ -38,6 +38,19 @@ pub(super) fn push_background_target(
         ));
 }
 
+pub(super) fn loaded_page_for_target<'a>(
+    browser_context: &'a BrowserContext,
+    target_id: &str,
+) -> Option<&'a moli_core::page::Page> {
+    if browser_context.is_active_target(target_id) {
+        browser_context.loaded_page()
+    } else {
+        browser_context
+            .background_target(target_id)
+            .and_then(crate::conn::BackgroundTarget::loaded_page)
+    }
+}
+
 pub(super) fn push_shared_worker_target(
     ctx: &mut TestContext,
     renderer_instance_id: SharedWorkerInstanceId,

@@ -32,7 +32,9 @@ mod window_document_source;
 pub use javascript_dialog::{
     RendererJavaScriptDialogId, RendererJavaScriptDialogSource, RendererPendingJavaScriptDialog,
 };
-pub use popup_activation::{RendererPendingPopupActivation, RendererPopupActivationSource};
+pub use popup_activation::{
+    RendererPendingPopupActivation, RendererPopupActivationSource, RendererPopupDisposition,
+};
 pub use window_document_source::RendererWindowDocumentSource;
 
 #[derive(Debug, Clone)]

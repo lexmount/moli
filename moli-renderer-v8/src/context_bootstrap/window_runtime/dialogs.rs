@@ -240,6 +240,9 @@ pub(crate) fn window_open_callback<'s>(
         let window_open_event = opened_popup
             .created_new_browsing_context
             .then_some(window_open_event);
+        let popup_disposition = host
+            .current_input_popup_disposition()
+            .unwrap_or(crate::RendererPopupDisposition::Foreground);
         host.record_pending_popup_activation(
             RendererPendingPopupActivation::window(
                 root_document,
@@ -248,6 +251,7 @@ pub(crate) fn window_open_callback<'s>(
                 Some(popup_id),
                 url,
                 parsed.target_name,
+                popup_disposition,
             )
             .with_initial_auxiliary_state(
                 session_storage_store,
@@ -262,6 +266,9 @@ pub(crate) fn window_open_callback<'s>(
         }
         return;
     }
+    let popup_disposition = host
+        .current_input_popup_disposition()
+        .unwrap_or(crate::RendererPopupDisposition::Foreground);
     host.record_pending_popup_activation(
         RendererPendingPopupActivation::window(
             root_document,
@@ -270,6 +277,7 @@ pub(crate) fn window_open_callback<'s>(
             None,
             url,
             parsed.target_name,
+            popup_disposition,
         )
         .with_initial_auxiliary_state(None, None),
         Some(window_open_event),

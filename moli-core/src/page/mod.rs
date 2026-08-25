@@ -113,7 +113,7 @@ pub use moli_renderer_v8::{
     RendererPendingJavaScriptDialog, RendererPendingPopupActivation,
     RendererPendingSameDocumentNavigation, RendererPendingTopLevelHistoryTraversal,
     RendererPendingWindowOpenEvent, RendererPerformanceMetricSnapshot,
-    RendererPointerEventProperties, RendererPopupActivationSource,
+    RendererPointerEventProperties, RendererPopupActivationSource, RendererPopupDisposition,
     RendererResourceTextSearchOutcome, RendererRuntimeCommandOutput, RendererRuntimeHeapUsage,
     RendererRuntimeInspectorIoCommandClaim, RendererRuntimeInspectorIoCommandRoute,
     RendererRuntimeInspectorMainCommandCompletion, RendererRuntimeInspectorMainCommandRoute,

@@ -43,6 +43,11 @@ fn form_target_blank_reloads_rel_opener_policy_for_each_submission() {
             exposes_opener, &expected_exposes_opener,
             "rel={rel:?} opener policy"
         );
+        assert_eq!(
+            activations[0].disposition(),
+            crate::RendererPopupDisposition::Foreground,
+            "target=_blank form submission should select its new surface"
+        );
     }
 }
 

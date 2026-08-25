@@ -1,8 +1,9 @@
 use serde::Deserialize;
 
 use crate::conn::{
-    BackgroundProtocolEvent, CdpTargetFilter, CdpTargetFilterEntry, PopupTargetNavigationKind,
-    PopupTargetNavigationOwnerAction, PreparedTargetAttach, TargetAttachSessionCommit,
+    BackgroundProtocolEvent, CdpTargetFilter, CdpTargetFilterEntry, PopupTargetActivationAction,
+    PopupTargetNavigationKind, PopupTargetNavigationOwnerAction, PreparedTargetAttach,
+    TargetAttachSessionCommit,
 };
 use crate::devtools_runtime::{
     DevToolsActivateTargetCommand, DevToolsBrowserContextId, DevToolsCloseTargetCommand,
@@ -488,6 +489,7 @@ pub(crate) struct PopupTargetCreation {
     target_name: String,
     opener: Option<PopupTargetOpenerIdentity>,
     can_access_opener: bool,
+    disposition: moli_core::page::RendererPopupDisposition,
     session_storage_store: Option<moli_core::network::SharedWebStorageStore>,
     initial_empty_document_storage_key: Option<moli_storage_key::MoliStorageKey>,
 }
@@ -500,6 +502,7 @@ impl PopupTargetCreation {
         target_name: String,
         opener: Option<PopupTargetOpenerIdentity>,
         can_access_opener: bool,
+        disposition: moli_core::page::RendererPopupDisposition,
         session_storage_store: Option<moli_core::network::SharedWebStorageStore>,
         initial_empty_document_storage_key: Option<moli_storage_key::MoliStorageKey>,
     ) -> Self {
@@ -510,6 +513,7 @@ impl PopupTargetCreation {
             target_name,
             opener,
             can_access_opener,
+            disposition,
             session_storage_store,
             initial_empty_document_storage_key,
         }
@@ -528,6 +532,7 @@ pub(crate) async fn create_popup_target_from_renderer_output_background_events_a
         target_name,
         opener,
         can_access_opener,
+        disposition,
         session_storage_store,
         initial_empty_document_storage_key,
     } = creation;
@@ -557,6 +562,11 @@ pub(crate) async fn create_popup_target_from_renderer_output_background_events_a
                     )
                 })
                 .flatten();
+        let activation = (disposition == moli_core::page::RendererPopupDisposition::Foreground)
+            .then(|| {
+                PopupTargetActivationAction::capture(conn, &browser_context_id, &existing_target_id)
+            })
+            .flatten();
 
         let target_url_updated = conn
             .browser_context_by_id_mut(&browser_context_id)
@@ -572,6 +582,9 @@ pub(crate) async fn create_popup_target_from_renderer_output_background_events_a
             );
             if let Some(navigation) = navigation {
                 conn.publish_popup_target_navigation_owner_action(navigation);
+            }
+            if let Some(activation) = activation {
+                conn.publish_popup_target_activation_action(activation);
             }
         }
         return (target_url_updated
@@ -719,6 +732,12 @@ pub(crate) async fn create_popup_target_from_renderer_output_background_events_a
         )
     {
         conn.publish_popup_target_navigation_owner_action(navigation);
+    }
+    if disposition == moli_core::page::RendererPopupDisposition::Foreground
+        && let Some(activation) =
+            PopupTargetActivationAction::capture(conn, &browser_context_id, &target_id)
+    {
+        conn.publish_popup_target_activation_action(activation);
     }
     Some(target_id)
 }
@@ -958,6 +977,77 @@ pub(crate) async fn complete_popup_target_navigation_owner_action_async(
         protocol_events,
         conn.take_scheduler_events(),
     )
+}
+
+pub(crate) async fn complete_popup_target_activation_action_async(
+    conn: &mut CdpConnection,
+    action: PopupTargetActivationAction,
+) -> crate::conn::CdpTurnOutcome {
+    let (owner_scope, browser_context_id, target_id) = action.into_parts();
+    let target_is_current = {
+        let mut route_scope = owner_scope.enter(conn);
+        let conn = route_scope.conn_mut();
+        conn.target_owner_identity_for_session(None).is_some_and(
+            |(current_browser_context_id, current_target_id)| {
+                current_browser_context_id == browser_context_id
+                    && current_target_id.as_deref() == Some(target_id.as_str())
+            },
+        ) && popup_target_has_loaded_page(conn, &browser_context_id, &target_id)
+    };
+    if !target_is_current {
+        tracing::debug!(
+            browser_context_id,
+            target_id,
+            "dropping popup activation after its exact target owner retired"
+        );
+        return crate::conn::CdpTurnOutcome::new_with_protocol_events(
+            Vec::new(),
+            conn.take_scheduler_events(),
+        );
+    }
+    if let Err(error) = activate_popup_target_async(conn, &browser_context_id, &target_id).await {
+        tracing::debug!(
+            browser_context_id,
+            target_id,
+            %error,
+            "popup target could not be activated"
+        );
+    }
+    crate::conn::CdpTurnOutcome::new_with_protocol_events(Vec::new(), conn.take_scheduler_events())
+}
+
+async fn activate_popup_target_async(
+    conn: &mut CdpConnection,
+    browser_context_id: &str,
+    target_id: &str,
+) -> Result<(), String> {
+    let restore_browser_context_id = previously_active_browser_context_id(conn);
+    let result = if let Err(message) = select_browser_context_for_target(conn, target_id) {
+        Err(message.to_owned())
+    } else if conn
+        .browser_context
+        .as_ref()
+        .is_none_or(|browser_context| browser_context.id != browser_context_id)
+    {
+        Err("PopupTargetBrowserContextChanged".to_owned())
+    } else if conn
+        .browser_context
+        .as_ref()
+        .is_some_and(|browser_context| browser_context.is_active_target(target_id))
+    {
+        Ok(())
+    } else {
+        match conn
+            .promote_background_target_to_active_for_connection_async(target_id)
+            .await
+        {
+            Ok(true) => Ok(()),
+            Ok(false) => Err("PopupTargetUnavailable".to_owned()),
+            Err(message) => Err(message),
+        }
+    };
+    restore_previously_active_browser_context(conn, restore_browser_context_id.as_deref());
+    result
 }
 
 pub(crate) fn emit_target_info_changed_for_session_owner_background_event(

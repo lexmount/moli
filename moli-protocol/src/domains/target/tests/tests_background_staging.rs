@@ -5058,7 +5058,7 @@ async fn same_context_loaded_background_window_open_self_navigates_owner_without
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_named_popup_reuse_navigates_loaded_background_owner_without_promotion() {
+async fn same_context_named_popup_reuse_navigates_and_promotes_loaded_owner() {
     let mut ctx = TestContext::new();
     tokio::task::LocalSet::new()
         .run_until(async {
@@ -5090,17 +5090,17 @@ async fn same_context_named_popup_reuse_navigates_loaded_background_owner_withou
     assert_eq!(response["result"]["result"]["type"], json!("boolean"));
     assert_eq!(response["result"]["result"]["value"], json!(true));
     ctx.wait_until_scheduler_state(
-        "named background popup navigation commit",
+        "named popup navigation commit and foreground activation",
         |conn| {
             conn.browser_context_by_id("BID-9-NAMED-POPUP")
-                .and_then(|browser_context| browser_context.background_target(&owner.target_id))
-                .is_some_and(|target| {
-                    target.target_url()
-                        == "data:text/html,<title>named</title><main>named target</main>"
-                        && target.loaded_page().is_some_and(|page| {
-                            page.final_url().as_str()
-                                == "data:text/html,<title>named</title><main>named target</main>"
-                        })
+                .is_some_and(|browser_context| {
+                    browser_context.active_target_id() == Some(owner.target_id.as_str())
+                        && loaded_page_for_target(browser_context, &owner.target_id).is_some_and(
+                            |page| {
+                                page.final_url().as_str()
+                                    == "data:text/html,<title>named</title><main>named target</main>"
+                            },
+                        )
                 })
         },
     )
@@ -5136,19 +5136,22 @@ async fn same_context_named_popup_reuse_navigates_loaded_background_owner_withou
         let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
         assert_eq!(
             browser_context.active_target_id(),
-            Some("TID-000000000NPA"),
-            "named popup reuse must not promote the background target"
+            Some(owner.target_id.as_str()),
+            "ordinary window.open should promote its reused named target"
         );
-        let background_target = browser_context
-            .background_target(&owner.target_id)
-            .expect("background target should remain parked");
         assert_eq!(
-            background_target.target_url(),
+            browser_context.target_url(),
             "data:text/html,<title>named</title><main>named target</main>"
         );
         assert!(
-            background_target.has_loaded_page(),
+            browser_context.has_loaded_page(),
             "named popup reuse should replace the existing owner loaded page"
+        );
+        assert!(
+            browser_context
+                .background_target("TID-000000000NPA")
+                .is_some(),
+            "foreground named-target reuse should demote the previous active target"
         );
     }
 
