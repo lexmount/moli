@@ -146,6 +146,26 @@ impl RendererTurnOutputJournal {
         state.records.extend(records);
     }
 
+    /// Appends one non-empty owner-command batch and atomically captures the
+    /// cursor of the publication that must contain it.
+    pub(crate) fn append_command_records(
+        &self,
+        records: Vec<PendingRendererOutputRecord>,
+    ) -> RendererOutputCursor {
+        assert!(
+            !records.is_empty(),
+            "renderer command output cursor requires at least one record"
+        );
+        let mut state = self.state.lock();
+        assert!(
+            !state.closed,
+            "renderer output cannot be appended after stream closure"
+        );
+        let expected_cursor = RendererOutputCursor::new(state.stream, state.next_sequence);
+        state.records.extend(records);
+        expected_cursor
+    }
+
     #[cfg(test)]
     pub(crate) fn settle(&self) -> Option<RendererOutputPublication> {
         let mut state = self.state.lock();

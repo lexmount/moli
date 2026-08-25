@@ -1806,6 +1806,13 @@ impl PageVm {
         self.vm().append_renderer_output_records(records);
     }
 
+    pub(super) fn append_renderer_command_output_records(
+        &self,
+        records: Vec<PendingRendererOutputRecord>,
+    ) -> crate::runtime::RendererOutputCursor {
+        self.vm().append_renderer_command_output_records(records)
+    }
+
     pub(super) fn renderer_output_tail_cursor(
         &self,
     ) -> Option<crate::runtime::RendererOutputCursor> {

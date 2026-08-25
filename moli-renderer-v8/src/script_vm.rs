@@ -6625,6 +6625,17 @@ impl ScriptVm {
         environment.output_journal().append_records(records);
     }
 
+    pub(super) fn append_renderer_command_output_records(
+        &self,
+        records: Vec<crate::runtime::PendingRendererOutputRecord>,
+    ) -> crate::runtime::RendererOutputCursor {
+        let environment = self
+            .renderer_page_script_environment
+            .as_ref()
+            .expect("a live Page command must have a renderer output journal");
+        environment.output_journal().append_command_records(records)
+    }
+
     pub(super) fn has_renderer_output_journal(&self) -> bool {
         self.renderer_page_script_environment.is_some()
     }

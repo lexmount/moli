@@ -195,6 +195,13 @@ impl JsRuntime {
     }
 
     #[cfg(test)]
+    pub(crate) fn publish_next_command_output_before_owner_settlement_for_testing(&self) {
+        self.inner
+            .renderer_owner
+            .publish_next_command_output_before_settlement_for_testing();
+    }
+
+    #[cfg(test)]
     pub(crate) fn close_owner_command_admission_for_testing(&self) {
         self.inner
             .renderer_owner

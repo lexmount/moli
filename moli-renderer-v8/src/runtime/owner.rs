@@ -995,6 +995,8 @@ pub(super) struct RendererOwnerState {
     context_shutdown_notify: tokio::sync::Notify,
     #[cfg(test)]
     command_dispatch_gate: Mutex<Option<RendererCommandDispatchGateForTesting>>,
+    #[cfg(test)]
+    publish_next_command_output_before_settlement: std::sync::atomic::AtomicBool,
     #[cfg(debug_assertions)]
     pub(super) owner_local_thread_id: Mutex<Option<ThreadId>>,
 }
@@ -1797,6 +1799,10 @@ impl RendererOwnerHandle {
             context_shutdown_notify: tokio::sync::Notify::new(),
             #[cfg(test)]
             command_dispatch_gate: Mutex::new(None),
+            #[cfg(test)]
+            publish_next_command_output_before_settlement: std::sync::atomic::AtomicBool::new(
+                false,
+            ),
             #[cfg(debug_assertions)]
             owner_local_thread_id: Mutex::new(None),
         });
@@ -2328,6 +2334,17 @@ impl RendererOwnerHandle {
             "renderer command test gate already installed"
         );
         (entered_rx, release_tx)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn publish_next_command_output_before_settlement_for_testing(&self) {
+        assert!(
+            !self
+                .state
+                .publish_next_command_output_before_settlement
+                .swap(true, Ordering::AcqRel),
+            "renderer command output publication test hook already installed"
+        );
     }
 
     #[cfg(test)]
@@ -4705,8 +4722,45 @@ impl RendererOwnerHandle {
     ) -> RenderRuntimeDispatchOutcome {
         let (runtime_command_output, runtime_session_response) =
             entry.page_vm_mut().take_runtime_command_settlement();
-        let command_produced_records = !turn_records.is_empty();
-        entry.page_vm().append_renderer_output_records(turn_records);
+        let expected_command_output_cursor = if turn_records.is_empty() {
+            None
+        } else {
+            Some(
+                entry
+                    .page_vm()
+                    .append_renderer_command_output_records(turn_records),
+            )
+        };
+        #[cfg(test)]
+        if self
+            .state
+            .publish_next_command_output_before_settlement
+            .swap(false, Ordering::AcqRel)
+        {
+            assert!(
+                expected_command_output_cursor.is_some(),
+                "the command output publication test hook requires command-owned records"
+            );
+            let published = entry
+                .page_vm()
+                .renderer_page_script_environment()
+                .expect("a live Page command must retain its script environment")
+                .output_journal()
+                .publish_pending();
+            assert!(
+                published.is_some(),
+                "the command output publication test hook must settle a concrete batch"
+            );
+            entry.page_vm().append_renderer_output_records(vec![
+                PendingRendererOutputRecord::observation(
+                    None,
+                    RendererProtocolObservation::RuntimeLifecycleError {
+                        text: "test trailing output publication".to_owned(),
+                        execution_context_id: None,
+                    },
+                ),
+            ]);
+        }
         let (mut entry, page_state_result) = commit_page_state_on_entry_via_local_task_with_policy(
             self.state.local_executor.clone(),
             entry,
@@ -4714,24 +4768,35 @@ impl RendererOwnerHandle {
         )
         .await;
         let concrete_output = entry.page_vm_mut().settle_renderer_output_publication();
-        assert!(
-            !command_produced_records || concrete_output.is_some(),
-            "renderer command records must settle into the concrete Page stream before completion"
-        );
         // Chromium flushes every notification already queued by the current
-        // DevTools command before exposing its response. The concrete batch
-        // settled here is the exact Moli equivalent of that queue
-        // prefix. Do not require a Runtime-only causal marker: DOM commands
-        // and WebAPI side effects (for example mutation, CSP and Log records)
-        // are produced during this owner turn but do not all carry a
-        // `RendererRuntimeCommandCausalIdentity`.
+        // DevTools command before exposing its response. Appending under the
+        // journal lock freezes the exact publication cursor that must contain
+        // this command's records. An attachment-scoped producer can publish
+        // that batch while page-state capture is awaiting its local task, and
+        // can even publish later batches before this owner resumes. The
+        // response must still fence only the exact command batch, while the
+        // published tail proves that batch was not lost.
         //
-        // This remains a narrow fence. It names this command turn's one
-        // publication, not a Page-wide watermark, and a later independent
-        // task necessarily settles into a later stream sequence.
-        let renderer_output_cursor = concrete_output
-            .as_ref()
-            .map(RendererOutputPublication::cursor);
+        // Do not require a Runtime-only causal marker: DOM commands and WebAPI
+        // side effects (for example mutation, CSP and Log records) are
+        // produced during this owner turn but do not all carry a
+        // `RendererRuntimeCommandCausalIdentity`.
+        let renderer_output_cursor = match expected_command_output_cursor {
+            Some(expected) => {
+                let published_tail = entry.page_vm().renderer_output_tail_cursor();
+                assert!(
+                    published_tail.is_some_and(|cursor| {
+                        cursor.stream() == expected.stream()
+                            && cursor.sequence() >= expected.sequence()
+                    }),
+                    "renderer command records must settle into the concrete Page stream before completion"
+                );
+                Some(expected)
+            }
+            None => concrete_output
+                .as_ref()
+                .map(RendererOutputPublication::cursor),
+        };
         let renderer_output_predecessor = renderer_output_cursor
             .map(|cursor| entry.page_vm().declare_renderer_output_fence(cursor));
         self.restore_live_page_entry(token, entry);

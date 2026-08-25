@@ -10005,6 +10005,105 @@ async fn inspector_output_flushes_v8_state_for_commands_and_notifications() {
         .expect("inspector state output page should close");
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn owner_command_fences_exact_cursor_when_later_output_is_already_published() {
+    let runtime = JsRuntime::initialize();
+    let (output_tx, mut output_rx) = renderer_external_activity_test_channel();
+    runtime.set_renderer_output_transport_sender(output_tx);
+    let loader =
+        ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("default loader");
+    let url = url::Url::parse("https://example.test/concurrent-command-output").unwrap();
+    let mut page =
+        create_test_html_page(&runtime, &loader, url, "<!doctype html><body>before</body>").await;
+
+    let (enable_messages, _) = dispatch_runtime_protocol_with_output_for_test(
+        &page,
+        serde_json::json!({
+            "id": 711,
+            "method": "Runtime.enable",
+        }),
+    )
+    .await
+    .expect("Runtime.enable should dispatch");
+    assert!(
+        runtime_protocol_response_by_id(&enable_messages, 711)
+            .is_some_and(|message| message.get("error").is_none()),
+        "Runtime.enable should succeed before the command-output race: {enable_messages:?}"
+    );
+    output_rx.drain();
+
+    runtime.publish_next_command_output_before_owner_settlement_for_testing();
+    let pending_evaluate = page
+        .enqueue_async_command(RendererPageCommand::EvaluateExpression {
+            expression: "console.log('concurrent-command-output'); 'done'".to_owned(),
+            await_promise: false,
+        })
+        .expect("Runtime.evaluate should enqueue");
+    let concurrent_publication = tokio::time::timeout(Duration::from_secs(3), output_rx.recv())
+        .await
+        .expect("the test publication should not hang")
+        .expect("the test hook should settle the pending owner-command records");
+    assert!(
+        concurrent_publication
+            .records()
+            .iter()
+            .any(|record| matches!(
+                record.item(),
+                RendererOutputItem::Observation(RendererProtocolObservation::RuntimeInspector(batch))
+                    if batch.messages.iter().any(|message| matches!(
+                        message,
+                        RendererRuntimeInspectorMessage::Protocol(message)
+                            if message.get("method")
+                                == Some(&serde_json::json!("Runtime.consoleAPICalled"))
+                    ))
+            )),
+        "the early publication must own the Runtime notification emitted by the owner command"
+    );
+    let trailing_publication = tokio::time::timeout(Duration::from_secs(3), output_rx.recv())
+        .await
+        .expect("the trailing test publication should not hang")
+        .expect("final owner settlement should publish a later independent batch");
+    assert!(
+        trailing_publication.records().iter().any(|record| matches!(
+            record.item(),
+            RendererOutputItem::Observation(RendererProtocolObservation::RuntimeLifecycleError {
+                text,
+                execution_context_id: None,
+            }) if text == "test trailing output publication"
+        )),
+        "final Page settlement should publish the independent trailing test output"
+    );
+    assert_eq!(
+        trailing_publication.cursor().sequence(),
+        concurrent_publication.cursor().sequence() + 1,
+        "the independent output must follow the command publication"
+    );
+
+    let evaluate_output = tokio::time::timeout(Duration::from_secs(3), pending_evaluate.wait())
+        .await
+        .expect("owner command should not hang after the IO publication")
+        .expect("owner command should complete after its records were settled by IO");
+    assert_eq!(
+        evaluate_output
+            .renderer_output_predecessor()
+            .expect("owner response must retain the concurrently settled prefix")
+            .cursor(),
+        concurrent_publication.cursor()
+    );
+    assert_ne!(
+        evaluate_output
+            .renderer_output_predecessor()
+            .expect("owner response must retain an exact output prefix")
+            .cursor(),
+        trailing_publication.cursor(),
+        "the response fence must not drift to output published after its command batch"
+    );
+
+    page.close_async()
+        .await
+        .expect("concurrent command output page should close");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn page_diagnostics_snapshot_is_read_only_for_current_inspector_output() {
     let runtime = JsRuntime::initialize();
