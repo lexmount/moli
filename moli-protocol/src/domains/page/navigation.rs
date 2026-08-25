@@ -3523,10 +3523,11 @@ pub(crate) async fn complete_materialized_navigation_into_buffer_async(
     }
     if let Some(renderer_call_replacements) = renderer_call_replacements {
         let (new_attachment_id, terminations, replays) = renderer_call_replacements.into_parts();
-        conn.terminate_prepared_renderer_calls_after_navigation(
+        let termination_events = conn.terminate_prepared_renderer_calls_after_navigation(
             terminations,
             "Inspected target navigated or closed",
         );
+        out.extend_background_events_after_messages(termination_events);
         match conn
             .replay_prepared_renderer_calls_after_navigation_async(replays, new_attachment_id)
             .await

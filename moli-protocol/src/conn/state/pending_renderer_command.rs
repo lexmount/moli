@@ -236,18 +236,29 @@ pub(crate) struct PreparedRendererCallReplay {
 }
 
 #[derive(Debug)]
-pub(crate) struct PreparedRendererCallTermination {
-    correlation: RendererCommandCorrelation,
-    response_sender: RendererRuntimeInspectorResponseSender,
+pub(crate) enum PreparedRendererCallTermination {
+    /// Internal adapters await a private receiver, so navigation rotates the
+    /// lease to a synthetic terminal completion owned by the replacement.
+    CommandReply {
+        correlation: RendererCommandCorrelation,
+        response_sender: RendererRuntimeInspectorResponseSender,
+    },
+    /// Frontend calls remain owned by their protocol session. Navigation only
+    /// revokes the retired renderer lease; the session consumes this original
+    /// correlation when it emits the terminal response directly.
+    DevToolsSession {
+        correlation: RendererCommandCorrelation,
+    },
 }
 
 impl PreparedRendererCallTermination {
+    #[cfg(test)]
     pub(crate) const fn correlation(&self) -> RendererCommandCorrelation {
-        self.correlation
-    }
-
-    pub(crate) fn into_response_sender(self) -> RendererRuntimeInspectorResponseSender {
-        self.response_sender
+        match self {
+            Self::CommandReply { correlation, .. } | Self::DevToolsSession { correlation } => {
+                *correlation
+            }
+        }
     }
 }
 
@@ -463,6 +474,33 @@ impl<T> PendingRendererCommandRegistry<T> {
 
         let mut terminations = Vec::with_capacity(frontend_command_ids.len());
         for frontend_command_id in frontend_command_ids {
+            let response_delivery = self
+                .renderer_calls_by_frontend
+                .get(&frontend_command_id)
+                .expect("selected terminal command must remain registered")
+                .descriptor
+                .response_delivery();
+            match response_delivery {
+                RendererInspectorResponseDelivery::DevToolsSession => {
+                    let call = self
+                        .renderer_calls_by_frontend
+                        .get(&frontend_command_id)
+                        .expect("selected terminal command must remain registered");
+                    if !call.response_channel.try_revoke_active_lease() {
+                        continue;
+                    }
+                    terminations.push(PreparedRendererCallTermination::DevToolsSession {
+                        correlation: RendererCommandCorrelation {
+                            frontend_command_id,
+                            renderer_call_id: call.renderer_call_id,
+                            dispatched_attachment_id: call.dispatched_attachment_id,
+                        },
+                    });
+                    continue;
+                }
+                RendererInspectorResponseDelivery::CommandReply => {}
+            }
+
             let renderer_call_id = self.allocate_renderer_call_id()?;
             let response_sender = {
                 let call = self
@@ -491,7 +529,7 @@ impl<T> PendingRendererCommandRegistry<T> {
 
             call.renderer_call_id = renderer_call_id;
             call.dispatched_attachment_id = Some(terminal_attachment_id);
-            terminations.push(PreparedRendererCallTermination {
+            terminations.push(PreparedRendererCallTermination::CommandReply {
                 correlation: RendererCommandCorrelation {
                     frontend_command_id,
                     renderer_call_id,
@@ -1118,7 +1156,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn termination_rotates_attachment_and_invalidates_old_response_lease() {
+    async fn command_reply_termination_rotates_attachment_and_invalidates_old_response_lease() {
         let frontend_id = FrontendCommandId::new(42);
         let old_attachment = RendererAgentAttachmentId::allocate();
         let new_attachment = RendererAgentAttachmentId::allocate();
@@ -1163,8 +1201,15 @@ mod tests {
             "replacement must invalidate an old renderer callback before Page teardown"
         );
 
-        termination
-            .into_response_sender()
+        let PreparedRendererCallTermination::CommandReply {
+            correlation,
+            response_sender,
+        } = termination
+        else {
+            panic!("a synthesized command must use CommandReply termination")
+        };
+        assert_eq!(correlation, terminal_correlation);
+        response_sender
             .send(serde_json::json!({
                 "id": terminal_correlation.renderer_call_id().get(),
                 "error": {
@@ -1195,6 +1240,67 @@ mod tests {
                 Some(new_attachment),
             ),
             Some(terminal_correlation)
+        );
+    }
+
+    #[test]
+    fn devtools_session_termination_revokes_without_renderer_identity_rotation() {
+        let frontend_id = FrontendCommandId::new(43);
+        let old_attachment = RendererAgentAttachmentId::allocate();
+        let new_attachment = RendererAgentAttachmentId::allocate();
+        let frontend = ParsedCdpCommand::parse_str(
+            r#"{"id":43,"method":"Runtime.evaluate","params":{"expression":"43"}}"#,
+        )
+        .expect("frontend command must parse at ingress");
+        let mut registry = PendingRendererCommandRegistry::<()>::default();
+        let prepared = registry
+            .try_register_renderer_call(
+                frontend_id,
+                Some(old_attachment),
+                RendererCommandDescriptor::from_frontend_policy(
+                    frontend.json().to_owned(),
+                    frontend.renderer_policy(),
+                    RendererInspectorResponseDelivery::DevToolsSession,
+                ),
+            )
+            .unwrap();
+        let (old_correlation, old_sender, response_receiver) = prepared.into_parts();
+        assert!(response_receiver.is_none());
+        registry.next_renderer_call_id = None;
+
+        let mut terminations = registry
+            .prepare_terminations_from_attachment(old_attachment, new_attachment)
+            .expect("session termination must not allocate a renderer call id");
+
+        assert_eq!(terminations.len(), 1);
+        let termination = terminations.pop().unwrap();
+        assert_eq!(termination.correlation(), old_correlation);
+        assert!(matches!(
+            termination,
+            PreparedRendererCallTermination::DevToolsSession {
+                correlation
+            } if correlation == old_correlation
+        ));
+        assert_eq!(
+            registry.renderer_call_for_frontend(frontend_id),
+            Some(old_correlation),
+            "the session owner consumes the original correlation when it emits the error"
+        );
+        assert!(
+            old_sender
+                .send(serde_json::json!({
+                    "id": old_correlation.renderer_call_id().get(),
+                    "result": {},
+                }))
+                .is_err(),
+            "preparing the direct session error must revoke the old renderer lease"
+        );
+        assert_eq!(
+            registry.take_frontend_command_for_renderer_if_attachment_matches(
+                old_correlation.renderer_call_id(),
+                Some(old_attachment),
+            ),
+            Some(old_correlation)
         );
     }
 

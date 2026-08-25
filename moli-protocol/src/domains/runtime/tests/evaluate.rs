@@ -8024,9 +8024,16 @@ fn runtime_evaluate_await_promise_pending_is_terminated_once_by_navigation_repla
             ctx.sent
         );
         assert_eq!(responses[0]["error"]["code"], json!(-32000));
+        assert_eq!(responses[0]["sessionId"], json!("SID-1"));
         assert_eq!(
             responses[0]["error"]["message"],
             json!("Inspected target navigated or closed")
+        );
+        assert!(
+            ctx.conn
+                .renderer_runtime_command_cause_for_frontend(Some("SID-1"), 9_012)
+                .is_none(),
+            "terminal replacement response must consume the renderer correlation"
         );
         assert!(
             !ctx.conn.has_pending_inspector_awaits(),

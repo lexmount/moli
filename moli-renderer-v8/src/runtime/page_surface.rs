@@ -3102,6 +3102,20 @@ impl RendererRuntimeInspectorResponseChannel {
         })
     }
 
+    /// Revokes the current renderer sender without settling the frontend call.
+    ///
+    /// Attachment replacement uses this to prevent the retired renderer from
+    /// publishing while the protocol session still owns terminal completion.
+    /// A response that already claimed the channel wins and returns `false`.
+    pub fn try_revoke_active_lease(&self) -> bool {
+        let mut state = self.state.lock();
+        if !state.open || state.active_lease_id.is_none() {
+            return false;
+        }
+        state.active_lease_id = None;
+        true
+    }
+
     pub fn cancel(&self) {
         let mut state = self.state.lock();
         state.open = false;
@@ -3635,6 +3649,33 @@ mod renderer_runtime_inspector_response_channel_tests {
     }
 
     #[tokio::test]
+    async fn revoking_session_lease_leaves_terminal_settlement_to_protocol_owner() {
+        let attachment = RendererAgentAttachmentId::allocate();
+        let (channel, receiver) = RendererRuntimeInspectorResponseChannel::new_for_delivery(
+            moli_page_types::RendererInspectorResponseDelivery::DevToolsSession,
+        );
+        assert!(receiver.is_none());
+        let sender = channel.activate_sender(1, Some(attachment));
+        let mut settlement_rx = sender
+            .take_session_response_settlement_receiver()
+            .expect("the frontend call should retain a settlement waiter");
+
+        assert!(channel.try_revoke_active_lease());
+        assert!(
+            !channel.try_revoke_active_lease(),
+            "one attachment replacement must revoke the lease only once"
+        );
+        assert!(sender.send_output(output(1)).is_err());
+        assert!(
+            matches!(settlement_rx.try_recv(), Err(TryRecvError::Empty)),
+            "lease revocation must not settle the frontend call before its protocol error",
+        );
+
+        channel.cancel();
+        assert!(settlement_rx.await.is_err());
+    }
+
+    #[tokio::test]
     async fn completed_response_lease_cannot_be_rotated() {
         let (channel, rx) = RendererRuntimeInspectorResponseChannel::new();
         channel
@@ -3642,6 +3683,10 @@ mod renderer_runtime_inspector_response_channel_tests {
             .send_output(output(1))
             .expect("active response lease should complete");
 
+        assert!(
+            !channel.try_revoke_active_lease(),
+            "attachment replacement must not revoke a response that already won"
+        );
         assert!(channel.try_activate_sender(2, None).is_none());
         assert_eq!(rx.await.unwrap().call_id, 1);
     }

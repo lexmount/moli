@@ -48,7 +48,7 @@ pub(crate) use dedicated_worker_target::{
 };
 pub(crate) use devtools_session::{
     DevToolsConsoleOutputSessionState, DevToolsLogViolationThreshold, DevToolsSessionState,
-    PreparedRendererCallReplacements, SessionRendererCallReplay,
+    PreparedRendererCallReplacements, SessionRendererCallReplay, SessionRendererCallTermination,
     devtools_sessions_have_pending_inspector_awaits,
     devtools_sessions_pending_inspector_await_count,
     drain_pending_inspector_awaits_for_devtools_sessions,

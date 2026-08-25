@@ -23,7 +23,7 @@ use moli_core::{
 
 use crate::conn::state::{
     DevToolsSessionState, PreparedRendererCallTermination, SessionRendererCallReplay,
-    devtools_sessions_have_pending_inspector_awaits,
+    SessionRendererCallTermination, devtools_sessions_have_pending_inspector_awaits,
     drain_pending_inspector_awaits_for_devtools_sessions,
 };
 use crate::domains::command_output::protocol_message_background_event;
@@ -4836,7 +4836,7 @@ impl CdpConnection {
             ) {
                 Ok(route) => route,
                 Err(error) => {
-                    self.settle_renderer_replay_error(
+                    self.settle_renderer_replacement_error(
                         &mut events,
                         frontend_session_id.as_deref(),
                         response_delivery,
@@ -4848,7 +4848,7 @@ impl CdpConnection {
                 }
             };
             if route.renderer_agent_attachment_id != new_attachment_id {
-                self.settle_renderer_replay_error(
+                self.settle_renderer_replacement_error(
                     &mut events,
                     frontend_session_id.as_deref(),
                     response_delivery,
@@ -4891,7 +4891,7 @@ impl CdpConnection {
                         )
                         | Ok(moli_core::page::CompletedDevToolsIoCommandDispatch::Dispatched) => {}
                         Err(error) => {
-                            self.settle_renderer_replay_error(
+                            self.settle_renderer_replacement_error(
                                 &mut events,
                                 frontend_session_id.as_deref(),
                                 response_delivery,
@@ -4931,7 +4931,7 @@ impl CdpConnection {
                         )
                         | Ok(moli_core::page::CompletedDevToolsIoCommandDispatch::Dispatched) => {}
                         Err(error) => {
-                            self.settle_renderer_replay_error(
+                            self.settle_renderer_replacement_error(
                                 &mut events,
                                 frontend_session_id.as_deref(),
                                 response_delivery,
@@ -4954,7 +4954,7 @@ impl CdpConnection {
             ) {
                 Ok(raw_json) => raw_json,
                 Err(error) => {
-                    self.settle_renderer_replay_error(
+                    self.settle_renderer_replacement_error(
                         &mut events,
                         frontend_session_id.as_deref(),
                         response_delivery,
@@ -4970,7 +4970,7 @@ impl CdpConnection {
                 {
                     Ok(page) => page,
                     Err(error) => {
-                        self.settle_renderer_replay_error(
+                        self.settle_renderer_replacement_error(
                             &mut events,
                             frontend_session_id.as_deref(),
                             response_delivery,
@@ -5028,7 +5028,7 @@ impl CdpConnection {
                         ),
                 },
                 Err(error) => {
-                    self.settle_renderer_replay_error(
+                    self.settle_renderer_replacement_error(
                         &mut events,
                         frontend_session_id.as_deref(),
                         response_delivery,
@@ -5042,7 +5042,7 @@ impl CdpConnection {
             let completed = match pending.wait().await {
                 Ok(completed) => completed,
                 Err(error) => {
-                    self.settle_renderer_replay_error(
+                    self.settle_renderer_replacement_error(
                         &mut events,
                         frontend_session_id.as_deref(),
                         response_delivery,
@@ -5080,7 +5080,7 @@ impl CdpConnection {
             {
                 Ok(output) => output,
                 Err(error) => {
-                    send_renderer_replay_error(
+                    send_renderer_replacement_error(
                         &response_sender,
                         correlation,
                         &format!("runtime inspector replay dispatch failed: {error}"),
@@ -5095,7 +5095,7 @@ impl CdpConnection {
             events.extend(command.take_protocol_events());
             events.extend(command.take_post_response_events());
             let Some(output) = completion.into_runtime_inspector_output() else {
-                send_renderer_replay_error(
+                send_renderer_replacement_error(
                     &response_sender,
                     correlation,
                     "runtime inspector replay completed with a non-Runtime renderer reply",
@@ -5121,7 +5121,7 @@ impl CdpConnection {
         Ok(events)
     }
 
-    fn settle_renderer_replay_error(
+    fn settle_renderer_replacement_error(
         &mut self,
         events: &mut Vec<BackgroundProtocolEvent>,
         frontend_session_id: Option<&str>,
@@ -5131,10 +5131,25 @@ impl CdpConnection {
         message: &str,
     ) {
         if response_delivery == RendererInspectorResponseDelivery::CommandReply {
-            send_renderer_replay_error(response_sender, correlation, message);
+            send_renderer_replacement_error(response_sender, correlation, message);
             return;
         }
 
+        self.settle_devtools_session_renderer_error(
+            events,
+            frontend_session_id,
+            correlation,
+            message,
+        );
+    }
+
+    fn settle_devtools_session_renderer_error(
+        &mut self,
+        events: &mut Vec<BackgroundProtocolEvent>,
+        frontend_session_id: Option<&str>,
+        correlation: RendererCommandCorrelation,
+        message: &str,
+    ) {
         let Some(resolved) = self
             .take_frontend_command_for_renderer_if_attachment_matches_for_session_owner(
                 frontend_session_id,
@@ -5160,19 +5175,27 @@ impl CdpConnection {
 
     pub(crate) fn terminate_prepared_renderer_calls_after_navigation(
         &mut self,
-        terminations: Vec<PreparedRendererCallTermination>,
+        terminations: Vec<SessionRendererCallTermination>,
         reason: &str,
-    ) {
+    ) -> Vec<BackgroundProtocolEvent> {
+        let mut events = Vec::new();
         for termination in terminations {
-            let correlation = termination.correlation();
-            let _ = termination.into_response_sender().send(json!({
-                "id": correlation.renderer_call_id().get(),
-                "error": {
-                    "code": -32000,
-                    "message": reason,
-                },
-            }));
+            let (frontend_session_id, termination) = termination.into_parts();
+            match termination {
+                PreparedRendererCallTermination::CommandReply {
+                    correlation,
+                    response_sender,
+                } => send_renderer_replacement_error(&response_sender, correlation, reason),
+                PreparedRendererCallTermination::DevToolsSession { correlation } => self
+                    .settle_devtools_session_renderer_error(
+                        &mut events,
+                        frontend_session_id.as_deref(),
+                        correlation,
+                        reason,
+                    ),
+            }
         }
+        events
     }
 
     #[cfg(test)]
@@ -5993,7 +6016,7 @@ impl CdpConnection {
     }
 }
 
-fn send_renderer_replay_error(
+fn send_renderer_replacement_error(
     response_sender: &RendererRuntimeInspectorResponseSender,
     correlation: RendererCommandCorrelation,
     message: &str,
@@ -6384,6 +6407,24 @@ mod tests {
         .unwrap()
     }
 
+    fn devtools_session_renderer_command_descriptor_for_test(
+        command_id: u64,
+    ) -> RendererCommandDescriptor {
+        let frontend_payload = json!({
+            "id": command_id,
+            "method": "Runtime.evaluate",
+            "params": { "expression": command_id.to_string() },
+        })
+        .to_string();
+        let frontend =
+            ParsedCdpCommand::parse_str(&frontend_payload).expect("frontend command should parse");
+        RendererCommandDescriptor::from_frontend_policy(
+            frontend.json().to_owned(),
+            frontend.renderer_policy(),
+            RendererInspectorResponseDelivery::DevToolsSession,
+        )
+    }
+
     fn register_devtools_session_response_for_test(
         conn: &mut CdpConnection,
         session_id: &str,
@@ -6412,6 +6453,263 @@ mod tests {
         );
         drop(response_sender);
         correlation
+    }
+
+    #[test]
+    fn navigation_termination_consumes_a_devtools_session_frontend_call() {
+        let mut conn = CdpConnection::default();
+        let mut browser_context = BrowserContext::new("BID-navigation-termination".to_owned());
+        browser_context.set_active_target_id("TID-navigation-termination".to_owned());
+        browser_context.attach_active_session("SID-navigation-termination".to_owned());
+        conn.browser_context = Some(browser_context);
+
+        let old_attachment = RendererAgentAttachmentId::allocate();
+        let terminal_attachment = RendererAgentAttachmentId::allocate();
+        let prepared = conn
+            .try_register_renderer_call_for_session_owner(
+                Some("SID-navigation-termination"),
+                69,
+                Some(old_attachment),
+                devtools_session_renderer_command_descriptor_for_test(69),
+            )
+            .expect("frontend response correlation should register");
+        let (old_correlation, old_sender, response_receiver) = prepared.into_parts();
+        assert!(response_receiver.is_none());
+
+        let replacements = {
+            let browser_context = conn
+                .browser_context
+                .as_mut()
+                .expect("test browser context should remain loaded");
+            crate::conn::state::prepare_renderer_call_replacements_for_devtools_sessions(
+                Some("SID-navigation-termination"),
+                &mut browser_context.devtools_session_state,
+                &mut browser_context.auxiliary_devtools_session_states,
+                old_attachment,
+                terminal_attachment,
+            )
+            .expect("navigation replacement should prepare")
+        };
+        let (replacement_attachment, terminations, replays) = replacements.into_parts();
+        assert_eq!(replacement_attachment, terminal_attachment);
+        assert_eq!(terminations.len(), 1);
+        assert!(replays.is_empty());
+        assert!(
+            old_sender
+                .send(json!({
+                    "id": old_correlation.renderer_call_id().get(),
+                    "result": {},
+                }))
+                .is_err(),
+            "navigation termination must invalidate the old renderer lease"
+        );
+        assert_eq!(
+            conn.renderer_call_for_frontend_for_session_owner(
+                Some("SID-navigation-termination"),
+                69,
+            ),
+            Some(old_correlation),
+            "direct session termination must retain the original correlation until settlement"
+        );
+
+        let termination_events = conn.terminate_prepared_renderer_calls_after_navigation(
+            terminations,
+            "Inspected target navigated or closed",
+        );
+        assert_eq!(termination_events.len(), 1);
+        let response = termination_events[0]
+            .protocol_message()
+            .expect("DevToolsSession termination should emit a frontend response");
+        assert_eq!(response["id"], json!(69));
+        assert_eq!(response["sessionId"], json!("SID-navigation-termination"));
+        assert_eq!(response["error"]["code"], json!(-32000));
+        assert_eq!(
+            response["error"]["message"],
+            json!("Inspected target navigated or closed")
+        );
+
+        assert!(
+            conn.renderer_runtime_command_cause_for_frontend(
+                Some("SID-navigation-termination"),
+                69,
+            )
+            .is_none(),
+            "navigation termination must consume the frontend correlation"
+        );
+    }
+
+    #[test]
+    fn navigation_termination_isolated_same_frontend_id_by_devtools_session() {
+        let mut conn = CdpConnection::default();
+        let mut browser_context = BrowserContext::new("BID-navigation-sessions".to_owned());
+        browser_context.set_active_target_id("TID-navigation-sessions".to_owned());
+        browser_context.attach_active_session("SID-navigation-primary".to_owned());
+        assert!(browser_context.assign_auxiliary_session_to_target(
+            "TID-navigation-sessions",
+            "SID-navigation-auxiliary".to_owned(),
+        ));
+        conn.browser_context = Some(browser_context);
+
+        let old_attachment = RendererAgentAttachmentId::allocate();
+        let terminal_attachment = RendererAgentAttachmentId::allocate();
+        let primary = conn
+            .try_register_renderer_call_for_session_owner(
+                Some("SID-navigation-primary"),
+                71,
+                Some(old_attachment),
+                devtools_session_renderer_command_descriptor_for_test(71),
+            )
+            .expect("primary frontend response correlation should register");
+        let auxiliary = conn
+            .try_register_renderer_call_for_session_owner(
+                Some("SID-navigation-auxiliary"),
+                71,
+                Some(old_attachment),
+                devtools_session_renderer_command_descriptor_for_test(71),
+            )
+            .expect("auxiliary frontend response correlation should register");
+        let (primary_correlation, primary_sender, primary_receiver) = primary.into_parts();
+        let (auxiliary_correlation, auxiliary_sender, auxiliary_receiver) = auxiliary.into_parts();
+        assert!(primary_receiver.is_none());
+        assert!(auxiliary_receiver.is_none());
+
+        let replacements = {
+            let browser_context = conn
+                .browser_context
+                .as_mut()
+                .expect("test browser context should remain loaded");
+            crate::conn::state::prepare_renderer_call_replacements_for_devtools_sessions(
+                Some("SID-navigation-primary"),
+                &mut browser_context.devtools_session_state,
+                &mut browser_context.auxiliary_devtools_session_states,
+                old_attachment,
+                terminal_attachment,
+            )
+            .expect("navigation replacement should prepare for every session")
+        };
+        let (_, terminations, replays) = replacements.into_parts();
+        assert_eq!(terminations.len(), 2);
+        assert!(replays.is_empty());
+        for (correlation, sender) in [
+            (primary_correlation, primary_sender),
+            (auxiliary_correlation, auxiliary_sender),
+        ] {
+            assert!(
+                sender
+                    .send(json!({
+                        "id": correlation.renderer_call_id().get(),
+                        "result": {},
+                    }))
+                    .is_err(),
+                "navigation replacement must invalidate every old session lease"
+            );
+        }
+        assert_eq!(
+            conn.renderer_call_for_frontend_for_session_owner(Some("SID-navigation-primary"), 71,),
+            Some(primary_correlation)
+        );
+        assert_eq!(
+            conn.renderer_call_for_frontend_for_session_owner(
+                Some("SID-navigation-auxiliary"),
+                71,
+            ),
+            Some(auxiliary_correlation)
+        );
+
+        let termination_events = conn.terminate_prepared_renderer_calls_after_navigation(
+            terminations,
+            "Inspected target navigated or closed",
+        );
+        assert_eq!(termination_events.len(), 2);
+        let session_ids = termination_events
+            .iter()
+            .map(|event| {
+                let response = event
+                    .protocol_message()
+                    .expect("each session termination should emit a frontend response");
+                assert_eq!(response["id"], json!(71));
+                assert_eq!(response["error"]["code"], json!(-32000));
+                response["sessionId"]
+                    .as_str()
+                    .expect("attached sessions must retain sessionId")
+                    .to_owned()
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            session_ids,
+            std::collections::BTreeSet::from([
+                "SID-navigation-primary".to_owned(),
+                "SID-navigation-auxiliary".to_owned(),
+            ])
+        );
+        assert!(
+            conn.renderer_runtime_command_cause_for_frontend(Some("SID-navigation-primary"), 71,)
+                .is_none()
+        );
+        assert!(
+            conn.renderer_runtime_command_cause_for_frontend(Some("SID-navigation-auxiliary"), 71,)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn navigation_termination_preserves_sessionless_page_response_shape() {
+        let mut conn = CdpConnection::default();
+        let mut browser_context = BrowserContext::new("BID-navigation-sessionless".to_owned());
+        browser_context.set_active_target_id("TID-navigation-sessionless".to_owned());
+        conn.browser_context = Some(browser_context);
+
+        let old_attachment = RendererAgentAttachmentId::allocate();
+        let terminal_attachment = RendererAgentAttachmentId::allocate();
+        let prepared = conn
+            .try_register_renderer_call_for_session_owner(
+                None,
+                72,
+                Some(old_attachment),
+                devtools_session_renderer_command_descriptor_for_test(72),
+            )
+            .expect("sessionless frontend response correlation should register");
+        let (old_correlation, old_sender, response_receiver) = prepared.into_parts();
+        assert!(response_receiver.is_none());
+
+        let replacements = {
+            let browser_context = conn
+                .browser_context
+                .as_mut()
+                .expect("test browser context should remain loaded");
+            crate::conn::state::prepare_renderer_call_replacements_for_devtools_sessions(
+                None,
+                &mut browser_context.devtools_session_state,
+                &mut browser_context.auxiliary_devtools_session_states,
+                old_attachment,
+                terminal_attachment,
+            )
+            .expect("sessionless navigation replacement should prepare")
+        };
+        let (_, terminations, replays) = replacements.into_parts();
+        assert_eq!(terminations.len(), 1);
+        assert!(replays.is_empty());
+        drop(old_sender);
+        assert_eq!(
+            conn.renderer_call_for_frontend_for_session_owner(None, 72),
+            Some(old_correlation)
+        );
+
+        let termination_events = conn.terminate_prepared_renderer_calls_after_navigation(
+            terminations,
+            "Inspected target navigated or closed",
+        );
+        assert_eq!(termination_events.len(), 1);
+        let response = termination_events[0]
+            .protocol_message()
+            .expect("sessionless termination should emit a frontend response");
+        assert_eq!(response["id"], json!(72));
+        assert!(response.get("sessionId").is_none());
+        assert_eq!(response["error"]["code"], json!(-32000));
+        assert!(
+            conn.renderer_runtime_command_cause_for_frontend(None, 72)
+                .is_none()
+        );
     }
 
     #[test]

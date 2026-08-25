@@ -55,17 +55,23 @@ pub(crate) struct SessionRendererCallReplay {
     replay: PreparedRendererCallReplay,
 }
 
+#[derive(Debug)]
+pub(crate) struct SessionRendererCallTermination {
+    frontend_session_id: Option<String>,
+    termination: PreparedRendererCallTermination,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct PreparedRendererCallReplacements {
     new_attachment_id: Option<moli_page_types::RendererAgentAttachmentId>,
-    terminations: Vec<PreparedRendererCallTermination>,
+    terminations: Vec<SessionRendererCallTermination>,
     replays: Vec<SessionRendererCallReplay>,
 }
 
 impl PreparedRendererCallReplacements {
     fn new(
         new_attachment_id: moli_page_types::RendererAgentAttachmentId,
-        terminations: Vec<PreparedRendererCallTermination>,
+        terminations: Vec<SessionRendererCallTermination>,
         replays: Vec<SessionRendererCallReplay>,
     ) -> Self {
         Self {
@@ -83,7 +89,7 @@ impl PreparedRendererCallReplacements {
         self,
     ) -> (
         moli_page_types::RendererAgentAttachmentId,
-        Vec<PreparedRendererCallTermination>,
+        Vec<SessionRendererCallTermination>,
         Vec<SessionRendererCallReplay>,
     ) {
         (
@@ -92,6 +98,12 @@ impl PreparedRendererCallReplacements {
             self.terminations,
             self.replays,
         )
+    }
+}
+
+impl SessionRendererCallTermination {
+    pub(crate) fn into_parts(self) -> (Option<String>, PreparedRendererCallTermination) {
+        (self.frontend_session_id, self.termination)
     }
 }
 
@@ -606,14 +618,19 @@ pub(crate) fn prepare_renderer_call_replays_for_devtools_sessions(
 }
 
 pub(crate) fn prepare_renderer_call_terminations_for_devtools_sessions(
+    primary_session_id: Option<&str>,
     primary: &mut DevToolsSessionState,
     auxiliary: &mut HashMap<String, DevToolsSessionState>,
     old_attachment_id: moli_page_types::RendererAgentAttachmentId,
     terminal_attachment_id: moli_page_types::RendererAgentAttachmentId,
-) -> Result<Vec<PreparedRendererCallTermination>, RendererCallIdExhausted> {
+) -> Result<Vec<SessionRendererCallTermination>, RendererCallIdExhausted> {
     let mut terminations = primary
         .prepare_renderer_call_terminations(old_attachment_id, terminal_attachment_id)?
         .into_iter()
+        .map(|termination| SessionRendererCallTermination {
+            frontend_session_id: primary_session_id.map(str::to_owned),
+            termination,
+        })
         .collect::<Vec<_>>();
     let mut auxiliary_session_ids = auxiliary.keys().cloned().collect::<Vec<_>>();
     auxiliary_session_ids.sort();
@@ -622,7 +639,13 @@ pub(crate) fn prepare_renderer_call_terminations_for_devtools_sessions(
             .get_mut(&session_id)
             .expect("selected auxiliary session must remain registered");
         terminations.extend(
-            state.prepare_renderer_call_terminations(old_attachment_id, terminal_attachment_id)?,
+            state
+                .prepare_renderer_call_terminations(old_attachment_id, terminal_attachment_id)?
+                .into_iter()
+                .map(|termination| SessionRendererCallTermination {
+                    frontend_session_id: Some(session_id.clone()),
+                    termination,
+                }),
         );
     }
     Ok(terminations)
@@ -636,6 +659,7 @@ pub(crate) fn prepare_renderer_call_replacements_for_devtools_sessions(
     new_attachment_id: moli_page_types::RendererAgentAttachmentId,
 ) -> Result<PreparedRendererCallReplacements, RendererCallIdExhausted> {
     let terminations = prepare_renderer_call_terminations_for_devtools_sessions(
+        primary_session_id,
         primary,
         auxiliary,
         old_attachment_id,
