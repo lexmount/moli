@@ -1815,6 +1815,34 @@ fn fetch_client_rejects_private_network_targets_via_host_resolve_override() {
 }
 
 #[test]
+fn fetch_client_rejects_ip_literal_private_target_via_host_resolve_override() {
+    let server = ScriptedHttpServer::spawn(vec![ScriptedResponse::ok("should-not-be-reached")]);
+    let port = Url::parse(&server.url())
+        .unwrap()
+        .port()
+        .expect("scripted server URL should include a port");
+    let mut config = FetchConfig::default();
+    config.set_http_proxy(Some(String::new()));
+    config.set_network_blocking(true, vec![]);
+    config.set_http_host_resolve(vec![format!("1.1.1.1:{port}:127.0.0.1")]);
+
+    let error = fetch_with_config_for_test(
+        &config,
+        Request::get(&format!("http://1.1.1.1:{port}/")).unwrap(),
+    )
+    .unwrap_err();
+    let error_chain = format!("{error:#}");
+
+    assert!(
+        error_chain.contains("blocked private network address `127.0.0.1`"),
+        "unexpected error: {error_chain}"
+    );
+    assert_eq!(server.hits(), 0);
+
+    server.shutdown();
+}
+
+#[test]
 fn fetch_client_rejects_configured_cidrs() {
     let mut config = FetchConfig::default();
     config.set_network_blocking(false, vec!["198.18.0.0/15".parse().unwrap()]);
