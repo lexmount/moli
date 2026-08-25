@@ -190,3 +190,37 @@ fn multibyte_values_keep_character_boundaries() {
     );
     assert_eq!(unquote_parameter_value("\"caf\\é\""), "café");
 }
+
+#[test]
+fn a_quote_outside_a_parameter_value_is_ordinary_data() {
+    // A `"` that does not open a parameter value must not swallow the rest of
+    // the field, or the parameters behind it become invisible.
+    assert_eq!(
+        split_outside_quoted_strings("text/html;\";charset=gbk", ';'),
+        vec!["text/html", "\"", "charset=gbk"]
+    );
+    assert_eq!(
+        split_outside_quoted_strings("a\"b;c", ';'),
+        vec!["a\"b", "c"]
+    );
+}
+
+#[test]
+fn whitespace_between_equals_and_a_quoted_value_still_opens_it() {
+    assert_eq!(
+        split_outside_quoted_strings("text/html; boundary =  \"; x\"; charset=utf-8", ';'),
+        vec!["text/html", " boundary =  \"; x\"", " charset=utf-8"]
+    );
+}
+
+#[test]
+fn a_trailing_backslash_is_kept_rather_than_dropped() {
+    // Dropping it would turn a malformed value into a well-formed one.
+    assert_eq!(unquote_parameter_value("\"31536000\\"), "31536000\\");
+    assert_eq!(unquote_parameter_value("\"a\\"), "a\\");
+}
+
+#[test]
+fn an_escaped_quote_survives_as_data() {
+    assert_eq!(unquote_parameter_value("\"utf-8\\\"\""), "utf-8\"");
+}

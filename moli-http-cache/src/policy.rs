@@ -295,4 +295,15 @@ mod tests {
         ));
         assert!(request_pragma_requires_validation("no-cache"));
     }
+
+    #[test]
+    fn a_trailing_backslash_does_not_manufacture_a_freshness_lifetime() {
+        // `31536000\` is malformed and must not parse as one year.
+        let headers = vec![(
+            "Cache-Control".to_owned(),
+            "max-age=\"31536000\\".to_owned(),
+        )];
+
+        assert_eq!(response_cache_policy(&headers).expires_at_unix_ms, None);
+    }
 }

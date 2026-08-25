@@ -19,12 +19,21 @@ pub fn charset_from_content_type(value: &str) -> Option<String> {
         if !name.trim().eq_ignore_ascii_case("charset") {
             continue;
         }
-        let charset = unquote_parameter_value(parameter_value.trim());
-        // Apostrophe delimiters are not a quoted string, but receivers have
-        // long tolerated them here, so keep stripping them.
-        let charset = charset.trim_matches(|ch| ch == '"' || ch == '\'').trim();
+        let parameter_value = parameter_value.trim();
+        let charset = if parameter_value.starts_with('"') {
+            // Delimiters are already gone, so any `"` left is data produced by
+            // an escaped quote and must not be trimmed away.
+            unquote_parameter_value(parameter_value).into_owned()
+        } else {
+            // Apostrophe delimiters are not a quoted string, but receivers
+            // have long tolerated them here, so keep stripping them.
+            parameter_value
+                .trim_matches(|ch| ch == '"' || ch == '\'')
+                .trim()
+                .to_owned()
+        };
         if !charset.is_empty() {
-            return Some(charset.to_owned());
+            return Some(charset);
         }
     }
     None

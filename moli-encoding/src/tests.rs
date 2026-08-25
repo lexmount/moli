@@ -733,3 +733,24 @@ fn header_charset_keeps_its_existing_tolerances() {
         Some("gbk")
     );
 }
+
+#[test]
+fn header_charset_recovers_after_a_stray_quote() {
+    // WPT MIME case: the `"` does not open a parameter value, so the following
+    // `;` still separates parameters and the real charset is found.
+    assert_eq!(
+        charset_from_content_type("text/html;\";charset=gbk").as_deref(),
+        Some("gbk")
+    );
+}
+
+#[test]
+fn header_charset_keeps_an_escaped_quote_as_data() {
+    // The quoted value is `utf-8"`, which is not a valid label. Trimming the
+    // data quote would manufacture a valid one.
+    let label = charset_from_content_type("text/html; charset=\"utf-8\\\"\"")
+        .expect("a parameter value is present");
+
+    assert_eq!(label, "utf-8\"");
+    assert!(encoding_for_label(&label).is_none());
+}
