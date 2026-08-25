@@ -154,6 +154,12 @@ const GRANDCHILD_PAGE: &str = r#"<!doctype html>
   <body><noscript><main id="grandchild-fallback">grandchild fallback</main></noscript></body>
 </html>"#;
 
+const JAVASCRIPT_URL_PAGE: &str = r#"<!doctype html>
+<iframe
+  id="javascript-url-child"
+  src="javascript:document.documentElement.setAttribute('data-javascript-url-ran', 'yes')"
+></iframe>"#;
+
 struct DisableJsFixtureServer {
     base_url: String,
     requests: Arc<Mutex<Vec<String>>>,
@@ -169,6 +175,10 @@ impl DisableJsFixtureServer {
             .route("/page.html", get(|| async { Html(MAIN_PAGE) }))
             .route("/child.html", get(|| async { Html(CHILD_PAGE) }))
             .route("/grandchild.html", get(|| async { Html(GRANDCHILD_PAGE) }))
+            .route(
+                "/javascript-url.html",
+                get(|| async { Html(JAVASCRIPT_URL_PAGE) }),
+            )
             .route("/redirect.html", get(redirect_to_page))
             .route("/meta-refresh.html", get(meta_refresh_page))
             .route("/document-write.html", get(document_write_page))
@@ -450,6 +460,80 @@ fn blocks_dynamic_scripts_and_event_handlers() -> Result<()> {
     assert!(
         stdout.contains("data-dynamic-disable-js-probe=\"ready\""),
         "dynamic page-owned code was not observed long enough: {stdout}"
+    );
+    Ok(())
+}
+
+#[test]
+fn blocks_child_javascript_url_execution() -> Result<()> {
+    const READY_SCRIPT: &str = r#"(() => {
+        const child = document.getElementById('javascript-url-child')?.contentDocument;
+        if (!child?.documentElement) {
+            return false;
+        }
+        if (!globalThis.__disableJsJavascriptUrlProbeStarted) {
+            globalThis.__disableJsJavascriptUrlProbeStarted = Date.now();
+            return false;
+        }
+        if (Date.now() - globalThis.__disableJsJavascriptUrlProbeStarted < 150) {
+            return false;
+        }
+        document.documentElement.setAttribute('data-javascript-url-disable-js-probe', 'ready');
+        return true;
+    })()"#;
+
+    let runtime = tokio::runtime::Runtime::new()?;
+    let server = runtime.block_on(DisableJsFixtureServer::spawn())?;
+    let output = fetch_disabled_until(&server, "/javascript-url.html", READY_SCRIPT, &[])?;
+
+    assert!(
+        output.status.success(),
+        "script-disabled javascript URL fixture failed: stdout={}\nstderr={}",
+        clean_output(&output.stdout),
+        clean_output(&output.stderr)
+    );
+    let stdout = clean_output(&output.stdout);
+    assert!(
+        stdout.contains("data-javascript-url-disable-js-probe=\"ready\""),
+        "automation probe did not observe the child long enough: {stdout}"
+    );
+    assert!(
+        !stdout.contains("data-javascript-url-ran=&quot;yes&quot;"),
+        "a child javascript: URL executed despite --disable-js: {stdout}"
+    );
+    Ok(())
+}
+
+#[test]
+fn child_javascript_url_fixture_executes_by_default() -> Result<()> {
+    const READY_SCRIPT: &str = r#"(() => {
+        const child = document.getElementById('javascript-url-child')?.contentDocument;
+        return child?.documentElement?.getAttribute('data-javascript-url-ran') === 'yes';
+    })()"#;
+
+    let runtime = tokio::runtime::Runtime::new()?;
+    let server = runtime.block_on(DisableJsFixtureServer::spawn())?;
+    let output = run_fetch_cli_with_args(
+        &server.url("/javascript-url.html"),
+        &[
+            "--with-frames",
+            "--timeout",
+            "5000",
+            "--wait-script",
+            READY_SCRIPT,
+        ],
+    )?;
+
+    assert!(
+        output.status.success(),
+        "default javascript URL control failed: stdout={}\nstderr={}",
+        clean_output(&output.stdout),
+        clean_output(&output.stderr)
+    );
+    let stdout = clean_output(&output.stdout);
+    assert!(
+        stdout.contains("data-javascript-url-ran=&quot;yes&quot;"),
+        "default control did not execute the child javascript: URL: {stdout}"
     );
     Ok(())
 }

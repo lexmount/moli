@@ -307,14 +307,21 @@ impl JsContextHost {
     }
 
     pub(in crate::native_bridge::context_host::child_frame_snapshots) fn detached_child_document_scripting_enabled(
-        document: &crate::dom::native::NativeDom,
-        owner: DomHandle,
+        snapshot_document: &crate::dom::native::NativeDom,
+        synthetic_owner: DomHandle,
         parent_scripting_enabled: bool,
         snapshot: &ChildBrowsingContextSnapshot,
     ) -> bool {
+        // Live child Documents do not reach this helper: their snapshot path uses the
+        // sandbox policy captured in `ChildBrowsingContextEntry` at commit time. This
+        // owner belongs to immutable navigation markup that was reparsed only to
+        // discover a synthetic nested frame, so its sandbox attribute is the policy
+        // input for that synthetic Document rather than a mutable live owner attribute.
         parent_scripting_enabled
             && super::super::child_frames::document_sandbox_policy_from_attribute(
-                document.get_attribute(owner, "sandbox").as_deref(),
+                snapshot_document
+                    .get_attribute(synthetic_owner, "sandbox")
+                    .as_deref(),
             )
             .allows_scripts
             && snapshot.policy_container.sandbox.allows_scripts

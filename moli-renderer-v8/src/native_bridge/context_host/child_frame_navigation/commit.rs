@@ -447,10 +447,20 @@ impl JsContextHost {
         dispatch_load_on_no_string_completion: bool,
         navigation_load: crate::frame_owner_model::FrameDocumentNavigationLoadBinding,
     ) {
+        if !self.child_browsing_context_scripting_enabled(handle) {
+            let cancelled = self
+                .cancel_child_javascript_url_navigation_without_execution(handle, navigation_load);
+            tracing::debug!(
+                ?handle,
+                %url,
+                cancelled,
+                "blocked child javascript URL because scripting is disabled"
+            );
+            return;
+        }
         let Some(snapshot) = self.frame_owner_store.current_child_owner_snapshot(handle) else {
-            self.clear_child_browsing_context_pending_navigation(handle);
-            let _ =
-                self.finish_child_frame_navigation_without_load_dispatch(handle, navigation_load);
+            let _ = self
+                .cancel_child_javascript_url_navigation_without_execution(handle, navigation_load);
             return;
         };
         let task_owner = FrameDocumentTaskOwner::new(
@@ -475,9 +485,8 @@ impl JsContextHost {
             )
             .is_none()
         {
-            let _ =
-                self.finish_child_frame_navigation_without_load_dispatch(handle, navigation_load);
-            let _ = self.clear_child_browsing_context_pending_navigation(handle);
+            let _ = self
+                .cancel_child_javascript_url_navigation_without_execution(handle, navigation_load);
             return;
         }
         tracing::debug!(
@@ -488,6 +497,28 @@ impl JsContextHost {
         );
     }
 
+    fn cancel_child_javascript_url_navigation_without_execution(
+        &mut self,
+        handle: DomHandle,
+        navigation_load: crate::frame_owner_model::FrameDocumentNavigationLoadBinding,
+    ) -> bool {
+        if self.current_child_navigation_load(handle) != Some(navigation_load) {
+            return false;
+        }
+        let Some(entry) = self.child_browsing_contexts.get_mut(&handle) else {
+            return false;
+        };
+        entry.clear_pending_navigation();
+        entry.clear_pending_top_level_history_length_increment();
+        entry.restore_navigation_entry_seed_from_committed();
+        self.clear_pending_form_submission_child_target(handle);
+        self.reject_replaced_service_worker_child_client_navigation(
+            handle,
+            "Cannot navigate to URL.".to_owned(),
+        );
+        self.finish_child_frame_navigation_without_load_dispatch(handle, navigation_load)
+    }
+
     pub(crate) fn drop_child_javascript_url_document_script(
         &mut self,
         work: &PendingChildJavascriptUrlDocumentScript,
@@ -495,14 +526,10 @@ impl JsContextHost {
         if !self.frame_document_task_owner_is_current(work.child_handle, work.owner) {
             return false;
         }
-        if !self.finish_child_frame_navigation_without_load_dispatch(
+        self.cancel_child_javascript_url_navigation_without_execution(
             work.child_handle,
             work.navigation_load,
-        ) {
-            return false;
-        }
-        let _ = self.clear_child_browsing_context_pending_navigation(work.child_handle);
-        true
+        )
     }
 
     pub(crate) fn frame_document_task_owner_is_current(
@@ -526,6 +553,7 @@ impl JsContextHost {
     ) -> Option<FrameDocumentJavascriptUrlScriptExecutionAction> {
         if !self.frame_document_task_owner_is_current(work.child_handle, work.owner)
             || self.current_child_navigation_load(work.child_handle) != Some(work.navigation_load)
+            || !self.child_browsing_context_scripting_enabled(work.child_handle)
         {
             return None;
         }

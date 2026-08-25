@@ -9323,6 +9323,55 @@ async fn iframe_javascript_url_non_string_completion_does_not_replace_child_docu
 }
 
 #[tokio::test]
+async fn queued_iframe_javascript_url_does_not_execute_after_scripting_is_disabled() {
+    let mut vm = new_storage_test_vm("https://iframe-javascript-url-disabled.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  const frame = document.createElement('iframe');
+  frame.id = 'disabled-javascript-url-frame';
+  frame.src = "javascript:document.documentElement.setAttribute('data-javascript-url-ran', 'yes')";
+  (document.body || document.documentElement || document).appendChild(frame);
+})()
+"#,
+    )
+    .expect("disabled iframe javascript URL setup should evaluate as automation");
+    let child_handle = vm
+        .document_runtime
+        .dom_host()
+        .element_handle_by_id("disabled-javascript-url-frame")
+        .expect("disabled javascript URL iframe owner");
+
+    assert!(
+        vm.run_child_frame_task_source_once_for_test(ChildFrameSemanticTurnKind::NavigationCommit)
+            .await,
+        "NavigationCommit must publish the javascript URL work before scripting is disabled"
+    );
+    vm.set_script_execution_disabled(true);
+    expect_child_frame_task_source_after_realm_prerequisite(
+        &mut vm,
+        ChildFrameSemanticTurnKind::DocumentScriptReady,
+        "the already-queued javascript URL work must be consumed as disabled",
+    )
+    .await;
+    assert_eq!(
+        vm.eval(
+            "String(document.getElementById('disabled-javascript-url-frame').contentDocument.documentElement.getAttribute('data-javascript-url-ran'))"
+        )
+        .expect("disabled child document should remain observable to automation"),
+        "null"
+    );
+    assert!(
+        vm._context_host
+            .borrow()
+            .child_browsing_context_pending_live_navigation_for_test(child_handle)
+            .is_none(),
+        "disabled javascript URL work must settle its exact pending navigation"
+    );
+}
+
+#[tokio::test]
 async fn iframe_javascript_url_exception_does_not_replace_child_document_or_load() {
     let mut vm = new_storage_test_vm("https://iframe-javascript-url-exception.test/");
 
@@ -12207,6 +12256,9 @@ async fn detached_frame_tree_snapshot_reuses_each_child_document_scripting_polic
         "enabled srcdoc commit",
     )
     .await;
+    enabled_vm
+        .eval("document.getElementById('enabled').setAttribute('sandbox', 'allow-same-origin')")
+        .expect("tightening the owner sandbox after commit should evaluate");
 
     let enabled_handle = enabled_vm
         .document_runtime
@@ -12253,6 +12305,9 @@ async fn detached_frame_tree_snapshot_reuses_each_child_document_scripting_polic
         "sandboxed srcdoc commit",
     )
     .await;
+    sandboxed_vm
+        .eval("document.getElementById('sandboxed').removeAttribute('sandbox')")
+        .expect("loosening the owner sandbox after commit should evaluate");
 
     let sandboxed_handle = sandboxed_vm
         .document_runtime
