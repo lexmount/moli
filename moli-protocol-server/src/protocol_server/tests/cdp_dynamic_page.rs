@@ -26,6 +26,96 @@ async fn connect_dynamic_page(addr: std::net::SocketAddr, target_id: &str) -> Te
         .0
 }
 
+async fn connect_discovered_foreground_tab(
+    addr: std::net::SocketAddr,
+    target_id: &str,
+) -> TestCdpSocket {
+    let (status, body) = fetch_server_response(addr, "GET", "/json/list?for_tab").await;
+    assert_eq!(status, 200);
+    let targets: Vec<serde_json::Value> =
+        serde_json::from_slice(&body).expect("parse tab target discovery response");
+    let target = targets
+        .iter()
+        .find(|target| target["id"] == json!(target_id))
+        .expect("discovered foreground tab target");
+    assert_eq!(target["type"], json!("tab"));
+    let websocket_url = target["webSocketDebuggerUrl"]
+        .as_str()
+        .expect("foreground tab websocket URL");
+    assert!(websocket_url.contains("/devtools/tab/"));
+    connect_async(websocket_url)
+        .await
+        .expect("foreground tab websocket should connect")
+        .0
+}
+
+async fn enable_foreground_tab_page(
+    socket: &mut TestCdpSocket,
+    command_id: u64,
+    target_id: &str,
+) -> String {
+    send_cdp_command_without_wait(
+        socket,
+        command_id,
+        "Target.setAutoAttach",
+        None,
+        json!({
+            "autoAttach": true,
+            "waitForDebuggerOnStart": true,
+            "flatten": true
+        }),
+    )
+    .await;
+    let mut saw_response = false;
+    let mut attached_session_id = None;
+    let messages = recv_until_match(socket, |message| {
+        saw_response |= message["id"] == json!(command_id);
+        if message["method"] == json!("Target.attachedToTarget")
+            && message["params"]["targetInfo"]["targetId"] == json!(target_id)
+        {
+            attached_session_id = message["params"]["sessionId"].as_str().map(str::to_owned);
+        }
+        saw_response && attached_session_id.is_some()
+    })
+    .await;
+    assert_eq!(response_by_id(&messages, command_id)["result"], json!({}));
+    attached_session_id.expect("foreground tab page session")
+}
+
+async fn expect_foreground_tab_page_replaced(
+    socket: &mut TestCdpSocket,
+    old_session_id: &str,
+    target_id: &str,
+) -> String {
+    let mut detached = false;
+    let mut attached_session = None;
+    recv_until_match(socket, |message| {
+        detached |= message["method"] == json!("Target.detachedFromTarget")
+            && message["params"]["sessionId"] == json!(old_session_id);
+        if message["method"] == json!("Target.attachedToTarget")
+            && message["params"]["targetInfo"]["targetId"] == json!(target_id)
+        {
+            attached_session = message["params"]["sessionId"].as_str().map(|session_id| {
+                (
+                    session_id.to_owned(),
+                    message["params"]["waitingForDebugger"]
+                        .as_bool()
+                        .expect("replacement attachment waitingForDebugger"),
+                )
+            });
+        }
+        detached && attached_session.is_some()
+    })
+    .await;
+    let (session_id, waiting_for_debugger) =
+        attached_session.expect("replacement foreground tab page session");
+    assert!(
+        !waiting_for_debugger,
+        "an existing replacement page must not wait for the debugger"
+    );
+    session_id
+}
+
 async fn wait_for_websocket_close(socket: &mut TestCdpSocket, label: &str) {
     let wait_for_close = async {
         loop {
@@ -46,6 +136,26 @@ fn response_by_id(messages: &[serde_json::Value], id: u64) -> &serde_json::Value
         .iter()
         .find(|message| message["id"] == json!(id))
         .unwrap_or_else(|| panic!("missing response id {id}: {messages:#?}"))
+}
+
+fn is_screencast_visibility(message: &serde_json::Value, visible: bool) -> bool {
+    message["method"] == json!("Page.screencastVisibilityChanged")
+        && message["params"]["visible"] == json!(visible)
+}
+
+fn is_target_created_for_url(message: &serde_json::Value, url: &str) -> bool {
+    message["method"] == json!("Target.targetCreated")
+        && message["params"]["targetInfo"]["url"] == json!(url)
+}
+
+async fn expect_screencast_visibility(socket: &mut TestCdpSocket, visible: bool) {
+    let messages =
+        recv_until_match(socket, |message| is_screencast_visibility(message, visible)).await;
+    assert!(
+        messages
+            .iter()
+            .any(|message| is_screencast_visibility(message, visible))
+    );
 }
 
 async fn enable_runtime_and_expect_default_context(
@@ -209,18 +319,26 @@ async fn fetch_server_response(
     (status, response[header_end + 4..].to_vec())
 }
 
-async fn dispatch_primary_click(socket: &mut TestCdpSocket, command_id: u64, x: u32, y: u32) {
+async fn dispatch_primary_click(
+    socket: &mut TestCdpSocket,
+    command_id: u64,
+    session_id: Option<&str>,
+    x: u32,
+    y: u32,
+) -> Vec<serde_json::Value> {
+    let mut messages = Vec::new();
     for (offset, event_type) in [(0, "mousePressed"), (1, "mouseReleased")] {
         let response = send_cdp_command(
             socket,
             command_id + offset,
             "Input.dispatchMouseEvent",
-            None,
+            session_id,
             json!({
                 "type": event_type,
                 "x": x,
                 "y": y,
                 "button": "left",
+                "buttons": if event_type == "mousePressed" { 1 } else { 0 },
                 "clickCount": 1
             }),
         )
@@ -230,7 +348,9 @@ async fn dispatch_primary_click(socket: &mut TestCdpSocket, command_id: u64, x: 
                 .get("result")
                 .is_some()
         );
+        messages.extend(response);
     }
+    messages
 }
 
 async fn evaluate_page_surface(socket: &mut TestCdpSocket, command_id: u64) -> serde_json::Value {
@@ -427,7 +547,7 @@ async fn websocket_cdp_dynamic_page_routes_to_existing_target_owner() {
     assert_eq!(
         listed_target["devtoolsFrontendUrl"],
         json!(format!(
-            "/devtools/inspector.html?ws={addr}/devtools/page/{target_id}"
+            "/devtools/inspector.html?targetType=tab&ws={addr}/devtools/tab/{target_id}"
         ))
     );
     let mut page = connect_dynamic_page(addr, &target_id).await;
@@ -554,7 +674,11 @@ async fn foreground_blank_click_activates_popup_browser_surface() {
     let (mut opener, _) = connect_async(format!("ws://{addr}/devtools/page/{DEFAULT_TARGET_ID}"))
         .await
         .expect("connect default page websocket");
+    let mut foreground_tab = connect_discovered_foreground_tab(addr, DEFAULT_TARGET_ID).await;
+    let opener_foreground_session =
+        enable_foreground_tab_page(&mut foreground_tab, 1, DEFAULT_TARGET_ID).await;
     let popup_url = "data:text/html,%3Ctitle%3EForeground%20Popup%3C/title%3E";
+    let popup_final_url = "data:text/html,<title>Foreground Popup</title>";
     let opener_url = format!(
         "data:text/html,<title>Popup Opener</title>\
          <a id='popup' href='{popup_url}' \
@@ -570,7 +694,107 @@ async fn foreground_blank_click_activates_popup_browser_surface() {
     )
     .await;
     assert!(response_by_id(&navigation, 1).get("result").is_some());
-    dispatch_primary_click(&mut opener, 2, 20, 20).await;
+    assert!(
+        response_by_id(
+            &send_cdp_command(&mut opener, 2, "Page.enable", None, json!({})).await,
+            2,
+        )
+        .get("result")
+        .is_some()
+    );
+    assert!(
+        response_by_id(
+            &send_cdp_command(
+                &mut opener,
+                3,
+                "Target.setDiscoverTargets",
+                None,
+                json!({ "discover": true }),
+            )
+            .await,
+            3,
+        )
+        .get("result")
+        .is_some()
+    );
+    let screencast_started =
+        send_cdp_command(&mut opener, 4, "Page.startScreencast", None, json!({})).await;
+    assert_eq!(response_by_id(&screencast_started, 4)["result"], json!({}));
+    assert!(
+        screencast_started
+            .iter()
+            .any(|message| is_screencast_visibility(message, true))
+    );
+
+    let foreground_link = send_cdp_command(
+        &mut foreground_tab,
+        3,
+        "Runtime.evaluate",
+        Some(&opener_foreground_session),
+        json!({
+            "expression": "(() => { const link = document.getElementById('popup'); const rect = link?.getBoundingClientRect(); return { href: location.href, link: link?.href, x: rect?.x, y: rect?.y, width: rect?.width, height: rect?.height, hit: document.elementFromPoint(20, 20)?.id }; })()",
+            "returnByValue": true
+        }),
+    )
+    .await;
+    assert_eq!(
+        response_by_id(&foreground_link, 3)["result"]["result"]["value"]["link"],
+        json!(popup_final_url)
+    );
+
+    dispatch_primary_click(
+        &mut foreground_tab,
+        5,
+        Some(&opener_foreground_session),
+        20,
+        20,
+    )
+    .await;
+    let mut activation_messages = recv_until_match(&mut opener, |message| {
+        is_target_created_for_url(message, popup_final_url)
+            || is_screencast_visibility(message, false)
+    })
+    .await;
+    let mut saw_popup_created = activation_messages
+        .iter()
+        .any(|message| is_target_created_for_url(message, popup_final_url));
+    let mut saw_opener_hidden = activation_messages
+        .iter()
+        .any(|message| is_screencast_visibility(message, false));
+    if !saw_popup_created || !saw_opener_hidden {
+        activation_messages.extend(
+            recv_until_match(&mut opener, |message| {
+                saw_popup_created |= is_target_created_for_url(message, popup_final_url);
+                saw_opener_hidden |= is_screencast_visibility(message, false);
+                saw_popup_created && saw_opener_hidden
+            })
+            .await,
+        );
+    }
+    let popup_created_index = activation_messages
+        .iter()
+        .position(|message| is_target_created_for_url(message, popup_final_url))
+        .expect("foreground click should create the popup target");
+    let opener_hidden_index = activation_messages
+        .iter()
+        .position(|message| is_screencast_visibility(message, false))
+        .expect("foreground click should hide the opener screencast");
+    assert!(
+        popup_created_index < opener_hidden_index,
+        "Chromium reports popup creation before the opener becomes inactive: {activation_messages:#?}"
+    );
+    let popup_target_id = activation_messages
+        .iter()
+        .find(|message| is_target_created_for_url(message, popup_final_url))
+        .and_then(|message| message["params"]["targetInfo"]["targetId"].as_str())
+        .expect("foreground popup target id")
+        .to_owned();
+    let popup_foreground_session = expect_foreground_tab_page_replaced(
+        &mut foreground_tab,
+        &opener_foreground_session,
+        &popup_target_id,
+    )
+    .await;
 
     let targets = wait_for_target_list(
         addr,
@@ -583,22 +807,56 @@ async fn foreground_blank_click_activates_popup_browser_surface() {
         },
     )
     .await;
-    let popup_target_id = targets[0]["id"]
-        .as_str()
-        .expect("popup target id")
-        .to_owned();
+    assert_eq!(targets[0]["id"], json!(&popup_target_id));
+    let foreground_popup = send_cdp_command(
+        &mut foreground_tab,
+        9,
+        "Runtime.evaluate",
+        Some(&popup_foreground_session),
+        json!({
+            "expression": "location.href",
+            "returnByValue": true
+        }),
+    )
+    .await;
+    assert_eq!(
+        response_by_id(&foreground_popup, 9)["result"]["result"]["value"],
+        json!(popup_final_url)
+    );
     assert_eq!(targets[0]["title"], json!("Foreground Popup"));
     assert_eq!(targets[1]["id"], json!(DEFAULT_TARGET_ID));
     assert_eq!(targets[1]["title"], json!("Popup Opener"));
     assert_eq!(targets[1]["url"], json!(&opener_url));
 
-    let opener_surface = evaluate_page_surface(&mut opener, 4).await;
+    let opener_surface = evaluate_page_surface(&mut opener, 7).await;
     assert_eq!(opener_surface["href"], json!(&opener_url));
     assert_page_surface_active(&opener_surface, false);
+    let parked_opener_screencast =
+        send_cdp_command(&mut opener, 8, "Page.startScreencast", None, json!({})).await;
+    assert_eq!(
+        response_by_id(&parked_opener_screencast, 8)["result"],
+        json!({})
+    );
+    assert!(
+        parked_opener_screencast
+            .iter()
+            .any(|message| is_screencast_visibility(message, false))
+    );
 
     let mut popup = connect_dynamic_page(addr, &popup_target_id).await;
-    let popup_surface = evaluate_page_surface(&mut popup, 5).await;
+    let popup_surface = evaluate_page_surface(&mut popup, 9).await;
     assert_page_surface_active(&popup_surface, true);
+    let popup_screencast_started =
+        send_cdp_command(&mut popup, 10, "Page.startScreencast", None, json!({})).await;
+    assert_eq!(
+        response_by_id(&popup_screencast_started, 10)["result"],
+        json!({})
+    );
+    assert!(
+        popup_screencast_started
+            .iter()
+            .any(|message| is_screencast_visibility(message, true))
+    );
 
     let (activate_status, _) =
         fetch_server_response(addr, "GET", "/json/activate/moli-default").await;
@@ -614,9 +872,34 @@ async fn foreground_blank_click_activates_popup_browser_surface() {
     )
     .await;
 
-    let restored_opener = evaluate_page_surface(&mut opener, 6).await;
+    expect_screencast_visibility(&mut opener, true).await;
+    expect_screencast_visibility(&mut popup, false).await;
+
+    let restored_foreground_session = expect_foreground_tab_page_replaced(
+        &mut foreground_tab,
+        &popup_foreground_session,
+        DEFAULT_TARGET_ID,
+    )
+    .await;
+    let foreground_opener = send_cdp_command(
+        &mut foreground_tab,
+        10,
+        "Runtime.evaluate",
+        Some(&restored_foreground_session),
+        json!({
+            "expression": "location.href",
+            "returnByValue": true
+        }),
+    )
+    .await;
+    assert_eq!(
+        response_by_id(&foreground_opener, 10)["result"]["result"]["value"],
+        json!(&opener_url)
+    );
+
+    let restored_opener = evaluate_page_surface(&mut opener, 11).await;
     assert_page_surface_active(&restored_opener, true);
-    let demoted_popup = evaluate_page_surface(&mut popup, 7).await;
+    let demoted_popup = evaluate_page_surface(&mut popup, 12).await;
     assert_page_surface_active(&demoted_popup, false);
 
     abort_test_cdp_server(server).await;

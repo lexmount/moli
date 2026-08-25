@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::{Context, Result};
+use serde_json::Value;
 
 #[derive(Clone)]
 pub(super) struct CdpCommandFrontend {
@@ -12,6 +13,7 @@ pub(super) struct CdpCommandFrontend {
 pub(super) enum PendingCommandEffect {
     None,
     AttachToTarget { target_id: Option<String> },
+    ReplayForegroundTabTargetCommand { method: String, params: Value },
 }
 
 pub(super) struct PendingCommandRoute {

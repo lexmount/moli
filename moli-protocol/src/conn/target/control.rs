@@ -470,6 +470,11 @@ impl TargetControlPlane {
         self.sessions.attached_sessions_for_target(target_id)
     }
 
+    pub(crate) fn target_has_waiting_for_debugger_session(&self, target_id: &str) -> bool {
+        self.sessions
+            .target_has_waiting_for_debugger_session(target_id)
+    }
+
     pub(crate) fn auto_attached_sessions_for_owner(
         &self,
         owner_session_id: Option<&str>,

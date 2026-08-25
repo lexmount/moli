@@ -7,6 +7,7 @@ use crate::{cdp_frontend::CdpFrontendEndpoint, cdp_writer::spawn_socket_sink};
 pub(super) enum CdpFrontendSocketKind {
     Browser,
     Page { target_id: String },
+    ForegroundTab { page_target_id: String },
 }
 
 pub(super) async fn run_cdp_frontend_socket(
@@ -22,6 +23,11 @@ pub(super) async fn run_cdp_frontend_socket(
         CdpFrontendSocketKind::Page { target_id } => {
             endpoint.attach_page(target_id.clone(), sink).await
         }
+        CdpFrontendSocketKind::ForegroundTab { page_target_id } => {
+            endpoint
+                .attach_foreground_tab(page_target_id.clone(), sink)
+                .await
+        }
     };
     let frontend_id = match frontend_id {
         Ok(frontend_id) => frontend_id,
@@ -36,6 +42,7 @@ pub(super) async fn run_cdp_frontend_socket(
         kind: match kind {
             CdpFrontendSocketKind::Browser => CdpFrontendKind::Browser,
             CdpFrontendSocketKind::Page { .. } => CdpFrontendKind::Page,
+            CdpFrontendSocketKind::ForegroundTab { .. } => CdpFrontendKind::ForegroundTab,
         },
     };
 
@@ -95,6 +102,7 @@ async fn wait_for_peer_close(socket_rx: &mut futures_util::stream::SplitStream<W
 enum CdpFrontendKind {
     Browser,
     Page,
+    ForegroundTab,
 }
 
 struct CdpFrontendDetachGuard {
@@ -111,6 +119,9 @@ impl CdpFrontendDetachGuard {
         match self.kind {
             CdpFrontendKind::Browser => self.endpoint.detach_browser(frontend_id),
             CdpFrontendKind::Page => self.endpoint.detach_page(frontend_id),
+            CdpFrontendKind::ForegroundTab => {
+                self.endpoint.detach_foreground_tab(frontend_id);
+            }
         }
     }
 }

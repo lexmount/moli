@@ -725,7 +725,7 @@ pub(crate) async fn create_popup_target_from_renderer_output_background_events_a
         &target_id,
         target_info,
     );
-    if !conn.auto_attach_wait_for_debugger_on_start
+    if !conn.target_has_waiting_for_debugger_session(&target_id)
         && let Some(navigation) = PopupTargetNavigationOwnerAction::capture(
             conn,
             &browser_context_id,
@@ -856,7 +856,7 @@ pub(super) async fn start_target_url_navigation_if_allowed_background_events_asy
     out: &mut Vec<BackgroundProtocolEvent>,
     target_id: &str,
 ) {
-    if conn.auto_attach_wait_for_debugger_on_start {
+    if conn.target_has_waiting_for_debugger_session(target_id) {
         return;
     }
     let Some(route) = conn.target_session_route_for_target_id(target_id) else {
@@ -1008,22 +1008,30 @@ pub(crate) async fn complete_popup_target_activation_action_async(
             conn.take_scheduler_events(),
         );
     }
-    if let Err(error) = activate_popup_target_async(conn, &browser_context_id, &target_id).await {
-        tracing::debug!(
-            browser_context_id,
-            target_id,
-            %error,
-            "popup target could not be activated"
-        );
-    }
-    crate::conn::CdpTurnOutcome::new_with_protocol_events(Vec::new(), conn.take_scheduler_events())
+    let protocol_events =
+        match activate_popup_target_async(conn, &browser_context_id, &target_id).await {
+            Ok(events) => events,
+            Err(error) => {
+                tracing::debug!(
+                    browser_context_id,
+                    target_id,
+                    %error,
+                    "popup target could not be activated"
+                );
+                Vec::new()
+            }
+        };
+    crate::conn::CdpTurnOutcome::new_with_protocol_events(
+        protocol_events,
+        conn.take_scheduler_events(),
+    )
 }
 
 async fn activate_popup_target_async(
     conn: &mut CdpConnection,
     browser_context_id: &str,
     target_id: &str,
-) -> Result<(), String> {
+) -> Result<Vec<BackgroundProtocolEvent>, String> {
     let restore_browser_context_id = previously_active_browser_context_id(conn);
     let result = if let Err(message) = select_browser_context_for_target(conn, target_id) {
         Err(message.to_owned())
@@ -1038,14 +1046,14 @@ async fn activate_popup_target_async(
         .as_ref()
         .is_some_and(|browser_context| browser_context.is_active_target(target_id))
     {
-        Ok(())
+        Ok(Vec::new())
     } else {
         match conn
             .promote_background_target_to_active_for_connection_async(target_id)
             .await
         {
-            Ok(true) => Ok(()),
-            Ok(false) => Err("PopupTargetUnavailable".to_owned()),
+            Ok(Some(activation)) => Ok(activation.into_protocol_events()),
+            Ok(None) => Err("PopupTargetUnavailable".to_owned()),
             Err(message) => Err(message),
         }
     };
@@ -2085,8 +2093,10 @@ async fn set_auto_attach_inner_async(
                     .promote_background_target_to_active_for_connection_async(&promote_target_id)
                     .await
                 {
-                    Ok(true) => {}
-                    Ok(false) => {}
+                    Ok(Some(activation)) => {
+                        out.extend_background_events(activation.into_protocol_events());
+                    }
+                    Ok(None) => {}
                     Err(message) => {
                         panic!(
                             "same-context target should remain promotable during auto-attach: {message}"
@@ -2852,7 +2862,12 @@ pub(super) async fn complete_activate_target_command_async(
     command: DevToolsActivateTargetCommand,
 ) -> CommandOutputPlan {
     match execute_devtools_activate_target_command_async(conn, command).await {
-        Ok(()) => CommandOutputPlan::success(),
+        Ok(events) => {
+            let mut plan = CommandOutputPlan::default();
+            plan.extend_background_events(events);
+            plan.push_success();
+            plan
+        }
         Err(error) => CommandOutputPlan::from_devtools_error(error),
     }
 }
@@ -2860,7 +2875,7 @@ pub(super) async fn complete_activate_target_command_async(
 pub(super) async fn execute_devtools_activate_target_command_async(
     conn: &mut CdpConnection,
     command: DevToolsActivateTargetCommand,
-) -> Result<(), DevToolsError> {
+) -> Result<Vec<BackgroundProtocolEvent>, DevToolsError> {
     let target_id = command.target_id.as_str().to_owned();
     let previously_active_browser_context_id = previously_active_browser_context_id(conn);
     if let Err(message) = select_browser_context_for_target(conn, &target_id) {
@@ -2888,21 +2903,21 @@ pub(super) async fn execute_devtools_activate_target_command_async(
             conn,
             previously_active_browser_context_id.as_deref(),
         );
-        return Ok(());
+        return Ok(Vec::new());
     }
     if bc.has_dedicated_worker_target(&target_id) {
         restore_previously_active_browser_context(
             conn,
             previously_active_browser_context_id.as_deref(),
         );
-        return Ok(());
+        return Ok(Vec::new());
     }
     if bc.has_service_worker_target(&target_id) {
         restore_previously_active_browser_context(
             conn,
             previously_active_browser_context_id.as_deref(),
         );
-        return Ok(());
+        return Ok(Vec::new());
     }
     if !bc.has_active_target() && bc.background_targets.is_empty() {
         restore_previously_active_browser_context(
@@ -2914,7 +2929,7 @@ pub(super) async fn execute_devtools_activate_target_command_async(
             "TargetNotLoaded",
         ));
     }
-    if !matches!(
+    let protocol_events = if !matches!(
         bc.active_target_identity(),
         Some((ref active_target_id, _)) if active_target_id == &target_id
     ) && bc.background_target(&target_id).is_some()
@@ -2923,8 +2938,8 @@ pub(super) async fn execute_devtools_activate_target_command_async(
             .promote_background_target_to_active_for_connection_async(&target_id)
             .await
         {
-            Ok(true) => {}
-            Ok(false) => {
+            Ok(Some(activation)) => activation.into_protocol_events(),
+            Ok(None) => {
                 restore_previously_active_browser_context(
                     conn,
                     previously_active_browser_context_id.as_deref(),
@@ -2954,13 +2969,15 @@ pub(super) async fn execute_devtools_activate_target_command_async(
             DevToolsErrorKind::NoSuchTarget,
             "UnknownTargetId",
         ));
-    }
+    } else {
+        Vec::new()
+    };
 
     restore_previously_active_browser_context(
         conn,
         previously_active_browser_context_id.as_deref(),
     );
-    Ok(())
+    Ok(protocol_events)
 }
 
 #[cfg(test)]

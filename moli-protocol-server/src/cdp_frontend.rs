@@ -27,11 +27,22 @@ pub(crate) enum CdpFrontendControlRequest {
         sink: CdpSocketSink,
         completion_tx: oneshot::Sender<Result<u64>>,
     },
+    AttachForegroundTab {
+        page_target_id: String,
+        sink: CdpSocketSink,
+        completion_tx: oneshot::Sender<Result<u64>>,
+    },
     DetachBrowser {
         frontend_id: u64,
     },
     DetachPage {
         frontend_id: u64,
+    },
+    DetachForegroundTab {
+        frontend_id: u64,
+    },
+    ForegroundTabChanged {
+        page_target_id: String,
     },
     TargetDestroyed {
         target_id: String,
@@ -113,6 +124,30 @@ impl CdpFrontendEndpoint {
         }
     }
 
+    pub(crate) async fn attach_foreground_tab(
+        &self,
+        page_target_id: String,
+        sink: CdpSocketSink,
+    ) -> Result<u64> {
+        if self.is_shutting_down() {
+            bail!("CDP target owner is shutting down");
+        }
+        let (completion_tx, completion_rx) = oneshot::channel();
+        self.control_tx
+            .send(CdpFrontendControlRequest::AttachForegroundTab {
+                page_target_id,
+                sink,
+                completion_tx,
+            })
+            .context("CDP target owner is no longer available")?;
+        tokio::select! {
+            biased;
+            _ = self.wait_for_shutdown() => bail!("CDP owner stopped before foreground tab attach"),
+            completion = completion_rx => completion
+                .context("CDP owner stopped before foreground tab attach")?,
+        }
+    }
+
     pub(crate) async fn command(&self, frontend_id: u64, raw: String) -> bool {
         tokio::select! {
             biased;
@@ -131,6 +166,18 @@ impl CdpFrontendEndpoint {
         let _ = self
             .control_tx
             .send(CdpFrontendControlRequest::DetachPage { frontend_id });
+    }
+
+    pub(crate) fn detach_foreground_tab(&self, frontend_id: u64) {
+        let _ = self
+            .control_tx
+            .send(CdpFrontendControlRequest::DetachForegroundTab { frontend_id });
+    }
+
+    pub(crate) fn foreground_tab_changed(&self, page_target_id: String) {
+        let _ = self
+            .control_tx
+            .send(CdpFrontendControlRequest::ForegroundTabChanged { page_target_id });
     }
 
     pub(crate) fn target_destroyed(&self, target_id: String) {

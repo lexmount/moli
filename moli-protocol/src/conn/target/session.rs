@@ -355,6 +355,18 @@ impl TargetSessionRegistry {
         sorted_index_values(self.attached_sessions_by_target.get(target_id))
     }
 
+    pub(crate) fn target_has_waiting_for_debugger_session(&self, target_id: &str) -> bool {
+        self.attached_sessions_by_target
+            .get(target_id)
+            .is_some_and(|session_ids| {
+                session_ids.iter().any(|session_id| {
+                    self.attached_sessions
+                        .get(session_id)
+                        .is_some_and(|session| session.waiting_for_debugger)
+                })
+            })
+    }
+
     pub(crate) fn attached_session_owner_session_id(&self, session_id: &str) -> Option<&str> {
         self.attached_sessions
             .get(session_id)?
@@ -734,6 +746,31 @@ mod tests {
             registry.auto_attached_target_ids_for_owner(Some("SID-tab")),
             vec!["TID-page".to_owned()]
         );
+    }
+
+    #[test]
+    fn target_session_registry_scopes_waiting_for_debugger_to_attached_target() {
+        let mut registry = TargetSessionRegistry::default();
+        registry.commit_attached_session(PreparedAttachSession::new(
+            "SID-waiting".to_owned(),
+            Some("SID-owner"),
+            "TID-waiting",
+            None,
+            true,
+            true,
+        ));
+        registry.commit_attached_session(PreparedAttachSession::new(
+            "SID-running".to_owned(),
+            Some("SID-owner"),
+            "TID-running",
+            None,
+            true,
+            false,
+        ));
+
+        assert!(registry.target_has_waiting_for_debugger_session("TID-waiting"));
+        assert!(!registry.target_has_waiting_for_debugger_session("TID-running"));
+        assert!(!registry.target_has_waiting_for_debugger_session("TID-unattached"));
     }
 
     #[test]

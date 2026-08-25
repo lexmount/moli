@@ -11,6 +11,12 @@ pub(super) struct CdpFrontendTargetControl {
     default_target_materialized: bool,
 }
 
+struct ForegroundTabRoute {
+    browser_context_id: Option<String>,
+    page_target_id: String,
+    tab_target_id: String,
+}
+
 impl Default for CdpFrontendTargetControl {
     fn default() -> Self {
         Self {
@@ -23,6 +29,29 @@ impl Default for CdpFrontendTargetControl {
 
 impl CdpFrontendTargetControl {
     pub(super) async fn attach_page(
+        &mut self,
+        scheduler: &mut CdpScheduler,
+        frontend_router: &CdpFrontendRouter,
+        target_id: &str,
+    ) -> Result<String> {
+        self.attach_target(scheduler, frontend_router, target_id)
+            .await
+    }
+
+    pub(super) async fn attach_foreground_tab(
+        &mut self,
+        scheduler: &mut CdpScheduler,
+        frontend_router: &CdpFrontendRouter,
+        page_target_id: &str,
+    ) -> Result<(String, Option<String>)> {
+        let route = foreground_tab_route(scheduler, page_target_id)?;
+        let session_id = self
+            .attach_target(scheduler, frontend_router, &route.tab_target_id)
+            .await?;
+        Ok((session_id, route.browser_context_id))
+    }
+
+    async fn attach_target(
         &mut self,
         scheduler: &mut CdpScheduler,
         frontend_router: &CdpFrontendRouter,
@@ -48,6 +77,85 @@ impl CdpFrontendTargetControl {
             self.default_target_materialized = true;
         }
         Ok(session_id)
+    }
+
+    pub(super) async fn follow_foreground_tab_change(
+        &mut self,
+        scheduler: &mut CdpScheduler,
+        frontend_router: &CdpFrontendRouter,
+        page_target_id: String,
+    ) {
+        let route = match foreground_tab_route(scheduler, &page_target_id) {
+            Ok(route) => route,
+            Err(error) => {
+                tracing::warn!(
+                    target_id = page_target_id,
+                    ?error,
+                    "failed to resolve promoted foreground tab"
+                );
+                return;
+            }
+        };
+        let frontends = frontend_router
+            .foreground_tab_frontends_for_browser_context(route.browser_context_id.as_deref());
+        for frontend in frontends {
+            if frontend.page_target_id == route.page_target_id {
+                continue;
+            }
+            let new_session_id = match self
+                .attach_target(scheduler, frontend_router, &route.tab_target_id)
+                .await
+            {
+                Ok(session_id) => session_id,
+                Err(error) => {
+                    tracing::warn!(
+                        frontend_id = frontend.frontend_id,
+                        target_id = route.page_target_id,
+                        ?error,
+                        "failed to attach promoted foreground tab"
+                    );
+                    continue;
+                }
+            };
+            self.detach_frontend_session(scheduler, frontend_router, &frontend.base_session_id)
+                .await;
+            if let Err(error) = frontend_router.replace_foreground_tab_frontend_base(
+                frontend.frontend_id,
+                route.browser_context_id.clone(),
+                route.page_target_id.clone(),
+                new_session_id.clone(),
+            ) {
+                tracing::warn!(
+                    frontend_id = frontend.frontend_id,
+                    target_id = route.page_target_id,
+                    ?error,
+                    "failed to bind promoted foreground tab"
+                );
+                self.detach_frontend_session(scheduler, frontend_router, &new_session_id)
+                    .await;
+                continue;
+            }
+            for (method, params) in frontend.replayable_target_commands {
+                if let Err(error) = self
+                    .execute_command(
+                        scheduler,
+                        frontend_router,
+                        Some(&new_session_id),
+                        &method,
+                        params,
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        frontend_id = frontend.frontend_id,
+                        target_id = route.page_target_id,
+                        method,
+                        ?error,
+                        "failed to restore foreground tab target state"
+                    );
+                }
+            }
+        }
     }
 
     pub(super) async fn attach_browser(
@@ -277,6 +385,21 @@ impl CdpFrontendTargetControl {
         );
         control_command_result(response, method)
     }
+}
+
+fn foreground_tab_route(
+    scheduler: &CdpScheduler,
+    page_target_id: &str,
+) -> Result<ForegroundTabRoute> {
+    let (tab_target_id, browser_context_id) = scheduler
+        .conn
+        .frontend_tab_target_identity(page_target_id)
+        .with_context(|| format!("CDP page target {page_target_id} has no tab target"))?;
+    Ok(ForegroundTabRoute {
+        browser_context_id,
+        page_target_id: page_target_id.to_owned(),
+        tab_target_id,
+    })
 }
 
 fn control_command_result(response: Option<Value>, method: &str) -> Result<Value> {

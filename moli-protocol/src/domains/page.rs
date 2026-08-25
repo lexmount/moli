@@ -1381,9 +1381,9 @@ fn start_bring_to_front_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Page
 async fn bring_session_route_to_front_async(
     conn: &mut CdpConnection,
     route: CdpSessionRoute,
-) -> Result<(), String> {
+) -> Result<Vec<BackgroundProtocolEvent>, String> {
     let (browser_context_id, target_id) = match route {
-        CdpSessionRoute::Browser => return Ok(()),
+        CdpSessionRoute::Browser => return Ok(Vec::new()),
         CdpSessionRoute::ActiveTarget {
             browser_context_id, ..
         } => {
@@ -1393,7 +1393,7 @@ async fn bring_session_route_to_front_async(
             {
                 return Err("BrowserContextNotLoaded".into());
             }
-            return Ok(());
+            return Ok(Vec::new());
         }
         CdpSessionRoute::AuxiliaryTarget {
             browser_context_id,
@@ -1424,15 +1424,15 @@ async fn bring_session_route_to_front_async(
         .and_then(|bc| bc.active_target_identity())
         .is_some_and(|(active_target_id, _)| active_target_id == target_id);
     if target_is_active {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     match conn
         .promote_background_target_to_active_for_connection_async(&target_id)
         .await
     {
-        Ok(true) => Ok(()),
-        Ok(false) => Err("UnknownTargetId".into()),
+        Ok(Some(activation)) => Ok(activation.into_protocol_events()),
+        Ok(None) => Err("UnknownTargetId".into()),
         Err(message) => Err(message),
     }
 }
@@ -1801,10 +1801,13 @@ fn start_screencast_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandO
     conn.push_scheduler_event(crate::conn::CdpSchedulerEvent::PageScreencastStarted {
         registration: PageScreencastRegistration::new(owner_scope, generation, every_nth_frame),
     });
+    let visible = conn
+        .page_screencast_visible_for_session_owner(cmd.session_id)
+        .unwrap_or(true);
     let mut plan = CommandOutputPlan::default();
     plan.push_background_event(BackgroundProtocolEvent::page_screencast_visibility_changed(
         cmd.session_id,
-        true,
+        visible,
     ));
     plan.push_success();
     plan
@@ -6480,7 +6483,7 @@ fn try_start_page_enable_command(
             "BrowserContextNotLoaded",
         )));
     }
-    if conn.auto_attach_wait_for_debugger_on_start {
+    if conn.session_owner_target_has_waiting_for_debugger_session(cmd.session_id) {
         return Some(PageCommandTaskStep::Complete(CommandOutputPlan::success()));
     }
     match conn.runtime_session_owner_slot(cmd.session_id) {
@@ -7462,7 +7465,12 @@ async fn complete_pending_page_command_inner(
             restore_page_bring_to_front_context_async(conn, restore_browser_context_id.as_deref())
                 .await;
             match result {
-                Ok(()) => CommandOutputPlan::success(),
+                Ok(events) => {
+                    let mut plan = CommandOutputPlan::default();
+                    plan.extend_background_events(events);
+                    plan.push_success();
+                    plan
+                }
                 Err(message) => CommandOutputPlan::error(-31998, message),
             }
         }

@@ -140,6 +140,56 @@ impl CdpFrontendControlState {
                 }
                 true
             }
+            CdpFrontendControlRequest::AttachForegroundTab {
+                page_target_id,
+                sink,
+                completion_tx,
+            } => {
+                let result = match self
+                    .target_control
+                    .attach_foreground_tab(scheduler, frontend_router, &page_target_id)
+                    .await
+                {
+                    Ok((session_id, browser_context_id)) => {
+                        let frontend_id = self.allocate_frontend_id();
+                        match frontend_router.register_foreground_tab_frontend(
+                            frontend_id,
+                            browser_context_id,
+                            page_target_id,
+                            session_id.clone(),
+                            sink,
+                        ) {
+                            Ok(()) => Ok(frontend_id),
+                            Err(error) => {
+                                self.target_control
+                                    .detach_frontend_session(
+                                        scheduler,
+                                        frontend_router,
+                                        &session_id,
+                                    )
+                                    .await;
+                                Err(error)
+                            }
+                        }
+                    }
+                    Err(error) => Err(error),
+                };
+                match completion_tx.send(result) {
+                    Ok(()) => {}
+                    Err(Ok(frontend_id)) => {
+                        if let Some(session_id) =
+                            frontend_router.unregister_foreground_tab_frontend(frontend_id)
+                        {
+                            self.target_control
+                                .detach_frontend_session(scheduler, frontend_router, &session_id)
+                                .await;
+                        }
+                        send_cookie_checkpoint(scheduler, owner_lifecycle);
+                    }
+                    Err(Err(_)) => {}
+                }
+                true
+            }
             CdpFrontendControlRequest::DetachBrowser { frontend_id } => {
                 if let Some(session_id) = frontend_router.unregister_browser_frontend(frontend_id) {
                     self.target_control
@@ -156,6 +206,23 @@ impl CdpFrontendControlState {
                         .await;
                     send_cookie_checkpoint(scheduler, owner_lifecycle);
                 }
+                true
+            }
+            CdpFrontendControlRequest::DetachForegroundTab { frontend_id } => {
+                if let Some(session_id) =
+                    frontend_router.unregister_foreground_tab_frontend(frontend_id)
+                {
+                    self.target_control
+                        .detach_frontend_session(scheduler, frontend_router, &session_id)
+                        .await;
+                    send_cookie_checkpoint(scheduler, owner_lifecycle);
+                }
+                true
+            }
+            CdpFrontendControlRequest::ForegroundTabChanged { page_target_id } => {
+                self.target_control
+                    .follow_foreground_tab_change(scheduler, frontend_router, page_target_id)
+                    .await;
                 true
             }
             CdpFrontendControlRequest::TargetDestroyed { target_id } => {

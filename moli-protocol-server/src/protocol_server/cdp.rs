@@ -28,14 +28,15 @@ pub(super) async fn json_version(State(state): State<AppState>) -> impl IntoResp
     }))
 }
 
-pub(super) async fn json_list(State(state): State<AppState>) -> impl IntoResponse {
+pub(super) async fn json_list(State(state): State<AppState>, uri: Uri) -> impl IntoResponse {
+    let for_tab = requests_tab_target(&uri);
     let target_infos = state.cdp_agent_host_directory.page_target_infos();
     let targets = if target_infos.is_empty() {
-        vec![target_json(&state, DEFAULT_TARGET_URL)]
+        vec![target_json(&state, DEFAULT_TARGET_URL, for_tab)]
     } else {
         target_infos
             .into_iter()
-            .filter_map(|target_info| dynamic_target_json(&state, target_info))
+            .filter_map(|target_info| dynamic_target_json(&state, target_info, for_tab))
             .collect()
     };
     axum::Json(json!(targets))
@@ -49,6 +50,7 @@ pub(super) async fn json_protocol() -> impl IntoResponse {
 }
 
 pub(super) async fn json_new_target(State(state): State<AppState>, uri: Uri) -> Response {
+    let for_tab = requests_tab_target(&uri);
     let endpoint = match state.cdp_owner_registry.shared_owner() {
         Ok(endpoint) => endpoint,
         Err(error) => {
@@ -80,7 +82,7 @@ pub(super) async fn json_new_target(State(state): State<AppState>, uri: Uri) -> 
         )
             .into_response();
     };
-    let Some(target) = dynamic_target_json(&state, route.target_info) else {
+    let Some(target) = dynamic_target_json(&state, route.target_info, for_tab) else {
         rollback_unpublished_target(&endpoint, &target_id).await;
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -153,35 +155,58 @@ fn no_such_target_response(target_id: &str) -> Response {
         .into_response()
 }
 
-fn target_json(state: &AppState, target_url: &str) -> serde_json::Value {
+fn target_json(state: &AppState, target_url: &str, for_tab: bool) -> serde_json::Value {
+    let (target_type, devtools_frontend_url, websocket_debugger_url) = if for_tab {
+        ("tab", &state.tab_devtools_frontend_url, &state.tab_ws_url)
+    } else {
+        ("page", &state.devtools_frontend_url, &state.page_ws_url)
+    };
     json!({
         "description": "",
-        "devtoolsFrontendUrl": &state.devtools_frontend_url,
+        "devtoolsFrontendUrl": devtools_frontend_url,
         "id": DEFAULT_TARGET_ID,
         "title": target_url,
-        "type": "page",
+        "type": target_type,
         "url": target_url,
-        "webSocketDebuggerUrl": &state.page_ws_url,
+        "webSocketDebuggerUrl": websocket_debugger_url,
     })
 }
 
 fn dynamic_target_json(
     state: &AppState,
     target_info: DevToolsTargetInfo,
+    for_tab: bool,
 ) -> Option<serde_json::Value> {
     let target_id = target_info.target_id.as_ref()?.as_str();
-    let page_ws_url_prefix = state.page_ws_url.strip_suffix(DEFAULT_TARGET_ID)?;
-    let devtools_frontend_url_prefix = state
-        .devtools_frontend_url
-        .strip_suffix(DEFAULT_TARGET_ID)?;
+    let (target_type, websocket_debugger_url, devtools_frontend_url) = if for_tab {
+        let websocket_prefix = state.tab_ws_url.strip_suffix(DEFAULT_TARGET_ID)?;
+        let frontend_prefix = state
+            .tab_devtools_frontend_url
+            .strip_suffix(DEFAULT_TARGET_ID)?;
+        (
+            "tab",
+            format!("{websocket_prefix}{target_id}"),
+            format!("{frontend_prefix}{target_id}"),
+        )
+    } else {
+        let websocket_prefix = state.page_ws_url.strip_suffix(DEFAULT_TARGET_ID)?;
+        let frontend_prefix = state
+            .devtools_frontend_url
+            .strip_suffix(DEFAULT_TARGET_ID)?;
+        (
+            "page",
+            format!("{websocket_prefix}{target_id}"),
+            format!("{frontend_prefix}{target_id}"),
+        )
+    };
     Some(json!({
         "description": "",
-        "devtoolsFrontendUrl": format!("{devtools_frontend_url_prefix}{target_id}"),
+        "devtoolsFrontendUrl": devtools_frontend_url,
         "id": target_id,
         "title": target_info.title,
-        "type": "page",
+        "type": target_type,
         "url": target_info.url,
-        "webSocketDebuggerUrl": format!("{page_ws_url_prefix}{target_id}"),
+        "webSocketDebuggerUrl": websocket_debugger_url,
     }))
 }
 
@@ -200,6 +225,11 @@ fn requested_target_url(uri: &Uri) -> String {
     target
         .filter(|target| url::Url::parse(target).is_ok())
         .unwrap_or_else(|| DEFAULT_TARGET_URL.to_owned())
+}
+
+fn requests_tab_target(uri: &Uri) -> bool {
+    uri.query()
+        .is_some_and(|query| query.split('&').any(|component| component == "for_tab"))
 }
 
 pub(super) async fn ws_browser_upgrade_handler(
@@ -237,6 +267,38 @@ pub(super) async fn ws_page_upgrade_handler(
         return StatusCode::NOT_FOUND.into_response();
     };
     page_ws_upgrade_response(ws, target_id, route.endpoint)
+}
+
+pub(super) async fn ws_foreground_tab_upgrade_handler(
+    Path(target_id): Path<String>,
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+) -> Response {
+    if target_id == DEFAULT_TARGET_ID {
+        let owner_registry = state.cdp_owner_registry;
+        return ws.on_upgrade(move |socket| {
+            run_shared_frontend_socket(
+                socket,
+                owner_registry,
+                CdpFrontendSocketKind::ForegroundTab {
+                    page_target_id: DEFAULT_TARGET_ID.to_owned(),
+                },
+            )
+        });
+    }
+    let Some(route) = state.cdp_agent_host_directory.lookup_page(&target_id) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    ws.on_upgrade(move |socket| async move {
+        run_cdp_frontend_socket(
+            socket,
+            route.endpoint,
+            CdpFrontendSocketKind::ForegroundTab {
+                page_target_id: target_id,
+            },
+        )
+        .await;
+    })
 }
 
 async fn run_shared_frontend_socket(

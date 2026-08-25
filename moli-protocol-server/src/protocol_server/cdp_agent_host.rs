@@ -49,14 +49,14 @@ impl CdpPageAgentHost {
 }
 
 impl CdpAgentHostDirectoryState {
-    fn activate_page_host(&mut self, owner_id: u64, target_id: &str) {
-        let Some(browser_context_id) = self
+    fn activate_page_host(&mut self, owner_id: u64, target_id: &str) -> bool {
+        let browser_context_id = self
             .page_hosts
             .get(target_id)
             .filter(|host| host.owner_id == owner_id)
-            .map(|host| host.browser_context_id().map(str::to_owned))
-        else {
-            return;
+            .map(|host| host.browser_context_id().map(str::to_owned));
+        let Some(browser_context_id) = browser_context_id else {
+            return false;
         };
 
         for host in self.page_hosts.values_mut().filter(|host| {
@@ -66,7 +66,9 @@ impl CdpAgentHostDirectoryState {
         }
         if let Some(host) = self.page_hosts.get_mut(target_id) {
             host.is_active = true;
+            return true;
         }
+        false
     }
 }
 
@@ -162,7 +164,9 @@ impl SharedCdpAgentHostDirectory {
                 }
             }
             CdpTargetHostLifecycleDelta::Activated { target_id } => {
-                self.inner.lock().activate_page_host(owner_id, &target_id);
+                if self.inner.lock().activate_page_host(owner_id, &target_id) {
+                    endpoint.foreground_tab_changed(target_id);
+                }
             }
             CdpTargetHostLifecycleDelta::Destroyed { target_id } => {
                 let endpoint = {

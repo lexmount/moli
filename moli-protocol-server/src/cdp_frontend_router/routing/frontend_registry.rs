@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{Result, bail};
+use serde_json::Value;
 
 use crate::cdp_writer::CdpSocketSink;
 
@@ -8,13 +9,24 @@ use crate::cdp_writer::CdpSocketSink;
 pub(super) enum CdpSessionFrontendKind {
     Browser,
     Page,
+    ForegroundTab,
 }
 
 pub(super) struct CdpSessionFrontendRoute {
     kind: CdpSessionFrontendKind,
     target_id: Option<String>,
+    browser_context_id: Option<String>,
     base_session_id: String,
+    replayable_target_commands: Vec<(String, Value)>,
     sink: CdpSocketSink,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ForegroundTabFrontendRoute {
+    pub(crate) frontend_id: u64,
+    pub(crate) page_target_id: String,
+    pub(crate) base_session_id: String,
+    pub(crate) replayable_target_commands: Vec<(String, Value)>,
 }
 
 #[derive(Clone)]
@@ -75,6 +87,7 @@ impl FrontendRegistry {
             frontend_id,
             CdpSessionFrontendKind::Browser,
             None,
+            None,
             session_id,
             sink,
             true,
@@ -92,6 +105,26 @@ impl FrontendRegistry {
             frontend_id,
             CdpSessionFrontendKind::Page,
             Some(target_id),
+            None,
+            session_id,
+            sink,
+            false,
+        )
+    }
+
+    pub(super) fn register_foreground_tab_frontend(
+        &mut self,
+        frontend_id: u64,
+        browser_context_id: Option<String>,
+        page_target_id: String,
+        session_id: String,
+        sink: CdpSocketSink,
+    ) -> Result<()> {
+        self.register_session_frontend(
+            frontend_id,
+            CdpSessionFrontendKind::ForegroundTab,
+            Some(page_target_id),
+            browser_context_id,
             session_id,
             sink,
             false,
@@ -103,6 +136,7 @@ impl FrontendRegistry {
         frontend_id: u64,
         kind: CdpSessionFrontendKind,
         target_id: Option<String>,
+        browser_context_id: Option<String>,
         session_id: String,
         sink: CdpSocketSink,
         may_claim_control_session: bool,
@@ -132,7 +166,9 @@ impl FrontendRegistry {
             CdpSessionFrontendRoute {
                 kind,
                 target_id,
+                browser_context_id,
                 base_session_id: session_id,
+                replayable_target_commands: Vec::new(),
                 sink,
             },
         );
@@ -163,6 +199,14 @@ impl FrontendRegistry {
             .map(|route| route.base_session_id)
     }
 
+    pub(super) fn unregister_foreground_tab_frontend(
+        &mut self,
+        frontend_id: u64,
+    ) -> Option<String> {
+        self.unregister_session_frontend(frontend_id, CdpSessionFrontendKind::ForegroundTab)
+            .map(|route| route.base_session_id)
+    }
+
     fn unregister_session_frontend(
         &mut self,
         frontend_id: u64,
@@ -187,15 +231,111 @@ impl FrontendRegistry {
             .frontends
             .iter()
             .filter_map(|(frontend_id, route)| {
-                (route.kind == CdpSessionFrontendKind::Page
-                    && route.target_id.as_deref() == Some(target_id))
+                (matches!(
+                    route.kind,
+                    CdpSessionFrontendKind::Page | CdpSessionFrontendKind::ForegroundTab
+                ) && route.target_id.as_deref() == Some(target_id))
                 .then_some(*frontend_id)
             })
             .collect::<Vec<_>>();
         for frontend_id in &frontend_ids {
-            self.unregister_page_frontend(*frontend_id);
+            match self.frontends.get(frontend_id).map(|route| route.kind) {
+                Some(CdpSessionFrontendKind::Page) => {
+                    self.unregister_page_frontend(*frontend_id);
+                }
+                Some(CdpSessionFrontendKind::ForegroundTab) => {
+                    self.unregister_foreground_tab_frontend(*frontend_id);
+                }
+                Some(CdpSessionFrontendKind::Browser) | None => {}
+            }
         }
         frontend_ids
+    }
+
+    pub(super) fn foreground_tab_frontends_for_browser_context(
+        &self,
+        browser_context_id: Option<&str>,
+    ) -> Vec<ForegroundTabFrontendRoute> {
+        self.frontends
+            .iter()
+            .filter_map(|(frontend_id, route)| {
+                if route.kind != CdpSessionFrontendKind::ForegroundTab
+                    || route.browser_context_id.as_deref() != browser_context_id
+                {
+                    return None;
+                }
+                Some(ForegroundTabFrontendRoute {
+                    frontend_id: *frontend_id,
+                    page_target_id: route.target_id.clone()?,
+                    base_session_id: route.base_session_id.clone(),
+                    replayable_target_commands: route.replayable_target_commands.clone(),
+                })
+            })
+            .collect()
+    }
+
+    pub(super) fn replace_foreground_tab_frontend_base(
+        &mut self,
+        frontend_id: u64,
+        browser_context_id: Option<String>,
+        page_target_id: String,
+        session_id: String,
+    ) -> Result<String> {
+        if self.sessions.contains_key(&session_id) {
+            bail!("CDP foreground tab replacement session is already registered");
+        }
+        let previous_session_id = {
+            let Some(route) = self.frontends.get_mut(&frontend_id) else {
+                bail!("CDP foreground tab frontend is not registered");
+            };
+            if route.kind != CdpSessionFrontendKind::ForegroundTab {
+                bail!("CDP frontend is not a foreground tab");
+            }
+            let previous_session_id =
+                std::mem::replace(&mut route.base_session_id, session_id.clone());
+            route.target_id = Some(page_target_id);
+            route.browser_context_id = browser_context_id;
+            previous_session_id
+        };
+        self.remove_session_descendants(&previous_session_id);
+        self.sessions.remove(&previous_session_id);
+        self.sessions.insert(
+            session_id,
+            SessionBinding::Frontend(FrontendSessionRoute {
+                frontend_id,
+                kind: FrontendSessionKind::Base,
+            }),
+        );
+        Ok(previous_session_id)
+    }
+
+    pub(super) fn is_foreground_tab_frontend(&self, frontend_id: u64) -> bool {
+        self.frontends
+            .get(&frontend_id)
+            .is_some_and(|route| route.kind == CdpSessionFrontendKind::ForegroundTab)
+    }
+
+    pub(super) fn remember_foreground_tab_target_command(
+        &mut self,
+        frontend_id: u64,
+        method: String,
+        params: Value,
+    ) {
+        let Some(route) = self.frontends.get_mut(&frontend_id) else {
+            return;
+        };
+        if route.kind != CdpSessionFrontendKind::ForegroundTab {
+            return;
+        }
+        if let Some((_, previous_params)) = route
+            .replayable_target_commands
+            .iter_mut()
+            .find(|(previous_method, _)| previous_method == &method)
+        {
+            *previous_params = params;
+            return;
+        }
+        route.replayable_target_commands.push((method, params));
     }
 
     pub(super) fn base_session_id(&self, frontend_id: u64) -> Option<&str> {

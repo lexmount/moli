@@ -240,7 +240,9 @@ async fn discovery_endpoints_accept_trailing_slashes() {
     assert_eq!(list[0]["description"], json!(""));
     assert_eq!(
         list[0]["devtoolsFrontendUrl"],
-        json!("/devtools/inspector.html?ws=127.0.0.1:9222/devtools/page/moli-default")
+        json!(
+            "/devtools/inspector.html?targetType=tab&ws=127.0.0.1:9222/devtools/tab/moli-default"
+        )
     );
     assert_eq!(list[0]["id"], json!(DEFAULT_TARGET_ID));
     assert_eq!(list[0]["title"], json!(DEFAULT_TARGET_URL));
@@ -499,19 +501,34 @@ async fn browser_websocket_exposes_same_default_target_as_json_list() {
 #[tokio::test]
 async fn chromium_devtools_json_list_accepts_non_get_methods_and_for_tab() {
     let list = request_json("/json").await;
+    let tab_list = request_json("/json/list?for_tab").await;
 
     // Ported from Chromium DevToolsHttpHandlerTest.TestJsonList: list
-    // discovery is not method-gated, and the legacy for_tab query is
-    // accepted by the same endpoint.
+    // discovery is not method-gated. Chromium's remote-device discovery asks
+    // for tab targets explicitly so its frontend can auto-attach the current
+    // page below a stable tab root.
     assert_eq!(request_json_with_method(Method::PUT, "/json").await, list);
     assert_eq!(
         request_json_with_method(Method::PUT, "/json/list").await,
         list
     );
-    assert_eq!(request_json("/json/list?for_tab").await, list);
     assert_eq!(
         request_json_with_method(Method::PUT, "/json/list?for_tab").await,
-        list
+        tab_list
+    );
+    assert_eq!(list[0]["type"], json!("page"));
+    assert_eq!(
+        list[0]["webSocketDebuggerUrl"],
+        json!("ws://127.0.0.1:9222/devtools/page/moli-default")
+    );
+    assert_eq!(tab_list[0]["type"], json!("tab"));
+    assert_eq!(
+        tab_list[0]["devtoolsFrontendUrl"],
+        json!("/devtools/inspector.html?ws=127.0.0.1:9222/devtools/tab/moli-default")
+    );
+    assert_eq!(
+        tab_list[0]["webSocketDebuggerUrl"],
+        json!("ws://127.0.0.1:9222/devtools/tab/moli-default")
     );
 }
 
@@ -539,6 +556,12 @@ async fn chromium_devtools_json_new_uses_put_and_decodes_first_query_component()
         request_json_with_method(Method::PUT, &format!("/json/new?{encoded}&for_tab")).await;
     assert_eq!(target["url"], json!("about:blank?q=1&x=2"));
     assert_eq!(target["title"], json!(""));
+    assert_eq!(target["type"], json!("tab"));
+    assert!(
+        target["webSocketDebuggerUrl"]
+            .as_str()
+            .is_some_and(|url| url.contains("/devtools/tab/"))
+    );
 
     let target = request_json_with_method(Method::PUT, "/json/new?url=about%3Ablank%23named").await;
     assert_eq!(target["url"], json!("about:blank#named"));

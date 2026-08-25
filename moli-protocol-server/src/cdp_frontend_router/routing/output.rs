@@ -32,19 +32,31 @@ impl CdpFrontendRoutingState {
             client_session_id,
         } = pending.frontend;
         let sink = self.frontends.frontend_sink(frontend_id)?;
-        if message.get("error").is_none()
-            && let PendingCommandEffect::AttachToTarget { target_id } = pending.effect
-            && let Some(child_session_id) = message
-                .pointer("/result/sessionId")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        {
-            self.register_child_session(
-                frontend_id,
-                dispatch_session_id.as_deref(),
-                &child_session_id,
-                target_id.as_deref(),
-            );
+        if message.get("error").is_none() {
+            match pending.effect {
+                PendingCommandEffect::AttachToTarget { target_id } => {
+                    if let Some(child_session_id) = message
+                        .pointer("/result/sessionId")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                    {
+                        self.register_child_session(
+                            frontend_id,
+                            dispatch_session_id.as_deref(),
+                            &child_session_id,
+                            target_id.as_deref(),
+                        );
+                    }
+                }
+                PendingCommandEffect::ReplayForegroundTabTargetCommand { method, params } => {
+                    self.frontends.remember_foreground_tab_target_command(
+                        frontend_id,
+                        method,
+                        params,
+                    );
+                }
+                PendingCommandEffect::None => {}
+            }
         }
         set_top_level_session_id(&mut message, client_session_id.as_deref());
         Some((CdpRoutedFrontend { frontend_id, sink }, message))

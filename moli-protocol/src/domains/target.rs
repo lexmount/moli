@@ -650,10 +650,10 @@ pub(crate) async fn execute_devtools_target_command_async_with_protocol_events(
             (result, protocol_events)
         }
         DevToolsCommand::ActivateTarget(command) => {
-            let result = lifecycle::execute_devtools_activate_target_command_async(conn, command)
-                .await
-                .map(|()| DevToolsCommandResult::Empty);
-            (result, Vec::new())
+            match lifecycle::execute_devtools_activate_target_command_async(conn, command).await {
+                Ok(events) => (Ok(DevToolsCommandResult::Empty), events),
+                Err(error) => (Err(error), Vec::new()),
+            }
         }
         DevToolsCommand::RemoveBrowserContext(_) => {
             let DevToolsCommand::RemoveBrowserContext(command) = command else {

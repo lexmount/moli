@@ -896,6 +896,16 @@ impl CdpConnection {
             .flatten()
     }
 
+    pub(crate) fn page_screencast_visible_for_session_owner(
+        &self,
+        session_id: Option<&str>,
+    ) -> Option<bool> {
+        let (browser_context_id, target_id) = self.target_owner_identity_for_session(session_id)?;
+        let browser_context = self.browser_context_by_id(&browser_context_id)?;
+        let target_id = target_id.or_else(|| browser_context.active_target_id_owned())?;
+        Some(browser_context.is_active_target(&target_id))
+    }
+
     pub(crate) fn stop_page_screencast_for_session_owner(
         &mut self,
         session_id: Option<&str>,

@@ -202,6 +202,14 @@ fn build_router(app_state: AppState) -> Router {
             get(cdp::ws_page_upgrade_handler),
         )
         .route(
+            "/devtools/tab/{target_id}",
+            get(cdp::ws_foreground_tab_upgrade_handler),
+        )
+        .route(
+            "/devtools/tab/{target_id}/",
+            get(cdp::ws_foreground_tab_upgrade_handler),
+        )
+        .route(
             "/session",
             get(webdriver_bidi::ws_bidi_session_upgrade_handler)
                 .post(webdriver_classic::webdriver_classic_new_session),
@@ -734,12 +742,14 @@ fn is_websocket_upgrade_request(request: &Request<Body>) -> bool {
 struct AppState {
     browser_ws_url: String,
     page_ws_url: String,
+    tab_ws_url: String,
     bidi_ws_url: String,
     bidi_session_registry: SharedBidiSessionRegistry,
     classic_session_registry: SharedClassicSessionRegistry,
     cdp_agent_host_directory: SharedCdpAgentHostDirectory,
     cdp_owner_registry: SharedCdpOwnerRegistry,
     devtools_frontend_url: String,
+    tab_devtools_frontend_url: String,
     cookie_profile: SharedCookieProfile,
     storage_partition: Arc<StoragePartitionState>,
     fetch_config: FetchConfig,
@@ -800,13 +810,17 @@ impl AppState {
         Self {
             browser_ws_url: format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"),
             page_ws_url: format!("ws://{addr}/devtools/page/{DEFAULT_TARGET_ID}"),
+            tab_ws_url: format!("ws://{addr}/devtools/tab/{DEFAULT_TARGET_ID}"),
             bidi_ws_url: format!("ws://{addr}/session"),
             bidi_session_registry: SharedBidiSessionRegistry::default(),
             classic_session_registry: SharedClassicSessionRegistry::default(),
             cdp_agent_host_directory,
             cdp_owner_registry,
             devtools_frontend_url: format!(
-                "/devtools/inspector.html?ws={addr}/devtools/page/{DEFAULT_TARGET_ID}"
+                "/devtools/inspector.html?targetType=tab&ws={addr}/devtools/tab/{DEFAULT_TARGET_ID}"
+            ),
+            tab_devtools_frontend_url: format!(
+                "/devtools/inspector.html?ws={addr}/devtools/tab/{DEFAULT_TARGET_ID}"
             ),
             cookie_profile,
             storage_partition,

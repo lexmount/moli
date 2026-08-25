@@ -1235,6 +1235,7 @@ async fn navigation_history_is_preserved_per_parked_target() {
             .promote_background_target_to_active_for_connection_async("TID-B")
             .await
             .unwrap()
+            .is_some()
     );
 
     ctx.process_async(json!({
@@ -1265,6 +1266,7 @@ async fn navigation_history_is_preserved_per_parked_target() {
                 .promote_background_target_to_active_for_connection_async("TID-A")
                 .await
                 .unwrap()
+                .is_some()
         );
     }
 

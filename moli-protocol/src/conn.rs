@@ -124,6 +124,25 @@ pub enum CdpTargetHostLifecycleDelta {
     Destroyed { target_id: String },
 }
 
+/// Successful target selection and the Page events caused by its surface move.
+///
+/// The events stay attached to the completion so every activation entry point
+/// must preserve their position relative to its own response or owner action.
+#[derive(Debug)]
+pub(crate) struct CompletedTargetActivation {
+    protocol_events: Vec<BackgroundProtocolEvent>,
+}
+
+impl CompletedTargetActivation {
+    fn new(protocol_events: Vec<BackgroundProtocolEvent>) -> Self {
+        Self { protocol_events }
+    }
+
+    pub(crate) fn into_protocol_events(self) -> Vec<BackgroundProtocolEvent> {
+        self.protocol_events
+    }
+}
+
 #[derive(Clone)]
 pub struct CdpTargetHostLifecycleObserver {
     callback: Arc<dyn Fn(CdpTargetHostLifecycleDelta) + Send + Sync>,
@@ -1505,6 +1524,14 @@ impl CdpConnection {
         })
     }
 
+    pub(crate) fn session_owner_target_has_waiting_for_debugger_session(
+        &self,
+        session_id: Option<&str>,
+    ) -> bool {
+        self.target_id_for_session_owner(session_id)
+            .is_some_and(|target_id| self.target_has_waiting_for_debugger_session(&target_id))
+    }
+
     pub fn background_navigation_target_id_for_event(
         &self,
         event: &BackgroundProtocolEvent,
@@ -2643,7 +2670,16 @@ impl CdpConnection {
     pub(crate) async fn promote_background_target_to_active_for_connection_async(
         &mut self,
         target_id: &str,
-    ) -> Result<bool, String> {
+    ) -> Result<Option<CompletedTargetActivation>, String> {
+        let previous_active_target_id = self
+            .browser_context
+            .as_ref()
+            .and_then(BrowserContext::active_target_id_owned);
+        let hidden_screencast_sessions = previous_active_target_id
+            .as_deref()
+            .filter(|active_target_id| *active_target_id != target_id)
+            .map(|active_target_id| self.page_screencast_session_ids_for_target(active_target_id))
+            .unwrap_or_default();
         self.handoff_navigation_engine_for_target_activation(target_id);
         let Some(browser_context) = self.browser_context.as_mut() else {
             return Err("BrowserContextNotLoaded".to_owned());
@@ -2651,11 +2687,51 @@ impl CdpConnection {
         let promoted = browser_context
             .promote_background_target_to_active_slot_async(target_id)
             .await?;
-        if promoted {
-            self.refresh_active_browser_context_loader_async().await;
-            self.notify_target_host_activated(target_id);
+        if !promoted {
+            return Ok(None);
         }
-        Ok(promoted)
+        self.refresh_active_browser_context_loader_async().await;
+        self.notify_target_host_activated(target_id);
+
+        let target_changed = previous_active_target_id.as_deref() != Some(target_id);
+        let mut protocol_events = Vec::new();
+        if target_changed {
+            // Chromium's PageHandler reports RenderWidgetHost visibility only
+            // while that attachment has an active screencast. Hide the old
+            // surface before exposing the promoted one.
+            protocol_events.extend(hidden_screencast_sessions.into_iter().map(|session_id| {
+                BackgroundProtocolEvent::page_screencast_visibility_changed(
+                    session_id.as_deref(),
+                    false,
+                )
+            }));
+            protocol_events.extend(
+                self.page_screencast_session_ids_for_target(target_id)
+                    .into_iter()
+                    .map(|session_id| {
+                        BackgroundProtocolEvent::page_screencast_visibility_changed(
+                            session_id.as_deref(),
+                            true,
+                        )
+                    }),
+            );
+        }
+        Ok(Some(CompletedTargetActivation::new(protocol_events)))
+    }
+
+    fn page_screencast_session_ids_for_target(&mut self, target_id: &str) -> Vec<Option<String>> {
+        let Some(route) = self.target_session_route_for_target_id(target_id) else {
+            return Vec::new();
+        };
+        let mut route_scope = self.scoped_none_session_owner_route_override(route);
+        let conn = route_scope.conn_mut();
+        conn.page_event_session_ids_for_session_owner(None)
+            .into_iter()
+            .filter(|session_id| {
+                conn.target_page_session_state_for_session(session_id.as_deref())
+                    .is_some_and(|state| state.page_screencast.is_active())
+            })
+            .collect()
     }
 
     pub(crate) fn enqueue_deferred_main_document_load_completion(
@@ -3386,6 +3462,22 @@ impl CdpConnection {
     pub(crate) fn tab_target_id_for_page_target_id(&self, page_target_id: &str) -> Option<&str> {
         self.target_control
             .tab_target_id_for_page_target_id(page_target_id)
+    }
+
+    /// Resolves the protocol tab and browser-context identities used by the
+    /// protocol server's DevTools foreground surface adapter.
+    #[doc(hidden)]
+    pub fn frontend_tab_target_identity(
+        &self,
+        page_target_id: &str,
+    ) -> Option<(String, Option<String>)> {
+        let tab_target_id = self
+            .tab_target_id_for_page_target_id(page_target_id)?
+            .to_owned();
+        let browser_context_id = self
+            .browser_context_id_for_target(page_target_id)
+            .map(str::to_owned);
+        Some((tab_target_id, browser_context_id))
     }
 
     pub(crate) fn page_target_id_for_tab_target_id(&self, tab_target_id: &str) -> Option<&str> {

@@ -7,6 +7,8 @@ use serde_json::Value;
 
 use crate::{cdp_scheduler::ProtocolOutputSequence, cdp_writer::CdpSocketSink};
 
+pub(crate) use self::routing::ForegroundTabFrontendRoute;
+
 use self::routing::CdpFrontendRoutingState;
 
 mod routing;
@@ -65,12 +67,59 @@ impl CdpFrontendRouter {
             .register_page_frontend(frontend_id, target_id, session_id, sink)
     }
 
+    pub(crate) fn register_foreground_tab_frontend(
+        &self,
+        frontend_id: u64,
+        browser_context_id: Option<String>,
+        page_target_id: String,
+        session_id: String,
+        sink: CdpSocketSink,
+    ) -> Result<()> {
+        self.routing.lock().register_foreground_tab_frontend(
+            frontend_id,
+            browser_context_id,
+            page_target_id,
+            session_id,
+            sink,
+        )
+    }
+
     pub(crate) fn unregister_browser_frontend(&self, frontend_id: u64) -> Option<String> {
         self.routing.lock().unregister_browser_frontend(frontend_id)
     }
 
     pub(crate) fn unregister_page_frontend(&self, frontend_id: u64) -> Option<String> {
         self.routing.lock().unregister_page_frontend(frontend_id)
+    }
+
+    pub(crate) fn unregister_foreground_tab_frontend(&self, frontend_id: u64) -> Option<String> {
+        self.routing
+            .lock()
+            .unregister_foreground_tab_frontend(frontend_id)
+    }
+
+    pub(crate) fn foreground_tab_frontends_for_browser_context(
+        &self,
+        browser_context_id: Option<&str>,
+    ) -> Vec<ForegroundTabFrontendRoute> {
+        self.routing
+            .lock()
+            .foreground_tab_frontends_for_browser_context(browser_context_id)
+    }
+
+    pub(crate) fn replace_foreground_tab_frontend_base(
+        &self,
+        frontend_id: u64,
+        browser_context_id: Option<String>,
+        page_target_id: String,
+        session_id: String,
+    ) -> Result<String> {
+        self.routing.lock().replace_foreground_tab_frontend_base(
+            frontend_id,
+            browser_context_id,
+            page_target_id,
+            session_id,
+        )
     }
 
     pub(crate) fn unregister_page_frontends_for_target(&self, target_id: &str) {
