@@ -140,3 +140,90 @@ pub(crate) fn spawn_webcrypto_result_task<F>(
         completion_tx.send(result);
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use super::*;
+
+    const DISPATCH_TIMEOUT: Duration = Duration::from_secs(5);
+
+    #[test]
+    fn webcrypto_bytes_tasks_start_independently_on_the_blocking_pool() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .max_blocking_threads(2)
+            .enable_time()
+            .build()
+            .expect("WebCrypto dispatch test runtime should build");
+        let handle = runtime.handle().clone();
+        let (completion_tx, mut completion_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (started_tx, started_rx) = mpsc::channel();
+        let mut release_txs = Vec::new();
+
+        for (task_id, byte) in [(1_u64, 1_u8), (2, 2)] {
+            let (release_tx, release_rx) = mpsc::channel();
+            release_txs.push(release_tx);
+            let started_tx = started_tx.clone();
+            spawn_webcrypto_bytes_task(
+                handle.clone(),
+                WebCryptoCompletionSink::Worker {
+                    task_id,
+                    tx: completion_tx.clone(),
+                },
+                move || {
+                    started_tx
+                        .send(task_id)
+                        .expect("dispatch test should still receive task starts");
+                    release_rx
+                        .recv()
+                        .expect("dispatch test should release each blocking task");
+                    Ok(vec![byte])
+                },
+            );
+        }
+        drop(started_tx);
+        drop(completion_tx);
+
+        // Hold both operations open and require both blocking closures to
+        // start before either is allowed to finish. Unlike a wall-clock
+        // speedup assertion, this observes independent dispatch directly and
+        // remains valid on a single-CPU or heavily loaded runner.
+        let mut started_task_ids = Vec::new();
+        for _ in 0..2 {
+            if let Ok(task_id) = started_rx.recv_timeout(DISPATCH_TIMEOUT) {
+                started_task_ids.push(task_id);
+            }
+        }
+        for release_tx in release_txs {
+            release_tx
+                .send(())
+                .expect("blocking task should remain live until release");
+        }
+        started_task_ids.sort_unstable();
+        assert_eq!(
+            started_task_ids,
+            vec![1, 2],
+            "both WebCrypto operations must enter the blocking pool before either completes"
+        );
+
+        let mut completed_task_ids = runtime.block_on(async {
+            tokio::time::timeout(DISPATCH_TIMEOUT, async {
+                let first = completion_rx
+                    .recv()
+                    .await
+                    .expect("first WebCrypto completion should arrive");
+                let second = completion_rx
+                    .recv()
+                    .await
+                    .expect("second WebCrypto completion should arrive");
+                [first.task_id, second.task_id]
+            })
+            .await
+            .expect("independently dispatched WebCrypto tasks should complete")
+        });
+        completed_task_ids.sort_unstable();
+        assert_eq!(completed_task_ids, [1, 2]);
+    }
+}

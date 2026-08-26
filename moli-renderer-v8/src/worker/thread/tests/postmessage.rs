@@ -276,45 +276,6 @@ async fn worker_crypto_subtle_derive_bits_does_not_block_event_loop() {
 }
 
 #[tokio::test]
-async fn worker_crypto_subtle_derive_bits_runs_concurrently_on_blocking_pool() {
-    ensure_v8();
-    // The worker async lane dispatches each heavy derivation to the blocking
-    // pool, so multiple in-flight deriveBits run in parallel rather than
-    // serializing on the worker event loop. Running 8 expensive derivations
-    // concurrently must be far cheaper than 8x a single derivation; assert it
-    // stays under 4x the serial cost (generous slack for loaded CI, but well
-    // below the ~8x a serial implementation would require).
-    let mut handle = spawn_worker(
-        r#"
-        (async () => {
-            const enc = new TextEncoder();
-            const baseKey = await crypto.subtle.importKey(
-                "raw", enc.encode("password"), { name: "PBKDF2" }, false, ["deriveBits"]
-            );
-            const one = () => crypto.subtle.deriveBits(
-                { name: "PBKDF2", salt: enc.encode("salt"), iterations: 1000000, hash: "SHA-256" },
-                baseKey, 256
-            );
-            const serialStart = performance.now();
-            await one();
-            const serialMs = performance.now() - serialStart;
-            const concurrentStart = performance.now();
-            await Promise.all([one(), one(), one(), one(), one(), one(), one(), one()]);
-            const concurrentMs = performance.now() - concurrentStart;
-            postMessage(concurrentMs < serialMs * 4 ? "concurrent" : "serial:" + serialMs + ":" + concurrentMs);
-        })().catch((error) => {
-            postMessage("error:" + error.name + ":" + error.message);
-        });
-        "#
-        .into(),
-        "https://worker-crypto.test/subtle-derive-bits-concurrent.js".into(),
-    );
-
-    let payload = recv_post_json(&mut handle).await;
-    assert_eq!(payload, r#""concurrent""#);
-}
-
-#[tokio::test]
 async fn worker_crypto_subtle_derive_bits_processes_incoming_message_while_pending() {
     ensure_v8();
     // Beyond timers, the worker must keep handling parent postMessage traffic
