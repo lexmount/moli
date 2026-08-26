@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import urllib.request
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Awaitable, Callable
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from ..assertions import SmokeError, assert_equal, record_contract, wait_until
 from ..helpers import attach_cdp_event_collector
@@ -147,6 +148,80 @@ def _raw_semantic_contracts() -> tuple[RawSemanticContract, ...]:
                 "Runtime.evaluate",
             ],
             _browser_context_disposal_isolation,
+        ),
+        RawSemanticContract(
+            "raw_cdp_contract_target_handler_access_and_flatten",
+            "Browser-level auto-attach requires flattened sessions, while a Tab target handler cannot invoke browser-only Target commands.",
+            "Chromium TargetHandler access modes and browser-level AutoAttacher contract",
+            [
+                "Target.attachToBrowserTarget",
+                "Target.setAutoAttach",
+                "Target.createTarget forTab",
+                "Target.attachToTarget",
+                "Target.getBrowserContexts",
+                "Target.autoAttachRelated",
+            ],
+            _target_handler_access_and_flatten,
+        ),
+        RawSemanticContract(
+            "raw_cdp_contract_repeated_tab_auto_attach_reconciles_filter",
+            "Repeating Target.setAutoAttach on a Tab target re-runs discovery against existing child targets, attaches a Page that became newly eligible, and does not duplicate that attachment on an identical third call.",
+            "Chromium DevToolsAgentHostImpl::AutoAttach and TargetAutoAttacher reconciliation",
+            [
+                "Target.createTarget forTab",
+                "Target.attachToTarget",
+                "Target.setAutoAttach x3",
+                "Runtime.evaluate",
+            ],
+            _repeated_tab_auto_attach_reconciles_filter,
+        ),
+        RawSemanticContract(
+            "raw_cdp_contract_create_target_foreground_activation",
+            "Target.createTarget activates the new target by default, background=true preserves the current foreground target, and Target.activateTarget changes Page visibility.",
+            "Chromium DevToolsProtocolTest.CreateTargetWithFocus and Target.createTarget",
+            [
+                "Target.createBrowserContext",
+                "Target.createTarget x3",
+                "Target.attachToTarget x3",
+                "Runtime.evaluate document.visibilityState",
+                "Target.activateTarget",
+            ],
+            _create_target_foreground_activation,
+        ),
+        RawSemanticContract(
+            "raw_cdp_contract_tab_session_stays_with_its_tab",
+            "A Tab target session and its auto-attached Page child remain bound to that tab when another tab becomes foreground.",
+            "Chromium DevTools TabTarget and child AgentHost ownership",
+            [
+                "Target.createTarget forTab x2",
+                "Target.attachToTarget",
+                "Target.setAutoAttach",
+                "Target.getTargetInfo",
+                "Target.activateTarget",
+                "Runtime.evaluate",
+            ],
+            _tab_session_stays_with_its_tab,
+        ),
+        RawSemanticContract(
+            "raw_cdp_contract_screencast_visibility_follows_foreground",
+            "A foreground Page screencast becomes hidden when another target is activated and visible again when that target closes.",
+            "Chromium WebContents visibility and Page screencast lifecycle",
+            [
+                "Target.createBrowserContext",
+                "Target.createTarget x2",
+                "Target.attachToTarget",
+                "Page.startScreencast",
+                "Target.closeTarget",
+                "Page.stopScreencast",
+            ],
+            _screencast_visibility_follows_foreground,
+        ),
+        RawSemanticContract(
+            "raw_cdp_contract_closed_default_target_stays_closed",
+            "The default Page returned by remote-debugging discovery is a real target: closing it removes it from subsequent discovery instead of recreating a fabricated descriptor.",
+            "Chromium DevToolsAgentHost discovery and /json/close lifecycle",
+            ["GET /json/list", "GET /json/close/{targetId}", "GET /json/list"],
+            _closed_default_target_stays_closed,
         ),
     )
 
@@ -488,16 +563,72 @@ async def _raw_command(
     return response.get("result", {}), seen
 
 
+async def _raw_command_error(
+    client: RawCdpClient,
+    method: str,
+    params: dict[str, Any] | None = None,
+    *,
+    session_id: str | None = None,
+    timeout: float = 10.0,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    message_id = await client.send(method, params, session_id=session_id)
+    seen: list[dict[str, Any]] = []
+    deadline = asyncio.get_running_loop().time() + timeout
+    while True:
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            raise SmokeError(
+                f"timed out waiting for failing {method} response id={message_id}; "
+                f"seen={seen[-20:]}"
+            )
+        message = await asyncio.wait_for(client.recv(), timeout=remaining)
+        seen.append(message)
+        if message.get("id") != message_id:
+            continue
+        error = message.get("error")
+        if not isinstance(error, dict):
+            raise SmokeError(f"{method} unexpectedly succeeded: {message}")
+        return error, seen
+
+
+def _read_json_list_url(url: str) -> list[dict[str, Any]]:
+    with urllib.request.urlopen(url, timeout=2) as response:
+        value = json.loads(response.read().decode("utf-8"))
+    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+        raise SmokeError(f"discovery returned a non-target list from {url}: {value!r}")
+    return value
+
+
+async def _discovered_targets(endpoint: str) -> list[dict[str, Any]]:
+    return await asyncio.to_thread(
+        _read_json_list_url,
+        f"{endpoint.rstrip('/')}/json/list",
+    )
+
+
+def _read_text_url(url: str) -> str:
+    with urllib.request.urlopen(url, timeout=2) as response:
+        return response.read().decode("utf-8")
+
+
 async def _raw_wait_for_event(
     client: RawCdpClient,
     method: str,
     predicate: Callable[[dict[str, Any]], bool],
     seen: list[dict[str, Any]],
     *,
+    session_id: str | None = None,
     timeout: float = 10.0,
 ) -> dict[str, Any]:
+    def matches(message: dict[str, Any]) -> bool:
+        return (
+            message.get("method") == method
+            and (session_id is None or message.get("sessionId") == session_id)
+            and predicate(message.get("params", {}))
+        )
+
     for message in seen:
-        if message.get("method") == method and predicate(message.get("params", {})):
+        if matches(message):
             return message
     deadline = asyncio.get_running_loop().time() + timeout
     while True:
@@ -506,7 +637,7 @@ async def _raw_wait_for_event(
             raise SmokeError(f"timed out waiting for {method}; seen={seen[-20:]}")
         message = await asyncio.wait_for(client.recv(), timeout=remaining)
         seen.append(message)
-        if message.get("method") == method and predicate(message.get("params", {})):
+        if matches(message):
             return message
 
 
@@ -514,11 +645,618 @@ async def _ignore_raw_error(
     client: RawCdpClient,
     method: str,
     params: dict[str, Any],
+    *,
+    session_id: str | None = None,
 ) -> None:
     try:
-        await _raw_command(client, method, params)
+        await _raw_command(client, method, params, session_id=session_id)
     except Exception:
         pass
+
+
+async def _target_handler_access_and_flatten(
+    endpoint: str,
+    _fixture: str,
+) -> dict[str, Any]:
+    client = await connect_raw_cdp(endpoint)
+    browser_context_id: str | None = None
+    target_id: str | None = None
+    browser_session_id: str | None = None
+    stage = "attach browser target"
+    try:
+        browser_attach, _ = await _raw_command(client, "Target.attachToBrowserTarget")
+        browser_session_id = browser_attach["sessionId"]
+
+        flatten_errors: list[dict[str, Any]] = []
+        for params in (
+            {"autoAttach": True, "waitForDebuggerOnStart": False},
+            {
+                "autoAttach": True,
+                "waitForDebuggerOnStart": False,
+                "flatten": False,
+            },
+        ):
+            stage = "reject non-flattened browser auto-attach"
+            error, _ = await _raw_command_error(
+                client,
+                "Target.setAutoAttach",
+                params,
+                session_id=browser_session_id,
+            )
+            assert_equal(error.get("code"), -32602, "browser auto-attach error code")
+            assert_equal(
+                error.get("message"),
+                "Only flatten protocol is supported with browser level auto-attach",
+                "browser auto-attach error message",
+            )
+            flatten_errors.append(error)
+
+        stage = "enable flattened browser auto-attach"
+        await _raw_command(
+            client,
+            "Target.setAutoAttach",
+            {
+                "autoAttach": True,
+                "waitForDebuggerOnStart": False,
+                "flatten": True,
+                "filter": [
+                    {"type": "page", "exclude": True},
+                    {"type": "tab", "exclude": True},
+                    {},
+                ],
+            },
+            session_id=browser_session_id,
+        )
+
+        context, _ = await _raw_command(client, "Target.createBrowserContext")
+        browser_context_id = context["browserContextId"]
+        created, _ = await _raw_command(
+            client,
+            "Target.createTarget",
+            {
+                "url": "about:blank",
+                "browserContextId": browser_context_id,
+                "forTab": True,
+            },
+        )
+        target_id = created["targetId"]
+        tab_attach, _ = await _raw_command(
+            client,
+            "Target.attachToTarget",
+            {"targetId": target_id, "flatten": True},
+        )
+        tab_session_id = tab_attach["sessionId"]
+
+        stage = "reject browser-only command on Tab handler"
+        access_error, _ = await _raw_command_error(
+            client,
+            "Target.getBrowserContexts",
+            session_id=tab_session_id,
+        )
+        assert_equal(access_error.get("code"), -32000, "Tab handler access error code")
+        assert_equal(access_error.get("message"), "Not allowed", "Tab handler access error")
+
+        stage = "reject browser-only related auto-attach on Tab handler"
+        related_error, _ = await _raw_command_error(
+            client,
+            "Target.autoAttachRelated",
+            {
+                "targetId": target_id,
+                "waitForDebuggerOnStart": False,
+            },
+            session_id=tab_session_id,
+        )
+        assert_equal(
+            related_error,
+            {
+                "code": -32000,
+                "message": "Target.autoAttachRelated is only supported on the Browser target",
+            },
+            "Tab related auto-attach access error",
+        )
+        return {
+            "flattenErrorCodes": [error["code"] for error in flatten_errors],
+            "tabAccessError": access_error,
+            "tabAutoAttachRelatedError": related_error,
+        }
+    except Exception as error:
+        raise SmokeError(f"{stage}: {type(error).__name__}: {error}") from error
+    finally:
+        if browser_session_id is not None:
+            await _ignore_raw_error(
+                client,
+                "Target.setAutoAttach",
+                {
+                    "autoAttach": False,
+                    "waitForDebuggerOnStart": False,
+                    "flatten": True,
+                },
+                session_id=browser_session_id,
+            )
+        if target_id is not None:
+            await _ignore_raw_error(client, "Target.closeTarget", {"targetId": target_id})
+        if browser_context_id is not None:
+            await _ignore_raw_error(
+                client,
+                "Target.disposeBrowserContext",
+                {"browserContextId": browser_context_id},
+            )
+        await client.websocket.close()
+
+
+async def _repeated_tab_auto_attach_reconciles_filter(
+    endpoint: str,
+    _fixture: str,
+) -> dict[str, Any]:
+    client = await connect_raw_cdp(endpoint)
+    browser_context_id: str | None = None
+    target_id: str | None = None
+    stage = "create Tab target"
+    try:
+        context, _ = await _raw_command(client, "Target.createBrowserContext")
+        browser_context_id = context["browserContextId"]
+        created, _ = await _raw_command(
+            client,
+            "Target.createTarget",
+            {
+                "url": "about:blank",
+                "browserContextId": browser_context_id,
+                "forTab": True,
+            },
+        )
+        target_id = created["targetId"]
+        attached_tab, _ = await _raw_command(
+            client,
+            "Target.attachToTarget",
+            {"targetId": target_id, "flatten": True},
+        )
+        tab_session_id = attached_tab["sessionId"]
+
+        stage = "exclude existing child Page"
+        _, excluded_seen = await _raw_command(
+            client,
+            "Target.setAutoAttach",
+            {
+                "autoAttach": True,
+                "waitForDebuggerOnStart": False,
+                "flatten": True,
+                "filter": [{"type": "page", "exclude": True}],
+            },
+            session_id=tab_session_id,
+        )
+        excluded_attachments = [
+            message
+            for message in excluded_seen
+            if message.get("method") == "Target.attachedToTarget"
+        ]
+        assert_equal(excluded_attachments, [], "excluded existing Page attachments")
+
+        stage = "reconcile newly eligible existing child Page"
+        _, eligible_seen = await _raw_command(
+            client,
+            "Target.setAutoAttach",
+            {
+                "autoAttach": True,
+                "waitForDebuggerOnStart": False,
+                "flatten": True,
+                "filter": [{"type": "page"}],
+            },
+            session_id=tab_session_id,
+        )
+        eligible_attachments = [
+            message
+            for message in eligible_seen
+            if message.get("method") == "Target.attachedToTarget"
+            and message.get("sessionId") == tab_session_id
+            and message.get("params", {}).get("targetInfo", {}).get("type") == "page"
+        ]
+        assert_equal(len(eligible_attachments), 1, "newly eligible Page attachment count")
+        child_session_id = eligible_attachments[0]["params"]["sessionId"]
+
+        stage = "repeat identical auto-attach without duplication"
+        _, repeated_seen = await _raw_command(
+            client,
+            "Target.setAutoAttach",
+            {
+                "autoAttach": True,
+                "waitForDebuggerOnStart": False,
+                "flatten": True,
+                "filter": [{"type": "page"}],
+            },
+            session_id=tab_session_id,
+        )
+        repeated_attachments = [
+            message
+            for message in repeated_seen
+            if message.get("method") == "Target.attachedToTarget"
+        ]
+        assert_equal(repeated_attachments, [], "duplicate Page attachments")
+
+        evaluation, _ = await _raw_command(
+            client,
+            "Runtime.evaluate",
+            {"expression": "location.href", "returnByValue": True},
+            session_id=child_session_id,
+        )
+        assert_equal(
+            evaluation.get("result", {}).get("value"),
+            "about:blank",
+            "reconciled child Page session",
+        )
+        return {
+            "newAttachments": len(eligible_attachments),
+            "duplicateAttachments": len(repeated_attachments),
+            "childSessionUrl": evaluation.get("result", {}).get("value"),
+        }
+    except Exception as error:
+        raise SmokeError(f"{stage}: {type(error).__name__}: {error}") from error
+    finally:
+        if target_id is not None:
+            await _ignore_raw_error(client, "Target.closeTarget", {"targetId": target_id})
+        if browser_context_id is not None:
+            await _ignore_raw_error(
+                client,
+                "Target.disposeBrowserContext",
+                {"browserContextId": browser_context_id},
+            )
+        await client.websocket.close()
+
+
+async def _create_target_foreground_activation(
+    endpoint: str,
+    _fixture: str,
+) -> dict[str, Any]:
+    client = await connect_raw_cdp(endpoint)
+    browser_context_id: str | None = None
+    target_ids: list[str] = []
+    session_ids: list[str] = []
+    stage = "create browser context"
+    try:
+        context, _ = await _raw_command(client, "Target.createBrowserContext")
+        browser_context_id = context["browserContextId"]
+        for index, background in ((1, None), (2, None), (3, True)):
+            params: dict[str, Any] = {
+                "url": f"about:blank#foreground-{index}",
+                "browserContextId": browser_context_id,
+            }
+            if background is not None:
+                params["background"] = background
+            created, _ = await _raw_command(client, "Target.createTarget", params)
+            target_ids.append(created["targetId"])
+
+        for target_id in target_ids:
+            attached, _ = await _raw_command(
+                client,
+                "Target.attachToTarget",
+                {"targetId": target_id, "flatten": True},
+            )
+            session_ids.append(attached["sessionId"])
+
+        async def visibility_states() -> list[str | None]:
+            states: list[str | None] = []
+            for session_id in session_ids:
+                evaluation, _ = await _raw_command(
+                    client,
+                    "Runtime.evaluate",
+                    {
+                        "expression": "document.visibilityState",
+                        "returnByValue": True,
+                    },
+                    session_id=session_id,
+                )
+                states.append(evaluation.get("result", {}).get("value"))
+            return states
+
+        stage = "observe default foreground and explicit background"
+        initial_visibility = await visibility_states()
+        assert_equal(
+            initial_visibility,
+            ["hidden", "visible", "hidden"],
+            "created target visibility",
+        )
+
+        stage = "activate first target"
+        await _raw_command(
+            client,
+            "Target.activateTarget",
+            {"targetId": target_ids[0]},
+        )
+        activated_visibility: list[str | None] = []
+
+        async def first_target_is_foreground() -> bool:
+            nonlocal activated_visibility
+            activated_visibility = await visibility_states()
+            return activated_visibility == ["visible", "hidden", "hidden"]
+
+        await wait_until(
+            first_target_is_foreground,
+            "activated target Page visibility",
+        )
+        return {
+            "initialVisibility": initial_visibility,
+            "activatedVisibility": activated_visibility,
+            "explicitBackgroundTarget": target_ids[2],
+        }
+    except Exception as error:
+        raise SmokeError(f"{stage}: {type(error).__name__}: {error}") from error
+    finally:
+        for target_id in reversed(target_ids):
+            await _ignore_raw_error(client, "Target.closeTarget", {"targetId": target_id})
+        if browser_context_id is not None:
+            await _ignore_raw_error(
+                client,
+                "Target.disposeBrowserContext",
+                {"browserContextId": browser_context_id},
+            )
+        await client.websocket.close()
+
+
+async def _tab_session_stays_with_its_tab(
+    endpoint: str,
+    _fixture: str,
+) -> dict[str, Any]:
+    client = await connect_raw_cdp(endpoint)
+    browser_context_id: str | None = None
+    tab_target_ids: list[str] = []
+    stage = "create and attach first Tab target"
+    try:
+        context, _ = await _raw_command(client, "Target.createBrowserContext")
+        browser_context_id = context["browserContextId"]
+        first, _ = await _raw_command(
+            client,
+            "Target.createTarget",
+            {
+                "url": "about:blank#stable-tab-one",
+                "browserContextId": browser_context_id,
+                "forTab": True,
+            },
+        )
+        first_tab_target_id = first["targetId"]
+        tab_target_ids.append(first_tab_target_id)
+        attached, _ = await _raw_command(
+            client,
+            "Target.attachToTarget",
+            {"targetId": first_tab_target_id, "flatten": True},
+        )
+        tab_session_id = attached["sessionId"]
+
+        stage = "auto-attach the first Tab child Page"
+        _, auto_attach_seen = await _raw_command(
+            client,
+            "Target.setAutoAttach",
+            {
+                "autoAttach": True,
+                "waitForDebuggerOnStart": False,
+                "flatten": True,
+                "filter": [{"type": "page"}],
+            },
+            session_id=tab_session_id,
+        )
+        child_attachments = [
+            message
+            for message in auto_attach_seen
+            if message.get("method") == "Target.attachedToTarget"
+            and message.get("sessionId") == tab_session_id
+            and message.get("params", {}).get("targetInfo", {}).get("type") == "page"
+        ]
+        assert_equal(len(child_attachments), 1, "first Tab child attachment count")
+        first_child_target_id = child_attachments[0]["params"]["targetInfo"]["targetId"]
+        first_child_session_id = child_attachments[0]["params"]["sessionId"]
+
+        stage = "activate a different Tab target"
+        second, creation_seen = await _raw_command(
+            client,
+            "Target.createTarget",
+            {
+                "url": "about:blank#stable-tab-two",
+                "browserContextId": browser_context_id,
+                "forTab": True,
+            },
+        )
+        second_tab_target_id = second["targetId"]
+        tab_target_ids.append(second_tab_target_id)
+
+        _, activation_seen = await _raw_command(
+            client,
+            "Target.activateTarget",
+            {"targetId": second_tab_target_id},
+        )
+        tab_info, info_seen = await _raw_command(
+            client,
+            "Target.getTargetInfo",
+            session_id=tab_session_id,
+        )
+        assert_equal(
+            tab_info.get("targetInfo", {}).get("targetId"),
+            first_tab_target_id,
+            "attached Tab target identity",
+        )
+        child_url, evaluation_seen = await _raw_command(
+            client,
+            "Runtime.evaluate",
+            {"expression": "location.href", "returnByValue": True},
+            session_id=first_child_session_id,
+        )
+        assert_equal(
+            child_url.get("result", {}).get("value"),
+            "about:blank#stable-tab-one",
+            "attached child Page identity",
+        )
+        leaked_attachments = [
+            message
+            for message in [
+                *creation_seen,
+                *activation_seen,
+                *info_seen,
+                *evaluation_seen,
+            ]
+            if message.get("method") == "Target.attachedToTarget"
+            and message.get("sessionId") == tab_session_id
+        ]
+        assert_equal(leaked_attachments, [], "cross-Tab child attachments")
+        return {
+            "tabTargetIdStable": first_tab_target_id,
+            "childTargetIdStable": first_child_target_id,
+            "childUrlAfterOtherTabActivation": child_url.get("result", {}).get("value"),
+            "crossTabAttachments": len(leaked_attachments),
+        }
+    except Exception as error:
+        raise SmokeError(f"{stage}: {type(error).__name__}: {error}") from error
+    finally:
+        for target_id in reversed(tab_target_ids):
+            await _ignore_raw_error(client, "Target.closeTarget", {"targetId": target_id})
+        if browser_context_id is not None:
+            await _ignore_raw_error(
+                client,
+                "Target.disposeBrowserContext",
+                {"browserContextId": browser_context_id},
+            )
+        await client.websocket.close()
+
+
+async def _screencast_visibility_follows_foreground(
+    endpoint: str,
+    _fixture: str,
+) -> dict[str, Any]:
+    client = await connect_raw_cdp(endpoint)
+    browser_context_id: str | None = None
+    target_ids: list[str] = []
+    screencast_session_id: str | None = None
+    stage = "create and attach foreground Page"
+    try:
+        context, _ = await _raw_command(client, "Target.createBrowserContext")
+        browser_context_id = context["browserContextId"]
+        first, _ = await _raw_command(
+            client,
+            "Target.createTarget",
+            {
+                "url": "about:blank#screencast-visible",
+                "browserContextId": browser_context_id,
+            },
+        )
+        first_target_id = first["targetId"]
+        target_ids.append(first_target_id)
+        attached, _ = await _raw_command(
+            client,
+            "Target.attachToTarget",
+            {"targetId": first_target_id, "flatten": True},
+        )
+        screencast_session_id = attached["sessionId"]
+
+        stage = "start visible screencast"
+        _, start_seen = await _raw_command(
+            client,
+            "Page.startScreencast",
+            {"format": "jpeg", "quality": 40, "everyNthFrame": 1000},
+            session_id=screencast_session_id,
+        )
+        initial_event = await _raw_wait_for_event(
+            client,
+            "Page.screencastVisibilityChanged",
+            lambda params: params.get("visible") is True,
+            start_seen,
+            session_id=screencast_session_id,
+        )
+
+        stage = "demote screencast Page by creating foreground target"
+        second, creation_seen = await _raw_command(
+            client,
+            "Target.createTarget",
+            {
+                "url": "about:blank#screencast-new-foreground",
+                "browserContextId": browser_context_id,
+            },
+        )
+        second_target_id = second["targetId"]
+        target_ids.append(second_target_id)
+        hidden_event = await _raw_wait_for_event(
+            client,
+            "Page.screencastVisibilityChanged",
+            lambda params: params.get("visible") is False,
+            creation_seen,
+            session_id=screencast_session_id,
+        )
+
+        stage = "close foreground target and promote screencast Page"
+        _, close_seen = await _raw_command(
+            client,
+            "Target.closeTarget",
+            {"targetId": second_target_id},
+        )
+        target_ids.remove(second_target_id)
+        visible_event = await _raw_wait_for_event(
+            client,
+            "Page.screencastVisibilityChanged",
+            lambda params: params.get("visible") is True,
+            close_seen,
+            session_id=screencast_session_id,
+        )
+        return {
+            "initialVisible": initial_event.get("params", {}).get("visible"),
+            "hiddenAfterForegroundCreation": hidden_event.get("params", {}).get("visible"),
+            "visibleAfterForegroundClose": visible_event.get("params", {}).get("visible"),
+        }
+    except Exception as error:
+        raise SmokeError(f"{stage}: {type(error).__name__}: {error}") from error
+    finally:
+        if screencast_session_id is not None:
+            await _ignore_raw_error(
+                client,
+                "Page.stopScreencast",
+                {},
+                session_id=screencast_session_id,
+            )
+        for target_id in reversed(target_ids):
+            await _ignore_raw_error(client, "Target.closeTarget", {"targetId": target_id})
+        if browser_context_id is not None:
+            await _ignore_raw_error(
+                client,
+                "Target.disposeBrowserContext",
+                {"browserContextId": browser_context_id},
+            )
+        await client.websocket.close()
+
+
+async def _closed_default_target_stays_closed(
+    endpoint: str,
+    _fixture: str,
+) -> dict[str, Any]:
+    stage = "discover default Page target"
+    try:
+        targets = await _discovered_targets(endpoint)
+        page_targets = [target for target in targets if target.get("type") == "page"]
+        assert_equal(len(page_targets), 1, "default Page target count before close")
+        target_id = page_targets[0].get("id")
+        if not isinstance(target_id, str) or not target_id:
+            raise SmokeError(f"default Page target had no id: {page_targets[0]!r}")
+
+        stage = "close default target through remote-debugging HTTP"
+        close_text = await asyncio.to_thread(
+            _read_text_url,
+            f"{endpoint.rstrip('/')}/json/close/{quote(target_id, safe='')}",
+        )
+
+        remaining: list[dict[str, Any]] = []
+
+        async def closed_target_is_absent() -> bool:
+            nonlocal remaining
+            remaining = await _discovered_targets(endpoint)
+            return all(target.get("id") != target_id for target in remaining)
+
+        stage = "verify closed default is not re-advertised"
+        await wait_until(closed_target_is_absent, "closed default target absent from discovery")
+        second_read = await _discovered_targets(endpoint)
+        _require(
+            all(target.get("id") != target_id for target in second_read),
+            f"closed default target was recreated: {second_read}",
+        )
+        return {
+            "closedTargetId": target_id,
+            "closeResponse": close_text,
+            "remainingTargetIds": [target.get("id") for target in second_read],
+        }
+    except Exception as error:
+        raise SmokeError(f"{stage}: {type(error).__name__}: {error}") from error
 
 
 async def _created_target_initial_navigation(

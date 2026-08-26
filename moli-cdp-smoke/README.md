@@ -98,6 +98,21 @@ while Chromium commits an error Document with `net::ERR_INVALID_RESPONSE` and
 Moli retains the prior Document with `net::ERR_ABORTED`; that difference is
 also recorded rather than hidden behind an exact error-string assertion.
 
+The expanded `target-semantics` group was calibrated on 2026-08-26 against
+Debian `/usr/bin/chromium` 145.0.7632.116 and then run unchanged against Moli.
+In addition to target creation, attachment, close, and browser-context
+isolation, its raw WebSocket contracts verify Chromium's TargetHandler access
+modes, the browser-level flattened-auto-attach requirement, repeated Tab
+auto-attach reconciliation without duplicate sessions, stable Tab-to-Page
+ownership across foreground changes, `Target.createTarget` foreground and
+background behavior, Page visibility changes, screencast visibility
+`true -> false -> true` across demotion and close-driven promotion, and a real
+default discovery target that is not recreated after close. The complete
+12-contract group passed three consecutive fresh Chromium processes and five
+consecutive fresh Moli processes. Chromium source revision `a03603fe9af6` was
+also inspected to explain the access-mode and auto-attach machinery; the
+executable probe remains the behavioral authority.
+
 ## Current Coverage
 
 The current suite is a strong core smoke gate, not a complete Playwright compatibility suite.
@@ -252,9 +267,12 @@ Covered well:
   overrides for user agent, locale, timezone, extra headers, and navigation
   referer.
 - Chromium-calibrated `target-semantics` and `browser-semantics` contracts for
-  target multi-attach/close/context disposal, real-URL target debugger-wait
-  lifecycle correlation, history entry identity and metadata, frame metadata
-  and detach order, top-level/popup storage,
+  stable Tab/Page ownership, TargetHandler access modes, repeated auto-attach
+  reconciliation, foreground/background activation, Page and screencast
+  visibility, default-target discovery and close, target
+  multi-attach/close/context disposal, real-URL target debugger-wait lifecycle
+  correlation, history entry identity and metadata, frame metadata and detach
+  order, top-level/popup storage,
   DOMStorage events, resource trees/search, XML, isolated worlds, EventSource,
   HTTP and CacheStorage caches, CSS Typed OM, and View
   Transitions. Each contract records its invariant, source, command chain, and

@@ -174,7 +174,7 @@ RAW_GROUPS: tuple[SmokeGroup, ...] = (
     ),
     SmokeGroup(
         "target-semantics",
-        "Cross-engine raw CDP target creation, attachment, detach, and close contracts.",
+        "Cross-engine raw CDP TargetHandler, stable Tab/Page ownership, auto-attach, activation, visibility, attachment, and close contracts.",
         "raw",
         run_target_semantics_group,
     ),
