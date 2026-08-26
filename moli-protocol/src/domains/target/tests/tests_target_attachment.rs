@@ -2,6 +2,23 @@ use super::*;
 use crate::conn::CdpSessionRoute;
 use moli_shared_worker::SharedWorkerInstanceId;
 
+fn expect_session_error(
+    ctx: &mut TestContext,
+    id: u64,
+    session_id: &str,
+    code: i32,
+    message: &str,
+) {
+    assert_eq!(
+        take_response_by_id(ctx, id),
+        json!({
+            "id": id,
+            "sessionId": session_id,
+            "error": { "code": code, "message": message }
+        })
+    );
+}
+
 /// cdp.target: attachToTarget – no browser context
 #[tokio::test(flavor = "multi_thread")]
 async fn attach_to_target_no_bc() {
@@ -261,6 +278,228 @@ async fn attach_to_target_tab_returns_control_plane_session() {
         page_targets["result"]["targetInfos"][0]["type"],
         json!("page")
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tab_and_page_target_handlers_cannot_manage_browser_contexts() {
+    let mut ctx = TestContext::new();
+    ctx.process_async(json!({
+        "id": 11020,
+        "method": "Target.createTarget",
+        "params": { "url": "about:blank" }
+    }))
+    .await;
+    let page_target_id = take_response_by_id(&mut ctx, 11020)["result"]["targetId"]
+        .as_str()
+        .expect("created Page target id")
+        .to_owned();
+    let tab_target_id = tab_id_for_page(&ctx, &page_target_id);
+    ctx.sent.clear();
+
+    ctx.process_async(json!({
+        "id": 11021,
+        "method": "Target.attachToTarget",
+        "params": { "targetId": tab_target_id }
+    }))
+    .await;
+    let tab_session_id = take_response_by_id(&mut ctx, 11021)["result"]["sessionId"]
+        .as_str()
+        .expect("attached Tab session id")
+        .to_owned();
+    ctx.sent.clear();
+
+    ctx.process_async(json!({
+        "id": 11022,
+        "sessionId": tab_session_id,
+        "method": "Target.getBrowserContexts"
+    }))
+    .await;
+    expect_session_error(&mut ctx, 11022, &tab_session_id, -32000, "Not allowed");
+
+    ctx.process_async(json!({
+        "id": 11025,
+        "sessionId": tab_session_id,
+        "method": "Target.autoAttachRelated",
+        "params": {
+            "targetId": page_target_id,
+            "waitForDebuggerOnStart": false
+        }
+    }))
+    .await;
+    expect_session_error(
+        &mut ctx,
+        11025,
+        &tab_session_id,
+        -32000,
+        "Target.autoAttachRelated is only supported on the Browser target",
+    );
+
+    ctx.process_async(json!({
+        "id": 11023,
+        "method": "Target.attachToTarget",
+        "params": { "targetId": page_target_id }
+    }))
+    .await;
+    let page_session_id = take_response_by_id(&mut ctx, 11023)["result"]["sessionId"]
+        .as_str()
+        .expect("attached Page session id")
+        .to_owned();
+    ctx.sent.clear();
+
+    ctx.process_async(json!({
+        "id": 11024,
+        "sessionId": page_session_id,
+        "method": "Target.createBrowserContext"
+    }))
+    .await;
+    expect_session_error(&mut ctx, 11024, &page_session_id, -32000, "Not allowed");
+    assert!(ctx.sent.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn worker_target_handler_is_auto_attach_only() {
+    let mut ctx = TestContext::new();
+    load_bc(&mut ctx, "BID-worker-access");
+    push_shared_worker_target(
+        &mut ctx,
+        SharedWorkerInstanceId::from_u64(11030),
+        "TID-worker-access",
+        "https://example.test/worker.js",
+        "worker-access",
+        None,
+    );
+    ctx.process_async(json!({
+        "id": 11031,
+        "method": "Target.attachToTarget",
+        "params": { "targetId": "TID-worker-access", "flatten": true }
+    }))
+    .await;
+    let worker_session_id = take_response_by_id(&mut ctx, 11031)["result"]["sessionId"]
+        .as_str()
+        .expect("attached worker session id")
+        .to_owned();
+    ctx.sent.clear();
+
+    ctx.process_async(json!({
+        "id": 11032,
+        "sessionId": worker_session_id,
+        "method": "Target.getTargets"
+    }))
+    .await;
+    expect_session_error(&mut ctx, 11032, &worker_session_id, -32000, "Not allowed");
+
+    ctx.process_async(json!({
+        "id": 11033,
+        "sessionId": worker_session_id,
+        "method": "Target.getTargetInfo"
+    }))
+    .await;
+    let own_info = take_response_by_id(&mut ctx, 11033);
+    assert_eq!(own_info["sessionId"], json!(worker_session_id));
+    assert_eq!(
+        own_info["result"]["targetInfo"]["targetId"],
+        json!("TID-worker-access")
+    );
+
+    push_shared_worker_target(
+        &mut ctx,
+        SharedWorkerInstanceId::from_u64(11035),
+        "TID-worker-child",
+        "https://example.test/worker-child.js",
+        "worker-child",
+        Some("SID-worker-child"),
+    );
+    ctx.conn.register_auto_attached_session_for_target(
+        "SID-worker-child".to_owned(),
+        Some(&worker_session_id),
+        Some("TID-worker-child"),
+    );
+    assert!(
+        ctx.conn
+            .target_handler_may_close_target(Some(&worker_session_id), "TID-worker-child"),
+        "an AutoAttachOnly handler may close its auto-attached child"
+    );
+
+    ctx.process_async(json!({
+        "id": 11035,
+        "sessionId": worker_session_id,
+        "method": "Target.getTargetInfo",
+        "params": { "targetId": "TID-worker-child" }
+    }))
+    .await;
+    expect_session_error(&mut ctx, 11035, &worker_session_id, -32000, "Not allowed");
+
+    ctx.process_async(json!({
+        "id": 11036,
+        "sessionId": worker_session_id,
+        "method": "Target.getTargetInfo",
+        "params": { "targetId": "browser" }
+    }))
+    .await;
+    expect_session_error(&mut ctx, 11036, &worker_session_id, -32000, "Not allowed");
+    assert!(ctx.sent.is_empty());
+
+    ctx.process_async(json!({
+        "id": 11037,
+        "sessionId": worker_session_id,
+        "method": "Target.closeTarget",
+        "params": { "targetId": "TID-worker-child" }
+    }))
+    .await;
+    assert_eq!(
+        take_response_by_id(&mut ctx, 11037),
+        json!({
+            "id": 11037,
+            "sessionId": worker_session_id,
+            "result": { "success": true }
+        })
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn browser_target_auto_attach_requires_explicit_flatten_true() {
+    let mut ctx = TestContext::new();
+    ctx.conn
+        .register_browser_session("SID-browser-flatten".to_owned());
+
+    for (id, flatten) in [(11040, None), (11041, Some(false))] {
+        let mut params = json!({
+            "autoAttach": true,
+            "waitForDebuggerOnStart": false
+        });
+        if let Some(flatten) = flatten {
+            params["flatten"] = json!(flatten);
+        }
+        ctx.process_async(json!({
+            "id": id,
+            "sessionId": "SID-browser-flatten",
+            "method": "Target.setAutoAttach",
+            "params": params
+        }))
+        .await;
+        expect_session_error(
+            &mut ctx,
+            id,
+            "SID-browser-flatten",
+            -32602,
+            "Only flatten protocol is supported with browser level auto-attach",
+        );
+    }
+
+    ctx.process_async(json!({
+        "id": 11042,
+        "sessionId": "SID-browser-flatten",
+        "method": "Target.setAutoAttach",
+        "params": {
+            "autoAttach": true,
+            "waitForDebuggerOnStart": false,
+            "flatten": true,
+            "filter": [{ "type": "page", "exclude": true }]
+        }
+    }))
+    .await;
+    ctx.expect_result(11042, json!({}), Some("SID-browser-flatten"));
+    assert!(ctx.sent.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -692,8 +931,8 @@ async fn shared_worker_target_session_does_not_fall_back_to_active_page_commands
 
     let response = ctx.take_response_by_id(14);
     assert_eq!(response["sessionId"], "SID-shared-worker");
-    assert_eq!(response["error"]["code"], -31998);
-    assert_eq!(response["error"]["message"], "DirectSessionRouteRequired");
+    assert_eq!(response["error"]["code"], -32000);
+    assert_eq!(response["error"]["message"], "Not allowed");
     let bc = ctx.conn.browser_context.as_ref().unwrap();
     assert_eq!(bc.active_target_id(), Some("TID-active"));
 }
@@ -1801,7 +2040,8 @@ async fn set_auto_attach_false_detaches_existing_target() {
         "method": "Target.setAutoAttach",
         "params": {
             "autoAttach": false,
-            "waitForDebuggerOnStart": false
+            "waitForDebuggerOnStart": false,
+            "flatten": true
         }
     }))
     .await;
@@ -1991,7 +2231,7 @@ async fn set_auto_attach_false_cleans_shared_worker_runtime_state_before_detache
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn set_auto_attach_false_detaches_only_matching_service_worker_auto_attach_owner() {
+async fn set_auto_attach_false_detaches_only_matching_browser_service_worker_owner() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-9");
     push_service_worker_target(
@@ -2008,7 +2248,8 @@ async fn set_auto_attach_false_detaches_only_matching_service_worker_auto_attach
         "method": "Target.setAutoAttach",
         "params": {
             "autoAttach": true,
-            "waitForDebuggerOnStart": false
+            "waitForDebuggerOnStart": false,
+            "flatten": true
         }
     }))
     .await;
@@ -2027,37 +2268,17 @@ async fn set_auto_attach_false_detaches_only_matching_service_worker_auto_attach
 
     ctx.process_async(json!({
         "id": 19,
-        "method": "Target.attachToTarget",
-        "params": {
-            "targetId": "TID-service-worker",
-            "flatten": true
-        }
+        "method": "Target.attachToBrowserTarget"
     }))
     .await;
-
-    let attach_result = take_response_by_id(&mut ctx, 19);
-    let owner_session_id = attach_result["result"]["sessionId"]
+    let browser_attached = ctx.take_first_matching("browser attachedToTarget", |message| {
+        message["method"] == json!("Target.attachedToTarget")
+    });
+    let owner_session_id = browser_attached["params"]["sessionId"]
         .as_str()
-        .expect("manual owner session")
+        .expect("browser owner session")
         .to_owned();
-    let manual_attached = ctx.take_one();
-    assert_eq!(manual_attached["method"], "Target.attachedToTarget");
-    assert_eq!(
-        manual_attached["params"]["sessionId"],
-        json!(owner_session_id)
-    );
-    let manual_attach_changed = ctx.take_first_matching(
-        "root service worker targetInfoChanged after manual attach",
-        |message| {
-            message.get("sessionId").is_none()
-                && message["method"] == json!("Target.targetInfoChanged")
-                && message["params"]["targetInfo"]["targetId"] == json!("TID-service-worker")
-        },
-    );
-    assert_eq!(
-        manual_attach_changed["params"]["targetInfo"]["attached"],
-        json!(true)
-    );
+    ctx.expect_result(19, json!({ "sessionId": owner_session_id.as_str() }), None);
 
     ctx.process_async(json!({
         "id": 20,
@@ -2065,7 +2286,8 @@ async fn set_auto_attach_false_detaches_only_matching_service_worker_auto_attach
         "method": "Target.setAutoAttach",
         "params": {
             "autoAttach": true,
-            "waitForDebuggerOnStart": false
+            "waitForDebuggerOnStart": false,
+            "flatten": true
         }
     }))
     .await;
@@ -2104,7 +2326,8 @@ async fn set_auto_attach_false_detaches_only_matching_service_worker_auto_attach
         "method": "Target.setAutoAttach",
         "params": {
             "autoAttach": false,
-            "waitForDebuggerOnStart": false
+            "waitForDebuggerOnStart": false,
+            "flatten": true
         }
     }))
     .await;
@@ -2152,7 +2375,7 @@ async fn set_auto_attach_false_detaches_only_matching_service_worker_auto_attach
     ));
     assert!(matches!(
         ctx.conn.session_route(Some(&owner_session_id)),
-        Some(CdpSessionRoute::ServiceWorkerTarget { .. })
+        Some(CdpSessionRoute::Browser)
     ));
     assert_eq!(ctx.conn.session_route(Some(&owner_auto_session_id)), None);
 }
@@ -2284,7 +2507,8 @@ async fn set_auto_attach_true_attaches_existing_unattached_target() {
         "method": "Target.setAutoAttach",
         "params": {
             "autoAttach": true,
-            "waitForDebuggerOnStart": false
+            "waitForDebuggerOnStart": false,
+            "flatten": true
         }
     }))
     .await;
@@ -2381,7 +2605,8 @@ async fn set_auto_attach_true_attaches_existing_page_target_for_each_owner() {
         "method": "Target.setAutoAttach",
         "params": {
             "autoAttach": true,
-            "waitForDebuggerOnStart": false
+            "waitForDebuggerOnStart": false,
+            "flatten": true
         }
     }))
     .await;
@@ -2451,7 +2676,8 @@ async fn set_auto_attach_true_attaches_existing_page_target_for_each_owner() {
         "method": "Target.setAutoAttach",
         "params": {
             "autoAttach": false,
-            "waitForDebuggerOnStart": false
+            "waitForDebuggerOnStart": false,
+            "flatten": true
         }
     }))
     .await;
@@ -2738,6 +2964,82 @@ async fn set_auto_attach_filter_excludes_existing_page_target() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn repeated_tab_auto_attach_reconciles_a_newly_matching_existing_page() {
+    let mut ctx = TestContext::new();
+    ctx.process_async(json!({
+        "id": 1706,
+        "method": "Target.createTarget",
+        "params": { "url": "about:blank" }
+    }))
+    .await;
+    let page_target_id = take_response_by_id(&mut ctx, 1706)["result"]["targetId"]
+        .as_str()
+        .expect("created Page target id")
+        .to_owned();
+    let tab_target_id = tab_id_for_page(&ctx, &page_target_id);
+    ctx.sent.clear();
+
+    ctx.process_async(json!({
+        "id": 1707,
+        "method": "Target.attachToTarget",
+        "params": { "targetId": tab_target_id }
+    }))
+    .await;
+    let tab_session_id = take_response_by_id(&mut ctx, 1707)["result"]["sessionId"]
+        .as_str()
+        .expect("attached Tab session id")
+        .to_owned();
+    ctx.sent.clear();
+
+    ctx.process_async(json!({
+        "id": 1708,
+        "sessionId": tab_session_id,
+        "method": "Target.setAutoAttach",
+        "params": {
+            "autoAttach": true,
+            "waitForDebuggerOnStart": false,
+            "flatten": true,
+            "filter": [{ "type": "page", "exclude": true }]
+        }
+    }))
+    .await;
+    ctx.expect_result(1708, json!({}), Some(&tab_session_id));
+    assert!(ctx.sent.is_empty());
+
+    ctx.process_async(json!({
+        "id": 1709,
+        "sessionId": tab_session_id,
+        "method": "Target.setAutoAttach",
+        "params": {
+            "autoAttach": true,
+            "waitForDebuggerOnStart": false,
+            "flatten": true,
+            "filter": [{ "type": "page" }]
+        }
+    }))
+    .await;
+
+    let attached = ctx.take_one();
+    assert_eq!(attached["method"], json!("Target.attachedToTarget"));
+    assert_eq!(attached["sessionId"], json!(tab_session_id));
+    assert_eq!(
+        attached["params"]["targetInfo"]["targetId"],
+        json!(page_target_id)
+    );
+    assert_eq!(attached["params"]["targetInfo"]["type"], json!("page"));
+    let info_changed = ctx.take_first_matching("attached Page targetInfoChanged", |message| {
+        message["method"] == json!("Target.targetInfoChanged")
+            && message["params"]["targetInfo"]["targetId"] == json!(page_target_id)
+    });
+    assert_eq!(
+        info_changed["params"]["targetInfo"]["attached"],
+        json!(true)
+    );
+    ctx.expect_result(1709, json!({}), Some(&tab_session_id));
+    assert!(ctx.sent.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn set_auto_attach_filter_page_exclude_catchall_auto_attaches_existing_tab() {
     let mut ctx = TestContext::new_with_target_discovery(false);
     ctx.process_async(json!({
@@ -2841,6 +3143,70 @@ async fn set_auto_attach_filter_allows_only_existing_service_worker_target() {
         Some(CdpSessionRoute::ServiceWorkerTarget { .. })
     ));
     assert!(ctx.conn.auto_attach);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tab_auto_attach_does_not_capture_an_existing_service_worker() {
+    let mut ctx = TestContext::new();
+    ctx.process_async(json!({
+        "id": 17100,
+        "method": "Target.createTarget",
+        "params": { "url": "about:blank" }
+    }))
+    .await;
+    let page_target_id = take_response_by_id(&mut ctx, 17100)["result"]["targetId"]
+        .as_str()
+        .expect("created Page target id")
+        .to_owned();
+    let tab_target_id = tab_id_for_page(&ctx, &page_target_id);
+    push_service_worker_target(
+        &mut ctx,
+        17101,
+        "TID-tab-unrelated-service-worker",
+        "https://example.test/service-worker.js",
+        "https://example.test/",
+        None,
+    );
+    ctx.sent.clear();
+
+    ctx.process_async(json!({
+        "id": 17102,
+        "method": "Target.attachToTarget",
+        "params": { "targetId": tab_target_id }
+    }))
+    .await;
+    let tab_session_id = take_response_by_id(&mut ctx, 17102)["result"]["sessionId"]
+        .as_str()
+        .expect("attached Tab session id")
+        .to_owned();
+    ctx.sent.clear();
+
+    ctx.process_async(json!({
+        "id": 17103,
+        "sessionId": tab_session_id,
+        "method": "Target.setAutoAttach",
+        "params": {
+            "autoAttach": true,
+            "waitForDebuggerOnStart": true,
+            "flatten": true,
+            "filter": [{ "type": "service_worker" }]
+        }
+    }))
+    .await;
+
+    ctx.expect_result(17103, json!({}), Some(&tab_session_id));
+    assert!(ctx.sent.is_empty());
+    assert!(
+        !ctx.conn
+            .attached_sessions_for_target("TID-tab-unrelated-service-worker")
+            .iter()
+            .any(|session_id| {
+                ctx.conn
+                    .auto_attached_sessions_for_owner(Some(&tab_session_id))
+                    .contains(session_id)
+            })
+    );
+    assert_eq!(ctx.conn.service_worker_pause_on_start_owner_count(), 0);
 }
 
 #[tokio::test(flavor = "multi_thread")]

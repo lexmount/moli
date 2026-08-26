@@ -14,7 +14,11 @@ async fn activate_target_promotes_auto_attached_background_session_into_page_run
     ctx.process_async(json!({
         "id": 103,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9", "url": "about:blank#second"}
+        "params": {
+            "browserContextId": "BID-9",
+            "url": "about:blank#second",
+            "background": true
+        }
     }))
     .await;
     let created = ctx.take_one();
@@ -80,7 +84,8 @@ async fn create_target_allows_second_target_in_same_browser_context_for_frame_se
     ctx.process_async(json!({
         "id": 10,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9", "url": "about:blank#second"}
     }))
     .await;
     let target_created = ctx.take_one();
@@ -126,7 +131,11 @@ async fn get_target_info_reports_background_target_in_same_browser_context() {
     ctx.process_async(json!({
         "id": 10,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9", "url": "about:blank#second"}
+        "params": {
+            "browserContextId": "BID-9",
+            "url": "about:blank#second",
+            "background": true
+        }
     }))
     .await;
     let second_target_id = take_created_target_id(&mut ctx, 10);
@@ -309,7 +318,8 @@ async fn attach_to_target_keeps_background_target_parked_when_active_target_has_
     ctx.process_async(json!({
         "id": 10,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9", "url": "about:blank#second"}
     }))
     .await;
     let second_target_id = take_created_target_id(&mut ctx, 10);
@@ -372,7 +382,8 @@ async fn background_target_session_can_navigate_enable_and_evaluate_after_attach
     ctx.process_async(json!({
         "id": 1010,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9", "url": "about:blank#second"}
     }))
     .await;
     let second_target_id = take_created_target_id(&mut ctx, 1010);
@@ -477,7 +488,8 @@ async fn close_target_removes_background_target_without_disturbing_active_target
     ctx.process_async(json!({
         "id": 10,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9", "url": "about:blank#second"}
     }))
     .await;
     let second_target_id = take_created_target_id(&mut ctx, 10);
@@ -517,7 +529,8 @@ async fn close_active_target_promotes_background_target_to_active_slot() {
     ctx.process_async(json!({
         "id": 10,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9", "url": "about:blank#second"}
     }))
     .await;
     let second_target_id = take_created_target_id(&mut ctx, 10);
@@ -574,7 +587,8 @@ async fn close_active_target_exposes_promoted_target_screencast() {
     ctx.process_async(json!({
         "id": 20,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9", "url": "about:blank#parked"}
+        "params": {
+            "background": true, "browserContextId": "BID-9", "url": "about:blank#parked"}
     }))
     .await;
     let parked_target_id = take_created_target_id(&mut ctx, 20);
@@ -628,6 +642,54 @@ async fn close_active_target_exposes_promoted_target_screencast() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn create_foreground_target_hides_demoted_target_screencast() {
+    let mut ctx = TestContext::new();
+    load_bc_with_titled_page_async(&mut ctx, "BID-9", "TID-active", "<title>active</title>").await;
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .attach_active_session("SID-active");
+
+    ctx.process_async(json!({
+        "id": 24,
+        "sessionId": "SID-active",
+        "method": "Page.startScreencast",
+        "params": {}
+    }))
+    .await;
+    let initially_visible = ctx
+        .take_first_matching("active screencast starts visible", |message| {
+            message["method"] == json!("Page.screencastVisibilityChanged")
+        });
+    assert_eq!(initially_visible["params"]["visible"], json!(true));
+    ctx.expect_result(24, json!({}), Some("SID-active"));
+
+    ctx.process_async(json!({
+        "id": 25,
+        "method": "Target.createTarget",
+        "params": { "browserContextId": "BID-9", "url": "about:blank#foreground" }
+    }))
+    .await;
+    let hidden = ctx.take_first_matching("demoted screencast becomes hidden", |message| {
+        message["method"] == json!("Page.screencastVisibilityChanged")
+            && message["sessionId"] == json!("SID-active")
+    });
+    assert_eq!(hidden["params"]["visible"], json!(false));
+    let created_target_id = take_response_by_id(&mut ctx, 25)["result"]["targetId"]
+        .as_str()
+        .expect("created target id")
+        .to_owned();
+    assert_eq!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .and_then(BrowserContext::active_target_id),
+        Some(created_target_id.as_str())
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn close_active_target_promoted_background_session_can_navigate_and_evaluate() {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
@@ -645,7 +707,8 @@ async fn close_active_target_promoted_background_session_can_navigate_and_evalua
     ctx.process_async(json!({
         "id": 12,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9", "url": "about:blank#second"}
     }))
     .await;
     let second_target_id = take_created_target_id(&mut ctx, 12);
@@ -736,7 +799,8 @@ async fn close_active_target_restores_background_loaded_page_runtime_without_ren
     ctx.process_async(json!({
         "id": 120,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9", "url": "about:blank#second"}
     }))
     .await;
     let second_target_id = take_created_target_id(&mut ctx, 120);
@@ -837,7 +901,8 @@ async fn close_active_target_promotes_auto_attached_background_session_into_page
     ctx.process_async(json!({
         "id": 17,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -923,7 +988,8 @@ async fn close_targets_chain_promotes_multiple_auto_attached_background_sessions
     ctx.process_async(json!({
         "id": 1801,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9", "url": "about:blank#second"}
     }))
     .await;
     let created_second = ctx.take_one();
@@ -943,7 +1009,8 @@ async fn close_targets_chain_promotes_multiple_auto_attached_background_sessions
     ctx.process_async(json!({
         "id": 1802,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9", "url": "about:blank#third"}
+        "params": {
+            "background": true, "browserContextId": "BID-9", "url": "about:blank#third"}
     }))
     .await;
     let created_third = ctx.take_first_matching("third targetCreated", |message| {
@@ -1092,7 +1159,8 @@ async fn activate_target_chain_restores_multiple_auto_attached_loaded_page_runti
     ctx.process_async(json!({
         "id": 1822,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9", "url": "about:blank#second"}
     }))
     .await;
     let created_second = ctx.take_one();
@@ -1137,7 +1205,8 @@ async fn activate_target_chain_restores_multiple_auto_attached_loaded_page_runti
     ctx.process_async(json!({
         "id": 1825,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9", "url": "about:blank#third"}
+        "params": {
+            "background": true, "browserContextId": "BID-9", "url": "about:blank#third"}
     }))
     .await;
     let created_third = ctx.take_one();
@@ -1662,7 +1731,8 @@ async fn detach_from_target_clears_background_target_session() {
     ctx.process_async(json!({
         "id": 10,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9", "url": "about:blank#second"}
     }))
     .await;
     let second_target_id = take_created_target_id(&mut ctx, 10);
@@ -2384,6 +2454,7 @@ async fn playwright_over_cdp_context_target_attach_and_navigate_smoke() {
         "id": 201,
         "method": "Target.createTarget",
         "params": {
+            "background": true,
             "browserContextId": browser_context_id,
             "url": "about:blank"
         }

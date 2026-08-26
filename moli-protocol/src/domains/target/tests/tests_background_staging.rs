@@ -104,7 +104,8 @@ async fn same_context_background_session_can_stage_its_own_pre_document_state_be
     ctx.process_async(json!({
         "id": 104186,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -298,7 +299,8 @@ async fn same_context_background_session_can_stage_its_own_utility_pre_document_
     ctx.process_async(json!({
         "id": 104194121,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE-UTILITY", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE-UTILITY", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -546,7 +548,8 @@ async fn same_context_background_session_can_remove_its_own_binding_before_promo
     ctx.process_async(json!({
         "id": 104194101,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE-REMOVE", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE-REMOVE", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -703,7 +706,8 @@ async fn same_context_background_session_can_remove_its_own_preload_before_promo
     ctx.process_async(json!({
         "id": 104194111,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE-REMOVE-SCRIPT", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE-REMOVE-SCRIPT", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -851,7 +855,8 @@ async fn same_context_background_session_can_remove_its_own_utility_binding_befo
     ctx.process_async(json!({
             "id": 104194131,
             "method": "Target.createTarget",
-            "params": {"browserContextId": "BID-9-PRE-REMOVE-UTILITY-BINDING", "url": "about:blank#second"}
+            "params": {
+            "background": true, "browserContextId": "BID-9-PRE-REMOVE-UTILITY-BINDING", "url": "about:blank#second"}
         })).await;
     let created = ctx.take_one();
     assert_eq!(created["method"], "Target.targetCreated");
@@ -1033,7 +1038,8 @@ async fn same_context_background_session_can_remove_its_own_utility_preload_befo
     ctx.process_async(json!({
             "id": 104194141,
             "method": "Target.createTarget",
-            "params": {"browserContextId": "BID-9-PRE-REMOVE-UTILITY-SCRIPT", "url": "about:blank#second"}
+            "params": {
+            "background": true, "browserContextId": "BID-9-PRE-REMOVE-UTILITY-SCRIPT", "url": "about:blank#second"}
         })).await;
     let created = ctx.take_one();
     assert_eq!(created["method"], "Target.targetCreated");
@@ -1222,7 +1228,8 @@ async fn same_context_background_session_can_stage_its_own_emulated_media_before
     ctx.process_async(json!({
         "id": 1041942,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE-MEDIA", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE-MEDIA", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -1355,7 +1362,8 @@ async fn same_context_background_session_can_clear_its_own_emulated_media_before
     ctx.process_async(json!({
         "id": 10419443,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE-MEDIA-CLEAR", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE-MEDIA-CLEAR", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -1496,7 +1504,8 @@ async fn same_context_background_session_can_stage_its_own_network_conditions_be
     ctx.process_async(json!({
         "id": 10419452,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE-NET", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE-NET", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -1640,7 +1649,8 @@ async fn same_context_background_session_can_stage_its_own_blocked_urls_before_p
     ctx.process_async(json!({
         "id": 10419458,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE-NET-BLOCK", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE-NET-BLOCK", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -1760,7 +1770,8 @@ async fn same_context_background_session_can_reset_its_own_network_conditions_be
     ctx.process_async(json!({
         "id": 104194502,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE-NET-RESET", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE-NET-RESET", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -1948,7 +1959,8 @@ async fn same_context_background_session_can_stage_its_own_extra_headers_before_
     ctx.process_async(json!({
         "id": 10419462,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE-HEADERS", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE-HEADERS", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -2127,7 +2139,8 @@ async fn same_context_background_session_can_clear_its_own_extra_headers_before_
     ctx.process_async(json!({
         "id": 104194663,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE-HEADERS-CLEAR", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE-HEADERS-CLEAR", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -2310,7 +2323,8 @@ async fn same_context_background_session_can_stage_its_own_user_agent_before_pro
     ctx.process_async(json!({
         "id": 10419472,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE-UA", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE-UA", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -2502,7 +2516,8 @@ async fn same_context_background_session_can_clear_its_own_user_agent_before_pro
     ctx.process_async(json!({
         "id": 104194703,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE-UA-CLEAR", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE-UA-CLEAR", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -2676,7 +2691,8 @@ async fn same_context_background_session_can_stage_its_own_locale_and_timezone_b
     ctx.process_async(json!({
         "id": 10419483,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE-LOCALE-TZ", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE-LOCALE-TZ", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -2868,7 +2884,8 @@ async fn same_context_background_session_can_clear_its_own_locale_before_promoti
     ctx.process_async(json!({
         "id": 104194802,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE-LOCALE-CLEAR", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE-LOCALE-CLEAR", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -3027,7 +3044,8 @@ async fn same_context_background_session_can_clear_its_own_timezone_before_promo
     ctx.process_async(json!({
         "id": 104194809,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE-TIMEZONE-CLEAR", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE-TIMEZONE-CLEAR", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -3203,7 +3221,8 @@ async fn same_context_background_session_can_stage_its_own_emulation_overrides_b
     ctx.process_async(json!({
         "id": 104194905,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE-EMU", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE-EMU", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -3413,7 +3432,8 @@ async fn same_context_background_session_can_stage_its_own_page_settings_before_
     ctx.process_async(json!({
         "id": 104194915,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE-PAGE", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE-PAGE", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -3570,7 +3590,8 @@ async fn same_context_background_session_can_clear_its_own_device_metrics_before
     ctx.process_async(json!({
         "id": 1041949132,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE-EMU-CLEAR", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE-EMU-CLEAR", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -3729,7 +3750,8 @@ async fn same_context_background_session_can_clear_its_own_touch_and_focus_befor
     ctx.process_async(json!({
         "id": 1041949142,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE-EMU-CLEAR-TF", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE-EMU-CLEAR-TF", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -3906,7 +3928,8 @@ async fn same_context_background_session_can_stage_its_own_script_execution_disa
     ctx.process_async(json!({
         "id": 104194921,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE-SCRIPT-DISABLED", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE-SCRIPT-DISABLED", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -4062,7 +4085,8 @@ async fn same_context_background_session_can_reenable_its_own_script_execution_b
     ctx.process_async(json!({
         "id": 1041949271,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE-SCRIPT-REENABLE", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE-SCRIPT-REENABLE", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -4233,7 +4257,8 @@ async fn same_context_background_session_can_stage_its_own_lifecycle_events_befo
     ctx.process_async(json!({
         "id": 104194931,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE-LIFECYCLE", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE-LIFECYCLE", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -4409,7 +4434,8 @@ async fn same_context_background_session_can_disable_its_own_lifecycle_events_be
     ctx.process_async(json!({
         "id": 1041949321,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE-LIFECYCLE-DISABLE", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE-LIFECYCLE-DISABLE", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -4555,7 +4581,8 @@ async fn same_context_background_session_can_stage_its_own_runtime_enable_before
     ctx.process_async(json!({
         "id": 104194937,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE-RUNTIME", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE-RUNTIME", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -4719,7 +4746,8 @@ async fn same_context_loaded_background_session_runtime_enable_replays_context_w
     ctx.process_async(json!({
         "id": 1041949311,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-RUNTIME-DIRECT", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-RUNTIME-DIRECT", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -4861,7 +4889,8 @@ async fn load_same_context_loaded_background_runtime_owner_async(
     ctx.process_async(json!({
         "id": command_id_base + 1,
         "method": "Target.createTarget",
-        "params": {"browserContextId": browser_context_id, "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": browser_context_id, "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -5472,7 +5501,8 @@ async fn same_context_background_session_can_disable_its_own_runtime_before_prom
     ctx.process_async(json!({
         "id": 1041949370,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE-RUNTIME-DISABLE", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE-RUNTIME-DISABLE", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -5621,7 +5651,8 @@ async fn same_context_background_session_can_stage_its_own_inspector_enable_befo
     ctx.process_async(json!({
         "id": 1041949396,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE-INSPECTOR", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE-INSPECTOR", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -5762,7 +5793,8 @@ async fn same_context_background_session_can_disable_its_own_inspector_before_pr
     ctx.process_async(json!({
         "id": 1041949401,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE-INSPECTOR-DISABLE", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE-INSPECTOR-DISABLE", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -5892,7 +5924,8 @@ async fn same_context_background_session_can_stage_its_own_css_enable_before_pro
     ctx.process_async(json!({
         "id": 1041949407,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE-CSS", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE-CSS", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -6000,7 +6033,8 @@ async fn same_context_background_session_can_disable_its_own_css_before_promotio
     ctx.process_async(json!({
         "id": 1041949412,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE-CSS-DISABLE", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE-CSS-DISABLE", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -6136,7 +6170,8 @@ async fn same_context_background_session_can_stage_its_own_fetch_enable_before_p
     ctx.process_async(json!({
         "id": 104194941,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE-FETCH", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE-FETCH", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -6316,6 +6351,7 @@ async fn same_context_background_fetch_continue_request_keeps_target_parked() {
         "id": 104194963,
         "method": "Target.createTarget",
         "params": {
+            "background": true,
             "browserContextId": "BID-9-PRE-FETCH-CONTINUE",
             "url": "about:blank#second"
         }
@@ -6481,7 +6517,8 @@ async fn same_context_background_session_can_stage_its_own_fetch_auth_handling_b
     ctx.process_async(json!({
         "id": 104194955,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE-FETCH-AUTH", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE-FETCH-AUTH", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -6660,7 +6697,8 @@ async fn same_context_background_session_can_disable_its_own_fetch_before_promot
     ctx.process_async(json!({
         "id": 104194948,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE-FETCH-DISABLE", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE-FETCH-DISABLE", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -6830,7 +6868,8 @@ async fn same_context_background_session_can_stage_its_own_network_enable_before
     ctx.process_async(json!({
         "id": 104194951,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE-NET", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE-NET", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -7014,7 +7053,8 @@ async fn same_context_background_session_can_disable_its_own_network_before_prom
     ctx.process_async(json!({
         "id": 104194959,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE-NET-DISABLE", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE-NET-DISABLE", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -7188,7 +7228,8 @@ async fn same_context_background_session_can_stage_its_own_cache_and_service_wor
     ctx.process_async(json!({
         "id": 104194957,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE-NET-POLICY", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE-NET-POLICY", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_first_matching(
@@ -7410,7 +7451,8 @@ async fn same_context_background_session_can_disable_its_own_cache_and_service_w
     ctx.process_async(json!({
         "id": 104194966,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PRE-NET-POLICY-DISABLE", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9-PRE-NET-POLICY-DISABLE", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_first_matching(

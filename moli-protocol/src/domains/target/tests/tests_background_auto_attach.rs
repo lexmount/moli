@@ -163,7 +163,8 @@ async fn runtime_add_binding_on_auto_attached_background_target_session_routes_w
     ctx.process_async(json!({
         "id": 1034,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -227,7 +228,8 @@ async fn runtime_add_binding_then_navigation_on_auto_attached_background_target_
     ctx.process_async(json!({
         "id": 10351,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -315,7 +317,8 @@ async fn runtime_add_binding_and_preload_on_auto_attached_background_target_sess
     ctx.process_async(json!({
         "id": 10355,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -426,7 +429,8 @@ async fn runtime_add_binding_and_utility_preload_on_auto_attached_background_tar
     ctx.process_async(json!({
         "id": 10369,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -574,7 +578,8 @@ async fn runtime_add_binding_and_utility_preload_then_remove_on_auto_attached_ba
     ctx.process_async(json!({
         "id": 10375,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();

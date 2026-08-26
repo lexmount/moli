@@ -434,7 +434,8 @@ async fn create_target_for_inactive_browser_context_keeps_previously_active_cont
     ctx.process_async(json!({
         "id": 1010,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-B", "url": "about:blank"}
+        "params": {
+            "background": true, "browserContextId": "BID-B", "url": "about:blank"}
     }))
     .await;
 
@@ -467,7 +468,8 @@ async fn create_target_with_auto_attach_attaches_second_target_in_same_browser_c
     ctx.conn.auto_attach = true;
 
     ctx.process_async(json!({"id": 10, "method": "Target.createTarget",
-                           "params": {"browserContextId": "BID-9", "url": "about:blank"}}))
+                           "params": {
+            "background": true, "browserContextId": "BID-9", "url": "about:blank"}}))
         .await;
     let created = ctx.take_one();
     assert_eq!(created["method"], "Target.targetCreated");
@@ -518,7 +520,8 @@ async fn page_command_on_auto_attached_background_target_session_routes_without_
     ctx.process_async(json!({
         "id": 101,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -600,7 +603,8 @@ async fn page_bring_to_front_promotes_background_session_explicitly() {
     ctx.process_async(json!({
         "id": 1021,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -691,7 +695,8 @@ async fn page_navigate_on_auto_attached_background_target_session_routes_without
     ctx.process_async(json!({
         "id": 1031,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -779,7 +784,8 @@ async fn page_stop_loading_aborts_background_pending_fetch_without_promotion() {
     ctx.process_async(json!({
         "id": 1034,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -880,7 +886,8 @@ async fn runtime_add_binding_and_preload_then_remove_on_auto_attached_background
     ctx.process_async(json!({
         "id": 10360,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -1017,7 +1024,8 @@ async fn runtime_remove_binding_on_background_target_session_routes_without_prom
     ctx.process_async(json!({
         "id": 1036,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -1119,7 +1127,8 @@ async fn same_context_targets_replay_only_their_own_pre_document_binding_and_pre
     ctx.process_async(json!({
         "id": 10392,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -1334,7 +1343,8 @@ async fn same_context_targets_materialize_only_their_own_utility_pre_document_bi
     ctx.process_async(json!({
         "id": 10404,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();
@@ -1645,7 +1655,8 @@ async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching
     ctx.process_async(json!({
         "id": 104151,
         "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9", "url": "about:blank#second"}
+        "params": {
+            "background": true, "browserContextId": "BID-9", "url": "about:blank#second"}
     }))
     .await;
     let created = ctx.take_one();

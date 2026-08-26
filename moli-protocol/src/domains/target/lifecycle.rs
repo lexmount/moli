@@ -24,6 +24,7 @@ pub(super) struct DevToolsCreateTargetExecution {
 pub(super) struct CreatedTargetProtocolEvents {
     page_target_id: String,
     tab_target_id: String,
+    demoted_target_id: Option<String>,
     attached_tab_sessions: Vec<TargetAttachSessionCommit>,
     attached_sessions: Vec<TargetAttachSessionCommit>,
 }
@@ -32,6 +33,40 @@ impl CreatedTargetProtocolEvents {
     pub(super) fn page_target_id(&self) -> &str {
         &self.page_target_id
     }
+
+    pub(super) fn demoted_target_id(&self) -> Option<&str> {
+        self.demoted_target_id.as_deref()
+    }
+}
+
+pub(super) async fn synchronize_created_target_activation_async(
+    conn: &mut CdpConnection,
+    events: &CreatedTargetProtocolEvents,
+) -> Vec<BackgroundProtocolEvent> {
+    let Some(demoted_target_id) = events.demoted_target_id() else {
+        return Vec::new();
+    };
+    let screencast_visibility_events = conn
+        .page_screencast_session_ids_for_target(demoted_target_id)
+        .into_iter()
+        .map(|session_id| {
+            BackgroundProtocolEvent::page_screencast_visibility_changed(
+                session_id.as_deref(),
+                false,
+            )
+        })
+        .collect();
+    if let Err(error) = conn
+        .apply_parked_target_surface_overrides_async(demoted_target_id)
+        .await
+    {
+        tracing::warn!(
+            target_id = demoted_target_id,
+            %error,
+            "failed to update Page visibility after createTarget activation"
+        );
+    }
+    screencast_visibility_events
 }
 
 #[derive(Clone, Copy)]
@@ -114,6 +149,8 @@ struct CreateTargetParams {
     url: String,
     browser_context_id: Option<String>,
     for_tab: Option<bool>,
+    background: Option<bool>,
+    focus: Option<bool>,
 }
 
 fn default_blank() -> String {
@@ -142,6 +179,8 @@ pub(super) fn start_create_target_command(
             url: "about:blank".into(),
             browser_context_id: None,
             for_tab: None,
+            background: None,
+            focus: None,
         },
         Err(e) => {
             return super::target_command_error(-32602, e);
@@ -152,7 +191,10 @@ pub(super) fn start_create_target_command(
     } else {
         CreateTargetResultHost::Page
     };
-    let command = build_cdp_create_target_command(cmd, params);
+    let command = match build_cdp_create_target_command(cmd, params) {
+        Ok(command) => command,
+        Err(message) => return super::target_command_error(-32602, message),
+    };
     start_devtools_create_target_command_with_result_host(
         conn,
         cmd.id,
@@ -165,15 +207,20 @@ pub(super) fn start_create_target_command(
 fn build_cdp_create_target_command(
     cmd: &Cmd<'_>,
     params: CreateTargetParams,
-) -> DevToolsCreateTargetCommand {
-    DevToolsCreateTargetCommand {
+) -> Result<DevToolsCreateTargetCommand, &'static str> {
+    let should_focus = params.focus.unwrap_or(!params.background.unwrap_or(false));
+    let create_in_background = params.background.unwrap_or(false) || params.focus == Some(false);
+    if should_focus && create_in_background {
+        return Err("Can't focus a target in the background. Use background=false instead.");
+    }
+    Ok(DevToolsCreateTargetCommand {
         context: cmd.devtools_command_context(None::<&str>, params.browser_context_id.as_deref()),
         url: params.url,
         browser_context_id: params
             .browser_context_id
             .map(DevToolsBrowserContextId::from),
-        activate: false,
-    }
+        activate: !create_in_background,
+    })
 }
 
 pub(super) fn start_devtools_create_target_command(
@@ -282,12 +329,18 @@ pub(super) fn execute_devtools_create_target_command(
 
     let target_id = conn.gen_target_id();
     let default_target_id = conn.default_target_id();
-    let browser_context = conn
-        .browser_context
-        .as_ref()
-        .expect("browser context must exist before target creation");
-    let has_active_target = browser_context.active_target_identity().is_some()
-        && !browser_context.active_target_is_unclaimed_default_placeholder(default_target_id);
+    let (has_active_target, previous_active_target_id) = {
+        let browser_context = conn
+            .browser_context
+            .as_ref()
+            .expect("browser context must exist before target creation");
+        (
+            browser_context.active_target_identity().is_some()
+                && !browser_context
+                    .active_target_is_unclaimed_default_placeholder(default_target_id),
+            browser_context.active_target_id_owned(),
+        )
+    };
     let auto_attach_page_owners = top_level_page_auto_attach_owner_sessions(conn);
     let auto_attach_tab_owners = top_level_tab_auto_attach_owner_sessions(conn);
     let auto_attached_page_sessions = auto_attach_page_owners
@@ -307,6 +360,11 @@ pub(super) fn execute_devtools_create_target_command(
         None
     };
     let activating_created_target = has_active_target && command.activate;
+    let demoted_target_id = if activating_created_target {
+        previous_active_target_id
+    } else {
+        None
+    };
     let initial_empty_document_url = create_target_initial_empty_document_url(&command.url);
     if activating_created_target {
         conn.handoff_navigation_engine_for_active_target_demotion();
@@ -408,6 +466,7 @@ pub(super) fn execute_devtools_create_target_command(
         protocol_events: CreatedTargetProtocolEvents {
             page_target_id: target_id,
             tab_target_id,
+            demoted_target_id,
             attached_tab_sessions,
             attached_sessions,
         },
@@ -1136,6 +1195,9 @@ pub(super) fn start_close_target_command(
             return super::target_command_error(-32602, "InvalidParams");
         }
     };
+    if !conn.target_handler_may_close_target(cmd.session_id, &params.target_id) {
+        return super::target_command_error(-32000, "Not allowed");
+    }
     let command = build_cdp_close_target_command(cmd, params);
     super::start_devtools_target_command(
         conn,
@@ -1401,6 +1463,9 @@ pub(super) fn get_target_info(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Comman
             return CommandOutputPlan::error_without_session(-32602, e);
         }
     };
+    if !conn.target_handler_may_get_target_info(cmd.session_id, params.target_id.as_deref()) {
+        return CommandOutputPlan::error(-32000, "Not allowed");
+    }
     let command = build_cdp_get_target_info_command(cmd, params);
     match super::start_devtools_target_command(
         conn,
@@ -1509,6 +1574,7 @@ struct AutoAttachParams {
     auto_attach: bool,
     #[serde(rename = "waitForDebuggerOnStart")]
     wait_for_debugger_on_start: bool,
+    flatten: Option<bool>,
     filter: Option<Vec<TargetFilterEntry>>,
 }
 
@@ -1657,6 +1723,17 @@ fn owner_already_auto_attached_to_target(
         })
 }
 
+fn owner_already_auto_attached_to_exact_target(
+    conn: &CdpConnection,
+    owner_session_id: Option<&str>,
+    target_id: &str,
+) -> bool {
+    let attached_sessions = conn.attached_sessions_for_target(target_id);
+    conn.auto_attached_sessions_for_owner(owner_session_id)
+        .iter()
+        .any(|session_id| attached_sessions.contains(session_id))
+}
+
 fn owner_already_auto_attached_to_page_target(
     conn: &CdpConnection,
     owner_session_id: Option<&str>,
@@ -1799,6 +1876,16 @@ pub(super) fn start_set_auto_attach_command(
             return super::target_command_error(-32602, "InvalidParams");
         }
     };
+    if cmd
+        .session_id
+        .is_some_and(|session_id| conn.is_browser_session_id(Some(session_id)))
+        && params.flatten != Some(true)
+    {
+        return super::target_command_error(
+            -32602,
+            "Only flatten protocol is supported with browser level auto-attach",
+        );
+    }
     if !params.auto_attach
         && params
             .filter
@@ -1833,7 +1920,8 @@ pub(super) fn start_set_auto_attach_command(
     }
     let pause_service_workers_on_start = params.auto_attach
         && params.wait_for_debugger_on_start
-        && target_filter.matches("service_worker");
+        && target_filter.matches("service_worker")
+        && super::browser_level_auto_attach_owner_session_allowed(conn, cmd.session_id);
     let pause_dedicated_workers_on_start =
         params.auto_attach && params.wait_for_debugger_on_start && target_filter.matches("worker");
     conn.set_auto_attach_owner(
@@ -1857,7 +1945,6 @@ pub(super) fn start_set_auto_attach_command(
         cmd.session_id,
         params.auto_attach,
         cmd.session_id,
-        owner_was_enabled,
         legacy_disable_all,
     )
 }
@@ -1866,7 +1953,6 @@ pub(super) async fn complete_set_auto_attach_command_async(
     conn: &mut CdpConnection,
     auto_attach: bool,
     owner_session_id: Option<&str>,
-    owner_was_enabled: bool,
     legacy_disable_all: bool,
     command_context: &mut crate::conn::CommandDispatchContext,
 ) -> CommandOutputPlan {
@@ -1877,7 +1963,6 @@ pub(super) async fn complete_set_auto_attach_command_async(
         &mut side_effects,
         auto_attach,
         owner_session_id,
-        owner_was_enabled,
         legacy_disable_all,
         command_context,
     )
@@ -1897,7 +1982,6 @@ async fn set_auto_attach_inner_async(
     out: &mut events::TargetProtocolSideEffects,
     auto_attach: bool,
     owner_session_id: Option<&str>,
-    owner_was_enabled: bool,
     legacy_disable_all: bool,
     command_context: &mut crate::conn::CommandDispatchContext,
 ) {
@@ -1907,7 +1991,6 @@ async fn set_auto_attach_inner_async(
         return;
     }
     if auto_attach
-        && !owner_was_enabled
         && let Some(owner_session_id) = owner_session_id
         && let Some(tab_target_id) = conn
             .tab_target_id_for_session_id(owner_session_id)
@@ -1924,9 +2007,6 @@ async fn set_auto_attach_inner_async(
             continue;
         }
         if auto_attach {
-            if owner_was_enabled {
-                continue;
-            }
             let attach_page_targets = conn
                 .auto_attach_owner_allows_target_type(owner_session_id, "page")
                 && super::browser_level_auto_attach_owner_session_allowed(conn, owner_session_id);
@@ -1938,8 +2018,9 @@ async fn set_auto_attach_inner_async(
                 && super::browser_level_auto_attach_owner_session_allowed(conn, owner_session_id);
             let attach_dedicated_worker_targets =
                 conn.auto_attach_owner_allows_target_type(owner_session_id, "worker");
-            let attach_service_worker_targets =
-                conn.auto_attach_owner_allows_target_type(owner_session_id, "service_worker");
+            let attach_service_worker_targets = conn
+                .auto_attach_owner_allows_target_type(owner_session_id, "service_worker")
+                && super::browser_level_auto_attach_owner_session_allowed(conn, owner_session_id);
             // waitForDebuggerOnStart applies to targets created after the
             // policy is installed. Chromium reports every target found by the
             // initial AddClient sweep as already running.
@@ -2020,6 +2101,13 @@ async fn set_auto_attach_inner_async(
                 if attach_shared_worker_targets {
                     bc.shared_worker_targets
                         .values()
+                        .filter(|target| {
+                            !owner_already_auto_attached_to_exact_target(
+                                conn,
+                                owner_session_id,
+                                &target.target_id,
+                            )
+                        })
                         .map(|target| target.target_id.clone())
                         .collect::<Vec<_>>()
                 } else {
@@ -2034,6 +2122,13 @@ async fn set_auto_attach_inner_async(
                 if attach_service_worker_targets {
                     bc.service_worker_targets
                         .values()
+                        .filter(|target| {
+                            !owner_already_auto_attached_to_exact_target(
+                                conn,
+                                owner_session_id,
+                                &target.target_id,
+                            )
+                        })
                         .map(|target| target.target_id.clone())
                         .collect::<Vec<_>>()
                 } else {
@@ -2053,6 +2148,10 @@ async fn set_auto_attach_inner_async(
                                 conn,
                                 owner_session_id,
                                 &target.owner_page,
+                            ) && !owner_already_auto_attached_to_exact_target(
+                                conn,
+                                owner_session_id,
+                                &target.target_id,
                             )
                         })
                         .map(|target| target.target_id.clone())
@@ -3071,8 +3170,11 @@ mod protocol_neutral_tests {
                 url: "https://example.com/new".to_owned(),
                 browser_context_id: Some("BID-create".to_owned()),
                 for_tab: None,
+                background: None,
+                focus: None,
             },
-        );
+        )
+        .expect("valid target disposition");
 
         assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
         assert_eq!(
@@ -3093,7 +3195,7 @@ mod protocol_neutral_tests {
             command.browser_context_id.as_ref().map(|id| id.as_str()),
             Some("BID-create")
         );
-        assert!(!command.activate);
+        assert!(command.activate);
     }
 
     #[test]

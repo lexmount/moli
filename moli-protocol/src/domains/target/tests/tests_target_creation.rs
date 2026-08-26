@@ -2492,7 +2492,7 @@ async fn create_target_with_puppeteer_tab_filter_auto_attaches_tab() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn closing_puppeteer_tab_auto_attach_clears_service_worker_pause_owner() {
+async fn tab_auto_attach_does_not_own_browser_level_service_worker_pause() {
     let mut ctx = TestContext::new();
     ctx.process_async(json!({
         "id": 9030,
@@ -2547,7 +2547,7 @@ async fn closing_puppeteer_tab_auto_attach_clears_service_worker_pause_owner() {
     }))
     .await;
     ctx.expect_result(9032, json!({}), None);
-    assert_eq!(ctx.conn.service_worker_pause_on_start_owner_count(), 2);
+    assert_eq!(ctx.conn.service_worker_pause_on_start_owner_count(), 1);
 
     ctx.process_async(json!({
         "id": 9033,
@@ -3439,7 +3439,11 @@ async fn create_target_with_auto_attach_emits_attached_event_for_each_owner() {
         "id": 9003,
         "sessionId": browser_session_id.as_str(),
         "method": "Target.setAutoAttach",
-        "params": { "autoAttach": true, "waitForDebuggerOnStart": true }
+        "params": {
+            "autoAttach": true,
+            "waitForDebuggerOnStart": true,
+            "flatten": true
+        }
     }))
     .await;
     ctx.expect_result(9003, json!({}), Some(&browser_session_id));
@@ -3509,16 +3513,65 @@ async fn create_target_with_bc_id() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn create_target_stages_second_target_in_background_slot() {
+async fn create_target_with_background_true_stages_second_target_in_background_slot() {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-9", "TID-000000000A");
 
     ctx.process_async(json!({"id": 10, "method": "Target.createTarget",
-                       "params": {"browserContextId": "BID-9", "url": "about:blank"}}))
+                       "params": {"browserContextId": "BID-9", "url": "about:blank", "background": true}}))
         .await;
     let created = take_created_target_id(&mut ctx, 10);
     let bc = ctx.conn.browser_context.as_ref().unwrap();
     assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
     assert_eq!(bc.background_targets.len(), 1);
     assert_eq!(bc.background_targets[0].target_id(), created);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn create_target_with_focus_false_stages_second_target_in_background_slot() {
+    let mut ctx = TestContext::new();
+    load_bc_with_target(&mut ctx, "BID-9", "TID-000000000A");
+
+    ctx.process_async(json!({
+        "id": 11,
+        "method": "Target.createTarget",
+        "params": {
+            "browserContextId": "BID-9",
+            "url": "about:blank#unfocused",
+            "background": false,
+            "focus": false
+        }
+    }))
+    .await;
+    let created = take_created_target_id(&mut ctx, 11);
+    let bc = ctx.conn.browser_context.as_ref().unwrap();
+    assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
+    assert_eq!(bc.background_targets.len(), 1);
+    assert_eq!(bc.background_targets[0].target_id(), created);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn create_target_rejects_focus_in_background() {
+    let mut ctx = TestContext::new();
+    load_bc_with_target(&mut ctx, "BID-9", "TID-000000000A");
+
+    ctx.process_async(json!({
+        "id": 12,
+        "method": "Target.createTarget",
+        "params": {
+            "browserContextId": "BID-9",
+            "url": "about:blank#invalid-disposition",
+            "background": true,
+            "focus": true
+        }
+    }))
+    .await;
+    ctx.expect_error(
+        12,
+        -32602,
+        "Can't focus a target in the background. Use background=false instead.",
+    );
+    let bc = ctx.conn.browser_context.as_ref().unwrap();
+    assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
+    assert!(bc.background_targets.is_empty());
 }

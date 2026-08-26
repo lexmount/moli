@@ -325,7 +325,17 @@ async fn create_isolated_world_restart_does_not_inherit_the_stale_renderer_strea
 async fn rust_cdp_chromiumoxide_loaded_background_target_replays_own_renderer_lifecycle() {
     let mut ctx = TestContext::new_with_target_discovery(false);
     let active_target_id = create_target(&mut ctx, 2_600_066, None, "about:blank").await;
-    let background_target_id = create_target(&mut ctx, 2_600_067, None, "about:blank").await;
+    ctx.process_async(json!({
+        "id": 2_600_067,
+        "method": "Target.createTarget",
+        "params": { "url": "about:blank", "background": true }
+    }))
+    .await;
+    let background_target_id = take_response_by_id(&mut ctx, 2_600_067)["result"]["targetId"]
+        .as_str()
+        .expect("background target id")
+        .to_owned();
+    ctx.take_all();
     assert_ne!(background_target_id, active_target_id);
     let session_id =
         attach_to_target(&mut ctx, 2_600_068, None, background_target_id.as_str()).await;
@@ -512,9 +522,15 @@ async fn rust_cdp_chromium_target_create_target_auto_attach_marks_get_targets_at
 // Chromium source:
 // third_party/blink/web_tests/http/tests/inspector-protocol/target/target-setAutoAttach-new-page.js
 #[tokio::test(flavor = "multi_thread")]
-async fn rust_cdp_chromium_target_second_create_target_stages_background_target() {
+async fn rust_cdp_chromium_target_second_create_target_activates_new_target_by_default() {
     let mut ctx = TestContext::new_with_target_discovery(false);
-    load_bc_with_target(&mut ctx, "BID-multi", "TID-000000000A");
+    load_bc_with_titled_page_async(
+        &mut ctx,
+        "BID-multi",
+        "TID-000000000A",
+        "<main>first target</main>",
+    )
+    .await;
 
     let target_id = create_target(
         &mut ctx,
@@ -525,9 +541,29 @@ async fn rust_cdp_chromium_target_second_create_target_stages_background_target(
     .await;
 
     let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
-    assert_eq!(browser_context.active_target_id(), Some("TID-000000000A"));
+    assert_eq!(browser_context.active_target_id(), Some(target_id.as_str()));
     assert_eq!(browser_context.background_targets.len(), 1);
-    assert_eq!(browser_context.background_targets[0].target_id(), target_id);
+    assert_eq!(
+        browser_context.background_targets[0].target_id(),
+        "TID-000000000A"
+    );
+
+    let first_session_id = attach_to_target(&mut ctx, 2_600_171, None, "TID-000000000A").await;
+    ctx.process_async(json!({
+        "id": 2_600_172,
+        "sessionId": first_session_id,
+        "method": "Runtime.evaluate",
+        "params": {
+            "expression": "JSON.stringify({ hidden: document.hidden, visibilityState: document.visibilityState })",
+            "returnByValue": true
+        }
+    }))
+    .await;
+    let visibility = take_response_by_id(&mut ctx, 2_600_172);
+    assert_eq!(
+        visibility["result"]["result"]["value"],
+        json!(r#"{"hidden":true,"visibilityState":"hidden"}"#)
+    );
 }
 
 // Chromium source:

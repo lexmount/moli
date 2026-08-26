@@ -1214,6 +1214,7 @@ async fn playwright_connect_over_cdp_second_page_window_query_keeps_background_t
         "id": 53192,
         "method": "Target.createTarget",
         "params": {
+            "background": true,
             "browserContextId": "BID-PW-WINDOW",
             "url": "about:blank"
         }

@@ -392,6 +392,26 @@ impl BrowserContext {
             .map_err(|error| format!("failed to hide demoted page surface: {error}"))
     }
 
+    pub(crate) async fn apply_parked_target_surface_overrides_async(
+        &mut self,
+        target_id: &str,
+    ) -> Result<bool, String> {
+        let Some(script) = self.generated_surface_override_script_for_parked_target(target_id)
+        else {
+            return Ok(false);
+        };
+        let Some(page) = self
+            .background_target_mut(target_id)
+            .and_then(|target| target.runtime_slot.loaded_page_mut())
+        else {
+            return Ok(false);
+        };
+        page.run_page_surface_override_script_async(&script.source)
+            .await
+            .map_err(|error| format!("failed to hide demoted page surface: {error}"))?;
+        Ok(true)
+    }
+
     pub(crate) fn generated_surface_override_script_for_active_target(
         &self,
     ) -> Option<DocumentStartScript> {

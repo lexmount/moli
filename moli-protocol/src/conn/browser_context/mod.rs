@@ -18,5 +18,5 @@ pub(crate) use page_owner::PageLifecycleEventsEnableResult;
 pub(crate) use runtime_owner::{
     SessionOwnerInspectorEnableResult, SessionOwnerRuntimeFrontendEnableResult,
 };
-pub(crate) use session_owner::CdpSessionRoute;
+pub(crate) use session_owner::{CdpSessionRoute, TargetHandlerAccessMode};
 pub(crate) use target_session_owner::TargetNavigationLoadInputs;

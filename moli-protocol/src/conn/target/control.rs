@@ -490,6 +490,14 @@ impl TargetControlPlane {
             .auto_attached_sessions_for_owner(owner_session_id)
     }
 
+    pub(crate) fn auto_attached_target_ids_for_owner(
+        &self,
+        owner_session_id: Option<&str>,
+    ) -> Vec<String> {
+        self.sessions
+            .auto_attached_target_ids_for_owner(owner_session_id)
+    }
+
     pub(crate) fn attached_session_cascade_for_owner(
         &self,
         owner_session_id: Option<&str>,

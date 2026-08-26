@@ -72,7 +72,7 @@ pub(crate) use bidi_channel_work::{
     BidiChannelPageOwner,
 };
 pub(crate) use body_spool::{CapturedBody, CapturedBodyWriter};
-pub(crate) use browser_context::CdpSessionRoute;
+pub(crate) use browser_context::{CdpSessionRoute, TargetHandlerAccessMode};
 pub(crate) use browser_context::{
     PageLifecycleEventsEnableResult, SessionOwnerInspectorEnableResult,
     SessionOwnerRuntimeFrontendEnableResult, TargetEmulationSessionStateMut,
@@ -2730,7 +2730,10 @@ impl CdpConnection {
         Ok(Some(CompletedTargetActivation::new(protocol_events)))
     }
 
-    fn page_screencast_session_ids_for_target(&mut self, target_id: &str) -> Vec<Option<String>> {
+    pub(crate) fn page_screencast_session_ids_for_target(
+        &mut self,
+        target_id: &str,
+    ) -> Vec<Option<String>> {
         let Some(route) = self.target_session_route_for_target_id(target_id) else {
             return Vec::new();
         };

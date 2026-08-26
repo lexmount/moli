@@ -1,6 +1,8 @@
 use serde::Deserialize;
 
-use crate::conn::{BackgroundProtocolEvent, BrowserContext, CdpConnection, Cmd};
+use crate::conn::{
+    BackgroundProtocolEvent, BrowserContext, CdpConnection, Cmd, TargetHandlerAccessMode,
+};
 use crate::devtools_runtime::{
     DevToolsActivateTargetCommand, DevToolsCloseTargetCommand, DevToolsCommand,
     DevToolsCommandResult, DevToolsCreateTargetCommand, DevToolsError, DevToolsErrorKind,
@@ -89,6 +91,39 @@ pub(crate) enum TargetCommandTaskStep {
 
 pub(super) fn target_command_error(code: i32, message: impl Into<String>) -> TargetCommandTaskStep {
     TargetCommandTaskStep::Complete(CommandOutputPlan::error(code, message))
+}
+
+fn target_handler_access_error(
+    conn: &CdpConnection,
+    cmd: &Cmd<'_>,
+    action: TargetAction,
+) -> Option<TargetCommandTaskStep> {
+    let access_mode = conn.target_handler_access_mode(cmd.session_id);
+    let allowed = match action {
+        TargetAction::GetBrowserContexts
+        | TargetAction::CreateBrowserContext
+        | TargetAction::AttachToBrowserTarget
+        | TargetAction::AutoAttachRelated
+        | TargetAction::DisposeBrowserContext => access_mode == TargetHandlerAccessMode::Browser,
+        TargetAction::GetTargets
+        | TargetAction::CreateTarget
+        | TargetAction::AttachToTarget
+        | TargetAction::SetDiscoverTargets
+        | TargetAction::ActivateTarget => access_mode != TargetHandlerAccessMode::AutoAttachOnly,
+        TargetAction::GetTargetInfo
+        | TargetAction::SetAutoAttach
+        | TargetAction::DetachFromTarget
+        | TargetAction::CloseTarget
+        | TargetAction::SendMessageToTarget => true,
+    };
+    (!allowed).then(|| {
+        let message = if action == TargetAction::AutoAttachRelated {
+            "Target.autoAttachRelated is only supported on the Browser target"
+        } else {
+            "Not allowed"
+        };
+        target_command_error(-32000, message)
+    })
 }
 
 fn transient_no_page_devtools_target_info_error(
@@ -274,7 +309,6 @@ enum PendingTargetCommandKind {
     SetAutoAttach {
         auto_attach: bool,
         owner_session_id: Option<String>,
-        owner_was_enabled: bool,
         legacy_disable_all: bool,
     },
     CreateTarget {
@@ -316,7 +350,6 @@ enum CompletedTargetCommandKind {
     SetAutoAttach {
         auto_attach: bool,
         owner_session_id: Option<String>,
-        owner_was_enabled: bool,
         legacy_disable_all: bool,
     },
     CreateTarget {
@@ -367,12 +400,10 @@ impl PendingTargetCommandDispatch {
             PendingTargetCommandKind::SetAutoAttach {
                 auto_attach,
                 owner_session_id,
-                owner_was_enabled,
                 legacy_disable_all,
             } => CompletedTargetCommandKind::SetAutoAttach {
                 auto_attach,
                 owner_session_id,
-                owner_was_enabled,
                 legacy_disable_all,
             },
             PendingTargetCommandKind::CreateTarget {
@@ -432,7 +463,13 @@ pub(crate) fn try_start_target_command_dispatch(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
 ) -> Option<TargetCommandTaskStep> {
-    match cmd.parse_action::<TargetAction>() {
+    let action = cmd.parse_action::<TargetAction>();
+    if let Some(action) = action
+        && let Some(error) = target_handler_access_error(conn, cmd, action)
+    {
+        return Some(error);
+    }
+    match action {
         Some(TargetAction::GetTargets) => {
             Some(browser_context::start_get_targets_command(conn, cmd))
         }
@@ -612,6 +649,10 @@ pub(crate) async fn execute_devtools_create_target_command_async_with_protocol_e
         .ensure_created_target_initial_document_page(&result.target_id)
         .await;
     protocol_events.extend(initial_document_events);
+    protocol_events.extend(
+        lifecycle::synchronize_created_target_activation_async(conn, &execution.protocol_events)
+            .await,
+    );
     if let Err(error) = lifecycle::emit_created_target_protocol_events(
         conn,
         execution.protocol_events,
@@ -688,10 +729,11 @@ async fn created_target_response_plan_after_initial_document(
     conn: &mut CdpConnection,
     response_plan: CommandOutputPlan,
     protocol_events: lifecycle::CreatedTargetProtocolEvents,
+    activation_events: Vec<BackgroundProtocolEvent>,
 ) -> CommandOutputPlan {
     let target_id = protocol_events.page_target_id().to_owned();
     let mut plan = CommandOutputPlan::default();
-    let mut events = Vec::new();
+    let mut events = activation_events;
     if let Err(error) =
         lifecycle::emit_created_target_protocol_events(conn, protocol_events, &mut events)
     {
@@ -740,7 +782,6 @@ pub(crate) async fn complete_pending_target_command(
         CompletedTargetCommandKind::SetAutoAttach {
             auto_attach,
             owner_session_id,
-            owner_was_enabled,
             legacy_disable_all,
         } => {
             return TargetCommandTaskStep::Complete(
@@ -748,7 +789,6 @@ pub(crate) async fn complete_pending_target_command(
                     conn,
                     auto_attach,
                     owner_session_id.as_deref(),
-                    owner_was_enabled,
                     legacy_disable_all,
                     command_context,
                 )
@@ -761,6 +801,9 @@ pub(crate) async fn complete_pending_target_command(
             initial_document_route,
             initial_document,
         } => {
+            let activation_events =
+                lifecycle::synchronize_created_target_activation_async(conn, &protocol_events)
+                    .await;
             match initial_document {
                 Some(Ok(completed_initial_document)) => {
                     let completed_initial_document = *completed_initial_document;
@@ -804,6 +847,7 @@ pub(crate) async fn complete_pending_target_command(
                     conn,
                     response_plan,
                     protocol_events,
+                    activation_events,
                 )
                 .await,
             )
@@ -873,7 +917,6 @@ fn pending_set_auto_attach_command(
     session_id: Option<&str>,
     auto_attach: bool,
     owner_session_id: Option<&str>,
-    owner_was_enabled: bool,
     legacy_disable_all: bool,
 ) -> TargetCommandTaskStep {
     TargetCommandTaskStep::Pending(PendingTargetCommandDispatch {
@@ -882,7 +925,6 @@ fn pending_set_auto_attach_command(
         kind: Box::new(PendingTargetCommandKind::SetAutoAttach {
             auto_attach,
             owner_session_id: owner_session_id.map(str::to_owned),
-            owner_was_enabled,
             legacy_disable_all,
         }),
     })
