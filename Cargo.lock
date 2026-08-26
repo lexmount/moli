@@ -787,7 +787,7 @@ dependencies = [
 [[package]]
 name = "curl"
 version = "0.4.49"
-source = "git+https://github.com/ldm0/curl-rust?branch=lightmount#e4dd37e9cb359f0feb25b07e3fa8a2963b9628c7"
+source = "git+https://github.com/ldm0/curl-rust?branch=moli#7f78fa7b108c5975f5595a6b576a085112336688"
 dependencies = [
  "curl-sys",
  "libc",
@@ -801,7 +801,7 @@ dependencies = [
 [[package]]
 name = "curl-sys"
 version = "0.4.87+curl-8.19.0"
-source = "git+https://github.com/ldm0/curl-rust?branch=lightmount#e4dd37e9cb359f0feb25b07e3fa8a2963b9628c7"
+source = "git+https://github.com/ldm0/curl-rust?branch=moli#7f78fa7b108c5975f5595a6b576a085112336688"
 dependencies = [
  "brotlic-sys",
  "cc",

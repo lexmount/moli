@@ -87,8 +87,8 @@ license = "MIT OR Apache-2.0"
 
 [patch.crates-io]
 xml5ever = { path = "vendor/xml5ever-0.39.0" }
-curl = { git = "https://github.com/ldm0/curl-rust", branch = "lightmount" }
-curl-sys = { git = "https://github.com/ldm0/curl-rust", branch = "lightmount" }
+curl = { git = "https://github.com/ldm0/curl-rust", branch = "moli" }
+curl-sys = { git = "https://github.com/ldm0/curl-rust", branch = "moli" }
 cookie = { git = "https://github.com/ldm0/cookie-rs", branch = "priority" }
 v8 = { path = "vendor/v8-146.9.0" }
 selectors = { git = "https://github.com/ldm0/stylo", rev = "74cd014af14d84db1fc8faed85086895012fc687" }
