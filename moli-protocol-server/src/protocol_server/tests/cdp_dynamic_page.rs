@@ -843,6 +843,7 @@ async fn page_agent_host_and_tab_host_survive_document_navigation() {
     );
 
     let destination = "data:text/html,<title>Stable Navigation Host</title>";
+    let destination_title = "Stable Navigation Host";
     let navigation = send_cdp_command(
         &mut page,
         2,
@@ -866,7 +867,7 @@ async fn page_agent_host_and_tab_host_survive_document_navigation() {
     .await;
     assert_eq!(
         response_by_id(&title, 3)["result"]["result"]["value"],
-        json!("Stable Navigation Host")
+        json!(destination_title)
     );
 
     let mut target_events = recv_until_match(&mut browser, |message| {
@@ -878,11 +879,18 @@ async fn page_agent_host_and_tab_host_survive_document_navigation() {
     target_events
         .extend(send_cdp_command(&mut browser, 2, "Browser.getVersion", None, json!({})).await);
     target_events.extend(recv_cdp_messages_for(&mut browser, Duration::from_millis(100)).await);
+    // The Tab frontend attaches on a separate socket, so its about:blank
+    // attached-state delta may reach this discovery owner after navigation
+    // starts. Only a Tab update carrying this document's metadata would mean
+    // that the Page navigation was incorrectly mirrored onto the Tab host.
+    let mirrored_tab_navigation = target_events.iter().find(|message| {
+        message["method"] == json!("Target.targetInfoChanged")
+            && message["params"]["targetInfo"]["targetId"] == json!(DEFAULT_TAB_TARGET_ID)
+            && (message["params"]["targetInfo"]["url"] == json!(destination)
+                || message["params"]["targetInfo"]["title"] == json!(destination_title))
+    });
     assert!(
-        target_events.iter().all(|message| {
-            message["method"] != json!("Target.targetInfoChanged")
-                || message["params"]["targetInfo"]["targetId"] != json!(DEFAULT_TAB_TARGET_ID)
-        }),
+        mirrored_tab_navigation.is_none(),
         "document navigation must update the Page target without mirroring a Tab event: {target_events:#?}"
     );
 
@@ -893,7 +901,7 @@ async fn page_agent_host_and_tab_host_survive_document_navigation() {
                 targets.iter().any(|target| {
                     target["id"] == json!(DEFAULT_TAB_TARGET_ID)
                         && target["url"] == json!(destination)
-                        && target["title"] == json!("Stable Navigation Host")
+                        && target["title"] == json!(destination_title)
                 })
             }) {
                 break descriptors;
