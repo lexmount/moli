@@ -1,4 +1,5 @@
-use openssl::{pkcs5, pkey::Id, pkey_ctx::PkeyCtx};
+use moli_crypto::derive_hkdf_bytes;
+use openssl::pkcs5;
 
 use crate::limits::ensure_kdf_parameter_bytes;
 use crate::{WebCryptoError, WebCryptoHashAlgorithm};
@@ -28,22 +29,8 @@ pub fn derive_hkdf_bits(
         return Err(WebCryptoError::Operation);
     }
 
-    let mut okm_bytes = vec![0_u8; length_bytes];
-    let mut ctx = PkeyCtx::new_id(Id::HKDF).map_err(|_| WebCryptoError::Operation)?;
-    ctx.derive_init().map_err(|_| WebCryptoError::Operation)?;
-    ctx.set_hkdf_md(hash.md_ref())
-        .map_err(|_| WebCryptoError::Operation)?;
-    ctx.set_hkdf_key(base_key)
-        .map_err(|_| WebCryptoError::Operation)?;
-    ctx.set_hkdf_salt(salt)
-        .map_err(|_| WebCryptoError::Operation)?;
-    if !info.is_empty() {
-        ctx.add_hkdf_info(info)
-            .map_err(|_| WebCryptoError::Operation)?;
-    }
-    ctx.derive(Some(&mut okm_bytes))
-        .map_err(|_| WebCryptoError::Operation)?;
-    Ok(okm_bytes)
+    derive_hkdf_bytes(hash.digest_algorithm(), base_key, salt, info, length_bytes)
+        .map_err(|_| WebCryptoError::Operation)
 }
 
 pub fn derive_pbkdf2_bits(

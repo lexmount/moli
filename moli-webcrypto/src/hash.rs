@@ -1,8 +1,5 @@
 use moli_crypto::DigestAlgorithm;
-use openssl::{
-    hash::MessageDigest,
-    md::{Md, MdRef},
-};
+use openssl::hash::MessageDigest;
 
 use crate::{WebCryptoError, limits::ensure_digest_operation_bytes};
 
@@ -51,7 +48,7 @@ impl WebCryptoHashAlgorithm {
         self.digest_algorithm().output_len_bytes()
     }
 
-    fn digest_algorithm(self) -> DigestAlgorithm {
+    pub(crate) fn digest_algorithm(self) -> DigestAlgorithm {
         match self {
             Self::Sha1 => DigestAlgorithm::Sha1,
             Self::Sha256 => DigestAlgorithm::Sha256,
@@ -60,23 +57,14 @@ impl WebCryptoHashAlgorithm {
         }
     }
 
-    // Keep the WebCrypto-to-OpenSSL mapping for algorithms that consume an
-    // OpenSSL digest descriptor (HMAC, RSA, HKDF, and PBKDF2) in one place.
+    // Keep the WebCrypto-to-OpenSSL mapping for algorithms that still consume
+    // an OpenSSL digest descriptor (HMAC, RSA, and PBKDF2) in one place.
     pub(crate) fn message_digest(self) -> MessageDigest {
         match self {
             Self::Sha1 => MessageDigest::sha1(),
             Self::Sha256 => MessageDigest::sha256(),
             Self::Sha384 => MessageDigest::sha384(),
             Self::Sha512 => MessageDigest::sha512(),
-        }
-    }
-
-    pub(crate) fn md_ref(self) -> &'static MdRef {
-        match self {
-            Self::Sha1 => Md::sha1(),
-            Self::Sha256 => Md::sha256(),
-            Self::Sha384 => Md::sha384(),
-            Self::Sha512 => Md::sha512(),
         }
     }
 }
