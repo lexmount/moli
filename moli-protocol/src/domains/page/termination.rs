@@ -673,7 +673,8 @@ pub(crate) async fn complete_page_target_termination_owner_action_async(
                     browser_context.is_active_target(&expected_target_id)
                 });
             if is_active_target {
-                conn.close_active_page_target_for_target_close_async().await
+                conn.close_active_page_target_for_target_close_async(&mut out)
+                    .await
             } else {
                 conn.close_background_page_target_for_target_close_async(
                     &expected_target_id,

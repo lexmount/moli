@@ -149,7 +149,7 @@ async fn close_target_tab_id_closes_page_pair_and_detaches_tab_session() {
         .as_str()
         .expect("created target id")
         .to_owned();
-    let tab_target_id = crate::conn::CdpConnection::derived_tab_target_id(&page_target_id);
+    let tab_target_id = tab_id_for_page(&ctx, &page_target_id);
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -188,7 +188,8 @@ async fn close_target_tab_id_closes_page_pair_and_detaches_tab_session() {
             .is_empty()
     );
     assert_eq!(
-        ctx.conn.page_target_id_for_tab_target_id(&tab_target_id),
+        ctx.conn
+            .primary_page_target_id_for_tab_target_id(&tab_target_id),
         None
     );
 

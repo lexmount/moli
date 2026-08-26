@@ -689,7 +689,7 @@ async fn created_target_response_plan_after_initial_document(
     response_plan: CommandOutputPlan,
     protocol_events: lifecycle::CreatedTargetProtocolEvents,
 ) -> CommandOutputPlan {
-    let target_id = protocol_events.target_id().to_owned();
+    let target_id = protocol_events.page_target_id().to_owned();
     let mut plan = CommandOutputPlan::default();
     let mut events = Vec::new();
     if let Err(error) =

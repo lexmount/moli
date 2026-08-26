@@ -66,18 +66,59 @@ async fn create_target_creates_browser_context_if_none() {
         .await;
     let bc = ctx.conn.browser_context.as_ref().unwrap();
     let tid = bc.active_target_id_owned().unwrap();
-    let tab_target_id = crate::conn::CdpConnection::derived_tab_target_id(&tid);
+    let tab_target_id = tab_id_for_page(&ctx, &tid);
     assert_eq!(
         ctx.conn.tab_target_id_for_page_target_id(&tid),
         Some(tab_target_id.as_str())
     );
     assert_eq!(
-        ctx.conn.page_target_id_for_tab_target_id(&tab_target_id),
+        ctx.conn
+            .primary_page_target_id_for_tab_target_id(&tab_target_id),
         Some(tid.as_str())
     );
-    assert_eq!(ctx.conn.top_level_target_graph_len(), 1);
+    assert_eq!(ctx.conn.tab_target_count(), 1);
     ctx.expect_event("Target.targetCreated", None);
     ctx.expect_result(10, json!({ "targetId": tid }), None);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn create_target_for_tab_returns_the_stable_tab_host() {
+    let mut ctx = TestContext::new();
+    ctx.process_async(json!({
+        "id": 10000,
+        "method": "Target.createTarget",
+        "params": { "url": "about:blank", "forTab": true }
+    }))
+    .await;
+
+    let tab_target_id = take_response_by_id(&mut ctx, 10000)["result"]["targetId"]
+        .as_str()
+        .expect("created tab target id")
+        .to_owned();
+    let page_target_id = ctx
+        .conn
+        .primary_page_target_id_for_tab_target_id(&tab_target_id)
+        .expect("created tab must expose its primary page")
+        .to_owned();
+    assert_ne!(tab_target_id, page_target_id);
+
+    ctx.process_async(json!({
+        "id": 10001,
+        "method": "Target.getTargetInfo",
+        "params": { "targetId": tab_target_id.clone() }
+    }))
+    .await;
+    let tab_info = take_response_by_id(&mut ctx, 10001);
+    assert_eq!(tab_info["result"]["targetInfo"]["type"], json!("tab"));
+
+    ctx.process_async(json!({
+        "id": 10002,
+        "method": "Target.getTargetInfo",
+        "params": { "targetId": page_target_id.clone() }
+    }))
+    .await;
+    let page_info = take_response_by_id(&mut ctx, 10002);
+    assert_eq!(page_info["result"]["targetInfo"]["type"], json!("page"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -111,7 +152,7 @@ async fn get_targets_default_filter_excludes_tab() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn get_targets_tab_filter_returns_derived_tab_target() {
+async fn get_targets_tab_filter_returns_stable_tab_target() {
     let mut ctx = TestContext::new();
     ctx.process_async(json!({
         "id": 10020,
@@ -123,7 +164,7 @@ async fn get_targets_tab_filter_returns_derived_tab_target() {
         .as_str()
         .expect("created target id")
         .to_owned();
-    let tab_target_id = crate::conn::CdpConnection::derived_tab_target_id(&page_target_id);
+    let tab_target_id = tab_id_for_page(&ctx, &page_target_id);
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -159,7 +200,7 @@ async fn get_targets_catchall_includes_tab_and_page_with_attached_state() {
         .as_str()
         .expect("created target id")
         .to_owned();
-    let tab_target_id = crate::conn::CdpConnection::derived_tab_target_id(&page_target_id);
+    let tab_target_id = tab_id_for_page(&ctx, &page_target_id);
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -214,7 +255,7 @@ async fn get_target_info_returns_tab_target_info() {
         .as_str()
         .expect("created target id")
         .to_owned();
-    let tab_target_id = crate::conn::CdpConnection::derived_tab_target_id(&page_target_id);
+    let tab_target_id = tab_id_for_page(&ctx, &page_target_id);
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -246,7 +287,7 @@ async fn set_discover_targets_catchall_reports_tab_and_page() {
         .as_str()
         .expect("created target id")
         .to_owned();
-    let tab_target_id = crate::conn::CdpConnection::derived_tab_target_id(&page_target_id);
+    let tab_target_id = tab_id_for_page(&ctx, &page_target_id);
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -328,7 +369,7 @@ async fn get_targets_without_filter_reuses_discovery_filter() {
         .as_str()
         .expect("created target id")
         .to_owned();
-    let tab_target_id = crate::conn::CdpConnection::derived_tab_target_id(&page_target_id);
+    let tab_target_id = tab_id_for_page(&ctx, &page_target_id);
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -401,7 +442,7 @@ async fn target_destroyed_uses_reported_hosts_after_discovery_filter_changes() {
         .as_str()
         .expect("created target id")
         .to_owned();
-    let tab_target_id = crate::conn::CdpConnection::derived_tab_target_id(&page_target_id);
+    let tab_target_id = tab_id_for_page(&ctx, &page_target_id);
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -1871,7 +1912,7 @@ async fn window_open_named_target_reused_in_same_command_emits_one_page_event() 
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn named_popup_reuse_with_catchall_discovery_emits_tab_and_page_target_info_changed() {
+async fn named_popup_reuse_with_catchall_discovery_only_changes_the_page_target_info() {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
         &mut ctx,
@@ -1916,7 +1957,7 @@ async fn named_popup_reuse_with_catchall_discovery_emits_tab_and_page_target_inf
         .as_str()
         .expect("popup page target id")
         .to_owned();
-    let tab_target_id = crate::conn::CdpConnection::derived_tab_target_id(&page_target_id);
+    let tab_target_id = tab_id_for_page(&ctx, &page_target_id);
     assert!(
         first_sent.iter().any(|message| {
             message["method"] == json!("Target.targetCreated")
@@ -1937,14 +1978,11 @@ async fn named_popup_reuse_with_catchall_discovery_emits_tab_and_page_target_inf
 
     let second_sent = ctx.take_all();
     assert!(
-        second_sent.iter().any(|message| {
-            message["method"] == json!("Target.targetInfoChanged")
-                && message["params"]["targetInfo"]["targetId"] == json!(tab_target_id)
-                && message["params"]["targetInfo"]["type"] == json!("tab")
-                && message["params"]["targetInfo"]["url"]
-                    == json!("https://example.com/second-popup")
+        second_sent.iter().all(|message| {
+            message["method"] != json!("Target.targetInfoChanged")
+                || message["params"]["targetInfo"]["targetId"] != json!(tab_target_id)
         }),
-        "catch-all discovery should report tab targetInfoChanged: {second_sent:?}"
+        "document navigation must not mirror Page targetInfoChanged onto the stable Tab host: {second_sent:?}"
     );
     assert!(
         second_sent.iter().any(|message| {
@@ -2429,7 +2467,7 @@ async fn create_target_with_puppeteer_tab_filter_auto_attaches_tab() {
         .as_str()
         .expect("created target id")
         .to_owned();
-    let tab_target_id = crate::conn::CdpConnection::derived_tab_target_id(&target_id);
+    let tab_target_id = tab_id_for_page(&ctx, &target_id);
     let created = ctx
         .sent
         .iter()
@@ -2483,7 +2521,7 @@ async fn closing_puppeteer_tab_auto_attach_clears_service_worker_pause_owner() {
         .as_str()
         .expect("created target id")
         .to_owned();
-    let tab_target_id = crate::conn::CdpConnection::derived_tab_target_id(&target_id);
+    let tab_target_id = tab_id_for_page(&ctx, &target_id);
     let tab_session_id = ctx
         .sent
         .iter()
@@ -2592,7 +2630,7 @@ async fn window_open_with_puppeteer_tab_filter_auto_attaches_popup_tab() {
         .as_str()
         .expect("popup page target id")
         .to_owned();
-    let tab_target_id = crate::conn::CdpConnection::derived_tab_target_id(&page_target_id);
+    let tab_target_id = tab_id_for_page(&ctx, &page_target_id);
     let attached = sent
         .iter()
         .find(|message| {
@@ -2696,7 +2734,7 @@ async fn browser_session_auto_attach_routes_popup_tab_attached_event_to_owner_se
         .as_str()
         .expect("popup page target id")
         .to_owned();
-    let tab_target_id = crate::conn::CdpConnection::derived_tab_target_id(&page_target_id);
+    let tab_target_id = tab_id_for_page(&ctx, &page_target_id);
     let attached = sent
         .iter()
         .find(|message| {
@@ -2770,7 +2808,7 @@ async fn tab_session_auto_attach_catchall_attaches_child_page() {
         .as_str()
         .expect("created target id")
         .to_owned();
-    let tab_target_id = crate::conn::CdpConnection::derived_tab_target_id(&page_target_id);
+    let tab_target_id = tab_id_for_page(&ctx, &page_target_id);
     let tab_attached = ctx.take_first_matching("tab attachedToTarget", |message| {
         message["method"] == json!("Target.attachedToTarget")
             && message["params"]["targetInfo"]["targetId"] == json!(tab_target_id)
@@ -2845,7 +2883,7 @@ async fn root_auto_attach_disable_detaches_auto_attached_tab_child_page_cascade(
         .as_str()
         .expect("created target id")
         .to_owned();
-    let tab_target_id = crate::conn::CdpConnection::derived_tab_target_id(&page_target_id);
+    let tab_target_id = tab_id_for_page(&ctx, &page_target_id);
     let tab_attached = ctx.take_first_matching("tab attachedToTarget", |message| {
         message["method"] == json!("Target.attachedToTarget")
             && message["params"]["targetInfo"]["targetId"] == json!(tab_target_id)
@@ -2926,8 +2964,7 @@ async fn tab_session_auto_attach_only_attaches_its_own_child_page() {
         .as_str()
         .expect("first target id")
         .to_owned();
-    let first_tab_target_id =
-        crate::conn::CdpConnection::derived_tab_target_id(&first_page_target_id);
+    let first_tab_target_id = tab_id_for_page(&ctx, &first_page_target_id);
 
     ctx.process_async(json!({
         "id": 9041,
@@ -2939,8 +2976,7 @@ async fn tab_session_auto_attach_only_attaches_its_own_child_page() {
         .as_str()
         .expect("second target id")
         .to_owned();
-    let second_tab_target_id =
-        crate::conn::CdpConnection::derived_tab_target_id(&second_page_target_id);
+    let second_tab_target_id = tab_id_for_page(&ctx, &second_page_target_id);
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -3032,7 +3068,7 @@ async fn incomplete_popup_rollback_clears_tab_page_sessions_and_target_graph() {
             .is_some()
     );
     assert!(ctx.conn.session_route(Some("SID-popup-page-aux")).is_some());
-    assert_eq!(ctx.conn.top_level_target_graph_len(), 1);
+    assert_eq!(ctx.conn.tab_target_count(), 1);
 
     lifecycle::rollback_incomplete_popup_target_async(
         &mut ctx.conn,
@@ -3045,7 +3081,7 @@ async fn incomplete_popup_rollback_clears_tab_page_sessions_and_target_graph() {
     assert_eq!(ctx.conn.session_route(Some("SID-popup-page-primary")), None);
     assert_eq!(ctx.conn.session_route(Some("SID-popup-page-aux")), None);
     assert!(ctx.conn.auto_attached_sessions_for_owner(None).is_empty());
-    assert_eq!(ctx.conn.top_level_target_graph_len(), 0);
+    assert_eq!(ctx.conn.tab_target_count(), 0);
     assert!(
         ctx.conn
             .browser_context
@@ -3056,7 +3092,7 @@ async fn incomplete_popup_rollback_clears_tab_page_sessions_and_target_graph() {
     );
     assert!(
         ctx.conn
-            .page_target_id_for_tab_target_id(&tab_target_id)
+            .primary_page_target_id_for_tab_target_id(&tab_target_id)
             .is_none()
     );
 }
@@ -3106,7 +3142,7 @@ async fn incomplete_active_popup_rollback_clears_active_slot_sessions_and_target
             .session_route(Some("SID-active-popup-page-aux"))
             .is_some()
     );
-    assert_eq!(ctx.conn.top_level_target_graph_len(), 1);
+    assert_eq!(ctx.conn.tab_target_count(), 1);
 
     lifecycle::rollback_incomplete_popup_target_async(
         &mut ctx.conn,
@@ -3126,7 +3162,7 @@ async fn incomplete_active_popup_rollback_clears_active_slot_sessions_and_target
         None
     );
     assert!(ctx.conn.auto_attached_sessions_for_owner(None).is_empty());
-    assert_eq!(ctx.conn.top_level_target_graph_len(), 0);
+    assert_eq!(ctx.conn.tab_target_count(), 0);
     assert_eq!(
         ctx.conn
             .browser_context
@@ -3137,7 +3173,7 @@ async fn incomplete_active_popup_rollback_clears_active_slot_sessions_and_target
     );
     assert!(
         ctx.conn
-            .page_target_id_for_tab_target_id(&tab_target_id)
+            .primary_page_target_id_for_tab_target_id(&tab_target_id)
             .is_none()
     );
 }

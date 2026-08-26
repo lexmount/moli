@@ -1,16 +1,16 @@
-use super::graph::TopLevelTarget;
+use super::graph::TabTarget;
 use crate::devtools_runtime::{DevToolsTargetId, DevToolsTargetInfo, DevToolsTargetKind};
 
 pub(crate) fn tab_target_info_from_page_target_info(
-    target: &TopLevelTarget,
+    target: &TabTarget,
     page_target_info: DevToolsTargetInfo,
 ) -> DevToolsTargetInfo {
     DevToolsTargetInfo {
-        target_id: Some(DevToolsTargetId::from(target.tab_target_id())),
+        target_id: Some(DevToolsTargetId::from(target.id())),
         kind: DevToolsTargetKind::Tab,
         title: page_target_info.title,
         url: page_target_info.url,
-        attached: target.tab_has_session(),
+        attached: target.has_session(),
         // Chromium's tab DevToolsAgentHost delegates opener identity and
         // access to its primary frame host. Preserve the same relationship
         // when projecting our page target into a tab target.
@@ -22,20 +22,16 @@ pub(crate) fn tab_target_info_from_page_target_info(
     }
 }
 
-pub(crate) fn project_tab_page_target_infos(
-    target: Option<&TopLevelTarget>,
+pub(crate) fn project_page_tab_target_infos_for_destruction(
+    target: Option<&TabTarget>,
     target_info: DevToolsTargetInfo,
 ) -> Vec<DevToolsTargetInfo> {
-    let mut target_infos = Vec::new();
+    let mut target_infos = vec![target_info.clone()];
     if target_info.kind == DevToolsTargetKind::Page
         && let Some(target) = target
     {
-        target_infos.push(tab_target_info_from_page_target_info(
-            target,
-            target_info.clone(),
-        ));
+        target_infos.push(tab_target_info_from_page_target_info(target, target_info));
     }
-    target_infos.push(target_info);
     target_infos
 }
 
@@ -52,10 +48,10 @@ mod tests {
     #[test]
     fn tab_projection_preserves_noopener_creator_identity_and_access_policy() {
         let mut graph = TargetGraph::default();
-        graph.register_top_level_page("TID-page".to_owned(), "TID-tab".to_owned());
+        graph.register_tab("TID-tab".to_owned(), "TID-page".to_owned());
         let target = graph
-            .top_level_target_for_page_target_id("TID-page")
-            .expect("registered top-level target");
+            .tab_for_page_target_id("TID-page")
+            .expect("registered tab target");
         let tab = tab_target_info_from_page_target_info(
             target,
             DevToolsTargetInfo {

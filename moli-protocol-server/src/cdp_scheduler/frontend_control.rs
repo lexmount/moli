@@ -91,19 +91,19 @@ impl CdpFrontendControlState {
                 }
                 true
             }
-            CdpFrontendControlRequest::AttachPage {
+            CdpFrontendControlRequest::AttachTarget {
                 target_id,
                 sink,
                 completion_tx,
             } => {
                 let result = match self
                     .target_control
-                    .attach_page(scheduler, frontend_router, &target_id)
+                    .attach_target(scheduler, frontend_router, &target_id)
                     .await
                 {
                     Ok(session_id) => {
                         let frontend_id = self.allocate_frontend_id();
-                        match frontend_router.register_page_frontend(
+                        match frontend_router.register_target_frontend(
                             frontend_id,
                             target_id,
                             session_id.clone(),
@@ -128,57 +128,7 @@ impl CdpFrontendControlState {
                     Ok(()) => {}
                     Err(Ok(frontend_id)) => {
                         if let Some(session_id) =
-                            frontend_router.unregister_page_frontend(frontend_id)
-                        {
-                            self.target_control
-                                .detach_frontend_session(scheduler, frontend_router, &session_id)
-                                .await;
-                        }
-                        send_cookie_checkpoint(scheduler, owner_lifecycle);
-                    }
-                    Err(Err(_)) => {}
-                }
-                true
-            }
-            CdpFrontendControlRequest::AttachForegroundTab {
-                page_target_id,
-                sink,
-                completion_tx,
-            } => {
-                let result = match self
-                    .target_control
-                    .attach_foreground_tab(scheduler, frontend_router, &page_target_id)
-                    .await
-                {
-                    Ok((session_id, browser_context_id)) => {
-                        let frontend_id = self.allocate_frontend_id();
-                        match frontend_router.register_foreground_tab_frontend(
-                            frontend_id,
-                            browser_context_id,
-                            page_target_id,
-                            session_id.clone(),
-                            sink,
-                        ) {
-                            Ok(()) => Ok(frontend_id),
-                            Err(error) => {
-                                self.target_control
-                                    .detach_frontend_session(
-                                        scheduler,
-                                        frontend_router,
-                                        &session_id,
-                                    )
-                                    .await;
-                                Err(error)
-                            }
-                        }
-                    }
-                    Err(error) => Err(error),
-                };
-                match completion_tx.send(result) {
-                    Ok(()) => {}
-                    Err(Ok(frontend_id)) => {
-                        if let Some(session_id) =
-                            frontend_router.unregister_foreground_tab_frontend(frontend_id)
+                            frontend_router.unregister_target_frontend(frontend_id)
                         {
                             self.target_control
                                 .detach_frontend_session(scheduler, frontend_router, &session_id)
@@ -199,34 +149,17 @@ impl CdpFrontendControlState {
                 }
                 true
             }
-            CdpFrontendControlRequest::DetachPage { frontend_id } => {
-                if let Some(session_id) = frontend_router.unregister_page_frontend(frontend_id) {
+            CdpFrontendControlRequest::DetachTarget { frontend_id } => {
+                if let Some(session_id) = frontend_router.unregister_target_frontend(frontend_id) {
                     self.target_control
                         .detach_frontend_session(scheduler, frontend_router, &session_id)
                         .await;
                     send_cookie_checkpoint(scheduler, owner_lifecycle);
                 }
-                true
-            }
-            CdpFrontendControlRequest::DetachForegroundTab { frontend_id } => {
-                if let Some(session_id) =
-                    frontend_router.unregister_foreground_tab_frontend(frontend_id)
-                {
-                    self.target_control
-                        .detach_frontend_session(scheduler, frontend_router, &session_id)
-                        .await;
-                    send_cookie_checkpoint(scheduler, owner_lifecycle);
-                }
-                true
-            }
-            CdpFrontendControlRequest::ForegroundTabChanged { page_target_id } => {
-                self.target_control
-                    .follow_foreground_tab_change(scheduler, frontend_router, page_target_id)
-                    .await;
                 true
             }
             CdpFrontendControlRequest::TargetDestroyed { target_id } => {
-                frontend_router.unregister_page_frontends_for_target(&target_id);
+                frontend_router.unregister_frontends_for_target(&target_id);
                 true
             }
             CdpFrontendControlRequest::ActivateTarget {
@@ -260,10 +193,10 @@ impl CdpFrontendControlState {
                     .target_control
                     .create_managed_target(scheduler, frontend_router, &target_url)
                     .await;
-                if let Err(Ok(target_id)) = completion_tx.send(result) {
+                if let Err(Ok(target)) = completion_tx.send(result) {
                     let _ = self
                         .target_control
-                        .close_target(scheduler, frontend_router, &target_id)
+                        .close_target(scheduler, frontend_router, &target.page_target_id)
                         .await;
                 }
                 send_cookie_checkpoint(scheduler, owner_lifecycle);

@@ -48,13 +48,6 @@ impl CdpFrontendRoutingState {
                         );
                     }
                 }
-                PendingCommandEffect::ReplayForegroundTabTargetCommand { method, params } => {
-                    self.frontends.remember_foreground_tab_target_command(
-                        frontend_id,
-                        method,
-                        params,
-                    );
-                }
                 PendingCommandEffect::None => {}
             }
         }

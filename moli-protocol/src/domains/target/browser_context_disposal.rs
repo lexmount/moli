@@ -255,7 +255,8 @@ async fn close_page_target(
         .as_ref()
         .is_some_and(|browser_context| browser_context.is_active_target(&target_id));
     let closed = if is_active_target {
-        conn.close_active_page_target_for_target_close_async().await
+        conn.close_active_page_target_for_target_close_async(out.background_events_mut())
+            .await
     } else {
         conn.close_background_page_target_for_target_close_async(
             &target_id,

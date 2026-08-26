@@ -562,6 +562,72 @@ async fn close_active_target_promotes_background_target_to_active_slot() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn close_active_target_exposes_promoted_target_screencast() {
+    let mut ctx = TestContext::new();
+    load_bc_with_titled_page_async(&mut ctx, "BID-9", "TID-active", "<title>active</title>").await;
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .attach_active_session("SID-active");
+
+    ctx.process_async(json!({
+        "id": 20,
+        "method": "Target.createTarget",
+        "params": {"browserContextId": "BID-9", "url": "about:blank#parked"}
+    }))
+    .await;
+    let parked_target_id = take_created_target_id(&mut ctx, 20);
+
+    ctx.process_async(json!({
+        "id": 21,
+        "method": "Target.attachToTarget",
+        "params": {"targetId": parked_target_id}
+    }))
+    .await;
+    let parked_session_id = take_response_by_id(&mut ctx, 21)["result"]["sessionId"]
+        .as_str()
+        .expect("parked target session")
+        .to_owned();
+    ctx.expect_event("Target.attachedToTarget", None);
+
+    ctx.process_async(json!({
+        "id": 22,
+        "method": "Page.startScreencast",
+        "sessionId": parked_session_id,
+        "params": {}
+    }))
+    .await;
+    let hidden = ctx.take_first_matching("parked screencast starts hidden", |message| {
+        message["method"] == json!("Page.screencastVisibilityChanged")
+    });
+    assert_eq!(hidden["sessionId"], json!(parked_session_id));
+    assert_eq!(hidden["params"]["visible"], json!(false));
+    ctx.expect_result(22, json!({}), Some(&parked_session_id));
+
+    ctx.process_async(json!({
+        "id": 23,
+        "method": "Target.closeTarget",
+        "params": {"targetId": "TID-active"}
+    }))
+    .await;
+    ctx.expect_result(23, json!({ "success": true }), None);
+    let visible = ctx.take_first_matching("promoted screencast becomes visible", |message| {
+        message["method"] == json!("Page.screencastVisibilityChanged")
+            && message["sessionId"] == json!(parked_session_id)
+    });
+    assert_eq!(visible["params"]["visible"], json!(true));
+
+    assert_eq!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .and_then(BrowserContext::active_target_id),
+        Some(parked_target_id.as_str())
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn close_active_target_promoted_background_session_can_navigate_and_evaluate() {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(

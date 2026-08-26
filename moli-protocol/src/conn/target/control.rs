@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use super::graph::TabTarget;
 use crate::devtools_runtime::{
     DevToolsSessionId, DevToolsTargetFilterEntry, DevToolsTargetId, DevToolsTargetInfo,
     DevToolsTargetKind, TargetAttachmentEvent, TargetDetachmentEvent,
@@ -20,13 +21,9 @@ pub(crate) struct TargetControlPlane {
 }
 
 impl TargetControlPlane {
-    pub(crate) fn register_top_level_page(
-        &mut self,
-        page_target_id: String,
-        tab_target_id: String,
-    ) {
+    pub(crate) fn register_tab(&mut self, tab_target_id: String, primary_page_target_id: String) {
         self.registry
-            .register_top_level_page(page_target_id, tab_target_id);
+            .register_tab(tab_target_id, primary_page_target_id);
     }
 
     pub(crate) fn register_worker(&mut self, target_id: String, kind: DevToolsTargetKind) {
@@ -42,9 +39,12 @@ impl TargetControlPlane {
             .tab_target_id_for_page_target_id(page_target_id)
     }
 
-    pub(crate) fn page_target_id_for_tab_target_id(&self, tab_target_id: &str) -> Option<&str> {
+    pub(crate) fn primary_page_target_id_for_tab_target_id(
+        &self,
+        tab_target_id: &str,
+    ) -> Option<&str> {
         self.registry
-            .page_target_id_for_tab_target_id(tab_target_id)
+            .primary_page_target_id_for_tab_target_id(tab_target_id)
     }
 
     pub(crate) fn primary_session_id_for_tab_target_id(&self, tab_target_id: &str) -> Option<&str> {
@@ -66,12 +66,11 @@ impl TargetControlPlane {
         self.registry.remove_tab_session(session_id)
     }
 
-    pub(crate) fn remove_top_level_page_by_page_target_id(
+    pub(crate) fn remove_tab_by_page_target_id(
         &mut self,
         page_target_id: &str,
     ) -> Option<TargetClosurePlan> {
-        self.registry
-            .remove_top_level_page_by_page_target_id(page_target_id)
+        self.registry.remove_tab_by_page_target_id(page_target_id)
     }
 
     pub(crate) fn tab_target_id_for_session_id(&self, session_id: &str) -> Option<&str> {
@@ -86,42 +85,50 @@ impl TargetControlPlane {
             return None;
         }
         let page_target_id = page_target_info.target_id.as_ref()?.as_str();
-        let target = self
-            .registry
-            .top_level_target_for_page_target_id(page_target_id)?;
+        let target = self.registry.tab_for_page_target_id(page_target_id)?;
         Some(super::projection::tab_target_info_from_page_target_info(
             target,
             page_target_info,
         ))
     }
 
-    pub(crate) fn project_tab_page_target_infos(
+    pub(crate) fn project_page_tab_target_infos_for_destruction(
         &self,
         target_info: DevToolsTargetInfo,
     ) -> Vec<DevToolsTargetInfo> {
-        let target = target_info.target_id.as_ref().and_then(|target_id| {
-            self.registry
-                .top_level_target_for_page_target_id(target_id.as_str())
-        });
-        super::projection::project_tab_page_target_infos(target, target_info)
+        let target = target_info
+            .target_id
+            .as_ref()
+            .and_then(|target_id| self.registry.tab_for_page_target_id(target_id.as_str()));
+        super::projection::project_page_tab_target_infos_for_destruction(target, target_info)
     }
 
-    pub(crate) fn target_deltas_for_target_id(
-        &self,
-        target_id: &str,
-        build_delta: fn(String) -> TargetHostDelta,
-    ) -> Vec<TargetHostDelta> {
-        if let Some(target) = self
-            .registry
-            .top_level_target_for_page_target_id(target_id)
-            .or_else(|| self.registry.top_level_target_for_tab_target_id(target_id))
-        {
-            return vec![
-                build_delta(target.tab_target_id().to_owned()),
-                build_delta(target.page_target_id().to_owned()),
-            ];
+    fn paired_tab_target(&self, target_id: &str) -> Option<&TabTarget> {
+        self.registry
+            .tab_for_page_target_id(target_id)
+            .or_else(|| self.registry.tab(target_id))
+    }
+
+    pub(crate) fn target_created_deltas(&self, target_id: &str) -> Vec<TargetHostDelta> {
+        let Some(target) = self.paired_tab_target(target_id) else {
+            return vec![TargetHostDelta::created(target_id.to_owned())];
+        };
+        target
+            .target_ids_in_creation_order()
+            .into_iter()
+            .map(TargetHostDelta::created)
+            .collect()
+    }
+
+    pub(crate) fn target_destroyed_deltas(&self, target_id: &str) -> Vec<TargetHostDelta> {
+        if let Some(target) = self.paired_tab_target(target_id) {
+            return target
+                .target_ids_in_destruction_order()
+                .into_iter()
+                .map(TargetHostDelta::destroyed)
+                .collect();
         }
-        vec![build_delta(target_id.to_owned())]
+        vec![TargetHostDelta::destroyed(target_id.to_owned())]
     }
 
     pub(crate) fn set_discover_targets(

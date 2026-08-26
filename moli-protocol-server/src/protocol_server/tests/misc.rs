@@ -240,9 +240,7 @@ async fn discovery_endpoints_accept_trailing_slashes() {
     assert_eq!(list[0]["description"], json!(""));
     assert_eq!(
         list[0]["devtoolsFrontendUrl"],
-        json!(
-            "/devtools/inspector.html?targetType=tab&ws=127.0.0.1:9222/devtools/tab/moli-default"
-        )
+        json!("/devtools/inspector.html?ws=127.0.0.1:9222/devtools/page/moli-default")
     );
     assert_eq!(list[0]["id"], json!(DEFAULT_TARGET_ID));
     assert_eq!(list[0]["title"], json!(DEFAULT_TARGET_URL));
@@ -521,14 +519,28 @@ async fn chromium_devtools_json_list_accepts_non_get_methods_and_for_tab() {
         list[0]["webSocketDebuggerUrl"],
         json!("ws://127.0.0.1:9222/devtools/page/moli-default")
     );
-    assert_eq!(tab_list[0]["type"], json!("tab"));
+    assert_eq!(tab_list.as_array().map(Vec::len), Some(2));
+    assert!(tab_list.as_array().is_some_and(|targets| {
+        targets.iter().any(|target| {
+            target["id"] == json!(DEFAULT_TARGET_ID) && target["type"] == json!("page")
+        })
+    }));
+    let tab = tab_list
+        .as_array()
+        .and_then(|targets| {
+            targets
+                .iter()
+                .find(|target| target["id"] == json!(DEFAULT_TAB_TARGET_ID))
+        })
+        .expect("for_tab discovery should add the stable tab target");
+    assert_eq!(tab["type"], json!("tab"));
     assert_eq!(
-        tab_list[0]["devtoolsFrontendUrl"],
-        json!("/devtools/inspector.html?ws=127.0.0.1:9222/devtools/tab/moli-default")
+        tab["devtoolsFrontendUrl"],
+        json!("/devtools/inspector.html?ws=127.0.0.1:9222/devtools/page/moli-default-tab")
     );
     assert_eq!(
-        tab_list[0]["webSocketDebuggerUrl"],
-        json!("ws://127.0.0.1:9222/devtools/tab/moli-default")
+        tab["webSocketDebuggerUrl"],
+        json!("ws://127.0.0.1:9222/devtools/page/moli-default-tab")
     );
 }
 
@@ -560,7 +572,7 @@ async fn chromium_devtools_json_new_uses_put_and_decodes_first_query_component()
     assert!(
         target["webSocketDebuggerUrl"]
             .as_str()
-            .is_some_and(|url| url.contains("/devtools/tab/"))
+            .is_some_and(|url| url.contains("/devtools/page/TAB-"))
     );
 
     let target = request_json_with_method(Method::PUT, "/json/new?url=about%3Ablank%23named").await;

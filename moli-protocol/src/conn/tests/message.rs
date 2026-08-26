@@ -96,6 +96,36 @@ async fn session_scoped_unknown_method_error_keeps_session_id() {
 }
 
 #[tokio::test]
+async fn browser_and_tab_sessions_do_not_fall_through_to_the_active_page() {
+    let mut conn = CdpConnection::new();
+    conn.install_default_browser_target();
+    conn.register_browser_session("SID-browser".to_owned());
+    let default_tab_target_id = conn.default_tab_target_id().to_owned();
+    assert!(
+        conn.assign_session_to_tab_target(&default_tab_target_id, "SID-tab".to_owned(), false,)
+    );
+
+    for session_id in ["SID-browser", "SID-tab"] {
+        let response = conn
+            .process_message_messages_only_for_test(&format!(
+                r#"{{"id":19,"method":"Page.getFrameTree","sessionId":"{session_id}"}}"#
+            ))
+            .await;
+        assert_eq!(
+            response,
+            vec![json!({
+                "id": 19,
+                "error": {
+                    "code": -32601,
+                    "message": "'Page.getFrameTree' wasn't found"
+                },
+                "sessionId": session_id
+            })]
+        );
+    }
+}
+
+#[tokio::test]
 async fn session_scoped_handler_error_keeps_session_id_even_when_domain_uses_plain_error_helper() {
     let mut conn = CdpConnection::new();
     let mut bc = BrowserContext::new("BID-1".into());

@@ -2723,6 +2723,7 @@ impl CdpConnection {
 
     pub(crate) async fn close_active_page_target_for_target_close_async(
         &mut self,
+        out: &mut Vec<BackgroundProtocolEvent>,
     ) -> Option<ClosedPageTarget> {
         let (
             target_id,
@@ -2768,6 +2769,16 @@ impl CdpConnection {
         self.refresh_active_browser_context_loader_async().await;
         if let Some(promoted_target_id) = promoted_target_id {
             self.notify_target_host_activated(&promoted_target_id);
+            out.extend(
+                self.page_screencast_session_ids_for_target(&promoted_target_id)
+                    .into_iter()
+                    .map(|session_id| {
+                        BackgroundProtocolEvent::page_screencast_visibility_changed(
+                            session_id.as_deref(),
+                            true,
+                        )
+                    }),
+            );
         }
 
         Some(ClosedPageTarget {

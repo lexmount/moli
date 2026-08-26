@@ -547,15 +547,26 @@ impl CdpConnection {
                 req.session_id(),
             );
         }
-        if let Some(session_id) = req.session_id()
-            && self.session_route(Some(session_id)).is_none()
-        {
-            return self.complete_with_output_plan(
-                command_context,
-                CommandOutputPlan::error(-32001, "Unknown sessionId"),
-                Some(req.id()),
-                Some(session_id),
-            );
+        let session_route = req
+            .session_id()
+            .and_then(|session_id| self.session_route(Some(session_id)));
+        if let Some(session_id) = req.session_id() {
+            let Some(session_route) = session_route.as_ref() else {
+                return self.complete_with_output_plan(
+                    command_context,
+                    CommandOutputPlan::error(-32001, "Unknown sessionId"),
+                    Some(req.id()),
+                    Some(session_id),
+                );
+            };
+            if !session_route.supports_cdp_domain(domain) {
+                return self.complete_with_output_plan(
+                    command_context,
+                    CommandOutputPlan::error(-32601, format!("'{}' wasn't found", req.method())),
+                    Some(req.id()),
+                    Some(session_id),
+                );
+            }
         }
         let cmd = Cmd::from_parsed(command)
             .expect("validated domain-qualified command must produce a command view")

@@ -14,6 +14,13 @@ pub(super) fn load_bc_with_target(ctx: &mut TestContext, bc_id: &str, target_id:
     ctx.conn.browser_context = Some(bc);
 }
 
+pub(super) fn tab_id_for_page(ctx: &TestContext, page_target_id: &str) -> String {
+    ctx.conn
+        .tab_target_id_for_page_target_id(page_target_id)
+        .unwrap_or_else(|| panic!("page target {page_target_id} has no tab target"))
+        .to_owned()
+}
+
 pub(super) fn push_background_target(
     ctx: &mut TestContext,
     target_id: &str,

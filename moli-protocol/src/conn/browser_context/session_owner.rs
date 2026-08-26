@@ -62,6 +62,35 @@ impl CdpSessionRoute {
             } => Some(browser_context_id),
         }
     }
+
+    /// Whether Chromium installs a handler for this CDP domain on the routed
+    /// DevToolsAgentHost.
+    ///
+    /// Page and worker capability checks remain in their domain handlers for
+    /// now. Browser and Tab hosts are browser-only sessions in Chromium; they
+    /// must not fall through to whichever Page happens to be active.
+    pub(crate) fn supports_cdp_domain(&self, domain: &str) -> bool {
+        match self {
+            Self::Browser => matches!(
+                domain,
+                "Browser"
+                    | "Fetch"
+                    | "IO"
+                    | "Security"
+                    | "Storage"
+                    | "SystemInfo"
+                    | "Target"
+                    | "Tracing"
+            ),
+            Self::TabTarget { .. } => matches!(domain, "IO" | "Target" | "Tracing"),
+            Self::ActiveTarget { .. }
+            | Self::AuxiliaryTarget { .. }
+            | Self::BackgroundTarget { .. }
+            | Self::SharedWorkerTarget { .. }
+            | Self::DedicatedWorkerTarget { .. }
+            | Self::ServiceWorkerTarget { .. } => true,
+        }
+    }
 }
 
 pub(super) enum TargetSessionOwner {
@@ -100,7 +129,9 @@ impl CdpConnection {
         &self,
         target_id: &str,
     ) -> Option<CdpSessionRoute> {
-        if self.page_target_id_for_tab_target_id(target_id).is_some()
+        if self
+            .primary_page_target_id_for_tab_target_id(target_id)
+            .is_some()
             && let Some(browser_context_id) = self.browser_context_id_for_tab_target_id(target_id)
         {
             return Some(CdpSessionRoute::TabTarget {
@@ -140,6 +171,41 @@ impl CdpConnection {
                     target_id: target_id.to_owned(),
                 })
         })
+    }
+
+    /// Returns the DevToolsAgentHost owned by a non-browser session.
+    ///
+    /// Chromium's Target domain uses its handler's `owner_target_id` when
+    /// `Target.getTargetInfo` omits `targetId`. A tab session therefore owns
+    /// the stable Tab target, while a page or worker session owns its exact
+    /// execution target.
+    pub(crate) fn non_browser_target_id_for_session(
+        &self,
+        session_id: Option<&str>,
+    ) -> Option<String> {
+        match self.session_route(session_id)? {
+            CdpSessionRoute::TabTarget {
+                tab_target_id: target_id,
+                ..
+            }
+            | CdpSessionRoute::AuxiliaryTarget { target_id, .. }
+            | CdpSessionRoute::BackgroundTarget { target_id, .. }
+            | CdpSessionRoute::SharedWorkerTarget { target_id, .. }
+            | CdpSessionRoute::DedicatedWorkerTarget { target_id, .. }
+            | CdpSessionRoute::ServiceWorkerTarget { target_id, .. }
+            | CdpSessionRoute::ActiveTarget {
+                target_id: Some(target_id),
+                ..
+            } => Some(target_id),
+            CdpSessionRoute::ActiveTarget {
+                browser_context_id,
+                target_id: None,
+            } => self
+                .browser_context_by_id(&browser_context_id)
+                .and_then(|browser_context| browser_context.active_target_id())
+                .map(str::to_owned),
+            CdpSessionRoute::Browser => None,
+        }
     }
 
     pub fn worker_target_id_for_session(&self, session_id: Option<&str>) -> Option<String> {
@@ -409,7 +475,7 @@ impl CdpConnection {
         session_id: String,
         owner_session_id: Option<&str>,
     ) {
-        let target_id = self.target_id_for_auto_attached_session(&session_id);
+        let target_id = self.non_browser_target_id_for_session(Some(&session_id));
         self.register_auto_attached_session_for_target(
             session_id,
             owner_session_id,
@@ -1384,31 +1450,6 @@ impl CdpConnection {
     ) -> Vec<String> {
         self.target_control
             .auto_attached_session_cascade_for_owner(owner_session_id)
-    }
-
-    #[cfg(test)]
-    fn target_id_for_auto_attached_session(&self, session_id: &str) -> Option<String> {
-        match self.session_route(Some(session_id))? {
-            CdpSessionRoute::TabTarget {
-                tab_target_id: target_id,
-                ..
-            }
-            | CdpSessionRoute::BackgroundTarget { target_id, .. }
-            | CdpSessionRoute::AuxiliaryTarget { target_id, .. }
-            | CdpSessionRoute::SharedWorkerTarget { target_id, .. }
-            | CdpSessionRoute::DedicatedWorkerTarget { target_id, .. }
-            | CdpSessionRoute::ServiceWorkerTarget { target_id, .. } => Some(target_id),
-            CdpSessionRoute::ActiveTarget {
-                target_id: Some(target_id),
-                ..
-            } => Some(target_id),
-            CdpSessionRoute::ActiveTarget {
-                target_id: None, ..
-            } => self
-                .target_owner_identity_for_session(Some(session_id))
-                .and_then(|(_, target_id)| target_id),
-            CdpSessionRoute::Browser => None,
-        }
     }
 
     pub(crate) fn set_service_worker_auto_attach_related_owner(

@@ -53,6 +53,7 @@ struct CdpOwnerRecord {
 struct CdpOwnerRuntimeConfig {
     directory: SharedCdpAgentHostDirectory,
     target_id_allocator: Arc<AtomicU64>,
+    tab_target_id_allocator: Arc<AtomicU64>,
     cookie_profile: SharedCookieProfile,
     storage_partition: Arc<StoragePartitionState>,
     navigation_runtime_config: NavigationRuntimeConfig,
@@ -62,6 +63,7 @@ impl SharedCdpOwnerRegistry {
     pub(super) fn new(
         directory: SharedCdpAgentHostDirectory,
         target_id_allocator: Arc<AtomicU64>,
+        tab_target_id_allocator: Arc<AtomicU64>,
         cookie_profile: SharedCookieProfile,
         storage_partition: Arc<StoragePartitionState>,
         navigation_runtime_config: NavigationRuntimeConfig,
@@ -71,6 +73,7 @@ impl SharedCdpOwnerRegistry {
                 config: CdpOwnerRuntimeConfig {
                     directory,
                     target_id_allocator,
+                    tab_target_id_allocator,
                     cookie_profile,
                     storage_partition,
                     navigation_runtime_config,
@@ -132,6 +135,7 @@ impl SharedCdpOwnerRegistry {
             self.inner.config.navigation_runtime_config.clone(),
             Some(CdpTargetHostIntegration::new(
                 self.inner.config.target_id_allocator.clone(),
+                self.inner.config.tab_target_id_allocator.clone(),
                 lifecycle_observer,
             )),
             Some(CdpOwnerActorLifecycle {

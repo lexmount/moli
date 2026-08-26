@@ -27,6 +27,9 @@ use moli_core::{
     },
 };
 
+pub const DEFAULT_CDP_PAGE_TARGET_ID: &str = "moli-default";
+pub const DEFAULT_CDP_TAB_TARGET_ID: &str = "moli-default-tab";
+
 mod activity_source;
 mod bidi_channel_work;
 mod body_spool;
@@ -1129,6 +1132,8 @@ pub struct CdpConnection {
     next_bc_id: u32,
     next_target_id: u32,
     shared_target_id_allocator: Option<Arc<AtomicU64>>,
+    next_tab_target_id: u32,
+    shared_tab_target_id_allocator: Option<Arc<AtomicU64>>,
     next_session_id: u32,
     next_page_domain_subscription_generation: u64,
     next_internal_runtime_command_id: u64,
@@ -1370,6 +1375,8 @@ impl CdpConnection {
             next_global_io_stream_id: 0,
             next_target_id: 0,
             shared_target_id_allocator: None,
+            next_tab_target_id: 0,
+            shared_tab_target_id_allocator: None,
             next_session_id: 0,
             next_page_domain_subscription_generation: 0,
             next_internal_runtime_command_id: 902_000_000,
@@ -1407,6 +1414,10 @@ impl CdpConnection {
 
     pub fn set_shared_target_id_allocator(&mut self, allocator: Arc<AtomicU64>) {
         self.shared_target_id_allocator = Some(allocator);
+    }
+
+    pub fn set_shared_tab_target_id_allocator(&mut self, allocator: Arc<AtomicU64>) {
+        self.shared_tab_target_id_allocator = Some(allocator);
     }
 
     pub fn set_target_host_lifecycle_observer(&mut self, observer: CdpTargetHostLifecycleObserver) {
@@ -3429,19 +3440,27 @@ impl CdpConnection {
     }
 
     pub fn default_target_id(&self) -> &'static str {
-        "moli-default"
+        DEFAULT_CDP_PAGE_TARGET_ID
     }
 
-    pub(crate) fn derived_tab_target_id(page_target_id: &str) -> String {
-        format!("TAB-{page_target_id}")
+    pub fn default_tab_target_id(&self) -> &'static str {
+        DEFAULT_CDP_TAB_TARGET_ID
     }
 
     pub(crate) fn register_top_level_page_target(&mut self, page_target_id: &str) -> String {
-        let tab_target_id = Self::derived_tab_target_id(page_target_id);
+        let tab_target_id = if page_target_id == self.default_target_id() {
+            self.default_tab_target_id().to_owned()
+        } else {
+            self.gen_tab_target_id()
+        };
         self.target_control
-            .register_top_level_page(page_target_id.to_owned(), tab_target_id.clone());
-        if let Some(target_info) = self.target_info_for_host_delta(page_target_id) {
-            self.notify_target_host_lifecycle(CdpTargetHostLifecycleDelta::Created(target_info));
+            .register_tab(tab_target_id.clone(), page_target_id.to_owned());
+        for target_id in [&tab_target_id, page_target_id] {
+            if let Some(target_info) = self.target_info_for_host_delta(target_id) {
+                self.notify_target_host_lifecycle(CdpTargetHostLifecycleDelta::Created(
+                    target_info,
+                ));
+            }
         }
         tab_target_id
     }
@@ -3459,30 +3478,18 @@ impl CdpConnection {
         self.target_control.remove_worker(target_id)
     }
 
-    pub(crate) fn tab_target_id_for_page_target_id(&self, page_target_id: &str) -> Option<&str> {
+    #[doc(hidden)]
+    pub fn tab_target_id_for_page_target_id(&self, page_target_id: &str) -> Option<&str> {
         self.target_control
             .tab_target_id_for_page_target_id(page_target_id)
     }
 
-    /// Resolves the protocol tab and browser-context identities used by the
-    /// protocol server's DevTools foreground surface adapter.
-    #[doc(hidden)]
-    pub fn frontend_tab_target_identity(
+    pub(crate) fn primary_page_target_id_for_tab_target_id(
         &self,
-        page_target_id: &str,
-    ) -> Option<(String, Option<String>)> {
-        let tab_target_id = self
-            .tab_target_id_for_page_target_id(page_target_id)?
-            .to_owned();
-        let browser_context_id = self
-            .browser_context_id_for_target(page_target_id)
-            .map(str::to_owned);
-        Some((tab_target_id, browser_context_id))
-    }
-
-    pub(crate) fn page_target_id_for_tab_target_id(&self, tab_target_id: &str) -> Option<&str> {
+        tab_target_id: &str,
+    ) -> Option<&str> {
         self.target_control
-            .page_target_id_for_tab_target_id(tab_target_id)
+            .primary_page_target_id_for_tab_target_id(tab_target_id)
     }
 
     pub(crate) fn primary_session_id_for_tab_target_id(&self, tab_target_id: &str) -> Option<&str> {
@@ -3504,16 +3511,18 @@ impl CdpConnection {
         self.target_control.remove_tab_session(session_id)
     }
 
-    pub(crate) fn remove_top_level_page_target_by_page_target_id(
+    pub(crate) fn remove_tab_for_page_target(
         &mut self,
         page_target_id: &str,
     ) -> Option<TargetClosurePlan> {
         let closure_plan = self
             .target_control
-            .remove_top_level_page_by_page_target_id(page_target_id)?;
-        self.notify_target_host_lifecycle(CdpTargetHostLifecycleDelta::Destroyed {
-            target_id: page_target_id.to_owned(),
-        });
+            .remove_tab_by_page_target_id(page_target_id)?;
+        for target_id in closure_plan.destroyed_target_ids() {
+            self.notify_target_host_lifecycle(CdpTargetHostLifecycleDelta::Destroyed {
+                target_id: target_id.to_owned(),
+            });
+        }
         Some(closure_plan)
     }
 
@@ -3522,9 +3531,7 @@ impl CdpConnection {
         page_target_id: &str,
         reason: Option<&str>,
     ) -> TargetEventPlan {
-        let Some(closure_plan) =
-            self.remove_top_level_page_target_by_page_target_id(page_target_id)
-        else {
+        let Some(closure_plan) = self.remove_tab_for_page_target(page_target_id) else {
             return TargetEventPlan::default();
         };
         debug_assert!(
@@ -3532,9 +3539,9 @@ impl CdpConnection {
                 .destroyed_target_ids()
                 .any(|target_id| target_id == page_target_id)
         );
-        let target = closure_plan.top_level_target();
-        let tab_target_id = target.tab_target_id().to_owned();
-        let tab_session_ids = target.tab_session_ids();
+        let target = closure_plan.tab_target();
+        let tab_target_id = target.id().to_owned();
+        let tab_session_ids = target.session_ids();
         self.detach_target_closure_cleanup_event_plan(
             TargetClosureCleanupPlan::new(tab_target_id, reason, tab_session_ids),
             None,
@@ -3545,12 +3552,10 @@ impl CdpConnection {
         &mut self,
         page_target_id: &str,
     ) {
-        let Some(closure_plan) =
-            self.remove_top_level_page_target_by_page_target_id(page_target_id)
-        else {
+        let Some(closure_plan) = self.remove_tab_for_page_target(page_target_id) else {
             return;
         };
-        for session_id in closure_plan.top_level_target().tab_session_ids() {
+        for session_id in closure_plan.tab_target().session_ids() {
             self.clear_auto_attach_owner(Some(&session_id));
             self.rollback_attached_session_without_event(&session_id);
         }
@@ -3564,7 +3569,7 @@ impl CdpConnection {
         &self,
         tab_target_id: &str,
     ) -> Option<String> {
-        let page_target_id = self.page_target_id_for_tab_target_id(tab_target_id)?;
+        let page_target_id = self.primary_page_target_id_for_tab_target_id(tab_target_id)?;
         self.browser_contexts()
             .find(|browser_context| {
                 browser_context
@@ -3586,7 +3591,7 @@ impl CdpConnection {
     }
 
     pub(crate) fn tab_target_info(&self, tab_target_id: &str) -> Option<DevToolsTargetInfo> {
-        let page_target_id = self.page_target_id_for_tab_target_id(tab_target_id)?;
+        let page_target_id = self.primary_page_target_id_for_tab_target_id(tab_target_id)?;
         let page_target_info = self
             .browser_contexts()
             .find_map(|browser_context| browser_context.devtools_target_info(page_target_id))?;
@@ -3692,15 +3697,7 @@ impl CdpConnection {
     }
 
     fn target_created_event_plan_for_target_delta(&mut self, target_id: &str) -> TargetEventPlan {
-        let deltas = self.target_deltas_for_target_id(target_id, TargetHostDelta::created);
-        self.target_host_delta_events(deltas)
-    }
-
-    pub(crate) fn target_info_changed_event_plan_for_target_delta(
-        &mut self,
-        target_id: &str,
-    ) -> TargetEventPlan {
-        let deltas = self.target_deltas_for_target_id(target_id, TargetHostDelta::info_changed);
+        let deltas = self.target_control.target_created_deltas(target_id);
         self.target_host_delta_events(deltas)
     }
 
@@ -3715,11 +3712,17 @@ impl CdpConnection {
         else {
             return TargetEventPlan::default();
         };
+        let tab_target_info = self.tab_target_info_for_page_target_info(&target_info);
         self.notify_target_host_lifecycle(CdpTargetHostLifecycleDelta::InfoChanged(target_info));
+        if let Some(tab_target_info) = tab_target_info {
+            self.notify_target_host_lifecycle(CdpTargetHostLifecycleDelta::InfoChanged(
+                tab_target_info,
+            ));
+        }
         if !self.has_any_target_info_observer() {
             return TargetEventPlan::default();
         }
-        self.target_info_changed_event_plan_for_target_delta(target_id)
+        self.exact_target_info_changed_event_plan_for_target_delta(target_id)
     }
 
     pub(crate) fn target_info_changed_event_plan_for_session_owner(
@@ -3739,15 +3742,6 @@ impl CdpConnection {
         target_id: &str,
     ) -> TargetEventPlan {
         self.target_host_delta_events([TargetHostDelta::info_changed(target_id.to_owned())])
-    }
-
-    fn target_deltas_for_target_id(
-        &self,
-        target_id: &str,
-        build_delta: fn(String) -> TargetHostDelta,
-    ) -> Vec<TargetHostDelta> {
-        self.target_control
-            .target_deltas_for_target_id(target_id, build_delta)
     }
 
     fn target_host_delta_events(
@@ -3808,7 +3802,7 @@ impl CdpConnection {
     pub(crate) fn prepare_target_host_closure(&self, target_id: &str) -> PreparedTargetHostClosure {
         let mut detached_info_deltas = Vec::new();
         let mut destroyed_deltas = Vec::new();
-        for delta in self.target_deltas_for_target_id(target_id, TargetHostDelta::destroyed) {
+        for delta in self.target_control.target_destroyed_deltas(target_id) {
             let target_id = delta.target_id().to_owned();
             let Some(target_info) = self.target_info_for_host_delta(&target_id) else {
                 continue;
@@ -3911,19 +3905,21 @@ impl CdpConnection {
         &self,
         target_info: DevToolsTargetInfo,
     ) -> Vec<BackgroundProtocolEvent> {
-        target_destroyed_automation_events(self.project_tab_page_target_infos(target_info))
+        target_destroyed_automation_events(
+            self.project_page_tab_target_infos_for_destruction(target_info),
+        )
     }
 
-    fn project_tab_page_target_infos(
+    fn project_page_tab_target_infos_for_destruction(
         &self,
         target_info: DevToolsTargetInfo,
     ) -> Vec<DevToolsTargetInfo> {
         self.target_control
-            .project_tab_page_target_infos(target_info)
+            .project_page_tab_target_infos_for_destruction(target_info)
     }
 
     #[cfg(test)]
-    pub(crate) fn top_level_target_graph_len(&self) -> usize {
+    pub(crate) fn tab_target_count(&self) -> usize {
         self.target_control.len()
     }
 
@@ -3992,6 +3988,29 @@ impl CdpConnection {
         }
     }
 
+    fn gen_tab_target_id(&mut self) -> String {
+        loop {
+            let id = if let Some(allocator) = self.shared_tab_target_id_allocator.as_ref() {
+                allocator
+                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                        current.checked_add(1)
+                    })
+                    .expect("shared tab target id space exhausted")
+                    + 1
+            } else {
+                self.next_tab_target_id = self
+                    .next_tab_target_id
+                    .checked_add(1)
+                    .expect("tab target id space exhausted");
+                u64::from(self.next_tab_target_id)
+            };
+            let target_id = format!("TAB-{id}");
+            if self.target_control.host_kind(&target_id).is_none() {
+                return target_id;
+            }
+        }
+    }
+
     pub fn gen_session_id(&mut self) -> String {
         loop {
             self.next_session_id = self
@@ -4034,6 +4053,11 @@ impl CdpConnection {
         self.notify_target_host_lifecycle(CdpTargetHostLifecycleDelta::Activated {
             target_id: target_id.to_owned(),
         });
+        if let Some(tab_target_id) = self.tab_target_id_for_page_target_id(target_id) {
+            self.notify_target_host_lifecycle(CdpTargetHostLifecycleDelta::Activated {
+                target_id: tab_target_id.to_owned(),
+            });
+        }
     }
 }
 

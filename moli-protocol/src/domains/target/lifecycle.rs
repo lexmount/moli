@@ -22,15 +22,22 @@ pub(super) struct DevToolsCreateTargetExecution {
 }
 
 pub(super) struct CreatedTargetProtocolEvents {
-    target_id: String,
+    page_target_id: String,
+    tab_target_id: String,
     attached_tab_sessions: Vec<TargetAttachSessionCommit>,
     attached_sessions: Vec<TargetAttachSessionCommit>,
 }
 
 impl CreatedTargetProtocolEvents {
-    pub(super) fn target_id(&self) -> &str {
-        &self.target_id
+    pub(super) fn page_target_id(&self) -> &str {
+        &self.page_target_id
     }
+}
+
+#[derive(Clone, Copy)]
+enum CreateTargetResultHost {
+    Page,
+    Tab,
 }
 
 pub(super) fn emit_created_target_protocol_events(
@@ -49,18 +56,18 @@ pub(super) fn emit_created_target_protocol_events(
         .browser_contexts()
         .find(|browser_context| {
             browser_context
-                .devtools_target_info(&events.target_id)
+                .devtools_target_info(&events.page_target_id)
                 .is_some()
         })
         .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "UnknownTargetId"))?;
     let target_info = bc
-        .devtools_target_info(&events.target_id)
+        .devtools_target_info(&events.page_target_id)
         .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "UnknownTargetId"))?;
     if let Some(message) = super::transient_no_page_devtools_target_info_error(conn, &target_info) {
         return Err(DevToolsError::new(DevToolsErrorKind::Internal, message));
     }
     if has_discovery {
-        for event in conn.target_created_event_plan(&events.target_id) {
+        for event in conn.target_created_event_plan(&events.page_target_id) {
             out.push_target_background_event(event);
         }
     }
@@ -80,7 +87,7 @@ pub(super) fn emit_created_target_protocol_events(
         }
     }
     let event_plan = conn.commit_prepared_attach_event_plan(PreparedTargetAttach::new(
-        events.target_id,
+        events.page_target_id,
         target_info,
         events.attached_sessions,
     ));
@@ -106,6 +113,7 @@ struct CreateTargetParams {
     #[serde(default = "default_blank")]
     url: String,
     browser_context_id: Option<String>,
+    for_tab: Option<bool>,
 }
 
 fn default_blank() -> String {
@@ -133,17 +141,24 @@ pub(super) fn start_create_target_command(
         Ok(None) => CreateTargetParams {
             url: "about:blank".into(),
             browser_context_id: None,
+            for_tab: None,
         },
         Err(e) => {
             return super::target_command_error(-32602, e);
         }
     };
+    let result_host = if params.for_tab.unwrap_or(false) {
+        CreateTargetResultHost::Tab
+    } else {
+        CreateTargetResultHost::Page
+    };
     let command = build_cdp_create_target_command(cmd, params);
-    super::start_devtools_target_command(
+    start_devtools_create_target_command_with_result_host(
         conn,
         cmd.id,
         cmd.session_id,
-        DevToolsCommand::CreateTarget(command),
+        command,
+        result_host,
     )
 }
 
@@ -167,13 +182,37 @@ pub(super) fn start_devtools_create_target_command(
     command_session_id: Option<&str>,
     command: DevToolsCreateTargetCommand,
 ) -> TargetCommandTaskStep {
+    start_devtools_create_target_command_with_result_host(
+        conn,
+        command_id,
+        command_session_id,
+        command,
+        CreateTargetResultHost::Page,
+    )
+}
+
+fn start_devtools_create_target_command_with_result_host(
+    conn: &mut CdpConnection,
+    command_id: Option<u64>,
+    command_session_id: Option<&str>,
+    command: DevToolsCreateTargetCommand,
+    result_host: CreateTargetResultHost,
+) -> TargetCommandTaskStep {
     let mut plan = CommandOutputPlan::default();
     let execution = execute_devtools_create_target_command(conn, command);
     let (created_target_id, created_target_protocol_events) = match execution {
         Ok(execution) => {
             let target_id = execution.result.target_id.clone();
+            let response_target_id = match result_host {
+                CreateTargetResultHost::Page => execution.result.target_id,
+                CreateTargetResultHost::Tab => {
+                    DevToolsTargetId::from(execution.protocol_events.tab_target_id.as_str())
+                }
+            };
             plan.extend(CommandOutputPlan::from_devtools_result(
-                DevToolsCommandResult::CreateTarget(execution.result),
+                DevToolsCommandResult::CreateTarget(DevToolsCreateTargetResult {
+                    target_id: response_target_id,
+                }),
             ));
             (target_id, execution.protocol_events)
         }
@@ -367,7 +406,8 @@ pub(super) fn execute_devtools_create_target_command(
             target_id: DevToolsTargetId::from(created_target_id),
         },
         protocol_events: CreatedTargetProtocolEvents {
-            target_id,
+            page_target_id: target_id,
+            tab_target_id,
             attached_tab_sessions,
             attached_sessions,
         },
@@ -1167,7 +1207,7 @@ async fn close_target_inner_async(
     target_id: String,
 ) -> Result<DevToolsCloseTargetResult, DevToolsError> {
     let target_id = conn
-        .page_target_id_for_tab_target_id(&target_id)
+        .primary_page_target_id_for_tab_target_id(&target_id)
         .map(str::to_owned)
         .unwrap_or(target_id);
     if let Err(message) = select_browser_context_for_target(conn, &target_id) {
@@ -1401,12 +1441,30 @@ pub(super) fn execute_devtools_get_target_info_command(
     conn: &CdpConnection,
     command: DevToolsGetTargetInfoCommand,
 ) -> Result<DevToolsGetTargetInfoResult, DevToolsError> {
-    let Some(target_id) = command.target_id.as_ref() else {
+    let owner_target_id = command
+        .context
+        .target_id
+        .as_ref()
+        .map(|target_id| target_id.as_str().to_owned())
+        .or_else(|| {
+            conn.non_browser_target_id_for_session(
+                command
+                    .context
+                    .session_id
+                    .as_ref()
+                    .map(|session_id| session_id.as_str()),
+            )
+        });
+    let wanted = command
+        .target_id
+        .as_ref()
+        .map(|target_id| target_id.as_str())
+        .or(owner_target_id.as_deref());
+    let Some(wanted) = wanted else {
         return Ok(DevToolsGetTargetInfoResult {
             target_info: super::browser_context::devtools_browser_target_info(),
         });
     };
-    let wanted = target_id.as_str();
     if wanted == super::browser_context::DEVTOOLS_BROWSER_TARGET_ID {
         return Ok(DevToolsGetTargetInfoResult {
             target_info: super::browser_context::devtools_browser_target_info(),
@@ -2347,7 +2405,7 @@ async fn auto_attach_child_page_for_tab_session_async(
         return;
     }
     let Some(page_target_id) = conn
-        .page_target_id_for_tab_target_id(tab_target_id)
+        .primary_page_target_id_for_tab_target_id(tab_target_id)
         .map(str::to_owned)
     else {
         return;
@@ -2876,7 +2934,10 @@ pub(super) async fn execute_devtools_activate_target_command_async(
     conn: &mut CdpConnection,
     command: DevToolsActivateTargetCommand,
 ) -> Result<Vec<BackgroundProtocolEvent>, DevToolsError> {
-    let target_id = command.target_id.as_str().to_owned();
+    let target_id = conn
+        .primary_page_target_id_for_tab_target_id(command.target_id.as_str())
+        .map(str::to_owned)
+        .unwrap_or_else(|| command.target_id.as_str().to_owned());
     let previously_active_browser_context_id = previously_active_browser_context_id(conn);
     if let Err(message) = select_browser_context_for_target(conn, &target_id) {
         restore_previously_active_browser_context(
@@ -3009,6 +3070,7 @@ mod protocol_neutral_tests {
             CreateTargetParams {
                 url: "https://example.com/new".to_owned(),
                 browser_context_id: Some("BID-create".to_owned()),
+                for_tab: None,
             },
         );
 

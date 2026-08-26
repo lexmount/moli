@@ -33,8 +33,8 @@ fn browser_and_page_client_command_ids_are_isolated_and_restored() {
         .register_browser_frontend(5, "SID-browser".to_owned(), test_sink())
         .expect("register browser frontend");
     routing
-        .register_page_frontend(10, "TID-1".to_owned(), "SID-page".to_owned(), test_sink())
-        .expect("register page frontend");
+        .register_target_frontend(10, "TID-1".to_owned(), "SID-page".to_owned(), test_sink())
+        .expect("register target frontend");
 
     let browser_command = expect_prepared_command(
         routing.prepare_command(
@@ -763,8 +763,8 @@ fn browser_frontend_hides_base_session_on_wire() {
 fn frontend_route_rewrite_preserves_unknown_command_fields() {
     let mut routing = CdpFrontendRoutingState::default();
     routing
-        .register_page_frontend(10, "TID-1".to_owned(), "SID-page".to_owned(), test_sink())
-        .expect("register page frontend");
+        .register_target_frontend(10, "TID-1".to_owned(), "SID-page".to_owned(), test_sink())
+        .expect("register target frontend");
 
     let command = expect_prepared_command(
         routing.prepare_command(
@@ -790,8 +790,8 @@ fn malformed_command_keeps_its_originating_frontend() {
         .register_browser_frontend(5, "SID-browser".to_owned(), test_sink())
         .expect("register browser frontend");
     routing
-        .register_page_frontend(10, "TID-1".to_owned(), "SID-page".to_owned(), test_sink())
-        .expect("register page frontend");
+        .register_target_frontend(10, "TID-1".to_owned(), "SID-page".to_owned(), test_sink())
+        .expect("register target frontend");
 
     assert!(matches!(
         routing.prepare_command_str(5, "{".to_owned()),
@@ -841,8 +841,8 @@ fn private_page_session_detach_does_not_fall_back_to_browser_frontend() {
         .register_browser_frontend(5, "SID-browser".to_owned(), test_sink())
         .expect("register browser frontend");
     routing
-        .register_page_frontend(10, "TID-1".to_owned(), "SID-page".to_owned(), test_sink())
-        .expect("register page frontend");
+        .register_target_frontend(10, "TID-1".to_owned(), "SID-page".to_owned(), test_sink())
+        .expect("register target frontend");
     routing.register_child_session(
         5,
         Some("SID-browser"),
@@ -887,11 +887,11 @@ fn private_page_session_detach_does_not_fall_back_to_browser_frontend() {
 fn page_child_sessions_are_scoped_to_their_frontend_and_removed_on_detach() {
     let mut routing = CdpFrontendRoutingState::default();
     routing
-        .register_page_frontend(10, "TID-1".to_owned(), "SID-page-1".to_owned(), test_sink())
-        .expect("register first page frontend");
+        .register_target_frontend(10, "TID-1".to_owned(), "SID-page-1".to_owned(), test_sink())
+        .expect("register first target frontend");
     routing
-        .register_page_frontend(20, "TID-2".to_owned(), "SID-page-2".to_owned(), test_sink())
-        .expect("register second page frontend");
+        .register_target_frontend(20, "TID-2".to_owned(), "SID-page-2".to_owned(), test_sink())
+        .expect("register second target frontend");
 
     let attach = expect_prepared_command(
         routing.prepare_command(
@@ -999,8 +999,8 @@ fn stalled_browser_writer_does_not_block_page_frontend_enqueue() {
         .register_browser_frontend(5, "SID-browser".to_owned(), root_sink)
         .expect("register browser frontend");
     router
-        .register_page_frontend(10, "TID-page".to_owned(), "SID-page".to_owned(), page_sink)
-        .expect("register page frontend");
+        .register_target_frontend(10, "TID-page".to_owned(), "SID-page".to_owned(), page_sink)
+        .expect("register target frontend");
 
     assert!(
         router.enqueue_protocol_output_sequence(ProtocolOutputSequence::from_messages(vec![

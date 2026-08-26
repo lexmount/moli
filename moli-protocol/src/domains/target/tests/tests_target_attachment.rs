@@ -136,7 +136,7 @@ async fn attach_to_target_tab_returns_control_plane_session() {
         .as_str()
         .expect("created target id")
         .to_owned();
-    let tab_target_id = crate::conn::CdpConnection::derived_tab_target_id(&page_target_id);
+    let tab_target_id = tab_id_for_page(&ctx, &page_target_id);
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -164,6 +164,19 @@ async fn attach_to_target_tab_returns_control_plane_session() {
             ..
         }) if route_tab_target_id == &tab_target_id
     ));
+
+    ctx.process_async(json!({
+        "id": 11016,
+        "sessionId": tab_session_id.clone(),
+        "method": "Target.getTargetInfo"
+    }))
+    .await;
+    let owner_info = take_response_by_id(&mut ctx, 11016);
+    assert_eq!(
+        owner_info["result"]["targetInfo"]["targetId"],
+        json!(tab_target_id)
+    );
+    assert_eq!(owner_info["result"]["targetInfo"]["type"], json!("tab"));
 
     ctx.process_async(json!({
         "id": 11014,
@@ -202,9 +215,10 @@ async fn attach_to_target_tab_returns_control_plane_session() {
     }))
     .await;
     let runtime_response = take_response_by_id(&mut ctx, 11012);
-    assert!(
-        runtime_response.get("error").is_some(),
-        "tab session must not route Runtime.evaluate to its page: {runtime_response:?}"
+    assert_eq!(runtime_response["error"]["code"], json!(-32601));
+    assert_eq!(
+        runtime_response["error"]["message"],
+        json!("'Runtime.evaluate' wasn't found")
     );
 
     ctx.process_async(json!({
@@ -262,7 +276,7 @@ async fn detach_tab_session_detaches_auto_attached_child_page_session() {
         .as_str()
         .expect("created target id")
         .to_owned();
-    let tab_target_id = crate::conn::CdpConnection::derived_tab_target_id(&page_target_id);
+    let tab_target_id = tab_id_for_page(&ctx, &page_target_id);
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -2736,7 +2750,7 @@ async fn set_auto_attach_filter_page_exclude_catchall_auto_attaches_existing_tab
         .as_str()
         .expect("created target id")
         .to_owned();
-    let tab_target_id = crate::conn::CdpConnection::derived_tab_target_id(&page_target_id);
+    let tab_target_id = tab_id_for_page(&ctx, &page_target_id);
     ctx.sent.clear();
 
     ctx.process_async(json!({

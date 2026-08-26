@@ -161,8 +161,8 @@ async fn dispose_browser_context_detaches_tab_session_and_clears_target_graph() 
         .as_str()
         .expect("page target id")
         .to_owned();
-    let tab_target_id = crate::conn::CdpConnection::derived_tab_target_id(&page_target_id);
-    assert_eq!(ctx.conn.top_level_target_graph_len(), 1);
+    let tab_target_id = tab_id_for_page(&ctx, &page_target_id);
+    assert_eq!(ctx.conn.tab_target_count(), 1);
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -195,10 +195,10 @@ async fn dispose_browser_context_detaches_tab_session_and_clears_target_graph() 
             "sessionId": tab_session_id
         })),
     );
-    assert_eq!(ctx.conn.top_level_target_graph_len(), 0);
+    assert_eq!(ctx.conn.tab_target_count(), 0);
     assert!(
         ctx.conn
-            .page_target_id_for_tab_target_id(&tab_target_id)
+            .primary_page_target_id_for_tab_target_id(&tab_target_id)
             .is_none()
     );
     assert!(ctx.conn.session_route(Some(&tab_session_id)).is_none());

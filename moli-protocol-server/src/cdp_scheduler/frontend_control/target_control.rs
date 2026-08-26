@@ -1,64 +1,49 @@
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
-use crate::cdp_frontend_router::CdpFrontendRouter;
+use crate::{cdp_frontend::CdpCreatedTarget, cdp_frontend_router::CdpFrontendRouter};
 
 use super::super::{CdpScheduler, ProtocolOutputSequence};
 
 pub(super) struct CdpFrontendTargetControl {
     next_command_id: u64,
-    page_control_session_id: Option<String>,
-    default_target_materialized: bool,
-}
-
-struct ForegroundTabRoute {
-    browser_context_id: Option<String>,
-    page_target_id: String,
-    tab_target_id: String,
+    browser_control_session_id: Option<String>,
+    default_page_materialized: bool,
 }
 
 impl Default for CdpFrontendTargetControl {
     fn default() -> Self {
         Self {
             next_command_id: u64::MAX,
-            page_control_session_id: None,
-            default_target_materialized: false,
+            browser_control_session_id: None,
+            default_page_materialized: false,
         }
     }
 }
 
 impl CdpFrontendTargetControl {
-    pub(super) async fn attach_page(
+    pub(super) async fn attach_target(
         &mut self,
         scheduler: &mut CdpScheduler,
         frontend_router: &CdpFrontendRouter,
         target_id: &str,
     ) -> Result<String> {
-        self.attach_target(scheduler, frontend_router, target_id)
+        if target_id == scheduler.conn.default_tab_target_id() {
+            self.ensure_default_target_is_materialized(scheduler, frontend_router)
+                .await?;
+        }
+        self.attach_target_session(scheduler, frontend_router, target_id)
             .await
     }
 
-    pub(super) async fn attach_foreground_tab(
-        &mut self,
-        scheduler: &mut CdpScheduler,
-        frontend_router: &CdpFrontendRouter,
-        page_target_id: &str,
-    ) -> Result<(String, Option<String>)> {
-        let route = foreground_tab_route(scheduler, page_target_id)?;
-        let session_id = self
-            .attach_target(scheduler, frontend_router, &route.tab_target_id)
-            .await?;
-        Ok((session_id, route.browser_context_id))
-    }
-
-    async fn attach_target(
+    async fn attach_target_session(
         &mut self,
         scheduler: &mut CdpScheduler,
         frontend_router: &CdpFrontendRouter,
         target_id: &str,
     ) -> Result<String> {
         let control_session_id = self
-            .ensure_page_control_session(scheduler, frontend_router)
+            .ensure_browser_control_session(scheduler, frontend_router)
             .await?;
         let response = self
             .execute_command(
@@ -74,88 +59,9 @@ impl CdpFrontendTargetControl {
             .with_context(|| format!("CDP target {target_id} did not return an attach session"))?
             .to_owned();
         if target_id == scheduler.conn.default_target_id() {
-            self.default_target_materialized = true;
+            self.default_page_materialized = true;
         }
         Ok(session_id)
-    }
-
-    pub(super) async fn follow_foreground_tab_change(
-        &mut self,
-        scheduler: &mut CdpScheduler,
-        frontend_router: &CdpFrontendRouter,
-        page_target_id: String,
-    ) {
-        let route = match foreground_tab_route(scheduler, &page_target_id) {
-            Ok(route) => route,
-            Err(error) => {
-                tracing::warn!(
-                    target_id = page_target_id,
-                    ?error,
-                    "failed to resolve promoted foreground tab"
-                );
-                return;
-            }
-        };
-        let frontends = frontend_router
-            .foreground_tab_frontends_for_browser_context(route.browser_context_id.as_deref());
-        for frontend in frontends {
-            if frontend.page_target_id == route.page_target_id {
-                continue;
-            }
-            let new_session_id = match self
-                .attach_target(scheduler, frontend_router, &route.tab_target_id)
-                .await
-            {
-                Ok(session_id) => session_id,
-                Err(error) => {
-                    tracing::warn!(
-                        frontend_id = frontend.frontend_id,
-                        target_id = route.page_target_id,
-                        ?error,
-                        "failed to attach promoted foreground tab"
-                    );
-                    continue;
-                }
-            };
-            self.detach_frontend_session(scheduler, frontend_router, &frontend.base_session_id)
-                .await;
-            if let Err(error) = frontend_router.replace_foreground_tab_frontend_base(
-                frontend.frontend_id,
-                route.browser_context_id.clone(),
-                route.page_target_id.clone(),
-                new_session_id.clone(),
-            ) {
-                tracing::warn!(
-                    frontend_id = frontend.frontend_id,
-                    target_id = route.page_target_id,
-                    ?error,
-                    "failed to bind promoted foreground tab"
-                );
-                self.detach_frontend_session(scheduler, frontend_router, &new_session_id)
-                    .await;
-                continue;
-            }
-            for (method, params) in frontend.replayable_target_commands {
-                if let Err(error) = self
-                    .execute_command(
-                        scheduler,
-                        frontend_router,
-                        Some(&new_session_id),
-                        &method,
-                        params,
-                    )
-                    .await
-                {
-                    tracing::warn!(
-                        frontend_id = frontend.frontend_id,
-                        target_id = route.page_target_id,
-                        method,
-                        ?error,
-                        "failed to restore foreground tab target state"
-                    );
-                }
-            }
-        }
     }
 
     pub(super) async fn attach_browser(
@@ -222,7 +128,7 @@ impl CdpFrontendTargetControl {
         scheduler: &mut CdpScheduler,
         frontend_router: &CdpFrontendRouter,
         target_url: &str,
-    ) -> Result<String> {
+    ) -> Result<CdpCreatedTarget> {
         self.ensure_default_target_is_materialized(scheduler, frontend_router)
             .await?;
         let response = self
@@ -234,10 +140,19 @@ impl CdpFrontendTargetControl {
                 json!({ "url": target_url }),
             )
             .await?;
-        response["result"]["targetId"]
+        let page_target_id = response["result"]["targetId"]
             .as_str()
             .map(str::to_owned)
-            .context("Target.createTarget returned no targetId")
+            .context("Target.createTarget returned no targetId")?;
+        let tab_target_id = scheduler
+            .conn
+            .tab_target_id_for_page_target_id(&page_target_id)
+            .map(str::to_owned)
+            .context("created page target has no tab target")?;
+        Ok(CdpCreatedTarget {
+            page_target_id,
+            tab_target_id,
+        })
     }
 
     pub(super) async fn close_target(
@@ -261,12 +176,12 @@ impl CdpFrontendTargetControl {
         Ok(())
     }
 
-    async fn ensure_page_control_session(
+    async fn ensure_browser_control_session(
         &mut self,
         scheduler: &mut CdpScheduler,
         frontend_router: &CdpFrontendRouter,
     ) -> Result<String> {
-        if let Some(control_session_id) = self.page_control_session_id.as_ref() {
+        if let Some(control_session_id) = self.browser_control_session_id.as_ref() {
             return Ok(control_session_id.clone());
         }
         let response = self
@@ -282,7 +197,7 @@ impl CdpFrontendTargetControl {
             .as_str()
             .context("CDP browser target did not return an attach session")?
             .to_owned();
-        self.page_control_session_id = Some(session_id.clone());
+        self.browser_control_session_id = Some(session_id.clone());
         Ok(session_id)
     }
 
@@ -291,7 +206,7 @@ impl CdpFrontendTargetControl {
         scheduler: &mut CdpScheduler,
         frontend_router: &CdpFrontendRouter,
     ) -> Result<()> {
-        if self.default_target_materialized {
+        if self.default_page_materialized {
             return Ok(());
         }
         // A fresh connection may reuse its unclaimed default placeholder for
@@ -299,7 +214,7 @@ impl CdpFrontendTargetControl {
         // ID permanently, so materialize it before creating another target.
         let default_target_id = scheduler.conn.default_target_id().to_owned();
         let control_session_id = self
-            .ensure_page_control_session(scheduler, frontend_router)
+            .ensure_browser_control_session(scheduler, frontend_router)
             .await?;
         let response = self
             .execute_command(
@@ -322,7 +237,7 @@ impl CdpFrontendTargetControl {
             json!({ "sessionId": reservation_session_id }),
         )
         .await?;
-        self.default_target_materialized = true;
+        self.default_page_materialized = true;
         Ok(())
     }
 
@@ -385,21 +300,6 @@ impl CdpFrontendTargetControl {
         );
         control_command_result(response, method)
     }
-}
-
-fn foreground_tab_route(
-    scheduler: &CdpScheduler,
-    page_target_id: &str,
-) -> Result<ForegroundTabRoute> {
-    let (tab_target_id, browser_context_id) = scheduler
-        .conn
-        .frontend_tab_target_identity(page_target_id)
-        .with_context(|| format!("CDP page target {page_target_id} has no tab target"))?;
-    Ok(ForegroundTabRoute {
-        browser_context_id,
-        page_target_id: page_target_id.to_owned(),
-        tab_target_id,
-    })
 }
 
 fn control_command_result(response: Option<Value>, method: &str) -> Result<Value> {

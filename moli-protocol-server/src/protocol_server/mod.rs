@@ -22,7 +22,9 @@ use moli_core::{
     runtime::{NavigationRuntimeConfig, storage_partition::StoragePartitionState},
 };
 use moli_fetch::FetchConfig;
-use moli_protocol::CdpInitialStoragePartition;
+#[cfg(test)]
+use moli_protocol::DEFAULT_CDP_TAB_TARGET_ID;
+use moli_protocol::{CdpInitialStoragePartition, DEFAULT_CDP_PAGE_TARGET_ID};
 #[cfg(test)]
 use parking_lot::Mutex;
 use tokio::net::TcpListener;
@@ -49,7 +51,9 @@ use webdriver_bidi::SharedBidiSessionRegistry;
 use webdriver_classic::SharedClassicSessionRegistry;
 
 const DEFAULT_BROWSER_ID: &str = "moli-browser";
-const DEFAULT_TARGET_ID: &str = "moli-default";
+const DEFAULT_TARGET_ID: &str = DEFAULT_CDP_PAGE_TARGET_ID;
+#[cfg(test)]
+const DEFAULT_TAB_TARGET_ID: &str = DEFAULT_CDP_TAB_TARGET_ID;
 const DEFAULT_TARGET_URL: &str = "about:blank";
 
 #[derive(Debug, Clone)]
@@ -195,19 +199,11 @@ fn build_router(app_state: AppState) -> Router {
         )
         .route(
             "/devtools/page/{target_id}",
-            get(cdp::ws_page_upgrade_handler),
+            get(cdp::ws_target_upgrade_handler),
         )
         .route(
             "/devtools/page/{target_id}/",
-            get(cdp::ws_page_upgrade_handler),
-        )
-        .route(
-            "/devtools/tab/{target_id}",
-            get(cdp::ws_foreground_tab_upgrade_handler),
-        )
-        .route(
-            "/devtools/tab/{target_id}/",
-            get(cdp::ws_foreground_tab_upgrade_handler),
+            get(cdp::ws_target_upgrade_handler),
         )
         .route(
             "/session",
@@ -742,14 +738,12 @@ fn is_websocket_upgrade_request(request: &Request<Body>) -> bool {
 struct AppState {
     browser_ws_url: String,
     page_ws_url: String,
-    tab_ws_url: String,
     bidi_ws_url: String,
     bidi_session_registry: SharedBidiSessionRegistry,
     classic_session_registry: SharedClassicSessionRegistry,
     cdp_agent_host_directory: SharedCdpAgentHostDirectory,
     cdp_owner_registry: SharedCdpOwnerRegistry,
     devtools_frontend_url: String,
-    tab_devtools_frontend_url: String,
     cookie_profile: SharedCookieProfile,
     storage_partition: Arc<StoragePartitionState>,
     fetch_config: FetchConfig,
@@ -800,9 +794,11 @@ impl AppState {
     ) -> Self {
         let cdp_agent_host_directory = SharedCdpAgentHostDirectory::default();
         let cdp_target_id_allocator = Arc::new(AtomicU64::new(0));
+        let cdp_tab_target_id_allocator = Arc::new(AtomicU64::new(0));
         let cdp_owner_registry = SharedCdpOwnerRegistry::new(
             cdp_agent_host_directory.clone(),
             cdp_target_id_allocator,
+            cdp_tab_target_id_allocator,
             cookie_profile.clone(),
             storage_partition.clone(),
             navigation_runtime_config.clone(),
@@ -810,17 +806,13 @@ impl AppState {
         Self {
             browser_ws_url: format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"),
             page_ws_url: format!("ws://{addr}/devtools/page/{DEFAULT_TARGET_ID}"),
-            tab_ws_url: format!("ws://{addr}/devtools/tab/{DEFAULT_TARGET_ID}"),
             bidi_ws_url: format!("ws://{addr}/session"),
             bidi_session_registry: SharedBidiSessionRegistry::default(),
             classic_session_registry: SharedClassicSessionRegistry::default(),
             cdp_agent_host_directory,
             cdp_owner_registry,
             devtools_frontend_url: format!(
-                "/devtools/inspector.html?targetType=tab&ws={addr}/devtools/tab/{DEFAULT_TARGET_ID}"
-            ),
-            tab_devtools_frontend_url: format!(
-                "/devtools/inspector.html?ws={addr}/devtools/tab/{DEFAULT_TARGET_ID}"
+                "/devtools/inspector.html?ws={addr}/devtools/page/{DEFAULT_TARGET_ID}"
             ),
             cookie_profile,
             storage_partition,

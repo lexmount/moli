@@ -58,22 +58,26 @@ pub(crate) use runtime_dispatch::{
 
 pub(crate) struct CdpTargetHostIntegration {
     target_id_allocator: Arc<AtomicU64>,
+    tab_target_id_allocator: Arc<AtomicU64>,
     lifecycle_observer: CdpTargetHostLifecycleObserver,
 }
 
 impl CdpTargetHostIntegration {
     pub(crate) fn new(
         target_id_allocator: Arc<AtomicU64>,
+        tab_target_id_allocator: Arc<AtomicU64>,
         lifecycle_observer: CdpTargetHostLifecycleObserver,
     ) -> Self {
         Self {
             target_id_allocator,
+            tab_target_id_allocator,
             lifecycle_observer,
         }
     }
 
     fn install(self, conn: &mut CdpConnection) {
         conn.set_shared_target_id_allocator(self.target_id_allocator);
+        conn.set_shared_tab_target_id_allocator(self.tab_target_id_allocator);
         conn.set_target_host_lifecycle_observer(self.lifecycle_observer);
     }
 }

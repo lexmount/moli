@@ -60,21 +60,6 @@ impl CdpFrontendRoutingState {
                     .and_then(Value::as_str)
                     .map(str::to_owned),
             }
-        } else if client_session_id.is_none()
-            && self.frontends.is_foreground_tab_frontend(frontend_id)
-            && matches!(
-                method.as_str(),
-                "Target.setAutoAttach" | "Target.setDiscoverTargets" | "Target.setRemoteLocations"
-            )
-        {
-            PendingCommandEffect::ReplayForegroundTabTargetCommand {
-                method: method.clone(),
-                params: request
-                    .params()
-                    .cloned()
-                    .map(Value::Object)
-                    .unwrap_or_else(|| Value::Object(Default::default())),
-            }
         } else {
             PendingCommandEffect::None
         };

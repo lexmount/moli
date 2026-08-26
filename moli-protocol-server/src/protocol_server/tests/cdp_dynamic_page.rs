@@ -26,33 +26,42 @@ async fn connect_dynamic_page(addr: std::net::SocketAddr, target_id: &str) -> Te
         .0
 }
 
-async fn connect_discovered_foreground_tab(
-    addr: std::net::SocketAddr,
-    target_id: &str,
-) -> TestCdpSocket {
+async fn discovered_tab_websocket_url(addr: std::net::SocketAddr, tab_target_id: &str) -> String {
     let (status, body) = fetch_server_response(addr, "GET", "/json/list?for_tab").await;
     assert_eq!(status, 200);
     let targets: Vec<serde_json::Value> =
         serde_json::from_slice(&body).expect("parse tab target discovery response");
     let target = targets
         .iter()
-        .find(|target| target["id"] == json!(target_id))
-        .expect("discovered foreground tab target");
+        .find(|target| target["id"] == json!(tab_target_id))
+        .expect("discovered tab target");
     assert_eq!(target["type"], json!("tab"));
+    assert_eq!(
+        target["devtoolsFrontendUrl"],
+        json!(format!(
+            "/devtools/inspector.html?ws={addr}/devtools/page/{tab_target_id}"
+        )),
+        "remote discovery uses the same inspector URL shape for Page and Tab hosts"
+    );
     let websocket_url = target["webSocketDebuggerUrl"]
         .as_str()
-        .expect("foreground tab websocket URL");
-    assert!(websocket_url.contains("/devtools/tab/"));
+        .expect("tab websocket URL");
+    assert!(websocket_url.contains("/devtools/page/"));
+    websocket_url.to_owned()
+}
+
+async fn connect_discovered_tab(addr: std::net::SocketAddr, tab_target_id: &str) -> TestCdpSocket {
+    let websocket_url = discovered_tab_websocket_url(addr, tab_target_id).await;
     connect_async(websocket_url)
         .await
-        .expect("foreground tab websocket should connect")
+        .expect("tab websocket should connect")
         .0
 }
 
-async fn enable_foreground_tab_page(
+async fn enable_tab_page(
     socket: &mut TestCdpSocket,
     command_id: u64,
-    target_id: &str,
+    page_target_id: &str,
 ) -> String {
     send_cdp_command_without_wait(
         socket,
@@ -71,7 +80,7 @@ async fn enable_foreground_tab_page(
     let messages = recv_until_match(socket, |message| {
         saw_response |= message["id"] == json!(command_id);
         if message["method"] == json!("Target.attachedToTarget")
-            && message["params"]["targetInfo"]["targetId"] == json!(target_id)
+            && message["params"]["targetInfo"]["targetId"] == json!(page_target_id)
         {
             attached_session_id = message["params"]["sessionId"].as_str().map(str::to_owned);
         }
@@ -79,41 +88,7 @@ async fn enable_foreground_tab_page(
     })
     .await;
     assert_eq!(response_by_id(&messages, command_id)["result"], json!({}));
-    attached_session_id.expect("foreground tab page session")
-}
-
-async fn expect_foreground_tab_page_replaced(
-    socket: &mut TestCdpSocket,
-    old_session_id: &str,
-    target_id: &str,
-) -> String {
-    let mut detached = false;
-    let mut attached_session = None;
-    recv_until_match(socket, |message| {
-        detached |= message["method"] == json!("Target.detachedFromTarget")
-            && message["params"]["sessionId"] == json!(old_session_id);
-        if message["method"] == json!("Target.attachedToTarget")
-            && message["params"]["targetInfo"]["targetId"] == json!(target_id)
-        {
-            attached_session = message["params"]["sessionId"].as_str().map(|session_id| {
-                (
-                    session_id.to_owned(),
-                    message["params"]["waitingForDebugger"]
-                        .as_bool()
-                        .expect("replacement attachment waitingForDebugger"),
-                )
-            });
-        }
-        detached && attached_session.is_some()
-    })
-    .await;
-    let (session_id, waiting_for_debugger) =
-        attached_session.expect("replacement foreground tab page session");
-    assert!(
-        !waiting_for_debugger,
-        "an existing replacement page must not wait for the debugger"
-    );
-    session_id
+    attached_session_id.expect("tab child page session")
 }
 
 async fn wait_for_websocket_close(socket: &mut TestCdpSocket, label: &str) {
@@ -198,8 +173,8 @@ async fn puppeteer_auto_attach_existing_page(
     browser: &mut TestCdpSocket,
     command_id: u64,
     page_target_id: &str,
+    tab_target_id: &str,
 ) -> String {
-    let tab_target_id = format!("TAB-{page_target_id}");
     send_cdp_command_without_wait(
         browser,
         command_id,
@@ -547,7 +522,7 @@ async fn websocket_cdp_dynamic_page_routes_to_existing_target_owner() {
     assert_eq!(
         listed_target["devtoolsFrontendUrl"],
         json!(format!(
-            "/devtools/inspector.html?targetType=tab&ws={addr}/devtools/tab/{target_id}"
+            "/devtools/inspector.html?ws={addr}/devtools/page/{target_id}"
         ))
     );
     let mut page = connect_dynamic_page(addr, &target_id).await;
@@ -565,6 +540,17 @@ async fn websocket_cdp_dynamic_page_routes_to_existing_target_owner() {
     {
         panic!("browser frontend received direct-page parse output: {message:#?}");
     }
+
+    let page_owner_info =
+        send_cdp_command(&mut page, 7000, "Target.getTargetInfo", None, json!({})).await;
+    assert_eq!(
+        response_by_id(&page_owner_info, 7000)["result"]["targetInfo"]["targetId"],
+        json!(target_id)
+    );
+    assert_eq!(
+        response_by_id(&page_owner_info, 7000)["result"]["targetInfo"]["type"],
+        json!("page")
+    );
 
     let frame_tree = send_cdp_command(&mut page, 1, "Page.getFrameTree", None, json!({})).await;
     let frame_tree_response = response_by_id(&frame_tree, 1);
@@ -597,6 +583,16 @@ async fn websocket_cdp_dynamic_page_routes_to_existing_target_owner() {
             .iter()
             .all(|message| message["method"] != json!("Target.attachedToTarget")),
         "private page frontend attach leaked to browser frontend: {browser_probe:#?}"
+    );
+    let browser_page_command =
+        send_cdp_command(&mut browser, 3, "Page.getFrameTree", None, json!({})).await;
+    assert_eq!(
+        response_by_id(&browser_page_command, 3)["error"],
+        json!({
+            "code": -32601,
+            "message": "'Page.getFrameTree' wasn't found"
+        }),
+        "the Browser AgentHost must not proxy Page commands to the active target"
     );
 
     let attach = send_cdp_command(
@@ -669,18 +665,313 @@ async fn websocket_cdp_dynamic_page_routes_to_existing_target_owner() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn foreground_blank_click_activates_popup_browser_surface() {
+async fn target_create_for_tab_exposes_distinct_chromium_agent_hosts() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .expect("connect browser websocket");
+
+    let discover = send_cdp_command(
+        &mut browser,
+        1,
+        "Target.setDiscoverTargets",
+        None,
+        json!({ "discover": true, "filter": [{}] }),
+    )
+    .await;
+    assert_eq!(response_by_id(&discover, 1)["result"], json!({}));
+
+    send_cdp_command_without_wait(
+        &mut browser,
+        2,
+        "Target.createTarget",
+        None,
+        json!({ "url": "about:blank", "forTab": true }),
+    )
+    .await;
+    let mut saw_response = false;
+    let mut page_target_id = None;
+    let mut tab_target_id = None;
+    let created = recv_until_match(&mut browser, |message| {
+        saw_response |= message["id"] == json!(2_u64);
+        if message["method"] == json!("Target.targetCreated") {
+            let info = &message["params"]["targetInfo"];
+            let target_id = info["targetId"].as_str().map(str::to_owned);
+            match info["type"].as_str() {
+                Some("page") if target_id.as_deref() != Some(DEFAULT_TARGET_ID) => {
+                    page_target_id = target_id;
+                }
+                Some("tab") if target_id.as_deref() != Some(DEFAULT_TAB_TARGET_ID) => {
+                    tab_target_id = target_id;
+                }
+                _ => {}
+            }
+        }
+        saw_response && page_target_id.is_some() && tab_target_id.is_some()
+    })
+    .await;
+    let page_target_id = page_target_id.expect("created Page target id");
+    let tab_target_id = tab_target_id.expect("created Tab target id");
+    assert_ne!(page_target_id, tab_target_id);
+    assert_eq!(
+        response_by_id(&created, 2)["result"]["targetId"],
+        json!(tab_target_id),
+        "forTab=true must return the stable Tab AgentHost"
+    );
+    let tab_created = created
+        .iter()
+        .position(|message| {
+            message["method"] == json!("Target.targetCreated")
+                && message["params"]["targetInfo"]["targetId"] == json!(tab_target_id)
+        })
+        .expect("Tab targetCreated");
+    let page_created = created
+        .iter()
+        .position(|message| {
+            message["method"] == json!("Target.targetCreated")
+                && message["params"]["targetInfo"]["targetId"] == json!(page_target_id)
+        })
+        .expect("Page targetCreated");
+    assert!(
+        tab_created < page_created,
+        "Chromium publishes the WebContents Tab host before its primary Page host: {created:#?}"
+    );
+
+    let mut tab = connect_discovered_tab(addr, &tab_target_id).await;
+    let tab_info = send_cdp_command(&mut tab, 1, "Target.getTargetInfo", None, json!({})).await;
+    assert_eq!(
+        response_by_id(&tab_info, 1)["result"]["targetInfo"]["targetId"],
+        json!(tab_target_id)
+    );
+    assert_eq!(
+        response_by_id(&tab_info, 1)["result"]["targetInfo"]["type"],
+        json!("tab")
+    );
+    let tab_page_session = enable_tab_page(&mut tab, 2, &page_target_id).await;
+    let child_info = send_cdp_command(
+        &mut tab,
+        4,
+        "Target.getTargetInfo",
+        Some(&tab_page_session),
+        json!({}),
+    )
+    .await;
+    assert_eq!(
+        response_by_id(&child_info, 4)["result"]["targetInfo"]["targetId"],
+        json!(page_target_id)
+    );
+    assert_eq!(
+        response_by_id(&child_info, 4)["result"]["targetInfo"]["type"],
+        json!("page")
+    );
+
+    send_cdp_command_without_wait(
+        &mut browser,
+        3,
+        "Target.closeTarget",
+        None,
+        json!({ "targetId": tab_target_id }),
+    )
+    .await;
+    let mut saw_close_response = false;
+    let mut saw_page_destroyed = false;
+    let mut saw_tab_destroyed = false;
+    let closed = recv_until_match(&mut browser, |message| {
+        saw_close_response |= message["id"] == json!(3_u64);
+        if message["method"] == json!("Target.targetDestroyed") {
+            saw_page_destroyed |= message["params"]["targetId"] == json!(page_target_id);
+            saw_tab_destroyed |= message["params"]["targetId"] == json!(tab_target_id);
+        }
+        saw_close_response && saw_page_destroyed && saw_tab_destroyed
+    })
+    .await;
+    assert_eq!(response_by_id(&closed, 3)["result"]["success"], json!(true));
+    let page_destroyed = closed
+        .iter()
+        .position(|message| {
+            message["method"] == json!("Target.targetDestroyed")
+                && message["params"]["targetId"] == json!(page_target_id)
+        })
+        .expect("Page targetDestroyed");
+    let tab_destroyed = closed
+        .iter()
+        .position(|message| {
+            message["method"] == json!("Target.targetDestroyed")
+                && message["params"]["targetId"] == json!(tab_target_id)
+        })
+        .expect("Tab targetDestroyed");
+    assert!(
+        page_destroyed < tab_destroyed,
+        "Chromium destroys the Page host before its owning Tab host: {closed:#?}"
+    );
+
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn page_agent_host_and_tab_host_survive_document_navigation() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .expect("connect browser websocket");
+    let (mut page, _) = connect_async(format!("ws://{addr}/devtools/page/{DEFAULT_TARGET_ID}"))
+        .await
+        .expect("connect default Page websocket");
+    let mut tab = connect_discovered_tab(addr, DEFAULT_TAB_TARGET_ID).await;
+
+    let discover = send_cdp_command(
+        &mut browser,
+        1,
+        "Target.setDiscoverTargets",
+        None,
+        json!({ "discover": true, "filter": [{}] }),
+    )
+    .await;
+    assert_eq!(response_by_id(&discover, 1)["result"], json!({}));
+
+    let page_before = send_cdp_command(&mut page, 1, "Target.getTargetInfo", None, json!({})).await;
+    let tab_before = send_cdp_command(&mut tab, 1, "Target.getTargetInfo", None, json!({})).await;
+    assert_eq!(
+        response_by_id(&page_before, 1)["result"]["targetInfo"]["targetId"],
+        json!(DEFAULT_TARGET_ID)
+    );
+    assert_eq!(
+        response_by_id(&tab_before, 1)["result"]["targetInfo"]["targetId"],
+        json!(DEFAULT_TAB_TARGET_ID)
+    );
+
+    let destination = "data:text/html,<title>Stable Navigation Host</title>";
+    let navigation = send_cdp_command(
+        &mut page,
+        2,
+        "Page.navigate",
+        None,
+        json!({ "url": destination }),
+    )
+    .await;
+    assert_eq!(
+        response_by_id(&navigation, 2)["result"]["frameId"],
+        json!(DEFAULT_TARGET_ID),
+        "the stable Page AgentHost id is also the main Frame id"
+    );
+    let title = send_cdp_command(
+        &mut page,
+        3,
+        "Runtime.evaluate",
+        None,
+        json!({ "expression": "document.title", "returnByValue": true }),
+    )
+    .await;
+    assert_eq!(
+        response_by_id(&title, 3)["result"]["result"]["value"],
+        json!("Stable Navigation Host")
+    );
+
+    let mut target_events = recv_until_match(&mut browser, |message| {
+        message["method"] == json!("Target.targetInfoChanged")
+            && message["params"]["targetInfo"]["targetId"] == json!(DEFAULT_TARGET_ID)
+            && message["params"]["targetInfo"]["url"] == json!(destination)
+    })
+    .await;
+    target_events
+        .extend(send_cdp_command(&mut browser, 2, "Browser.getVersion", None, json!({})).await);
+    target_events.extend(recv_cdp_messages_for(&mut browser, Duration::from_millis(100)).await);
+    assert!(
+        target_events.iter().all(|message| {
+            message["method"] != json!("Target.targetInfoChanged")
+                || message["params"]["targetInfo"]["targetId"] != json!(DEFAULT_TAB_TARGET_ID)
+        }),
+        "document navigation must update the Page target without mirroring a Tab event: {target_events:#?}"
+    );
+
+    let descriptors = timeout(Duration::from_secs(5), async {
+        loop {
+            let descriptors = fetch_server_json(addr, "/json/list?for_tab").await;
+            if descriptors.as_array().is_some_and(|targets| {
+                targets.iter().any(|target| {
+                    target["id"] == json!(DEFAULT_TAB_TARGET_ID)
+                        && target["url"] == json!(destination)
+                        && target["title"] == json!("Stable Navigation Host")
+                })
+            }) {
+                break descriptors;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("Tab discovery metadata should follow its primary Page");
+    assert!(descriptors.as_array().is_some_and(|targets| {
+        targets.iter().any(|target| {
+            target["id"] == json!(DEFAULT_TARGET_ID)
+                && target["type"] == json!("page")
+                && target["url"] == json!(destination)
+        })
+    }));
+
+    let frame_tree = send_cdp_command(&mut page, 4, "Page.getFrameTree", None, json!({})).await;
+    assert_eq!(
+        response_by_id(&frame_tree, 4)["result"]["frameTree"]["frame"]["id"],
+        json!(DEFAULT_TARGET_ID)
+    );
+    let page_after = send_cdp_command(&mut page, 5, "Target.getTargetInfo", None, json!({})).await;
+    let tab_after = send_cdp_command(&mut tab, 2, "Target.getTargetInfo", None, json!({})).await;
+    assert_eq!(
+        response_by_id(&page_after, 5)["result"]["targetInfo"]["targetId"],
+        json!(DEFAULT_TARGET_ID)
+    );
+    assert_eq!(
+        response_by_id(&tab_after, 2)["result"]["targetInfo"]["targetId"],
+        json!(DEFAULT_TAB_TARGET_ID)
+    );
+
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tab_websocket_stays_bound_to_its_page_when_a_popup_becomes_active() {
     let (addr, server) = spawn_test_protocol_server().await;
     let (mut opener, _) = connect_async(format!("ws://{addr}/devtools/page/{DEFAULT_TARGET_ID}"))
         .await
         .expect("connect default page websocket");
-    let mut foreground_tab = connect_discovered_foreground_tab(addr, DEFAULT_TARGET_ID).await;
-    let opener_foreground_session =
-        enable_foreground_tab_page(&mut foreground_tab, 1, DEFAULT_TARGET_ID).await;
-    let popup_url = "data:text/html,%3Ctitle%3EForeground%20Popup%3C/title%3E";
-    let popup_final_url = "data:text/html,<title>Foreground Popup</title>";
+    let opener_tab_websocket_url = discovered_tab_websocket_url(addr, DEFAULT_TAB_TARGET_ID).await;
+    let mut opener_tab = connect_async(&opener_tab_websocket_url)
+        .await
+        .expect("connect opener tab websocket")
+        .0;
+    let tab_owner_info = send_cdp_command(
+        &mut opener_tab,
+        9001,
+        "Target.getTargetInfo",
+        None,
+        json!({}),
+    )
+    .await;
+    assert_eq!(
+        response_by_id(&tab_owner_info, 9001)["result"]["targetInfo"]["targetId"],
+        json!(DEFAULT_TAB_TARGET_ID)
+    );
+    assert_eq!(
+        response_by_id(&tab_owner_info, 9001)["result"]["targetInfo"]["type"],
+        json!("tab")
+    );
+    let tab_page_command =
+        send_cdp_command(&mut opener_tab, 9002, "Page.getFrameTree", None, json!({})).await;
+    assert_eq!(
+        response_by_id(&tab_page_command, 9002)["error"],
+        json!({
+            "code": -32601,
+            "message": "'Page.getFrameTree' wasn't found"
+        }),
+        "the Tab AgentHost must expose its Page through Target auto-attach"
+    );
+    let opener_page_session = enable_tab_page(&mut opener_tab, 1, DEFAULT_TARGET_ID).await;
+    let popup_url = "data:text/html,%3Ctitle%3EStable%20Popup%3C/title%3E";
+    let popup_final_url = "data:text/html,<title>Stable Popup</title>";
     let opener_url = format!(
-        "data:text/html,<title>Popup Opener</title>\
+        "data:text/html,<title>Stable Opener</title>\
          <a id='popup' href='{popup_url}' \
          target='_blank' style='display:block;width:200px;height:100px'>open</a>"
     );
@@ -726,11 +1017,11 @@ async fn foreground_blank_click_activates_popup_browser_surface() {
             .any(|message| is_screencast_visibility(message, true))
     );
 
-    let foreground_link = send_cdp_command(
-        &mut foreground_tab,
+    let opener_link = send_cdp_command(
+        &mut opener_tab,
         3,
         "Runtime.evaluate",
-        Some(&opener_foreground_session),
+        Some(&opener_page_session),
         json!({
             "expression": "(() => { const link = document.getElementById('popup'); const rect = link?.getBoundingClientRect(); return { href: location.href, link: link?.href, x: rect?.x, y: rect?.y, width: rect?.width, height: rect?.height, hit: document.elementFromPoint(20, 20)?.id }; })()",
             "returnByValue": true
@@ -738,18 +1029,11 @@ async fn foreground_blank_click_activates_popup_browser_surface() {
     )
     .await;
     assert_eq!(
-        response_by_id(&foreground_link, 3)["result"]["result"]["value"]["link"],
+        response_by_id(&opener_link, 3)["result"]["result"]["value"]["link"],
         json!(popup_final_url)
     );
 
-    dispatch_primary_click(
-        &mut foreground_tab,
-        5,
-        Some(&opener_foreground_session),
-        20,
-        20,
-    )
-    .await;
+    dispatch_primary_click(&mut opener_tab, 5, Some(&opener_page_session), 20, 20).await;
     let mut activation_messages = recv_until_match(&mut opener, |message| {
         is_target_created_for_url(message, popup_final_url)
             || is_screencast_visibility(message, false)
@@ -789,12 +1073,6 @@ async fn foreground_blank_click_activates_popup_browser_surface() {
         .and_then(|message| message["params"]["targetInfo"]["targetId"].as_str())
         .expect("foreground popup target id")
         .to_owned();
-    let popup_foreground_session = expect_foreground_tab_page_replaced(
-        &mut foreground_tab,
-        &opener_foreground_session,
-        &popup_target_id,
-    )
-    .await;
 
     let targets = wait_for_target_list(
         addr,
@@ -802,17 +1080,21 @@ async fn foreground_blank_click_activates_popup_browser_surface() {
         |targets| {
             targets.len() == 2
                 && targets[0]["id"] != json!(DEFAULT_TARGET_ID)
-                && targets[0]["title"] == json!("Foreground Popup")
-                && targets[1]["title"] == json!("Popup Opener")
+                && targets[0]["title"] == json!("Stable Popup")
+                && targets[1]["title"] == json!("Stable Opener")
         },
     )
     .await;
     assert_eq!(targets[0]["id"], json!(&popup_target_id));
-    let foreground_popup = send_cdp_command(
-        &mut foreground_tab,
+
+    // A tab endpoint is a durable DevToolsAgentHost. Bringing another tab to
+    // the foreground must not detach its child Page session or retarget the
+    // socket to the new foreground Page.
+    let opener_after_popup = send_cdp_command(
+        &mut opener_tab,
         9,
         "Runtime.evaluate",
-        Some(&popup_foreground_session),
+        Some(&opener_page_session),
         json!({
             "expression": "location.href",
             "returnByValue": true
@@ -820,13 +1102,75 @@ async fn foreground_blank_click_activates_popup_browser_surface() {
     )
     .await;
     assert_eq!(
-        response_by_id(&foreground_popup, 9)["result"]["result"]["value"],
+        response_by_id(&opener_after_popup, 9)["result"]["result"]["value"],
+        json!(&opener_url)
+    );
+    assert!(
+        opener_after_popup.iter().all(|message| {
+            let detached_from_opener = message["method"] == json!("Target.detachedFromTarget")
+                && message["params"]["sessionId"] == json!(opener_page_session);
+            let attached_to_popup = message["method"] == json!("Target.attachedToTarget")
+                && message["params"]["targetInfo"]["targetId"] == json!(popup_target_id);
+            !(detached_from_opener || attached_to_popup)
+        }),
+        "the opener tab socket migrated to the foreground popup: {opener_after_popup:#?}"
+    );
+    assert_eq!(targets[0]["title"], json!("Stable Popup"));
+    assert_eq!(targets[1]["id"], json!(DEFAULT_TARGET_ID));
+    assert_eq!(targets[1]["title"], json!("Stable Opener"));
+    assert_eq!(targets[1]["url"], json!(&opener_url));
+
+    let tab_targets = fetch_server_json(addr, "/json/list?for_tab").await;
+    let tab_targets = tab_targets.as_array().expect("tab target list");
+    let opener_tab_descriptor = tab_targets
+        .iter()
+        .find(|target| target["id"] == json!(DEFAULT_TAB_TARGET_ID))
+        .expect("stable opener tab descriptor");
+    assert_eq!(opener_tab_descriptor["title"], json!("Stable Opener"));
+    assert_eq!(opener_tab_descriptor["url"], json!(&opener_url));
+    let popup_tab_target_id = tab_targets
+        .iter()
+        .find(|target| target["type"] == json!("tab") && target["title"] == json!("Stable Popup"))
+        .and_then(|target| target["id"].as_str())
+        .expect("stable popup tab target id")
+        .to_owned();
+    assert_ne!(popup_tab_target_id, DEFAULT_TAB_TARGET_ID);
+
+    // This URL was discovered before popup activation. It still identifies
+    // the opener tab after the browser context's active page has changed.
+    let mut late_opener_tab = connect_async(&opener_tab_websocket_url)
+        .await
+        .expect("connect opener tab from stale discovery descriptor")
+        .0;
+    let late_opener_page_session =
+        enable_tab_page(&mut late_opener_tab, 1, DEFAULT_TARGET_ID).await;
+    let late_opener_location = send_cdp_command(
+        &mut late_opener_tab,
+        3,
+        "Runtime.evaluate",
+        Some(&late_opener_page_session),
+        json!({ "expression": "location.href", "returnByValue": true }),
+    )
+    .await;
+    assert_eq!(
+        response_by_id(&late_opener_location, 3)["result"]["result"]["value"],
+        json!(&opener_url)
+    );
+
+    let mut popup_tab = connect_discovered_tab(addr, &popup_tab_target_id).await;
+    let popup_page_session = enable_tab_page(&mut popup_tab, 1, &popup_target_id).await;
+    let popup_location = send_cdp_command(
+        &mut popup_tab,
+        3,
+        "Runtime.evaluate",
+        Some(&popup_page_session),
+        json!({ "expression": "location.href", "returnByValue": true }),
+    )
+    .await;
+    assert_eq!(
+        response_by_id(&popup_location, 3)["result"]["result"]["value"],
         json!(popup_final_url)
     );
-    assert_eq!(targets[0]["title"], json!("Foreground Popup"));
-    assert_eq!(targets[1]["id"], json!(DEFAULT_TARGET_ID));
-    assert_eq!(targets[1]["title"], json!("Popup Opener"));
-    assert_eq!(targets[1]["url"], json!(&opener_url));
 
     let opener_surface = evaluate_page_surface(&mut opener, 7).await;
     assert_eq!(opener_surface["href"], json!(&opener_url));
@@ -858,8 +1202,12 @@ async fn foreground_blank_click_activates_popup_browser_surface() {
             .any(|message| is_screencast_visibility(message, true))
     );
 
-    let (activate_status, _) =
-        fetch_server_response(addr, "GET", "/json/activate/moli-default").await;
+    let (activate_status, _) = fetch_server_response(
+        addr,
+        "GET",
+        &format!("/json/activate/{DEFAULT_TAB_TARGET_ID}"),
+    )
+    .await;
     assert_eq!(activate_status, 200);
     wait_for_target_list(
         addr,
@@ -875,17 +1223,11 @@ async fn foreground_blank_click_activates_popup_browser_surface() {
     expect_screencast_visibility(&mut opener, true).await;
     expect_screencast_visibility(&mut popup, false).await;
 
-    let restored_foreground_session = expect_foreground_tab_page_replaced(
-        &mut foreground_tab,
-        &popup_foreground_session,
-        DEFAULT_TARGET_ID,
-    )
-    .await;
-    let foreground_opener = send_cdp_command(
-        &mut foreground_tab,
+    let restored_opener = send_cdp_command(
+        &mut opener_tab,
         10,
         "Runtime.evaluate",
-        Some(&restored_foreground_session),
+        Some(&opener_page_session),
         json!({
             "expression": "location.href",
             "returnByValue": true
@@ -893,12 +1235,24 @@ async fn foreground_blank_click_activates_popup_browser_surface() {
     )
     .await;
     assert_eq!(
-        response_by_id(&foreground_opener, 10)["result"]["result"]["value"],
+        response_by_id(&restored_opener, 10)["result"]["result"]["value"],
         json!(&opener_url)
     );
+    let parked_popup = send_cdp_command(
+        &mut popup_tab,
+        4,
+        "Runtime.evaluate",
+        Some(&popup_page_session),
+        json!({ "expression": "location.href", "returnByValue": true }),
+    )
+    .await;
+    assert_eq!(
+        response_by_id(&parked_popup, 4)["result"]["result"]["value"],
+        json!(popup_final_url)
+    );
 
-    let restored_opener = evaluate_page_surface(&mut opener, 11).await;
-    assert_page_surface_active(&restored_opener, true);
+    let restored_opener_surface = evaluate_page_surface(&mut opener, 11).await;
+    assert_page_surface_active(&restored_opener_surface, true);
     let demoted_popup = evaluate_page_surface(&mut popup, 12).await;
     assert_page_surface_active(&demoted_popup, false);
 
@@ -2256,7 +2610,9 @@ async fn websocket_cdp_puppeteer_reconnect_replays_existing_runtime_context() {
         connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
             .await
             .expect("connect first browser websocket");
-    let page_session_id = puppeteer_auto_attach_existing_page(&mut browser, 1, &target_id).await;
+    let page_session_id =
+        puppeteer_auto_attach_existing_page(&mut browser, 1, &target_id, DEFAULT_TAB_TARGET_ID)
+            .await;
     let page_enabled = send_cdp_command(
         &mut browser,
         3,
@@ -2303,7 +2659,8 @@ async fn websocket_cdp_puppeteer_reconnect_replays_existing_runtime_context() {
             .await
             .expect("connect replacement browser websocket");
     let replacement_page_session_id =
-        puppeteer_auto_attach_existing_page(&mut replacement, 1, &target_id).await;
+        puppeteer_auto_attach_existing_page(&mut replacement, 1, &target_id, DEFAULT_TAB_TARGET_ID)
+            .await;
     assert_ne!(replacement_page_session_id, page_session_id);
     let page_enabled = send_cdp_command(
         &mut replacement,

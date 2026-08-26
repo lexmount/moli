@@ -22,11 +22,11 @@ pub(super) struct SharedCdpAgentHostDirectory {
 
 #[derive(Default)]
 struct CdpAgentHostDirectoryState {
-    page_hosts: HashMap<String, CdpPageAgentHost>,
+    hosts: HashMap<String, CdpAgentHost>,
 }
 
 #[derive(Clone)]
-struct CdpPageAgentHost {
+struct CdpAgentHost {
     owner_id: u64,
     target_info: DevToolsTargetInfo,
     endpoint: CdpFrontendEndpoint,
@@ -34,12 +34,12 @@ struct CdpPageAgentHost {
 }
 
 #[derive(Clone)]
-pub(super) struct CdpPageAgentHostRoute {
+pub(super) struct CdpAgentHostRoute {
     pub(super) endpoint: CdpFrontendEndpoint,
     pub(super) target_info: DevToolsTargetInfo,
 }
 
-impl CdpPageAgentHost {
+impl CdpAgentHost {
     fn browser_context_id(&self) -> Option<&str> {
         self.target_info
             .browser_context_id
@@ -49,22 +49,29 @@ impl CdpPageAgentHost {
 }
 
 impl CdpAgentHostDirectoryState {
-    fn activate_page_host(&mut self, owner_id: u64, target_id: &str) -> bool {
-        let browser_context_id = self
-            .page_hosts
+    fn activate_host(&mut self, owner_id: u64, target_id: &str) -> bool {
+        let identity = self
+            .hosts
             .get(target_id)
             .filter(|host| host.owner_id == owner_id)
-            .map(|host| host.browser_context_id().map(str::to_owned));
-        let Some(browser_context_id) = browser_context_id else {
+            .map(|host| {
+                (
+                    host.browser_context_id().map(str::to_owned),
+                    host.target_info.kind,
+                )
+            });
+        let Some((browser_context_id, kind)) = identity else {
             return false;
         };
 
-        for host in self.page_hosts.values_mut().filter(|host| {
-            host.owner_id == owner_id && host.browser_context_id() == browser_context_id.as_deref()
+        for host in self.hosts.values_mut().filter(|host| {
+            host.owner_id == owner_id
+                && host.target_info.kind == kind
+                && host.browser_context_id() == browser_context_id.as_deref()
         }) {
             host.is_active = false;
         }
-        if let Some(host) = self.page_hosts.get_mut(target_id) {
+        if let Some(host) = self.hosts.get_mut(target_id) {
             host.is_active = true;
             return true;
         }
@@ -88,18 +95,28 @@ impl SharedCdpAgentHostDirectory {
         })
     }
 
-    pub(super) fn lookup_page(&self, target_id: &str) -> Option<CdpPageAgentHostRoute> {
+    pub(super) fn lookup_target(&self, target_id: &str) -> Option<CdpAgentHostRoute> {
         let state = self.inner.lock();
-        let host = state.page_hosts.get(target_id)?;
-        Some(CdpPageAgentHostRoute {
+        let host = state.hosts.get(target_id)?;
+        Some(CdpAgentHostRoute {
             endpoint: host.endpoint.clone(),
             target_info: host.target_info.clone(),
         })
     }
 
-    pub(super) fn page_target_infos(&self) -> Vec<DevToolsTargetInfo> {
+    pub(super) fn remote_debugging_target_infos(
+        &self,
+        include_tab_targets: bool,
+    ) -> Vec<DevToolsTargetInfo> {
         let state = self.inner.lock();
-        let mut hosts = state.page_hosts.iter().collect::<Vec<_>>();
+        let mut hosts = state
+            .hosts
+            .iter()
+            .filter(|(_, host)| {
+                host.target_info.kind == DevToolsTargetKind::Page
+                    || (include_tab_targets && host.target_info.kind == DevToolsTargetKind::Tab)
+            })
+            .collect::<Vec<_>>();
         hosts.sort_by(|(left_id, left), (right_id, right)| {
             right
                 .is_active
@@ -115,7 +132,7 @@ impl SharedCdpAgentHostDirectory {
     pub(super) fn remove_owner(&self, owner_id: u64) {
         self.inner
             .lock()
-            .page_hosts
+            .hosts
             .retain(|_, host| host.owner_id != owner_id);
     }
 
@@ -127,24 +144,24 @@ impl SharedCdpAgentHostDirectory {
     ) {
         match delta {
             CdpTargetHostLifecycleDelta::Created(target_info) => {
-                let Some(target_id) = page_target_id(&target_info) else {
+                let Some(target_id) = remote_debugging_target_id(&target_info) else {
                     return;
                 };
                 let mut state = self.inner.lock();
-                if let Some(existing) = state.page_hosts.get(&target_id)
+                if let Some(existing) = state.hosts.get(&target_id)
                     && existing.owner_id != owner_id
                 {
                     tracing::warn!(
                         target_id,
                         existing_owner_id = existing.owner_id,
                         owner_id,
-                        "refusing to replace a live CDP page agent host"
+                        "refusing to replace a live CDP agent host"
                     );
                     return;
                 }
-                state.page_hosts.insert(
+                state.hosts.insert(
                     target_id,
-                    CdpPageAgentHost {
+                    CdpAgentHost {
                         owner_id,
                         target_info,
                         endpoint: endpoint.clone(),
@@ -153,33 +170,28 @@ impl SharedCdpAgentHostDirectory {
                 );
             }
             CdpTargetHostLifecycleDelta::InfoChanged(target_info) => {
-                let Some(target_id) = page_target_id(&target_info) else {
+                let Some(target_id) = remote_debugging_target_id(&target_info) else {
                     return;
                 };
                 let mut state = self.inner.lock();
-                if let Some(host) = state.page_hosts.get_mut(&target_id)
+                if let Some(host) = state.hosts.get_mut(&target_id)
                     && host.owner_id == owner_id
                 {
                     host.target_info = target_info;
                 }
             }
             CdpTargetHostLifecycleDelta::Activated { target_id } => {
-                if self.inner.lock().activate_page_host(owner_id, &target_id) {
-                    endpoint.foreground_tab_changed(target_id);
-                }
+                self.inner.lock().activate_host(owner_id, &target_id);
             }
             CdpTargetHostLifecycleDelta::Destroyed { target_id } => {
                 let endpoint = {
                     let mut state = self.inner.lock();
                     if state
-                        .page_hosts
+                        .hosts
                         .get(&target_id)
                         .is_some_and(|host| host.owner_id == owner_id)
                     {
-                        state
-                            .page_hosts
-                            .remove(&target_id)
-                            .map(|host| host.endpoint)
+                        state.hosts.remove(&target_id).map(|host| host.endpoint)
                     } else {
                         None
                     }
@@ -192,8 +204,11 @@ impl SharedCdpAgentHostDirectory {
     }
 }
 
-fn page_target_id(target_info: &DevToolsTargetInfo) -> Option<String> {
-    if target_info.kind != DevToolsTargetKind::Page {
+fn remote_debugging_target_id(target_info: &DevToolsTargetInfo) -> Option<String> {
+    if !matches!(
+        target_info.kind,
+        DevToolsTargetKind::Page | DevToolsTargetKind::Tab
+    ) {
         return None;
     }
     target_info

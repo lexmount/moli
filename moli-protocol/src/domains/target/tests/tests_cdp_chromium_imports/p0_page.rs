@@ -93,7 +93,7 @@ async fn rust_cdp_p0_page_close_destroys_target() {
     ctx.expect_result(131_999, json!({}), None);
 
     let page = CdpPageHarness::attach(&mut ctx, 132_000).await;
-    let tab_target_id = crate::conn::CdpConnection::derived_tab_target_id(&page.target_id);
+    let tab_target_id = tab_id_for_page(&ctx, &page.target_id);
     ctx.process_async(json!({
         "id": 132_005,
         "method": "Target.setDiscoverTargets",
@@ -156,7 +156,7 @@ async fn rust_cdp_p0_page_close_destroys_target() {
         inspector_detached < target_info_changed
             && target_info_changed < target_detached
             && target_detached < target_destroyed
-            && target_detached < tab_destroyed,
+            && target_destroyed < tab_destroyed,
         "Page.close terminal event order should match Chromium: {messages:?}"
     );
 

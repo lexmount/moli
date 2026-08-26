@@ -136,7 +136,10 @@ fn do_attach(conn: &mut CdpConnection, cmd: &Cmd<'_>, target_id: &str) -> Target
         return TargetCommandTaskStep::Complete(attach_browser_target(conn, cmd.session_id));
     }
     let attach_from_browser_session = conn.is_browser_session_id(cmd.session_id);
-    if conn.page_target_id_for_tab_target_id(target_id).is_some() {
+    if conn
+        .primary_page_target_id_for_tab_target_id(target_id)
+        .is_some()
+    {
         return do_attach_tab_target(conn, cmd.session_id, target_id, attach_from_browser_session);
     }
     let restore_browser_context_id =
