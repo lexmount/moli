@@ -309,6 +309,100 @@ async fn runtime_fetch_post_body_is_available_by_network_request_id() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn runtime_form_post_navigation_body_is_available_by_network_request_id() {
+    async fn page() -> impl IntoResponse {
+        (
+            [(CONTENT_TYPE.as_str(), "text/html")],
+            r#"<!doctype html><form id="f" method="POST" action="/post"><input name="username" value="alice"><input name="pw" value="s3cret"></form>"#,
+        )
+    }
+
+    async fn post_body(body: String) -> impl IntoResponse {
+        body
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new()
+                .route("/page", get(page))
+                .route("/post", post(post_body)),
+        )
+        .await
+        .unwrap();
+    });
+
+    let page_url = format!("http://{addr}/page");
+    let mut ctx = TestContext::new();
+    let mut bc = BrowserContext::new("BID-1".into());
+    bc.attach_active_session("SID-1".to_owned());
+    bc.set_active_target_id("TID-1".to_owned());
+    ctx.conn.browser_context = Some(bc);
+    ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-1"))
+        .await;
+    ctx.sent.clear();
+
+    ctx.process_async(json!({
+        "id": 10_210,
+        "method": "Network.enable",
+        "sessionId": "SID-1"
+    }))
+    .await;
+    ctx.expect_result(10_210, json!({}), Some("SID-1"));
+
+    ctx.process_async(json!({
+        "id": 10_211,
+        "method": "Runtime.evaluate",
+        "sessionId": "SID-1",
+        "params": {
+            "expression": "document.getElementById('f').submit(); 'scheduled'"
+        }
+    }))
+    .await;
+    let _ = ctx.take_response_by_id(10_211);
+
+    wait_until_messages(
+        &mut ctx,
+        "SID-1",
+        "POST navigation requestWillBeSent",
+        |messages| {
+            messages.iter().any(|message| {
+                message["method"] == json!("Network.requestWillBeSent")
+                    && message["params"]["request"]["method"] == json!("POST")
+            })
+        },
+    )
+    .await;
+    let request_id = ctx
+        .sent
+        .iter()
+        .find(|message| {
+            message["method"] == json!("Network.requestWillBeSent")
+                && message["params"]["request"]["method"] == json!("POST")
+        })
+        .and_then(|message| message["params"]["requestId"].as_str())
+        .expect("POST navigation request id")
+        .to_owned();
+
+    ctx.process_async(json!({
+        "id": 10_212,
+        "method": "Network.getRequestPostData",
+        "sessionId": "SID-1",
+        "params": { "requestId": request_id }
+    }))
+    .await;
+    ctx.expect_result(
+        10_212,
+        json!({ "postData": "username=alice&pw=s3cret", "base64Encoded": false }),
+        Some("SID-1"),
+    );
+
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn websocket_runtime_activity_emits_cdp_websocket_events_without_payload() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

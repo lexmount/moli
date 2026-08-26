@@ -10,6 +10,7 @@ use crate::domains::network::{
     PendingSubresourceNetworkActivitySession, TargetNetworkBacklogRequestIdResolver,
     TargetNetworkOutputQueue, TargetSubresourcePlanOutput,
     emit_pending_network_backlog_activity_background_events,
+    start_observed_main_document_navigation_progress_background_events,
 };
 
 use super::*;
@@ -486,6 +487,61 @@ async fn get_request_post_data_respects_recorded_session_visibility() {
         7_289,
         json!({ "postData": "aux-only body", "base64Encoded": false }),
         Some("SID-aux"),
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn get_request_post_data_returns_main_document_navigation_post_body() {
+    let mut ctx = TestContext::new();
+    let mut bc = BrowserContext::new("BID-1".into());
+    bc.set_active_target_id("TID-1".to_owned());
+    bc.attach_active_session("SID-1".to_owned());
+    bc.active_target
+        .runtime_slot
+        .enable_primary_network_events();
+    ctx.conn.browser_context = Some(bc);
+
+    let requested_url = Url::parse("http://127.0.0.1:1/post").unwrap();
+    let navigation_state = NavigationDispatchState {
+        navigate_id: Some(1),
+        navigate_session_id: Some("SID-1".to_owned()),
+        result_projection: crate::conn::NavigationResultProjection::Cdp(
+            json!({"frameId": "TID-1", "loaderId": LOADER_ID}),
+        ),
+        frame_id: "TID-1".to_owned(),
+        session_id: Some("SID-1".to_owned()),
+        request_id: Some("REQ-main-post".to_owned()),
+        loader_id: LOADER_ID.to_owned(),
+        request_announced: false,
+        requested_url,
+        request_method: "POST".to_owned(),
+        request_body: Some("username=alice&pw=s3cret".to_owned()),
+        request_body_bytes: Some(b"username=alice&pw=s3cret".to_vec()),
+        request_headers: Vec::new(),
+        request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
+        timestamp: 0.0,
+        source_document_security: Default::default(),
+    };
+
+    let mut events = Vec::new();
+    start_observed_main_document_navigation_progress_background_events(
+        &mut ctx.conn,
+        &mut events,
+        &navigation_state,
+        None,
+    );
+
+    ctx.process_async(json!({
+        "id": 7_290,
+        "method": "Network.getRequestPostData",
+        "sessionId": "SID-1",
+        "params": { "requestId": "REQ-main-post" }
+    }))
+    .await;
+    ctx.expect_result(
+        7_290,
+        json!({ "postData": "username=alice&pw=s3cret", "base64Encoded": false }),
+        Some("SID-1"),
     );
 }
 

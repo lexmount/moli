@@ -1444,6 +1444,7 @@ pub(crate) fn start_observed_main_document_navigation_progress_background_events
 ) -> MainDocumentBodyProgressSource {
     let session_ids = main_document_network_event_session_ids(conn, state.session_id.as_deref());
     record_pending_main_document_response_body(conn, state, &session_ids);
+    record_main_document_request_body(conn, state, &session_ids);
     if let Some(sender) = conn.background_event_sender()
         && let Some(live_source) =
             MainDocumentLiveNetworkProgressSource::from_navigation_dispatch_state(
@@ -2188,6 +2189,45 @@ fn record_pending_main_document_response_body(
     if let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut(state.session_id.as_deref()) {
         runtime_slot.record_pending_response_body_with_collector_scope(
             request_id,
+            session_ids.iter().cloned(),
+            collector_ids,
+            collection_was_gated,
+        );
+    }
+}
+
+fn record_main_document_request_body(
+    conn: &mut CdpConnection,
+    state: &NavigationDispatchState,
+    session_ids: &[Option<String>],
+) {
+    if !main_document_network_observed(conn, state.session_id.as_deref()) {
+        return;
+    }
+    let Some(request_id) = state.request_id.clone() else {
+        return;
+    };
+    let Some(request_body) = state.clone_request_body_bytes() else {
+        return;
+    };
+    let data_type = crate::devtools_runtime::DevToolsNetworkDataType::Request;
+    let collector_ids = conn.network_data_collector_ids_for_session_owner_body(
+        state.session_id.as_deref(),
+        data_type,
+        request_body.len(),
+    );
+    let collection_was_gated = conn.network_data_collection_is_gated_for_body(data_type);
+    conn.record_collected_network_data_body(
+        request_id.clone(),
+        data_type,
+        crate::conn::CapturedBody::from_bytes(request_body.clone()),
+        collector_ids.iter().cloned(),
+        collection_was_gated,
+    );
+    if let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut(state.session_id.as_deref()) {
+        runtime_slot.record_captured_request_body_with_collector_scope(
+            request_id,
+            request_body,
             session_ids.iter().cloned(),
             collector_ids,
             collection_was_gated,
