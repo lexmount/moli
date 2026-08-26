@@ -2868,7 +2868,79 @@ fn ec_chromium_wpt_matrix_covers_ecdsa_ecdh_import_export_cases() {
 }
 
 #[test]
-fn okp_openssl_backend_covers_eddsa_and_x448() {
+fn okp_rustcrypto_ed448_matches_chromium_wpt_vector() {
+    let pkcs8 = hex_bytes(concat!(
+        "3047020100300506032b6571043b04390eff03458c28e0179c521de312c969b7",
+        "834348ecab991a60e3b2e9a79e4cd9e480ef291712d2c83d047272d5c9f4286",
+        "64f696d2670458f1d2e",
+    ));
+    let spki = hex_bytes(concat!(
+        "3043300506032b6571033a00ab4bb885fd7d2c5af24e83710cffa0c74a57e27",
+        "4801db2057b0bdc5ea032b6fe6bc78b8045365aeb26e86e1f14fd349d07c484",
+        "95f5a46a5a80",
+    ));
+    let data = hex_bytes(concat!(
+        "2b7ed0bc7795694ab4acd35903fe8cd7d80f6a1c8688a6c3414409457514a14",
+        "57855bbb219e30a1beea8fe869082d99fc8282f9050d024e59eaf0730ba9db7",
+        "0a",
+    ));
+    let expected_signature = hex_bytes(concat!(
+        "76897e8c50ac6b1132735c09c55f506c0149d2677c75664f8bc10b826fbd9df",
+        "0a03cd986bce8339e64c7d1720ea9361784dc73837765ac2980c0dac0814a8bc",
+        "187d1c9c907c5dcc07956f85b70930fe42de764177217cb2d52bab7c1debe0c",
+        "a89ccecbcd63f7025a2a5a572b9d23b0642f00",
+    ));
+
+    let private_key = import_okp_pkcs8_private_key(&pkcs8, WebCryptoOkpCurve::Ed448)
+        .expect("Ed448 WPT PKCS8 fixture should import");
+    let public_key = import_okp_spki_public_key(&spki, WebCryptoOkpCurve::Ed448)
+        .expect("Ed448 WPT SPKI fixture should import");
+    assert_eq!(
+        okp_public_key_from_private(WebCryptoOkpCurve::Ed448, &private_key.key_bytes)
+            .expect("Ed448 public key should derive"),
+        public_key.key_bytes
+    );
+    assert_eq!(
+        eddsa_sign(WebCryptoOkpCurve::Ed448, &private_key.key_bytes, &data)
+            .expect("Ed448 WPT fixture should sign"),
+        expected_signature
+    );
+    assert!(
+        eddsa_verify(
+            WebCryptoOkpCurve::Ed448,
+            &public_key.key_bytes,
+            &data,
+            &expected_signature,
+        )
+        .expect("Ed448 WPT fixture should verify")
+    );
+    assert_eq!(
+        export_okp_spki_public_key(WebCryptoOkpCurve::Ed448, &public_key.key_bytes)
+            .expect("Ed448 SPKI should export"),
+        spki
+    );
+    assert_eq!(
+        export_okp_pkcs8_private_key(WebCryptoOkpCurve::Ed448, &private_key.key_bytes)
+            .expect("Ed448 PKCS8 should export"),
+        pkcs8
+    );
+
+    let mut identity = [0_u8; 57];
+    identity[0] = 1;
+    assert!(import_okp_raw_public_key(&identity, WebCryptoOkpCurve::Ed448).is_ok());
+    assert_eq!(
+        eddsa_verify(
+            WebCryptoOkpCurve::Ed448,
+            &identity,
+            &data,
+            &expected_signature,
+        ),
+        Ok(false)
+    );
+}
+
+#[test]
+fn okp_backends_cover_eddsa_and_x448() {
     let ed25519 =
         generate_okp_key_pair(WebCryptoOkpCurve::Ed25519).expect("Ed25519 keygen should work");
     let signature = eddsa_sign(

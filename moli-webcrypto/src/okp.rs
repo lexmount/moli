@@ -1,14 +1,14 @@
 use openssl::{
-    derive::Deriver,
     pkey::{Id, PKey},
     sign::{Signer, Verifier},
 };
 use zeroize::Zeroizing;
 
-use crate::bits::truncate_derived_bits;
 use crate::jwk::{decode_jwk_base64url, encode_jwk_base64url, jwk_key_ops_allow_usages};
 use crate::limits::{ensure_der_key_bytes, ensure_signature_operation_bytes};
 use crate::{OkpJsonWebKeyExport, OkpJsonWebKeyImport, WebCryptoError};
+
+mod rust_crypto_448;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WebCryptoOkpCurve {
@@ -23,14 +23,6 @@ impl WebCryptoOkpCurve {
             Self::Ed25519 => "Ed25519",
             Self::Ed448 => "Ed448",
             Self::X448 => "X448",
-        }
-    }
-
-    fn id(self) -> Id {
-        match self {
-            Self::Ed25519 => Id::ED25519,
-            Self::Ed448 => Id::ED448,
-            Self::X448 => Id::X448,
         }
     }
 
@@ -67,30 +59,39 @@ pub enum OkpImportedKey {
 }
 
 pub fn generate_okp_key_pair(curve: WebCryptoOkpCurve) -> Result<OkpKeyPair, WebCryptoError> {
-    let key = match curve {
-        WebCryptoOkpCurve::Ed25519 => PKey::generate_ed25519(),
-        WebCryptoOkpCurve::Ed448 => PKey::generate_ed448(),
-        WebCryptoOkpCurve::X448 => PKey::generate_x448(),
+    match curve {
+        WebCryptoOkpCurve::Ed25519 => {
+            let key = PKey::generate_ed25519().map_err(|_| WebCryptoError::Operation)?;
+            Ok(OkpKeyPair {
+                private_key: Zeroizing::new(
+                    key.raw_private_key()
+                        .map_err(|_| WebCryptoError::Operation)?,
+                ),
+                public_key: key
+                    .raw_public_key()
+                    .map_err(|_| WebCryptoError::Operation)?,
+            })
+        }
+        WebCryptoOkpCurve::Ed448 | WebCryptoOkpCurve::X448 => {
+            rust_crypto_448::generate_key_pair(curve)
+        }
     }
-    .map_err(|_| WebCryptoError::Operation)?;
-    Ok(OkpKeyPair {
-        private_key: Zeroizing::new(
-            key.raw_private_key()
-                .map_err(|_| WebCryptoError::Operation)?,
-        ),
-        public_key: key
-            .raw_public_key()
-            .map_err(|_| WebCryptoError::Operation)?,
-    })
 }
 
 pub fn okp_public_key_from_private(
     curve: WebCryptoOkpCurve,
     private_key: &[u8],
 ) -> Result<Vec<u8>, WebCryptoError> {
-    let key = PKey::private_key_from_raw_bytes(private_key, curve.id())
-        .map_err(|_| WebCryptoError::Operation)?;
-    key.raw_public_key().map_err(|_| WebCryptoError::Operation)
+    match curve {
+        WebCryptoOkpCurve::Ed25519 => {
+            let key = PKey::private_key_from_raw_bytes(private_key, Id::ED25519)
+                .map_err(|_| WebCryptoError::Operation)?;
+            key.raw_public_key().map_err(|_| WebCryptoError::Operation)
+        }
+        WebCryptoOkpCurve::Ed448 | WebCryptoOkpCurve::X448 => {
+            rust_crypto_448::public_key_from_private(curve, private_key)
+        }
+    }
 }
 
 pub fn import_okp_raw_public_key(
@@ -100,12 +101,13 @@ pub fn import_okp_raw_public_key(
     if bytes.len() != curve.raw_len() {
         return Err(WebCryptoError::Data);
     }
-    let key =
-        PKey::public_key_from_raw_bytes(bytes, curve.id()).map_err(|_| WebCryptoError::Data)?;
-    Ok(OkpPublicKey {
-        key_bytes: key.raw_public_key().map_err(|_| WebCryptoError::Data)?,
-        curve,
-    })
+    let key_bytes = match curve {
+        WebCryptoOkpCurve::Ed25519 => PKey::public_key_from_raw_bytes(bytes, Id::ED25519)
+            .and_then(|key| key.raw_public_key())
+            .map_err(|_| WebCryptoError::Data)?,
+        WebCryptoOkpCurve::Ed448 | WebCryptoOkpCurve::X448 => bytes.to_vec(),
+    };
+    Ok(OkpPublicKey { key_bytes, curve })
 }
 
 pub fn import_okp_spki_public_key(
@@ -113,14 +115,22 @@ pub fn import_okp_spki_public_key(
     curve: WebCryptoOkpCurve,
 ) -> Result<OkpPublicKey, WebCryptoError> {
     ensure_der_key_bytes(bytes)?;
-    let key = PKey::public_key_from_der(bytes).map_err(|_| WebCryptoError::Data)?;
-    if key.id() != curve.id() {
-        return Err(WebCryptoError::Data);
+    match curve {
+        WebCryptoOkpCurve::Ed25519 => {
+            let key = PKey::public_key_from_der(bytes).map_err(|_| WebCryptoError::Data)?;
+            if key.id() != Id::ED25519 {
+                return Err(WebCryptoError::Data);
+            }
+            Ok(OkpPublicKey {
+                key_bytes: key.raw_public_key().map_err(|_| WebCryptoError::Data)?,
+                curve,
+            })
+        }
+        WebCryptoOkpCurve::Ed448 | WebCryptoOkpCurve::X448 => Ok(OkpPublicKey {
+            key_bytes: rust_crypto_448::import_spki_public_key(bytes, curve)?,
+            curve,
+        }),
     }
-    Ok(OkpPublicKey {
-        key_bytes: key.raw_public_key().map_err(|_| WebCryptoError::Data)?,
-        curve,
-    })
 }
 
 pub fn import_okp_pkcs8_private_key(
@@ -128,34 +138,56 @@ pub fn import_okp_pkcs8_private_key(
     curve: WebCryptoOkpCurve,
 ) -> Result<OkpPrivateKey, WebCryptoError> {
     ensure_der_key_bytes(bytes)?;
-    let key = PKey::private_key_from_der(bytes).map_err(|_| WebCryptoError::Data)?;
-    if key.id() != curve.id() {
-        return Err(WebCryptoError::Data);
+    match curve {
+        WebCryptoOkpCurve::Ed25519 => {
+            let key = PKey::private_key_from_der(bytes).map_err(|_| WebCryptoError::Data)?;
+            if key.id() != Id::ED25519 {
+                return Err(WebCryptoError::Data);
+            }
+            Ok(OkpPrivateKey {
+                key_bytes: Zeroizing::new(key.raw_private_key().map_err(|_| WebCryptoError::Data)?),
+                curve,
+            })
+        }
+        WebCryptoOkpCurve::Ed448 | WebCryptoOkpCurve::X448 => Ok(OkpPrivateKey {
+            key_bytes: rust_crypto_448::import_pkcs8_private_key(bytes, curve)?,
+            curve,
+        }),
     }
-    Ok(OkpPrivateKey {
-        key_bytes: Zeroizing::new(key.raw_private_key().map_err(|_| WebCryptoError::Data)?),
-        curve,
-    })
 }
 
 pub fn export_okp_spki_public_key(
     curve: WebCryptoOkpCurve,
     public_key: &[u8],
 ) -> Result<Vec<u8>, WebCryptoError> {
-    let key = PKey::public_key_from_raw_bytes(public_key, curve.id())
-        .map_err(|_| WebCryptoError::Operation)?;
-    key.public_key_to_der()
-        .map_err(|_| WebCryptoError::Operation)
+    match curve {
+        WebCryptoOkpCurve::Ed25519 => {
+            let key = PKey::public_key_from_raw_bytes(public_key, Id::ED25519)
+                .map_err(|_| WebCryptoError::Operation)?;
+            key.public_key_to_der()
+                .map_err(|_| WebCryptoError::Operation)
+        }
+        WebCryptoOkpCurve::Ed448 | WebCryptoOkpCurve::X448 => {
+            rust_crypto_448::export_spki_public_key(curve, public_key)
+        }
+    }
 }
 
 pub fn export_okp_pkcs8_private_key(
     curve: WebCryptoOkpCurve,
     private_key: &[u8],
 ) -> Result<Vec<u8>, WebCryptoError> {
-    let key = PKey::private_key_from_raw_bytes(private_key, curve.id())
-        .map_err(|_| WebCryptoError::Operation)?;
-    key.private_key_to_pkcs8()
-        .map_err(|_| WebCryptoError::Operation)
+    match curve {
+        WebCryptoOkpCurve::Ed25519 => {
+            let key = PKey::private_key_from_raw_bytes(private_key, Id::ED25519)
+                .map_err(|_| WebCryptoError::Operation)?;
+            key.private_key_to_pkcs8()
+                .map_err(|_| WebCryptoError::Operation)
+        }
+        WebCryptoOkpCurve::Ed448 | WebCryptoOkpCurve::X448 => {
+            rust_crypto_448::export_pkcs8_private_key(curve, private_key)
+        }
+    }
 }
 
 pub fn import_okp_jwk_key(
@@ -251,12 +283,19 @@ pub fn eddsa_sign(
     if !matches!(curve, WebCryptoOkpCurve::Ed25519 | WebCryptoOkpCurve::Ed448) {
         return Err(WebCryptoError::Operation);
     }
-    let key = PKey::private_key_from_raw_bytes(private_key, curve.id())
-        .map_err(|_| WebCryptoError::Operation)?;
-    let mut signer = Signer::new_without_digest(&key).map_err(|_| WebCryptoError::Operation)?;
-    signer
-        .sign_oneshot_to_vec(data)
-        .map_err(|_| WebCryptoError::Operation)
+    match curve {
+        WebCryptoOkpCurve::Ed25519 => {
+            let key = PKey::private_key_from_raw_bytes(private_key, Id::ED25519)
+                .map_err(|_| WebCryptoError::Operation)?;
+            let mut signer =
+                Signer::new_without_digest(&key).map_err(|_| WebCryptoError::Operation)?;
+            signer
+                .sign_oneshot_to_vec(data)
+                .map_err(|_| WebCryptoError::Operation)
+        }
+        WebCryptoOkpCurve::Ed448 => rust_crypto_448::sign_ed448(private_key, data),
+        WebCryptoOkpCurve::X448 => Err(WebCryptoError::Operation),
+    }
 }
 
 pub fn eddsa_verify(
@@ -273,12 +312,19 @@ pub fn eddsa_verify(
     if eddsa_has_rejected_verification_point(curve, public_key, signature) {
         return Ok(false);
     }
-    let key = PKey::public_key_from_raw_bytes(public_key, curve.id())
-        .map_err(|_| WebCryptoError::Operation)?;
-    let mut verifier = Verifier::new_without_digest(&key).map_err(|_| WebCryptoError::Operation)?;
-    verifier
-        .verify_oneshot(signature, data)
-        .map_err(|_| WebCryptoError::Operation)
+    match curve {
+        WebCryptoOkpCurve::Ed25519 => {
+            let key = PKey::public_key_from_raw_bytes(public_key, Id::ED25519)
+                .map_err(|_| WebCryptoError::Operation)?;
+            let mut verifier =
+                Verifier::new_without_digest(&key).map_err(|_| WebCryptoError::Operation)?;
+            verifier
+                .verify_oneshot(signature, data)
+                .map_err(|_| WebCryptoError::Operation)
+        }
+        WebCryptoOkpCurve::Ed448 => rust_crypto_448::verify_ed448(public_key, data, signature),
+        WebCryptoOkpCurve::X448 => Err(WebCryptoError::Operation),
+    }
 }
 
 fn eddsa_has_rejected_verification_point(
@@ -388,21 +434,7 @@ pub fn derive_x448_bits(
     public_key: &[u8],
     length_bits: usize,
 ) -> Result<Vec<u8>, WebCryptoError> {
-    let private_key = PKey::private_key_from_raw_bytes(private_key, Id::X448)
-        .map_err(|_| WebCryptoError::Operation)?;
-    let public_key = PKey::public_key_from_raw_bytes(public_key, Id::X448)
-        .map_err(|_| WebCryptoError::Operation)?;
-    let mut deriver = Deriver::new(&private_key).map_err(|_| WebCryptoError::Operation)?;
-    deriver
-        .set_peer(&public_key)
-        .map_err(|_| WebCryptoError::Operation)?;
-    let secret = deriver
-        .derive_to_vec()
-        .map_err(|_| WebCryptoError::Operation)?;
-    if secret.iter().all(|byte| *byte == 0) {
-        return Err(WebCryptoError::Operation);
-    }
-    truncate_derived_bits(&secret, length_bits)
+    rust_crypto_448::derive_x448_bits(private_key, public_key, length_bits)
 }
 
 fn decode_okp_jwk_public_member(
@@ -413,9 +445,7 @@ fn decode_okp_jwk_public_member(
         return Err(WebCryptoError::Data);
     };
     let decoded = decode_okp_jwk_value(value, curve)?;
-    let _ =
-        PKey::public_key_from_raw_bytes(&decoded, curve.id()).map_err(|_| WebCryptoError::Data)?;
-    Ok(decoded)
+    Ok(import_okp_raw_public_key(&decoded, curve)?.key_bytes)
 }
 
 fn decode_okp_jwk_private_value(
@@ -423,8 +453,10 @@ fn decode_okp_jwk_private_value(
     curve: WebCryptoOkpCurve,
 ) -> Result<Vec<u8>, WebCryptoError> {
     let decoded = decode_okp_jwk_value(value, curve)?;
-    let _ =
-        PKey::private_key_from_raw_bytes(&decoded, curve.id()).map_err(|_| WebCryptoError::Data)?;
+    if curve == WebCryptoOkpCurve::Ed25519 {
+        let _ = PKey::private_key_from_raw_bytes(&decoded, Id::ED25519)
+            .map_err(|_| WebCryptoError::Data)?;
+    }
     Ok(decoded)
 }
 
