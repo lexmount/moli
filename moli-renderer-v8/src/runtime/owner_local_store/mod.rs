@@ -41,7 +41,7 @@ use crate::page_task_queue::{
 use crate::script_vm::{
     DocumentInspectorBinding, PendingRuntimeEvaluateCall, RendererDocumentIsolateBootstrap,
     RendererDocumentIsolateHandle, RendererDocumentIsolateReservationAccounting,
-    RendererPageScriptEnvironment,
+    RendererPageScriptEnvironment, RuntimeEvaluateResultMode,
 };
 use crate::{RendererNavigationReplyPolicy, RendererTopLevelNavigationDispatch};
 use tokio::sync::oneshot;

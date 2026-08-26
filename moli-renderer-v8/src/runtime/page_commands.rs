@@ -36,13 +36,9 @@ impl PageVm {
                 .evaluate_expression_with_await(&expression, await_promise)
                 .map(RendererRuntimeEvaluationResult::from_protocol_payload)
                 .map(RendererPageReply::RuntimeEvaluationResult),
-            RendererPageCommand::EvaluateExpressionByValue {
-                expression,
-                await_promise,
-            } => self
-                .evaluate_expression_by_value_with_await(&expression, await_promise)
-                .map(RendererRuntimeEvaluationResult::from_protocol_payload)
-                .map(RendererPageReply::RuntimeEvaluationResult),
+            RendererPageCommand::EvaluateExpressionByValue { .. } => Err(anyhow!(
+                "by-value runtime evaluation must be routed through the renderer owner continuation"
+            )),
             RendererPageCommand::EvaluateExpressionInExecutionContext {
                 execution_context_id,
                 expression,

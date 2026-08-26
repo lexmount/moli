@@ -380,6 +380,22 @@ impl RuntimeEvaluateCodeGenerationPolicy {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum RuntimeEvaluateResultMode {
+    /// Preserve the ordinary `Runtime.evaluate` representation, including a
+    /// remote object handle when the result cannot be returned as a primitive.
+    RemoteObject,
+    /// Serialize the result into a JSON-compatible protocol value instead of
+    /// returning a remote object handle.
+    ByValue,
+}
+
+impl RuntimeEvaluateResultMode {
+    const fn returns_by_value(self) -> bool {
+        matches!(self, Self::ByValue)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct PendingRuntimeEvaluateCall {
     call_id: i32,
 }
@@ -7192,6 +7208,7 @@ impl ScriptVm {
             user_gesture,
             None,
             RuntimeEvaluateCodeGenerationPolicy::from_cdp(None),
+            RuntimeEvaluateResultMode::RemoteObject,
         )?;
         self.require_completed_runtime_evaluate(outcome)
     }
@@ -7211,6 +7228,7 @@ impl ScriptVm {
             user_gesture,
             file_prompt_handler,
             RuntimeEvaluateCodeGenerationPolicy::from_cdp(None),
+            RuntimeEvaluateResultMode::RemoteObject,
         )?;
         self.require_completed_runtime_evaluate(outcome)
     }
@@ -7223,14 +7241,14 @@ impl ScriptVm {
         user_gesture: bool,
         file_prompt_handler: Option<&str>,
     ) -> Result<Value> {
-        let outcome = self.begin_runtime_evaluate_with_result_mode(
+        let outcome = self.begin_runtime_evaluate(
             execution_context_id,
             expression,
             await_promise,
             user_gesture,
             file_prompt_handler,
             RuntimeEvaluateCodeGenerationPolicy::from_cdp(None),
-            true,
+            RuntimeEvaluateResultMode::ByValue,
         )?;
         self.require_completed_runtime_evaluate(outcome)
     }
@@ -7272,6 +7290,7 @@ impl ScriptVm {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn begin_runtime_evaluate(
         &mut self,
         execution_context_id: Option<i64>,
@@ -7280,55 +7299,17 @@ impl ScriptVm {
         user_gesture: bool,
         file_prompt_handler: Option<&str>,
         code_generation_policy: RuntimeEvaluateCodeGenerationPolicy,
-    ) -> Result<RuntimeEvaluateOutcome> {
-        self.begin_runtime_evaluate_with_result_mode(
-            execution_context_id,
-            expression,
-            await_promise,
-            user_gesture,
-            file_prompt_handler,
-            code_generation_policy,
-            false,
-        )
-    }
-
-    pub(super) fn begin_runtime_evaluate_by_value(
-        &mut self,
-        execution_context_id: Option<i64>,
-        expression: &str,
-        await_promise: bool,
-        user_gesture: bool,
-        file_prompt_handler: Option<&str>,
-        code_generation_policy: RuntimeEvaluateCodeGenerationPolicy,
-    ) -> Result<RuntimeEvaluateOutcome> {
-        self.begin_runtime_evaluate_with_result_mode(
-            execution_context_id,
-            expression,
-            await_promise,
-            user_gesture,
-            file_prompt_handler,
-            code_generation_policy,
-            true,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn begin_runtime_evaluate_with_result_mode(
-        &mut self,
-        execution_context_id: Option<i64>,
-        expression: &str,
-        await_promise: bool,
-        user_gesture: bool,
-        file_prompt_handler: Option<&str>,
-        code_generation_policy: RuntimeEvaluateCodeGenerationPolicy,
-        return_by_value: bool,
+        result_mode: RuntimeEvaluateResultMode,
     ) -> Result<RuntimeEvaluateOutcome> {
         self.validate_runtime_evaluate_context(execution_context_id)?;
         let call_id = self.next_internal_runtime_evaluate_call_id()?;
         let mut params = serde_json::Map::new();
         params.insert("expression".to_owned(), json!(expression));
         params.insert("awaitPromise".to_owned(), json!(await_promise));
-        params.insert("returnByValue".to_owned(), json!(return_by_value));
+        params.insert(
+            "returnByValue".to_owned(),
+            json!(result_mode.returns_by_value()),
+        );
         params.insert(
             "allowUnsafeEvalBlockedByCSP".to_owned(),
             json!(code_generation_policy.allows_unsafe_eval_blocked_by_csp()),

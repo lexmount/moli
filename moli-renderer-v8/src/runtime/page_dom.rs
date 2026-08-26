@@ -25,7 +25,7 @@ use crate::runtime::page_vm::{
 };
 use crate::script_vm::{
     DomInspectorEdit, DomInspectorEditOutcome, PendingRuntimeEvaluateCall,
-    RuntimeEvaluateCodeGenerationPolicy, RuntimeEvaluateOutcome,
+    RuntimeEvaluateCodeGenerationPolicy, RuntimeEvaluateOutcome, RuntimeEvaluateResultMode,
 };
 use moli_page_types::{
     DocumentNodeAssociatedSnapshot, DocumentNodeAttributeSnapshot, DocumentNodeInspectorIdentity,
@@ -546,21 +546,6 @@ impl PageVm {
             .evaluate_expression_payload_with_await(expression, await_promise, false)
     }
 
-    pub(crate) fn evaluate_expression_by_value_with_await(
-        &mut self,
-        expression: &str,
-        await_promise: bool,
-    ) -> Result<Value> {
-        self.vm_mut()
-            .evaluate_expression_by_value_payload_in_context_with_await(
-                None,
-                expression,
-                await_promise,
-                false,
-                None,
-            )
-    }
-
     pub(crate) fn evaluate_expression_for_internal_node_reference(
         &mut self,
         handle: DomHandle,
@@ -582,32 +567,20 @@ impl PageVm {
         execution_context_id: Option<i64>,
         expression: &str,
         pending_call: Option<PendingRuntimeEvaluateCall>,
-        return_by_value: bool,
+        result_mode: RuntimeEvaluateResultMode,
     ) -> Result<RuntimeEvaluateOutcome> {
         if let Some(pending_call) = pending_call {
             return self.vm_mut().poll_pending_runtime_evaluate(pending_call);
         }
-        let vm = self.vm_mut();
-        let code_generation_policy = RuntimeEvaluateCodeGenerationPolicy::from_cdp(None);
-        if return_by_value {
-            vm.begin_runtime_evaluate_by_value(
-                execution_context_id,
-                expression,
-                true,
-                false,
-                None,
-                code_generation_policy,
-            )
-        } else {
-            vm.begin_runtime_evaluate(
-                execution_context_id,
-                expression,
-                true,
-                false,
-                None,
-                code_generation_policy,
-            )
-        }
+        self.vm_mut().begin_runtime_evaluate(
+            execution_context_id,
+            expression,
+            true,
+            false,
+            None,
+            RuntimeEvaluateCodeGenerationPolicy::from_cdp(None),
+            result_mode,
+        )
     }
 
     pub(crate) fn dispatch_mouse_event_at_point_with_pointer(
@@ -1713,8 +1686,12 @@ impl PageVm {
         // lets Runtime.evaluate await a Promise returned by the predicate.
         // The source is evaluated exactly once per polling turn.
         let predicate_expression = script_truthy_predicate_expression(expression);
-        let evaluation =
-            self.advance_runtime_evaluate(None, &predicate_expression, pending_call, false)?;
+        let evaluation = self.advance_runtime_evaluate(
+            None,
+            &predicate_expression,
+            pending_call,
+            RuntimeEvaluateResultMode::RemoteObject,
+        )?;
         let evaluation = match evaluation {
             RuntimeEvaluateOutcome::Pending(pending_call) => {
                 return self
@@ -1761,13 +1738,13 @@ impl PageVm {
         expression: &str,
         pending_call: Option<PendingRuntimeEvaluateCall>,
         remaining: std::time::Duration,
-        return_by_value: bool,
+        result_mode: RuntimeEvaluateResultMode,
     ) -> Result<PageVmRuntimeExpressionAwaitAdvance> {
         match self.advance_runtime_evaluate(
             execution_context_id,
             expression,
             pending_call,
-            return_by_value,
+            result_mode,
         )? {
             RuntimeEvaluateOutcome::Complete(payload) => {
                 Ok(PageVmRuntimeExpressionAwaitAdvance::Completed {

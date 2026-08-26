@@ -4,7 +4,7 @@ use serde_json::Value;
 
 pub async fn evaluate(page: &mut Page, expression: &str) -> Result<Vec<u8>> {
     let result = page
-        .evaluate_runtime_expression_by_value_with_await_async(expression, true)
+        .evaluate_runtime_expression_by_value_async(expression)
         .await
         .context("failed to evaluate JavaScript expression")?;
     render_result(&result)

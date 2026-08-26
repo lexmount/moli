@@ -1,5 +1,5 @@
 use super::*;
-use crate::script_vm::RuntimeEvaluateCodeGenerationPolicy;
+use crate::script_vm::{RuntimeEvaluateCodeGenerationPolicy, RuntimeEvaluateResultMode};
 
 fn native_element_handle_by_id(vm: &ScriptVm, id: &str) -> DomHandle {
     vm.document_runtime
@@ -3563,6 +3563,7 @@ async fn child_eval_uses_child_document_csp_without_restricting_parent() {
                 false,
                 None,
                 RuntimeEvaluateCodeGenerationPolicy::EnforceContextPolicy,
+                RuntimeEvaluateResultMode::RemoteObject,
             )
             .and_then(|outcome| vm.require_completed_runtime_evaluate(outcome))
             .expect("Inspector cross-realm child eval probe should complete");
@@ -3758,6 +3759,7 @@ fn runtime_evaluate_code_generation_policy_matches_inspector_scope() {
             false,
             None,
             RuntimeEvaluateCodeGenerationPolicy::EnforceContextPolicy,
+            RuntimeEvaluateResultMode::RemoteObject,
         )
         .and_then(|outcome| vm.require_completed_runtime_evaluate(outcome))
         .expect("explicit false Runtime.evaluate should still execute its outer expression");
@@ -3817,6 +3819,7 @@ fn runtime_evaluate_trusted_types_policy_matches_inspector_scope() {
             false,
             None,
             RuntimeEvaluateCodeGenerationPolicy::EnforceContextPolicy,
+            RuntimeEvaluateResultMode::RemoteObject,
         )
         .and_then(|outcome| vm.require_completed_runtime_evaluate(outcome))
         .expect("explicit false Runtime.evaluate Trusted Types probe should complete");

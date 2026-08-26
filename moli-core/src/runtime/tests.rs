@@ -3661,10 +3661,7 @@ async fn page_runtime_evaluation_can_return_json_compatible_objects_by_value() -
     let mut page = browser.fetch(&server.url("/static")).await?;
 
     let by_value = page
-        .evaluate_runtime_expression_by_value_with_await_async(
-            "({ title: 'Moli', count: 2 })",
-            false,
-        )
+        .evaluate_runtime_expression_by_value_async("({ title: 'Moli', count: 2 })")
         .await?;
     assert_eq!(
         by_value["value"],

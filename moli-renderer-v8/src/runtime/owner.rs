@@ -85,8 +85,8 @@ use crate::page_task_queue::{
 use crate::referrer_policy::response_referrer_policy_from_headers;
 use crate::render_runtime::{RenderRuntimeEnvelope, RenderRuntimeHandle, RenderRuntimeOwner};
 use crate::script_vm::{
-    PendingRuntimeEvaluateCall, RendererDocumentIsolateBootstrap, dispatch_inspector_io_owner_wake,
-    dispatch_inspector_main_owner_wake,
+    PendingRuntimeEvaluateCall, RendererDocumentIsolateBootstrap, RuntimeEvaluateResultMode,
+    dispatch_inspector_io_owner_wake, dispatch_inspector_main_owner_wake,
 };
 use crate::service_worker_runtime::{
     ServiceWorkerRuntimeOwnerWake, service_worker_owner_wake_channel,
@@ -613,6 +613,25 @@ const LIVE_PAGE_COMMAND_WAIT_TURN_SLICE: std::time::Duration =
     std::time::Duration::from_millis(100);
 const LIVE_PAGE_RUNTIME_EXPRESSION_AWAIT_TIMEOUT_MS: u64 = 30_000;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeEvaluationNavigationPolicy {
+    DoNotFollow,
+    Follow,
+}
+
+impl RuntimeEvaluationNavigationPolicy {
+    const fn follows_pending_navigation(self) -> bool {
+        matches!(self, Self::Follow)
+    }
+}
+
+struct RuntimeExpressionAwaitSpec {
+    execution_context_id: Option<i64>,
+    expression: String,
+    result_mode: RuntimeEvaluateResultMode,
+    navigation_policy: RuntimeEvaluationNavigationPolicy,
+}
+
 fn checked_live_page_wait_deadline(timeout_ms: u64, operation: &str) -> Result<Instant> {
     let timeout = std::time::Duration::from_millis(timeout_ms);
     Instant::now()
@@ -719,8 +738,8 @@ enum RenderRuntimeTurn {
         expression: String,
         pending_call: Option<PendingRuntimeEvaluateCall>,
         deadline: Instant,
-        return_by_value: bool,
-        follow_pending_navigation: bool,
+        result_mode: RuntimeEvaluateResultMode,
+        navigation_policy: RuntimeEvaluationNavigationPolicy,
         capture_policy: super::RendererPageStateCapturePolicy,
     },
     WaitLivePageSubresourceResponse {
@@ -4991,6 +5010,71 @@ impl RendererOwnerHandle {
         capture_policy: super::RendererPageStateCapturePolicy,
     ) -> RenderRuntimeDispatchOutcome {
         match command {
+            RendererPageCommand::EvaluateExpression {
+                expression,
+                await_promise: true,
+            } => self.begin_live_page_runtime_expression_await(
+                token,
+                RuntimeExpressionAwaitSpec {
+                    execution_context_id: None,
+                    expression,
+                    result_mode: RuntimeEvaluateResultMode::RemoteObject,
+                    navigation_policy: RuntimeEvaluationNavigationPolicy::DoNotFollow,
+                },
+                capture_policy,
+            ),
+            RendererPageCommand::EvaluateExpressionByValue { expression } => self
+                .begin_live_page_runtime_expression_await(
+                    token,
+                    RuntimeExpressionAwaitSpec {
+                        execution_context_id: None,
+                        expression,
+                        result_mode: RuntimeEvaluateResultMode::ByValue,
+                        navigation_policy: RuntimeEvaluationNavigationPolicy::DoNotFollow,
+                    },
+                    capture_policy,
+                ),
+            RendererPageCommand::EvaluateExpressionAndFollowPendingNavigation {
+                expression,
+                await_promise: true,
+            } => self.begin_live_page_runtime_expression_await(
+                token,
+                RuntimeExpressionAwaitSpec {
+                    execution_context_id: None,
+                    expression,
+                    result_mode: RuntimeEvaluateResultMode::RemoteObject,
+                    navigation_policy: RuntimeEvaluationNavigationPolicy::Follow,
+                },
+                capture_policy,
+            ),
+            RendererPageCommand::EvaluateExpressionInExecutionContext {
+                execution_context_id,
+                expression,
+                await_promise: true,
+            } => self.begin_live_page_runtime_expression_await(
+                token,
+                RuntimeExpressionAwaitSpec {
+                    execution_context_id: Some(execution_context_id),
+                    expression,
+                    result_mode: RuntimeEvaluateResultMode::RemoteObject,
+                    navigation_policy: RuntimeEvaluationNavigationPolicy::DoNotFollow,
+                },
+                capture_policy,
+            ),
+            RendererPageCommand::EvaluateExpressionInExecutionContextAndFollowPendingNavigation {
+                execution_context_id,
+                expression,
+                await_promise: true,
+            } => self.begin_live_page_runtime_expression_await(
+                token,
+                RuntimeExpressionAwaitSpec {
+                    execution_context_id: Some(execution_context_id),
+                    expression,
+                    result_mode: RuntimeEvaluateResultMode::RemoteObject,
+                    navigation_policy: RuntimeEvaluationNavigationPolicy::Follow,
+                },
+                capture_policy,
+            ),
             RendererPageCommand::WaitForSelector {
                 selector,
                 timeout_ms,
@@ -5069,134 +5153,39 @@ impl RendererOwnerHandle {
                     },
                 ))
             }
-            RendererPageCommand::EvaluateExpression {
-                expression,
-                await_promise: true,
-            } => {
-                let deadline = match checked_live_page_wait_deadline(
-                    LIVE_PAGE_RUNTIME_EXPRESSION_AWAIT_TIMEOUT_MS,
-                    "runtime expression awaitPromise",
-                ) {
-                    Ok(deadline) => deadline,
-                    Err(error) => return Err(error).into(),
-                };
-                RenderRuntimeDispatchOutcome::ContinueNextTurn(Box::new(
-                    RenderRuntimeTurn::WaitLivePageRuntimeExpressionAwait {
-                        token,
-                        execution_context_id: None,
-                        expression,
-                        pending_call: None,
-                        deadline,
-                        return_by_value: false,
-                        follow_pending_navigation: false,
-                        capture_policy,
-                    },
-                ))
-            }
-            RendererPageCommand::EvaluateExpressionByValue {
-                expression,
-                await_promise: true,
-            } => {
-                let deadline = match checked_live_page_wait_deadline(
-                    LIVE_PAGE_RUNTIME_EXPRESSION_AWAIT_TIMEOUT_MS,
-                    "runtime expression awaitPromise",
-                ) {
-                    Ok(deadline) => deadline,
-                    Err(error) => return Err(error).into(),
-                };
-                RenderRuntimeDispatchOutcome::ContinueNextTurn(Box::new(
-                    RenderRuntimeTurn::WaitLivePageRuntimeExpressionAwait {
-                        token,
-                        execution_context_id: None,
-                        expression,
-                        pending_call: None,
-                        deadline,
-                        return_by_value: true,
-                        follow_pending_navigation: false,
-                        capture_policy,
-                    },
-                ))
-            }
-            RendererPageCommand::EvaluateExpressionAndFollowPendingNavigation {
-                expression,
-                await_promise: true,
-            } => {
-                let deadline = match checked_live_page_wait_deadline(
-                    LIVE_PAGE_RUNTIME_EXPRESSION_AWAIT_TIMEOUT_MS,
-                    "runtime expression awaitPromise",
-                ) {
-                    Ok(deadline) => deadline,
-                    Err(error) => return Err(error).into(),
-                };
-                RenderRuntimeDispatchOutcome::ContinueNextTurn(Box::new(
-                    RenderRuntimeTurn::WaitLivePageRuntimeExpressionAwait {
-                        token,
-                        execution_context_id: None,
-                        expression,
-                        pending_call: None,
-                        deadline,
-                        return_by_value: false,
-                        follow_pending_navigation: true,
-                        capture_policy,
-                    },
-                ))
-            }
-            RendererPageCommand::EvaluateExpressionInExecutionContext {
-                execution_context_id,
-                expression,
-                await_promise: true,
-            } => {
-                let deadline = match checked_live_page_wait_deadline(
-                    LIVE_PAGE_RUNTIME_EXPRESSION_AWAIT_TIMEOUT_MS,
-                    "runtime expression awaitPromise",
-                ) {
-                    Ok(deadline) => deadline,
-                    Err(error) => return Err(error).into(),
-                };
-                RenderRuntimeDispatchOutcome::ContinueNextTurn(Box::new(
-                    RenderRuntimeTurn::WaitLivePageRuntimeExpressionAwait {
-                        token,
-                        execution_context_id: Some(execution_context_id),
-                        expression,
-                        pending_call: None,
-                        deadline,
-                        return_by_value: false,
-                        follow_pending_navigation: false,
-                        capture_policy,
-                    },
-                ))
-            }
-            RendererPageCommand::EvaluateExpressionInExecutionContextAndFollowPendingNavigation {
-                execution_context_id,
-                expression,
-                await_promise: true,
-            } => {
-                let deadline = match checked_live_page_wait_deadline(
-                    LIVE_PAGE_RUNTIME_EXPRESSION_AWAIT_TIMEOUT_MS,
-                    "runtime expression awaitPromise",
-                ) {
-                    Ok(deadline) => deadline,
-                    Err(error) => return Err(error).into(),
-                };
-                RenderRuntimeDispatchOutcome::ContinueNextTurn(Box::new(
-                    RenderRuntimeTurn::WaitLivePageRuntimeExpressionAwait {
-                        token,
-                        execution_context_id: Some(execution_context_id),
-                        expression,
-                        pending_call: None,
-                        deadline,
-                        return_by_value: false,
-                        follow_pending_navigation: true,
-                        capture_policy,
-                    },
-                ))
-            }
             command => {
                 return self
                     .run_live_page_command_turn_inline(token, command, capture_policy)
                     .await;
             }
         }
+    }
+
+    fn begin_live_page_runtime_expression_await(
+        &self,
+        token: RendererPageToken,
+        spec: RuntimeExpressionAwaitSpec,
+        capture_policy: super::RendererPageStateCapturePolicy,
+    ) -> RenderRuntimeDispatchOutcome {
+        let deadline = match checked_live_page_wait_deadline(
+            LIVE_PAGE_RUNTIME_EXPRESSION_AWAIT_TIMEOUT_MS,
+            "runtime expression awaitPromise",
+        ) {
+            Ok(deadline) => deadline,
+            Err(error) => return Err(error).into(),
+        };
+        RenderRuntimeDispatchOutcome::ContinueNextTurn(Box::new(
+            RenderRuntimeTurn::WaitLivePageRuntimeExpressionAwait {
+                token,
+                execution_context_id: spec.execution_context_id,
+                expression: spec.expression,
+                pending_call: None,
+                deadline,
+                result_mode: spec.result_mode,
+                navigation_policy: spec.navigation_policy,
+                capture_policy,
+            },
+        ))
     }
 
     async fn run_live_page_command_turn_inline(
@@ -5814,8 +5803,8 @@ impl RendererOwnerHandle {
         expression: String,
         pending_call: Option<PendingRuntimeEvaluateCall>,
         deadline: Instant,
-        return_by_value: bool,
-        follow_pending_navigation: bool,
+        result_mode: RuntimeEvaluateResultMode,
+        navigation_policy: RuntimeEvaluationNavigationPolicy,
         capture_policy: super::RendererPageStateCapturePolicy,
     ) -> RenderRuntimeDispatchOutcome {
         let mut entry = match take_entry_for_command_on_bound_owner_local_store(token) {
@@ -5842,13 +5831,13 @@ impl RendererOwnerHandle {
                 expression.clone(),
                 pending_call,
                 remaining,
-                return_by_value,
+                result_mode,
             )
             .await;
         match wait_result {
             Ok(PageVmRuntimeExpressionAwaitAdvance::Completed { payload }) => {
                 let reply = RendererPageReply::RuntimeEvaluationResult(payload);
-                if follow_pending_navigation
+                if navigation_policy.follows_pending_navigation()
                     && entry.page_vm().vm().has_pending_location_navigation()
                 {
                     self.continue_live_page_pending_navigation(
@@ -5882,8 +5871,8 @@ impl RendererOwnerHandle {
                         expression,
                         pending_call,
                         deadline,
-                        return_by_value,
-                        follow_pending_navigation,
+                        result_mode,
+                        navigation_policy,
                         capture_policy,
                     },
                 ))
@@ -5914,8 +5903,8 @@ impl RendererOwnerHandle {
                             expression,
                             pending_call,
                             deadline,
-                            return_by_value,
-                            follow_pending_navigation,
+                            result_mode,
+                            navigation_policy,
                             capture_policy,
                         }),
                         wake_token: token,
@@ -6657,8 +6646,8 @@ impl RendererOwnerHandle {
                 expression,
                 pending_call,
                 deadline,
-                return_by_value,
-                follow_pending_navigation,
+                result_mode,
+                navigation_policy,
                 capture_policy,
             } => {
                 self.wait_live_page_runtime_expression_await_turn(
@@ -6667,8 +6656,8 @@ impl RendererOwnerHandle {
                     expression,
                     pending_call,
                     deadline,
-                    return_by_value,
-                    follow_pending_navigation,
+                    result_mode,
+                    navigation_policy,
                     capture_policy,
                 )
                 .await
