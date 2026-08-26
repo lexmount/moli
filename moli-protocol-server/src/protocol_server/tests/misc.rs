@@ -243,7 +243,7 @@ async fn discovery_endpoints_accept_trailing_slashes() {
         json!("/devtools/inspector.html?ws=127.0.0.1:9222/devtools/page/moli-default")
     );
     assert_eq!(list[0]["id"], json!(DEFAULT_TARGET_ID));
-    assert_eq!(list[0]["title"], json!(DEFAULT_TARGET_URL));
+    assert_eq!(list[0]["title"], json!(""));
     assert_eq!(list[0]["type"], json!("page"));
     assert_eq!(list[0]["url"], json!(DEFAULT_TARGET_URL));
 
@@ -609,4 +609,62 @@ async fn chromium_devtools_activate_and_close_return_text_payloads() {
         request_status_and_text_with_method(Method::GET, "/json/activate/missing").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body, "No such target id: missing");
+}
+
+#[tokio::test]
+async fn closed_default_target_is_not_readvertised_by_discovery() {
+    let app = build_router(test_state());
+    let first_list = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/json/list?for_tab")
+                .body(Body::empty())
+                .expect("list request"),
+        )
+        .await
+        .expect("first list response");
+    let first_list = serde_json::from_slice::<serde_json::Value>(
+        &to_bytes(first_list.into_body(), usize::MAX)
+            .await
+            .expect("first list body"),
+    )
+    .expect("first list JSON");
+    assert!(first_list.as_array().is_some_and(|targets| {
+        targets
+            .iter()
+            .any(|target| target["id"] == json!(DEFAULT_TARGET_ID))
+            && targets
+                .iter()
+                .any(|target| target["id"] == json!(DEFAULT_TAB_TARGET_ID))
+    }));
+
+    let close = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/json/close/moli-default")
+                .body(Body::empty())
+                .expect("close request"),
+        )
+        .await
+        .expect("close response");
+    assert_eq!(close.status(), StatusCode::OK);
+
+    let second_list = app
+        .oneshot(
+            Request::builder()
+                .uri("/json/list?for_tab")
+                .body(Body::empty())
+                .expect("second list request"),
+        )
+        .await
+        .expect("second list response");
+    let second_list = serde_json::from_slice::<serde_json::Value>(
+        &to_bytes(second_list.into_body(), usize::MAX)
+            .await
+            .expect("second list body"),
+    )
+    .expect("second list JSON");
+    assert_eq!(second_list, json!([]));
 }

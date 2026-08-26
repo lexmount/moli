@@ -32,30 +32,20 @@ pub(super) async fn json_version(State(state): State<AppState>) -> impl IntoResp
 }
 
 pub(super) async fn json_list(State(state): State<AppState>, uri: Uri) -> impl IntoResponse {
+    if let Err(error) = ensure_default_target_is_published(&state).await {
+        tracing::warn!(
+            ?error,
+            "failed to publish the default CDP target for discovery"
+        );
+    }
     let include_tab_targets = requests_tab_targets(&uri);
     let target_infos = state
         .cdp_agent_host_directory
         .remote_debugging_target_infos(include_tab_targets);
-    let targets = if target_infos.is_empty() {
-        let mut targets = vec![default_target_json(
-            &state,
-            DEFAULT_TARGET_URL,
-            DevToolsTargetKind::Page,
-        )];
-        if include_tab_targets {
-            targets.push(default_target_json(
-                &state,
-                DEFAULT_TARGET_URL,
-                DevToolsTargetKind::Tab,
-            ));
-        }
-        targets
-    } else {
-        target_infos
-            .into_iter()
-            .filter_map(|target_info| target_json(&state, target_info))
-            .collect()
-    };
+    let targets = target_infos
+        .into_iter()
+        .filter_map(|target_info| target_json(&state, target_info))
+        .collect::<Vec<_>>();
     axum::Json(json!(targets))
 }
 
@@ -132,10 +122,20 @@ pub(super) async fn json_activate_target(
     Path(target_id): Path<String>,
     State(state): State<AppState>,
 ) -> Response {
-    let route = state.cdp_agent_host_directory.lookup_target(&target_id);
-    if is_default_target_id(&target_id) && route.is_none() {
-        return (StatusCode::OK, "Target activated").into_response();
+    if is_default_target_id(&target_id)
+        && state
+            .cdp_agent_host_directory
+            .lookup_target(&target_id)
+            .is_none()
+        && let Err(error) = ensure_default_target_is_published(&state).await
+    {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!("Unable to create default target: {error}"),
+        )
+            .into_response();
     }
+    let route = state.cdp_agent_host_directory.lookup_target(&target_id);
     let Some(route) = route else {
         return no_such_target_response(&target_id);
     };
@@ -153,8 +153,18 @@ pub(super) async fn json_close_target(
     Path(target_id): Path<String>,
     State(state): State<AppState>,
 ) -> Response {
-    if is_default_target_id(&target_id) {
-        return (StatusCode::OK, "Target is closing").into_response();
+    if is_default_target_id(&target_id)
+        && state
+            .cdp_agent_host_directory
+            .lookup_target(&target_id)
+            .is_none()
+        && let Err(error) = ensure_default_target_is_published(&state).await
+    {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!("Unable to create default target: {error}"),
+        )
+            .into_response();
     }
     let Some(route) = state.cdp_agent_host_directory.lookup_target(&target_id) else {
         return no_such_target_response(&target_id);
@@ -177,29 +187,6 @@ fn no_such_target_response(target_id: &str) -> Response {
         .into_response()
 }
 
-fn default_target_json(
-    state: &AppState,
-    target_url: &str,
-    kind: DevToolsTargetKind,
-) -> serde_json::Value {
-    let (target_id, target_type) = match kind {
-        DevToolsTargetKind::Page => (DEFAULT_CDP_PAGE_TARGET_ID, "page"),
-        DevToolsTargetKind::Tab => (DEFAULT_CDP_TAB_TARGET_ID, "tab"),
-        _ => unreachable!("remote debugging discovery only selects page or tab targets"),
-    };
-    let (devtools_frontend_url, websocket_debugger_url) =
-        target_endpoint_urls(state, target_id).expect("default target URL prefixes must be valid");
-    json!({
-        "description": "",
-        "devtoolsFrontendUrl": devtools_frontend_url,
-        "id": target_id,
-        "title": target_url,
-        "type": target_type,
-        "url": target_url,
-        "webSocketDebuggerUrl": websocket_debugger_url,
-    })
-}
-
 fn target_json(state: &AppState, target_info: DevToolsTargetInfo) -> Option<serde_json::Value> {
     let target_id = target_info.target_id.as_ref()?.as_str();
     let target_type = match target_info.kind {
@@ -217,6 +204,17 @@ fn target_json(state: &AppState, target_info: DevToolsTargetInfo) -> Option<serd
         "url": target_info.url,
         "webSocketDebuggerUrl": websocket_debugger_url,
     }))
+}
+
+async fn ensure_default_target_is_published(state: &AppState) -> Result<(), String> {
+    let endpoint = state
+        .cdp_owner_registry
+        .shared_owner()
+        .map_err(|error| error.to_string())?;
+    endpoint
+        .ensure_default_target()
+        .await
+        .map_err(|error| error.to_string())
 }
 
 fn target_endpoint_urls(state: &AppState, target_id: &str) -> Option<(String, String)> {
@@ -286,15 +284,14 @@ pub(super) async fn ws_target_upgrade_handler(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
 ) -> Response {
-    if is_default_target_id(&target_id) {
-        let owner_registry = state.cdp_owner_registry;
-        return ws.on_upgrade(move |socket| {
-            run_shared_frontend_socket(
-                socket,
-                owner_registry,
-                CdpFrontendSocketKind::Target { target_id },
-            )
-        });
+    if is_default_target_id(&target_id)
+        && state
+            .cdp_agent_host_directory
+            .lookup_target(&target_id)
+            .is_none()
+        && ensure_default_target_is_published(&state).await.is_err()
+    {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     let Some(route) = state.cdp_agent_host_directory.lookup_target(&target_id) else {
         return StatusCode::NOT_FOUND.into_response();

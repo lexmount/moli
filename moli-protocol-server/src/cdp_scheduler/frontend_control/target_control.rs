@@ -201,7 +201,7 @@ impl CdpFrontendTargetControl {
         Ok(session_id)
     }
 
-    async fn ensure_default_target_is_materialized(
+    pub(super) async fn ensure_default_target_is_materialized(
         &mut self,
         scheduler: &mut CdpScheduler,
         frontend_router: &CdpFrontendRouter,
