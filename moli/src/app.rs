@@ -8,7 +8,7 @@ use std::{fmt, io::Write, sync::Arc};
 use crate::{
     cli::{Cli, Commands, normalize_args_for_compat},
     config::AppConfig,
-    cookie_cache, fetch_dump, robots,
+    cookie_cache, eval_output, fetch_dump, robots,
 };
 use anyhow::Result;
 use anyhow::{Context, anyhow};
@@ -66,6 +66,13 @@ pub async fn run_cli_with_config<W: Write>(
             let mut page = match fetched_document {
                 FetchedDocument::Page(page) => page,
                 FetchedDocument::Raw(raw_document) => {
+                    if args.eval.is_some() {
+                        finalize_fetch_browser(browser);
+                        return Err(with_fetch_context(
+                            anyhow!("raw non-HTML document fetch does not support --eval"),
+                            &args.url,
+                        ));
+                    }
                     if readiness.has_page_waits() || args.delay_ms > 0 {
                         finalize_fetch_browser(browser);
                         return Err(with_fetch_context(
@@ -107,9 +114,12 @@ pub async fn run_cli_with_config<W: Write>(
                     .map_err(|error| with_fetch_context(error, &args.url))?;
             }
 
-            let rendered = fetch_dump::render_page_output_async(&mut page, &config.fetch)
-                .await
-                .map_err(|error| with_fetch_context(error, &args.url))?;
+            let rendered = if let Some(expression) = args.eval.as_deref() {
+                eval_output::evaluate(&mut page, expression).await
+            } else {
+                fetch_dump::render_page_output_async(&mut page, &config.fetch).await
+            }
+            .map_err(|error| with_fetch_context(error, &args.url))?;
             stdout
                 .write_all(&rendered)
                 .context("failed to write fetch output")

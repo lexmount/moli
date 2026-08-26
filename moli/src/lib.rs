@@ -7,6 +7,7 @@ pub mod app;
 pub mod cli;
 pub mod config;
 pub mod cookie_cache;
+mod eval_output;
 pub mod fetch_dump;
 mod network_trace;
 mod robots;

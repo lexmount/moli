@@ -44,6 +44,16 @@ pub struct FetchArgs {
     #[arg(short, long, value_enum)]
     pub dump: Option<DumpFormat>,
 
+    /// Evaluate one JavaScript expression after page readiness and write its
+    /// value to stdout. Promises are awaited. Strings are written as text;
+    /// other serializable values are written as compact JSON.
+    #[arg(
+        long,
+        value_name = "EXPRESSION",
+        conflicts_with_all = ["dump", "with_base", "with_frames", "strip_mode"]
+    )]
+    pub eval: Option<String>,
+
     #[arg(short = 'H', long = "header", value_name = "HEADER", value_parser = parse_request_header_arg)]
     pub headers: Vec<RequestHeaderArg>,
 

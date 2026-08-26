@@ -719,6 +719,7 @@ enum RenderRuntimeTurn {
         expression: String,
         pending_call: Option<PendingRuntimeEvaluateCall>,
         deadline: Instant,
+        return_by_value: bool,
         follow_pending_navigation: bool,
         capture_policy: super::RendererPageStateCapturePolicy,
     },
@@ -5086,6 +5087,31 @@ impl RendererOwnerHandle {
                         expression,
                         pending_call: None,
                         deadline,
+                        return_by_value: false,
+                        follow_pending_navigation: false,
+                        capture_policy,
+                    },
+                ))
+            }
+            RendererPageCommand::EvaluateExpressionByValue {
+                expression,
+                await_promise: true,
+            } => {
+                let deadline = match checked_live_page_wait_deadline(
+                    LIVE_PAGE_RUNTIME_EXPRESSION_AWAIT_TIMEOUT_MS,
+                    "runtime expression awaitPromise",
+                ) {
+                    Ok(deadline) => deadline,
+                    Err(error) => return Err(error).into(),
+                };
+                RenderRuntimeDispatchOutcome::ContinueNextTurn(Box::new(
+                    RenderRuntimeTurn::WaitLivePageRuntimeExpressionAwait {
+                        token,
+                        execution_context_id: None,
+                        expression,
+                        pending_call: None,
+                        deadline,
+                        return_by_value: true,
                         follow_pending_navigation: false,
                         capture_policy,
                     },
@@ -5109,6 +5135,7 @@ impl RendererOwnerHandle {
                         expression,
                         pending_call: None,
                         deadline,
+                        return_by_value: false,
                         follow_pending_navigation: true,
                         capture_policy,
                     },
@@ -5133,6 +5160,7 @@ impl RendererOwnerHandle {
                         expression,
                         pending_call: None,
                         deadline,
+                        return_by_value: false,
                         follow_pending_navigation: false,
                         capture_policy,
                     },
@@ -5157,6 +5185,7 @@ impl RendererOwnerHandle {
                         expression,
                         pending_call: None,
                         deadline,
+                        return_by_value: false,
                         follow_pending_navigation: true,
                         capture_policy,
                     },
@@ -5785,6 +5814,7 @@ impl RendererOwnerHandle {
         expression: String,
         pending_call: Option<PendingRuntimeEvaluateCall>,
         deadline: Instant,
+        return_by_value: bool,
         follow_pending_navigation: bool,
         capture_policy: super::RendererPageStateCapturePolicy,
     ) -> RenderRuntimeDispatchOutcome {
@@ -5812,6 +5842,7 @@ impl RendererOwnerHandle {
                 expression.clone(),
                 pending_call,
                 remaining,
+                return_by_value,
             )
             .await;
         match wait_result {
@@ -5851,6 +5882,7 @@ impl RendererOwnerHandle {
                         expression,
                         pending_call,
                         deadline,
+                        return_by_value,
                         follow_pending_navigation,
                         capture_policy,
                     },
@@ -5882,6 +5914,7 @@ impl RendererOwnerHandle {
                             expression,
                             pending_call,
                             deadline,
+                            return_by_value,
                             follow_pending_navigation,
                             capture_policy,
                         }),
@@ -6624,6 +6657,7 @@ impl RendererOwnerHandle {
                 expression,
                 pending_call,
                 deadline,
+                return_by_value,
                 follow_pending_navigation,
                 capture_policy,
             } => {
@@ -6633,6 +6667,7 @@ impl RendererOwnerHandle {
                     expression,
                     pending_call,
                     deadline,
+                    return_by_value,
                     follow_pending_navigation,
                     capture_policy,
                 )

@@ -4736,6 +4736,10 @@ pub enum RendererPageCommand {
         expression: String,
         await_promise: bool,
     },
+    EvaluateExpressionByValue {
+        expression: String,
+        await_promise: bool,
+    },
     EvaluateExpressionAndFollowPendingNavigation {
         expression: String,
         await_promise: bool,

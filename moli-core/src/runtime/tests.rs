@@ -3655,6 +3655,33 @@ async fn renderer_owner_created_page_runs_common_page_commands() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn page_runtime_evaluation_can_return_json_compatible_objects_by_value() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = browser.fetch(&server.url("/static")).await?;
+
+    let by_value = page
+        .evaluate_runtime_expression_by_value_with_await_async(
+            "({ title: 'Moli', count: 2 })",
+            false,
+        )
+        .await?;
+    assert_eq!(
+        by_value["value"],
+        serde_json::json!({ "title": "Moli", "count": 2 })
+    );
+
+    let by_reference = page
+        .evaluate_runtime_expression_async("({ title: 'Moli' })")
+        .await?;
+    assert!(by_reference.get("objectId").is_some());
+    assert!(by_reference.get("value").is_none());
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn async_page_command_snapshot_follow_can_adopt_pending_location_navigation() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;

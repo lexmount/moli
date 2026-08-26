@@ -588,6 +588,7 @@ pub(in crate::runtime) async fn advance_runtime_expression_await_turn_on_entry_v
     expression: String,
     pending_call: Option<PendingRuntimeEvaluateCall>,
     remaining: std::time::Duration,
+    return_by_value: bool,
 ) -> (LivePageEntry, Result<PageVmRuntimeExpressionAwaitAdvance>) {
     run_entry_on_bound_owner_local_store_local_task(local_executor, entry, move |entry| {
         Box::pin(async move {
@@ -598,6 +599,7 @@ pub(in crate::runtime) async fn advance_runtime_expression_await_turn_on_entry_v
                     &expression,
                     pending_call,
                     remaining,
+                    return_by_value,
                 )
                 .await
         })

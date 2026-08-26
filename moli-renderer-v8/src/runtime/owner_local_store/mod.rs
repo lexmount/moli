@@ -2539,6 +2539,7 @@ impl RendererOwnerLocalStore {
         let directly_delegates_location_navigation = matches!(
             &command,
             RendererPageCommand::EvaluateExpression { .. }
+                | RendererPageCommand::EvaluateExpressionByValue { .. }
                 | RendererPageCommand::EvaluateExpressionInExecutionContext { .. }
         );
         // Every bounded Page command owns the concrete records produced while

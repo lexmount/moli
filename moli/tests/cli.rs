@@ -74,6 +74,7 @@ fn parses_explicit_fetch_command_with_compatibility_flags() {
         cli.command,
         Commands::Fetch(Box::new(FetchArgs {
             dump: Some(DumpFormat::SemanticTree),
+            eval: None,
             headers: vec![
                 RequestHeaderArg {
                     name: "X-Test".to_owned(),
@@ -416,6 +417,7 @@ fn infers_fetch_mode_from_bare_url() {
         cli.command,
         Commands::Fetch(Box::new(FetchArgs {
             dump: None,
+            eval: None,
             headers: vec![],
             disable_js: false,
             with_base: false,
@@ -456,6 +458,7 @@ fn parses_bare_dump_with_explicit_fetch_command_and_defaults_to_html() {
         cli.command,
         Commands::Fetch(Box::new(FetchArgs {
             dump: Some(DumpFormat::Html),
+            eval: None,
             headers: vec![],
             disable_js: false,
             with_base: false,
@@ -497,6 +500,7 @@ fn parses_header_flag_with_explicit_fetch_command() {
         cli.command,
         Commands::Fetch(Box::new(FetchArgs {
             dump: None,
+            eval: None,
             headers: vec![RequestHeaderArg {
                 name: "X-Test".to_owned(),
                 value: "one".to_owned(),
@@ -887,6 +891,39 @@ fn fetch_strip_options_combine_cli_selections() {
             css: true,
         }
     );
+}
+
+#[test]
+fn parses_fetch_eval_expression() {
+    let cli = Cli::try_parse_from(normalize_args_for_compat([
+        "moli",
+        "fetch",
+        "--eval",
+        "document.title",
+        "https://example.com",
+    ]))
+    .unwrap();
+
+    let Commands::Fetch(args) = cli.command else {
+        panic!("expected fetch command");
+    };
+    assert_eq!(args.eval.as_deref(), Some("document.title"));
+}
+
+#[test]
+fn fetch_eval_rejects_page_dump_output_options() {
+    for conflicting_args in [
+        &["--dump", "json"][..],
+        &["--with-base"][..],
+        &["--with-frames"][..],
+        &["--strip-mode", "js"][..],
+    ] {
+        let mut args = vec!["moli", "fetch", "--eval", "document.title"];
+        args.extend_from_slice(conflicting_args);
+        args.push("https://example.com");
+        let error = Cli::try_parse_from(normalize_args_for_compat(args)).unwrap_err();
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
 }
 
 #[test]

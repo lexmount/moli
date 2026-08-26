@@ -7292,6 +7292,26 @@ impl ScriptVm {
         )
     }
 
+    pub(super) fn begin_runtime_evaluate_by_value(
+        &mut self,
+        execution_context_id: Option<i64>,
+        expression: &str,
+        await_promise: bool,
+        user_gesture: bool,
+        file_prompt_handler: Option<&str>,
+        code_generation_policy: RuntimeEvaluateCodeGenerationPolicy,
+    ) -> Result<RuntimeEvaluateOutcome> {
+        self.begin_runtime_evaluate_with_result_mode(
+            execution_context_id,
+            expression,
+            await_promise,
+            user_gesture,
+            file_prompt_handler,
+            code_generation_policy,
+            true,
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn begin_runtime_evaluate_with_result_mode(
         &mut self,

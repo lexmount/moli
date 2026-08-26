@@ -3,6 +3,7 @@
 ## Contents
 
 - [Output selection](#output-selection)
+- [Page Evaluation](#page-evaluation)
 - [Readiness](#readiness)
 - [Dynamic Content and Frames](#dynamic-content-and-frames)
 - [Screenshots and PDFs](#screenshots-and-pdfs)
@@ -29,6 +30,56 @@ Raw non-HTML responses support only `html` and `json`.
 JSON `headers` is an ordered list of `{name, value}` records so duplicate
 headers are preserved. `redirect_chain` contains every main-navigation HTTP
 redirect hop in order.
+
+## Page Evaluation
+
+Prefer ordinary Markdown, semantic-tree, or JSON output. Use `--eval` only when
+a targeted JavaScript query is more precise than serializing the whole
+document. It runs after the selected readiness condition and uses the page's
+standard JavaScript and DOM APIs. Promises are awaited. A string is written as
+plain text; arrays and objects are written as compact JSON. Do not combine
+`--eval` with `--dump`.
+
+Start with a single DOM value:
+
+```bash
+moli fetch --eval 'document.querySelector("h1")?.textContent.trim()' \
+  "https://example.com"
+```
+
+Use declarations and return a structured value for multi-field extraction:
+
+```bash
+moli fetch --wait-selector "main" --eval $'
+const main = document.querySelector("main");
+const links = [...main.querySelectorAll("a[href]")].map(link => ({
+  text: link.textContent.trim(),
+  href: link.href
+}));
+({ title: document.title, links });
+' "https://example.com"
+```
+
+For asynchronous or multi-step work, return an async IIFE. A top-level
+`return` is invalid JavaScript, so return the final value from the function:
+
+```bash
+moli fetch --wait-selector "[data-row]" --eval $'
+(async () => {
+  const response = await fetch(new URL("/api/items", location.href));
+  if (!response.ok) throw new Error("request failed: " + response.status);
+
+  const payload = await response.json();
+  const visibleRows = [...document.querySelectorAll("[data-row]")]
+    .map(row => row.textContent.trim());
+
+  return { url: location.href, payload, visibleRows };
+})()
+' "https://example.com/app"
+```
+
+If the script ends with a declaration instead of a value-producing expression,
+the result is `undefined`. JavaScript exceptions make the command fail.
 
 ## Readiness
 

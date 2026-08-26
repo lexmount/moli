@@ -36,6 +36,13 @@ impl PageVm {
                 .evaluate_expression_with_await(&expression, await_promise)
                 .map(RendererRuntimeEvaluationResult::from_protocol_payload)
                 .map(RendererPageReply::RuntimeEvaluationResult),
+            RendererPageCommand::EvaluateExpressionByValue {
+                expression,
+                await_promise,
+            } => self
+                .evaluate_expression_by_value_with_await(&expression, await_promise)
+                .map(RendererRuntimeEvaluationResult::from_protocol_payload)
+                .map(RendererPageReply::RuntimeEvaluationResult),
             RendererPageCommand::EvaluateExpressionInExecutionContext {
                 execution_context_id,
                 expression,
@@ -1425,6 +1432,7 @@ fn renderer_page_command_uses_cpu_throttling(command: &RendererPageCommand) -> b
     matches!(
         command,
         RendererPageCommand::EvaluateExpression { .. }
+            | RendererPageCommand::EvaluateExpressionByValue { .. }
             | RendererPageCommand::EvaluateExpressionAndFollowPendingNavigation { .. }
             | RendererPageCommand::EvaluateExpressionInExecutionContext { .. }
             | RendererPageCommand::EvaluateExpressionInExecutionContextAndFollowPendingNavigation { .. }

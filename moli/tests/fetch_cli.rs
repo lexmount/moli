@@ -38,6 +38,8 @@ use tracing_subscriber::fmt::MakeWriter;
 mod anubis_deferred_module;
 #[path = "fetch_cli/disable_js.rs"]
 mod disable_js;
+#[path = "fetch_cli/eval.rs"]
+mod eval;
 
 struct Output {
     status: OutputStatus,

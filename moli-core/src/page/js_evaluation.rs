@@ -84,6 +84,24 @@ impl Page {
         )
     }
 
+    pub async fn evaluate_runtime_expression_by_value_with_await_async(
+        &mut self,
+        expression: &str,
+        await_promise: bool,
+    ) -> Result<serde_json::Value> {
+        let command = RendererPageCommand::EvaluateExpressionByValue {
+            expression: expression.to_owned(),
+            await_promise,
+        };
+        let reply = self.dispatch_page_command_async(command).await?;
+        expect_page_reply!(
+            reply,
+            "evaluate expression by value page command",
+            "a runtime evaluation result reply",
+            RendererPageReply::RuntimeEvaluationResult(result) => Ok(result.into_protocol_payload()),
+        )
+    }
+
     pub async fn evaluate_runtime_expression_in_execution_context_with_await_async(
         &mut self,
         execution_context_id: i64,
