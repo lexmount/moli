@@ -4,8 +4,7 @@ use crate::cookie::Cookie;
 use crate::utils::{is_http_scheme, is_secure, is_trustworthy_non_cryptographic};
 
 use super::policy::{
-    access_semantics, effective_same_site, scope_semantics, source_port_mismatch,
-    source_scheme_mismatch,
+    access_semantics, effective_same_site, scope_semantics, source_scheme_mismatch,
 };
 use super::*;
 
@@ -64,9 +63,6 @@ pub(super) fn query_context_access_result(
         && !is_http_scheme(context.url)
     {
         status.add_exclusion(CookieExclusionReason::HttpOnly);
-    }
-    if source_port_mismatch(cookie, context.url) {
-        status.add_exclusion(CookieExclusionReason::PortMismatch);
     }
     if source_scheme_mismatch(cookie, context.url) {
         status.add_exclusion(CookieExclusionReason::SchemeMismatch);

@@ -370,7 +370,6 @@ fn access_query_result_reports_secure_cookie_capability_for_insecure_context() {
         sid.access_result.status.exclusion_reasons,
         vec![
             CookieExclusionReason::SecureOnly,
-            CookieExclusionReason::PortMismatch,
             CookieExclusionReason::SchemeMismatch,
         ]
     );

@@ -136,24 +136,38 @@ fn query_result_reports_secure_and_path_exclusions() {
 }
 
 #[test]
-fn query_result_reports_source_port_mismatch() {
+fn query_result_is_agnostic_to_source_port() {
     let mut store = CookieStore::default();
     let request_url = test_utils::url("https://example.com:8443/foo/bar");
-    let mismatched_port_url = test_utils::url("https://example.com:9443/foo/bar");
+    let other_port_url = test_utils::url("https://example.com:9443/foo/bar");
 
     inserted!(store.insert_response_cookie_str_with_context(
         "sid=1; Path=/foo; Secure",
         &InsertContext::http(&request_url),
     ));
 
-    let result = store.get_cookie_query_result(&QueryContext::http(&mismatched_port_url));
-    assert!(result.included_cookies.is_empty());
-    assert_eq!(result.excluded_cookies.len(), 1);
-    assert_eq!(result.excluded_cookies[0].cookie.name(), "sid");
-    assert_eq!(
-        result.excluded_cookies[0].reason,
-        CookieExclusionReason::PortMismatch
-    );
+    // RFC 6265 matching is port-agnostic: a cookie set on one port of a host
+    // is visible on every other port of the same host.
+    let result = store.get_cookie_query_result(&QueryContext::http(&other_port_url));
+    assert!(result.excluded_cookies.is_empty());
+    assert_eq!(result.included_cookies.len(), 1);
+    assert_eq!(result.included_cookies[0].name(), "sid");
+}
+
+#[test]
+fn host_only_cookie_is_shared_across_ports_of_the_same_host() {
+    let mut store = CookieStore::default();
+    let set_url = test_utils::url("http://127.0.0.1:8771/");
+    let other_port_url = test_utils::url("http://127.0.0.1:8768/check");
+
+    inserted!(store
+        .insert_response_cookie_str_with_context("a=1; Path=/", &InsertContext::http(&set_url),));
+
+    let result = store.get_cookie_query_result(&QueryContext::http(&other_port_url));
+    assert!(result.excluded_cookies.is_empty());
+    assert_eq!(result.included_cookies.len(), 1);
+    assert_eq!(result.included_cookies[0].name(), "a");
+    assert_eq!(result.included_cookies[0].value(), "1");
 }
 
 #[test]
@@ -200,7 +214,6 @@ fn access_query_result_accumulates_multiple_exclusion_reasons() {
         vec![
             CookieExclusionReason::PathMismatch,
             CookieExclusionReason::SecureOnly,
-            CookieExclusionReason::PortMismatch,
             CookieExclusionReason::SchemeMismatch,
             CookieExclusionReason::SameSiteStrict,
         ]

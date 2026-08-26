@@ -3869,7 +3869,7 @@ fn request_access_report_projects_browser_site_context_snapshot() {
 }
 
 #[test]
-fn request_access_report_projects_source_port_mismatch_exclusion() {
+fn request_access_report_is_agnostic_to_source_port() {
     let mut store = BrowserCookieStore::default();
     let response_url = parse("https://example.com:8443/app/index.html");
     let request_url = parse("https://example.com:9443/app/panel");
@@ -3882,15 +3882,35 @@ fn request_access_report_projects_source_port_mismatch_exclusion() {
         )],
     );
 
+    // RFC 6265 matching is port-agnostic: a cookie set on one port of a host
+    // is attached to requests on every other port of the same host.
     let report = store.cookie_access_report_for_request(
         &request_url,
         NetworkCookieRequestContext::subresource("GET"),
     );
     let sid = find_cookie(&report, "sid").expect("cookie should be present");
-    assert_eq!(
-        sid.exclusion_reasons,
-        vec![StoredCookieExclusionReason::PortMismatch]
+    assert_eq!(sid.exclusion_reasons, vec![]);
+    assert!(
+        report
+            .included_cookies
+            .iter()
+            .any(|entry| entry.cookie.name == "sid")
     );
+}
+
+#[test]
+fn host_only_cookie_is_shared_across_ports_of_the_same_host() {
+    let mut store = BrowserCookieStore::default();
+    let set_url = parse("http://127.0.0.1:8771/");
+    let other_port_url = parse("http://127.0.0.1:8768/check");
+
+    store.store_response_headers(
+        &set_url,
+        &[("set-cookie".to_owned(), "a=1; Path=/".to_owned())],
+    );
+
+    assert_eq!(store.document_cookie(&other_port_url), "a=1");
+    assert_eq!(store.cookie_header(&other_port_url).as_deref(), Some("a=1"));
 }
 
 #[test]
@@ -3940,7 +3960,6 @@ fn request_access_report_accumulates_multiple_exclusion_reasons() {
         vec![
             StoredCookieExclusionReason::PathMismatch,
             StoredCookieExclusionReason::SecureOnly,
-            StoredCookieExclusionReason::PortMismatch,
             StoredCookieExclusionReason::SchemeMismatch,
             StoredCookieExclusionReason::SameSiteStrict,
         ]
@@ -4001,7 +4020,6 @@ fn request_access_report_projects_access_semantics_and_secure_access_capability(
         strict_insecure.exclusion_reasons,
         vec![
             StoredCookieExclusionReason::SecureOnly,
-            StoredCookieExclusionReason::PortMismatch,
             StoredCookieExclusionReason::SchemeMismatch,
         ]
     );

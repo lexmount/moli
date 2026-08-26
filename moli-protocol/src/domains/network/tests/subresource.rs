@@ -3081,7 +3081,7 @@ fetch('{start_url}', {{ credentials: 'include' }})
     server.abort();
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn page_fetch_same_host_different_port_reports_port_mismatch_cookie_exclusion() {
+async fn page_fetch_same_host_different_port_sends_host_only_cookie() {
     async fn page(target_url: String) -> impl IntoResponse {
         (
             [(CONTENT_TYPE.as_str(), "text/html")],
@@ -3177,12 +3177,12 @@ fetch('{target_url}', {{ credentials: 'include' }})
         })
         .expect("fetch request should emit requestWillBeSent");
     assert_eq!(
-        fetch_request["params"]["cookieAccessReport"]["excludedCookies"][0]["cookie"]["name"],
+        fetch_request["params"]["cookieAccessReport"]["includedCookies"][0]["cookie"]["name"],
         "sid"
     );
     assert_eq!(
-        fetch_request["params"]["cookieAccessReport"]["excludedCookies"][0]["exclusionReasons"],
-        json!(["PortMismatch"])
+        fetch_request["params"]["request"]["headers"]["Cookie"],
+        "sid=1"
     );
 
     server.abort();

@@ -8,15 +8,6 @@ use crate::utils::is_http_scheme;
 
 use super::*;
 
-pub(super) fn source_port_mismatch(cookie: &Cookie<'_>, url: &Url) -> bool {
-    let source_port = cookie.source_port();
-    source_port != -1
-        && url
-            .port_or_known_default()
-            .map(i32::from)
-            .is_some_and(|request_port| request_port != source_port)
-}
-
 pub(super) fn source_scheme_mismatch(cookie: &Cookie<'_>, url: &Url) -> bool {
     let source_scheme = cookie.source_scheme();
     source_scheme != CookieSourceScheme::Unset && source_scheme != CookieSourceScheme::from_url(url)
