@@ -82,7 +82,7 @@ moli-webidl-callback = { path = "../moli-webidl-callback" }
 moli-websocket = { path = "../moli-websocket" }
 moli-xpath = { path = "../moli-xpath" }
 publicsuffix = "2.3.0"
-curl = "0.4.49"
+curl = { version = "0.4.49", default-features = false, features = ["brotli", "http2", "poll_7_68_0", "ssl", "static-curl"] }
 http = "1"
 httpdate = "1.0.3"
 html-escape = "0.2.13"

@@ -55,6 +55,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Install AWS-LC build dependencies
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends cmake libclang-dev
+
       - name: Install clippy
         run: rustup component add clippy
 
@@ -69,6 +74,11 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Install AWS-LC build dependencies
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends cmake libclang-dev
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
@@ -89,6 +99,11 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Install AWS-LC build dependencies
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends cmake libclang-dev
 
       - name: Install uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0

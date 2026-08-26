@@ -41,10 +41,10 @@ use crate::{
         CachedStreamingResponseLookup, RawStreamingResponseCollector, RequestHttpVersion,
         RequestTransferMetrics, ResponseCollector, StreamingCachePlan, StreamingHtmlResponseStart,
         StreamingResponseCollector, cached_streaming_response_body_exceeds_response_limit,
-        cached_streaming_response_is_stale, configure_easy, configure_openssl_tls_context,
-        cookie_access_report_for_request, cookie_header_from_report,
-        finish_streaming_cached_response, load_cached_streaming_response_lookup,
-        log_request_completion, merge_cached_not_modified_streaming_response_lookup,
+        cached_streaming_response_is_stale, configure_easy, cookie_access_report_for_request,
+        cookie_header_from_report, finish_streaming_cached_response,
+        load_cached_streaming_response_lookup, log_request_completion,
+        merge_cached_not_modified_streaming_response_lookup,
         network_request_extra_info_from_headers, next_followed_redirect_url_from_parts,
         remove_cached_response, response_headers_forbid_cache_storage, store_response_cookies,
         transfer_metrics_from_easy, validation_headers_for_cached_streaming_response_lookup,
@@ -2749,10 +2749,6 @@ impl Handler for FetchTransferHandler {
                 .record_incoming_header_line(data),
             _ => {}
         }
-    }
-
-    fn ssl_ctx(&mut self, ssl_ctx: *mut std::ffi::c_void) -> std::result::Result<(), curl::Error> {
-        configure_openssl_tls_context(ssl_ctx)
     }
 }
 

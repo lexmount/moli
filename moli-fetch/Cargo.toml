@@ -12,8 +12,8 @@ test-support = ["moli-cookie-jar/test-support"]
 anyhow = "1.0.100"
 cidr = "0.3.2"
 crossbeam-channel = "0.5.15"
-curl = { version = "0.4.49", features = ["brotli", "http2", "poll_7_68_0", "static-curl", "static-ssl"] }
-curl-sys = "0.4.87"
+curl = { version = "0.4.49", default-features = false, features = ["brotli", "http2", "poll_7_68_0", "ssl", "static-curl"] }
+curl-sys = { version = "0.4.87", default-features = false }
 http = "1"
 moli-browser-profile = { path = "../moli-browser-profile" }
 moli-cookie-jar = { path = "../moli-cookie-jar" }
@@ -31,12 +31,6 @@ tokio = { version = "1.51.0", features = ["rt", "sync"] }
 tracing = "0.1.41"
 url = "2.5.7"
 wildcard = "0.3.0"
-
-[target.'cfg(windows)'.dependencies]
-openssl-sys = { version = "0.9", features = ["vendored"] }
-
-[target.'cfg(not(windows))'.dependencies]
-openssl-sys = "0.9"
 
 [dev-dependencies]
 h2 = "0.4"

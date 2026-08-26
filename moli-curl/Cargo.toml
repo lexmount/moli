@@ -7,8 +7,9 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.100"
 crossbeam-channel = "0.5.15"
-curl = { version = "0.4.49", features = ["brotli", "http2", "poll_7_68_0", "static-curl", "static-ssl"] }
+curl = { version = "0.4.49", default-features = false, features = ["brotli", "http2", "poll_7_68_0", "ssl", "static-curl"] }
 moli-dns-resolver = { path = "../moli-dns-resolver" }
+openssl-sys = { version = "0.9", features = ["aws-lc"] }
 parking_lot = "0.12"
 tracing = "0.1.41"
 

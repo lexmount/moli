@@ -53,6 +53,11 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.base.sha || inputs.base_ref || github.event.repository.default_branch }}
 
+      - name: Install AWS-LC build dependencies
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends cmake libclang-dev
+
       - name: Resolve commits and initialize evidence
         id: refs
         shell: bash

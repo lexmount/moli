@@ -19,9 +19,8 @@ use crate::{
 use crate::RedirectInfo;
 
 use super::{
-    StreamingHtmlResponseStart, configure_openssl_tls_context,
-    create_streaming_cache_body_writer_for_response_parts, next_redirect_url_from_parts,
-    store_response_cookies,
+    StreamingHtmlResponseStart, create_streaming_cache_body_writer_for_response_parts,
+    next_redirect_url_from_parts, store_response_cookies,
 };
 
 fn is_interim_response_status(status: u16) -> bool {
@@ -979,10 +978,6 @@ impl Handler for ResponseCollector {
         self.headers.push((name, value));
         true
     }
-
-    fn ssl_ctx(&mut self, ssl_ctx: *mut std::ffi::c_void) -> std::result::Result<(), curl::Error> {
-        configure_openssl_tls_context(ssl_ctx)
-    }
 }
 
 impl Handler for StreamingResponseCollector {
@@ -1052,10 +1047,6 @@ impl Handler for StreamingResponseCollector {
 
     fn progress(&mut self, _: f64, _: f64, _: f64, _: f64) -> bool {
         !self.cancel_handle.is_cancelled()
-    }
-
-    fn ssl_ctx(&mut self, ssl_ctx: *mut std::ffi::c_void) -> std::result::Result<(), curl::Error> {
-        configure_openssl_tls_context(ssl_ctx)
     }
 }
 
@@ -1129,10 +1120,6 @@ impl Handler for RawStreamingResponseCollector {
 
     fn progress(&mut self, _: f64, _: f64, _: f64, _: f64) -> bool {
         !self.cancel_handle.is_cancelled()
-    }
-
-    fn ssl_ctx(&mut self, ssl_ctx: *mut std::ffi::c_void) -> std::result::Result<(), curl::Error> {
-        configure_openssl_tls_context(ssl_ctx)
     }
 }
 

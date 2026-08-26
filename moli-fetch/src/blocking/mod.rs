@@ -2,7 +2,7 @@ mod cache;
 mod collectors;
 
 use std::{
-    ffi::{c_char, c_long, c_void},
+    ffi::{c_char, c_long},
     net::{IpAddr, ToSocketAddrs},
     str,
     time::Duration,
@@ -794,21 +794,6 @@ pub(crate) fn configure_easy<H: Handler>(
     }
 
     Ok(outgoing_headers)
-}
-
-pub(crate) fn configure_openssl_tls_context(
-    ssl_ctx: *mut c_void,
-) -> std::result::Result<(), curl::Error> {
-    // WPT's Python TLS server and some real servers close TLS sockets without a
-    // close_notify alert. Browsers tolerate that EOF, while OpenSSL 3 reports it
-    // as SSL_ERROR_SSL unless this compatibility option is set.
-    unsafe {
-        openssl_sys::SSL_CTX_set_options(
-            ssl_ctx.cast::<openssl_sys::SSL_CTX>(),
-            openssl_sys::SSL_OP_IGNORE_UNEXPECTED_EOF,
-        );
-    }
-    Ok(())
 }
 
 fn enforce_request_target_policy(config: &FetchConfig, request_url: &Url) -> Result<()> {

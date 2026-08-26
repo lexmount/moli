@@ -105,7 +105,7 @@ jobs:
         shell: bash
         run: |
           apt-get update
-          apt-get install --yes --no-install-recommends binutils python3
+          apt-get install --yes --no-install-recommends binutils cmake libclang-dev python3
 
       - name: Validate shell installer
         shell: bash
