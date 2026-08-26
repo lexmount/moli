@@ -20,7 +20,7 @@ from .fixture import FixtureServer
 from .groups.action_window import run_action_window_group
 from .groups.agent_browser import run_agent_browser_group
 from .groups.agent_episode import run_agent_episode_group
-from .groups.browser_semantics import run_browser_semantics_group, run_target_semantics_group
+from .groups.browser_semantics import run_browser_semantics_group
 from .groups.classic_scrollbar import run_classic_scrollbar_group
 from .groups.cdp_use import run_cdp_use_group
 from .groups.chrome_remote_interface import run_chrome_remote_interface_group
@@ -59,6 +59,7 @@ from .groups.protocol_regressions import (
 from .groups.proxy_auth import run_proxy_auth_group
 from .groups.puppeteer import run_puppeteer_group
 from .groups.stagehand import run_stagehand_group
+from .groups.target_semantics import run_target_semantics_group
 from .groups.tracing import run_raw_tracing_group, run_tracing_group
 from .groups.url_policy import run_url_policy_group
 from .groups.workers import run_workers_group
