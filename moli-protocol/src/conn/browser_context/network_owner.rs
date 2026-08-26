@@ -1,6 +1,6 @@
-use super::session_owner::CdpSessionRoute;
 use super::target_session_owner::{TargetSessionOwnerMut, TargetSessionStateMut};
 use super::*;
+use crate::conn::CdpSessionRoute;
 use crate::conn::{CapturedBody, TargetRuntimeSlot};
 use crate::devtools_runtime::DevToolsNetworkDataType;
 use crate::domains::network::{
@@ -1064,7 +1064,7 @@ fn clear_parked_network_observation_artifacts_if_unobserved(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conn::BackgroundTarget;
+    use crate::conn::{BackgroundTarget, ParkedPageSessionState};
 
     fn active_session_state_mut(browser_context: &mut BrowserContext) -> TargetSessionStateMut<'_> {
         TargetSessionStateMut::Active {

@@ -1006,6 +1006,7 @@ fn runtime_observable_console_payloads(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::conn::ParkedPageSessionState;
 
     fn active_session_state_mut(browser_context: &mut BrowserContext) -> TargetSessionStateMut<'_> {
         TargetSessionStateMut::Active {

@@ -3070,7 +3070,7 @@ async fn incomplete_popup_rollback_clears_tab_page_sessions_and_target_graph() {
     assert!(ctx.conn.session_route(Some("SID-popup-page-aux")).is_some());
     assert_eq!(ctx.conn.tab_target_count(), 1);
 
-    lifecycle::rollback_incomplete_popup_target_async(
+    popup::rollback_incomplete_popup_target_async(
         &mut ctx.conn,
         Some("BID-popup-rollback"),
         page_target_id,
@@ -3144,7 +3144,7 @@ async fn incomplete_active_popup_rollback_clears_active_slot_sessions_and_target
     );
     assert_eq!(ctx.conn.tab_target_count(), 1);
 
-    lifecycle::rollback_incomplete_popup_target_async(
+    popup::rollback_incomplete_popup_target_async(
         &mut ctx.conn,
         Some("BID-active-popup-rollback"),
         page_target_id,

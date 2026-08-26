@@ -578,7 +578,7 @@ async fn detach_from_target_inner_async(
     }
 
     if let Some(session_id) = params.session_id.as_deref() {
-        super::lifecycle::detach_attached_sessions_for_owner_async(
+        super::auto_attach::detach_attached_sessions_for_owner_async(
             conn,
             out.target_events_mut(),
             Some(session_id),
@@ -651,7 +651,7 @@ async fn detach_from_target_inner_async(
         let _ = conn
             .detach_runtime_inspector_session_for_session_owner_async(Some(session_id))
             .await;
-        super::lifecycle::clear_emulated_media_for_detached_session_best_effort(conn, session_id)
+        super::auto_attach::clear_emulated_media_for_detached_session_best_effort(conn, session_id)
             .await;
         super::clear_detached_target_fetch_state_background_events_async(
             conn,
