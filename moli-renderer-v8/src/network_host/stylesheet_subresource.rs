@@ -104,13 +104,33 @@ pub(crate) fn start_stylesheet_subresource_fetch(
     };
 
     if let Some(response) = local_url_response(&request_url) {
-        let response: crate::protocol_types::NavigationResponse = response.into();
+        let mut response: crate::protocol_types::NavigationResponse = response.into();
+        let encoded = (resource_kind == StylesheetLoadBlockingResourceKind::Image).then(|| {
+            let manager = host
+                .document_resource_loader_for_owner(binding.owner())
+                .map_or_else(
+                    moli_parkable_image::ParkableImageManager::default,
+                    |loader| {
+                        let runner = loader.task_runner();
+                        loader.request_client().parkable_image_manager(&runner)
+                    },
+                );
+            manager.from_frozen_bytes(response.take_body_bytes())
+        });
         if let Some(identity) = css_image.as_ref() {
-            let descriptor = image_response_descriptor(&response);
+            let descriptor = crate::network_host::image_response_descriptor_from_parkable(
+                &response,
+                encoded
+                    .as_ref()
+                    .expect("a local CSS image must have parkable bytes"),
+            );
             let _ = host.complete_stylesheet_css_image_response(
                 identity,
                 descriptor,
-                response.body_bytes(),
+                encoded
+                    .as_ref()
+                    .expect("a local CSS image must have parkable bytes")
+                    .clone(),
             );
         }
         let terminal = if is_main_web_font {
@@ -125,14 +145,27 @@ pub(crate) fn start_stylesheet_subresource_fetch(
         } else {
             StylesheetSubresourceFetchStart::Settled
         };
-        host.record_get_subresource_network_result_with_initiator(
-            frame_id,
-            document_url,
-            request_url,
-            resource_type,
-            SubresourceRequestInitiatorType::Css,
-            &Ok(response),
-        );
+        let result = Ok(response);
+        if let Some(encoded) = encoded {
+            host.record_get_subresource_network_result_with_body_and_initiator(
+                frame_id,
+                document_url,
+                request_url,
+                resource_type,
+                SubresourceRequestInitiatorType::Css,
+                &result,
+                crate::types::SubresourceResponseBody::from_parkable_image(encoded),
+            );
+        } else {
+            host.record_get_subresource_network_result_with_initiator(
+                frame_id,
+                document_url,
+                request_url,
+                resource_type,
+                SubresourceRequestInitiatorType::Css,
+                &result,
+            );
+        }
         host.settle_stylesheet_subresource_load_delay(binding);
         return Ok(terminal);
     }
@@ -250,7 +283,8 @@ pub(crate) fn start_stylesheet_subresource_fetch(
                     skip_fetch_security_validation: false,
                     response_filter: None,
                     network_error_text: None,
-                    result: Err("service worker stylesheet subresource dispatch failed".to_owned()),
+                    result: Err("service worker stylesheet subresource dispatch failed".to_owned())
+                        .into(),
                 },
             );
         }

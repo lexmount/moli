@@ -414,6 +414,83 @@ async fn removing_active_browser_context_switches_engine_to_promoted_context() {
 }
 
 #[tokio::test]
+async fn memory_diagnostics_reports_resource_runtime_storage() {
+    let mut conn = CdpConnection::new();
+    let resource_runtime = conn
+        .ensure_resource_request_client()
+        .expect("resource request client should initialize")
+        .browser_resource_runtime();
+    assert!(
+        resource_runtime.disk_pool().is_some(),
+        "the default resource runtime should have a writable disk pool"
+    );
+
+    let parkable_images = resource_runtime.parkable_image_manager();
+    let parked_image_bytes = 2 * 1024;
+    let parked_image = parkable_images.from_frozen_bytes(vec![7; parked_image_bytes]);
+    let snapshot = parked_image
+        .snapshot()
+        .expect("resident image bytes should be readable");
+    assert_eq!(snapshot.len(), parked_image_bytes);
+    drop(snapshot);
+    parkable_images.park_images_now();
+    assert_eq!(parkable_images.diagnostics().parked_count, 1);
+
+    let pending_diagnostics = conn
+        .start_moli_diagnostics()
+        .expect("moli diagnostics dispatch should start");
+    let diagnostics = conn.complete_moli_diagnostics(
+        pending_diagnostics
+            .wait()
+            .await
+            .expect("moli diagnostics dispatch should finish"),
+    );
+
+    let active_engine = &diagnostics["connection"]["activeNavigationEngine"];
+    let resource_runtime = &active_engine["resourceRuntime"];
+    assert!(
+        active_engine["resourceRuntimeId"]
+            .as_u64()
+            .is_some_and(|runtime_id| runtime_id > 0),
+        "a materialized ResourceRequestClient should expose its shared browser resource runtime identity"
+    );
+    assert_eq!(
+        resource_runtime["runtimeId"], active_engine["resourceRuntimeId"],
+        "the legacy runtime id field should alias the canonical resource runtime snapshot"
+    );
+    assert_eq!(
+        resource_runtime["memoryCache"], active_engine["networkMemoryCache"],
+        "the legacy memory cache field should alias the canonical resource runtime snapshot"
+    );
+    assert_eq!(
+        resource_runtime["diskPool"],
+        json!({
+            "mayWrite": true,
+            "diskFootprintBytes": parked_image_bytes,
+            "freeBytes": 0,
+            "freeChunkCount": 0,
+        })
+    );
+    assert_eq!(
+        resource_runtime["parkableImages"],
+        json!({
+            "imageCount": 1,
+            "residentCount": 0,
+            "parkingCount": 0,
+            "residentWithDiskBackupCount": 0,
+            "parkedCount": 1,
+            "retainedMemoryBytes": 0,
+            "retainedDiskBytes": parked_image_bytes,
+        })
+    );
+    assert_eq!(
+        resource_runtime["detachedKeepaliveLoads"]["activeLoadCount"],
+        json!(0)
+    );
+    assert_eq!(parked_image.len(), parked_image_bytes);
+}
+
+#[tokio::test]
 async fn memory_diagnostics_reports_page_vm_document_isolate_model() {
     let mut conn = CdpConnection::new();
     conn.replace_navigation_engine(

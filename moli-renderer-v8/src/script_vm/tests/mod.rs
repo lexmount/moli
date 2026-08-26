@@ -2361,7 +2361,7 @@ async fn child_navigation_retires_local_window_owned_xhr() {
         skip_fetch_security_validation: false,
         response_filter: None,
         network_error_text: None,
-        result: Err("stale retired XHR completion".to_owned()),
+        result: Err("stale retired XHR completion".to_owned()).into(),
     })
     .expect("late completion for retired XHR should be harmless");
     vm.eval(
@@ -2801,7 +2801,7 @@ fn main_document_open_fetch_redirect_uses_source_document_csp_report_context() {
         skip_fetch_security_validation: true,
         response_filter: None,
         network_error_text: None,
-        result: Ok(redirected_fetch_response(&request_url, final_url)),
+        result: Ok(redirected_fetch_response(&request_url, final_url)).into(),
     })
     .expect("source-owned Fetch redirect should complete in the preserved LocalWindow");
 
@@ -2968,7 +2968,7 @@ async fn child_navigation_aborts_fetch_and_detaches_keepalive() {
         skip_fetch_security_validation: false,
         response_filter: None,
         network_error_text: None,
-        result: Err("stale retired Fetch completion".to_owned()),
+        result: Err("stale retired Fetch completion".to_owned()).into(),
     })
     .expect("late ordinary Fetch completion should be harmless");
     let _ = vm.take_network_output();
@@ -2988,7 +2988,8 @@ async fn child_navigation_aborts_fetch_and_detaches_keepalive() {
             200,
             vec![("content-type".to_owned(), "text/plain".to_owned())],
             "keepalive completed".to_owned(),
-        )),
+        ))
+        .into(),
     })
     .expect("detached keepalive completion should remain observable without V8");
     assert!(
@@ -3130,7 +3131,8 @@ async fn detached_keepalive_redirect_reports_source_document_csp_without_v8() {
         result: Ok(redirected_fetch_response(
             &report_only_request,
             report_only_final,
-        )),
+        ))
+        .into(),
     })
     .expect("detached report-only keepalive should complete without V8");
     let enforce_final = Url::parse("https://enforce-redirect-target.test/final").unwrap();
@@ -3144,7 +3146,7 @@ async fn detached_keepalive_redirect_reports_source_document_csp_without_v8() {
         skip_fetch_security_validation: true,
         response_filter: None,
         network_error_text: None,
-        result: Ok(redirected_fetch_response(&enforce_request, enforce_final)),
+        result: Ok(redirected_fetch_response(&enforce_request, enforce_final)).into(),
     })
     .expect("detached enforcing keepalive should fail without entering V8");
 
@@ -3438,7 +3440,8 @@ fn main_document_open_preserves_accepted_beacon_without_rebind() {
             204,
             Vec::new(),
             String::new(),
-        )),
+        ))
+        .into(),
     })
     .expect("accepted main Beacon should complete without entering V8");
     assert!(
@@ -3699,7 +3702,8 @@ fn main_document_open_preserves_accepted_csp_report_but_rejects_stale_owner_reus
             204,
             Vec::new(),
             String::new(),
-        )),
+        ))
+        .into(),
     })
     .expect("accepted main CSP report should complete without entering V8");
     assert!(
@@ -12607,7 +12611,7 @@ async fn main_image_source_restart_cancels_exact_request_and_drops_stale_termina
         skip_fetch_security_validation: false,
         response_filter: None,
         network_error_text: None,
-        result: Err("stale cancelled image completion".to_owned()),
+        result: Err("stale cancelled image completion".to_owned()).into(),
     })
     .expect("stale cancelled image completion should be harmless");
     wait_for_image_load_event_executor_test_task(&mut vm, "replacement image decode completion")
@@ -13276,7 +13280,7 @@ async fn main_media_source_restart_cancels_exact_network_request_and_stale_termi
         skip_fetch_security_validation: false,
         response_filter: None,
         network_error_text: None,
-        result: Err("stale cancelled media completion".to_owned()),
+        result: Err("stale cancelled media completion".to_owned()).into(),
     })
     .expect("stale cancelled media completion should be harmless");
 

@@ -27,7 +27,7 @@ use super::{
 };
 use crate::network::{BrowserResourceRuntimeOwner, BrowserResourceRuntimeOwnerRoot};
 use crate::protocol_types::OptionalResourceFetchMask;
-use crate::types::SubresourceResourceType;
+use crate::types::{SubresourceResourceType, SubresourceResponseBodyWriter};
 
 #[test]
 fn loader_clones_share_one_browser_resource_runtime() {
@@ -39,6 +39,65 @@ fn loader_clones_share_one_browser_resource_runtime() {
     assert_eq!(
         loader.resource_runtime_diagnostics().runtime_id,
         clone.resource_runtime_diagnostics().runtime_id
+    );
+}
+
+#[test]
+fn loader_clones_share_one_resource_disk_pool() {
+    let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+    let clone = loader.clone();
+    let pool = loader
+        .disk_pool()
+        .expect("resource runtime should create one disk pool");
+    let mut writer =
+        SubresourceResponseBodyWriter::with_memory_limit_and_disk_pool(2, clone.disk_pool());
+    writer.append(b"shared");
+    let body = writer.finish();
+
+    assert_eq!(body.materialize_bytes().unwrap(), b"shared");
+    assert_eq!(pool.diagnostics().disk_footprint_bytes, 6);
+    assert_eq!(
+        loader
+            .resource_runtime_diagnostics()
+            .disk_pool
+            .expect("disk pool diagnostics should be present")
+            .disk_footprint_bytes,
+        6
+    );
+    drop(body);
+    assert_eq!(pool.diagnostics().free_bytes, 6);
+}
+
+#[test]
+fn loader_clones_share_one_parkable_image_manager() {
+    let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+    let clone = loader.clone();
+    let runner = crate::network::RendererResourceTaskRunner::for_test();
+    let image = loader
+        .parkable_image_manager(&runner)
+        .from_frozen_bytes(vec![7; 2 * 1024]);
+
+    assert_eq!(
+        clone
+            .resource_runtime_diagnostics()
+            .parkable_images
+            .image_count,
+        1
+    );
+    assert_eq!(
+        clone
+            .resource_runtime_diagnostics()
+            .parkable_images
+            .retained_memory_bytes,
+        2 * 1024
+    );
+    drop(image);
+    assert_eq!(
+        loader
+            .resource_runtime_diagnostics()
+            .parkable_images
+            .image_count,
+        0
     );
 }
 
@@ -91,6 +150,47 @@ fn independently_created_loaders_use_isolated_browser_resource_runtimes() {
         left.resource_runtime_diagnostics().runtime_id,
         right.resource_runtime_diagnostics().runtime_id
     );
+
+    let runner = crate::network::RendererResourceTaskRunner::for_test();
+    let _left_image = left
+        .parkable_image_manager(&runner)
+        .from_frozen_bytes(vec![1; 1024]);
+    assert_eq!(
+        left.resource_runtime_diagnostics()
+            .parkable_images
+            .image_count,
+        1
+    );
+    assert_eq!(
+        right
+            .resource_runtime_diagnostics()
+            .parkable_images
+            .image_count,
+        0
+    );
+
+    let left_data = left
+        .disk_pool()
+        .expect("left runtime should have a disk pool")
+        .store(b"left")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        left.resource_runtime_diagnostics()
+            .disk_pool
+            .unwrap()
+            .disk_footprint_bytes,
+        4
+    );
+    assert_eq!(
+        right
+            .resource_runtime_diagnostics()
+            .disk_pool
+            .unwrap()
+            .disk_footprint_bytes,
+        0
+    );
+    drop(left_data);
 }
 
 fn unique_test_cache_dir() -> PathBuf {

@@ -195,7 +195,23 @@ impl ResourcePerformanceEntry {
         start_unix_millis: Option<f64>,
         response: &crate::protocol_types::NavigationResponse,
     ) -> Self {
-        let body_size = response.body_bytes().len() as f64;
+        Self::from_network_response_with_body_size(
+            name,
+            initiator_type,
+            start_unix_millis,
+            response,
+            response.body_bytes().len(),
+        )
+    }
+
+    pub(crate) fn from_network_response_with_body_size(
+        name: impl Into<String>,
+        initiator_type: &'static str,
+        start_unix_millis: Option<f64>,
+        response: &crate::protocol_types::NavigationResponse,
+        body_size: usize,
+    ) -> Self {
+        let body_size = body_size as f64;
         let header_size = response
             .headers
             .iter()

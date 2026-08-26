@@ -140,7 +140,7 @@ pub(super) fn dispatch_service_worker_xhr(
                 skip_fetch_security_validation: false,
                 response_filter: None,
                 network_error_text: None,
-                result: Err("service worker xhr dispatch failed".to_owned()),
+                result: Err("service worker xhr dispatch failed".to_owned()).into(),
             });
     Some(internal_id)
 }

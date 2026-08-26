@@ -8,7 +8,10 @@ mod diagnostics;
 mod memory_cache;
 mod runtime;
 
-pub use diagnostics::BrowserResourceRuntimeDiagnostics;
+pub use diagnostics::{
+    BrowserParkableImageDiagnostics, BrowserResourceDiskPoolDiagnostics,
+    BrowserResourceRuntimeDiagnostics,
+};
 pub use memory_cache::SharedMemoryResourceCacheDiagnostics;
 pub use runtime::{
     BrowserResourceRuntime, BrowserResourceRuntimeOwner, BrowserResourceRuntimeOwnerRegistrar,

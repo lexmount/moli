@@ -670,7 +670,7 @@ impl ServiceWorkerRuntimeService {
                 skip_fetch_security_validation: true,
                 response_filter,
                 network_error_text: None,
-                result: Ok(navigation_response),
+                result: Ok(navigation_response).into(),
             });
     }
 
@@ -723,7 +723,7 @@ impl ServiceWorkerRuntimeService {
                 skip_fetch_security_validation: false,
                 response_filter: None,
                 network_error_text,
-                result: Err(message),
+                result: Err(message).into(),
             });
     }
 }

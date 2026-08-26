@@ -3123,6 +3123,7 @@ impl CdpConnection {
                     "imageFetchEnabled": self.engine.image_fetch_enabled(),
                     "optionalResourceFetchMask": self.engine.optional_resource_fetch_mask().bits(),
                     "subframeLoadingEnabled": self.engine.subframe_loading_enabled(),
+                    "resourceRuntime": active_navigation_engine_resource_runtime,
                     "resourceRuntimeId": active_navigation_engine_resource_runtime_id,
                     "networkMemoryCache": active_navigation_engine_memory_cache,
                     "browserContextRuntime": self.engine

@@ -226,7 +226,7 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                         }
                     } else if !allow_headers_first {
                         // Worker fetch still resolves after the full response, but ordinary
-                        // transfers can keep their body in the same chunked/spooled carrier that
+                        // transfers can keep their body in the same chunked/pooled carrier that
                         // CDP Network capture uses instead of forcing a single buffered Response.
                         match fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata(
                             &loader,
@@ -240,7 +240,10 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                                 let (mut response, network_request_headers) =
                                     worker_network_result_parts(observed);
                                 let head = response.head();
-                                let mut body_writer = SubresourceResponseBodyWriter::default();
+                                let mut body_writer =
+                                    SubresourceResponseBodyWriter::with_disk_pool(
+                                        loader.disk_pool(),
+                                    );
                                 while let Some(chunk) = response.next_chunk().await {
                                     body_writer.append(&chunk);
                                 }
@@ -278,7 +281,10 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                                         network_request_headers,
                                     },
                                 ));
-                                let mut body_writer = SubresourceResponseBodyWriter::default();
+                                let mut body_writer =
+                                    SubresourceResponseBodyWriter::with_disk_pool(
+                                        loader.disk_pool(),
+                                    );
                                 while let Some(chunk) = response.next_chunk().await {
                                     body_writer.append(&chunk);
                                     let _ = completion_tx.send(WorkerFetchEvent::StreamingChunk(
@@ -556,7 +562,7 @@ pub(in crate::worker) fn spawn_worker_xhr_network(
             }
             Ok(request) => {
                 // Ordinary worker XHR can keep the network/cache path streaming
-                // and spool large bodies until the XHR DONE boundary.
+                // and pool large bodies until the XHR DONE boundary.
                 match fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata(
                     &loader,
                     request,
@@ -569,7 +575,9 @@ pub(in crate::worker) fn spawn_worker_xhr_network(
                         let (mut response, network_request_headers) =
                             worker_network_result_parts(observed);
                         let head = response.head();
-                        let mut body_writer = SubresourceResponseBodyWriter::default();
+                        let mut body_writer = SubresourceResponseBodyWriter::with_disk_pool(
+                            loader.disk_pool(),
+                        );
                         while let Some(chunk) = response.next_chunk().await {
                             body_writer.append(&chunk);
                         }
