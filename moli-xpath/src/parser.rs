@@ -138,7 +138,7 @@ where
 
             result = self.parse_union_expression()?;
 
-            if negations > 1 {
+            if negations > 0 {
                 if negations % 2 == 0 {
                     result = Expression::Function(CoreFunction::Number(Some(Box::new(result))))
                 } else {
@@ -827,6 +827,17 @@ mod tests {
                 assert_eq!(result, expected, "{:?} was parsed incorrectly", test_case);
             }
             Err(e) => panic!("Failed to parse '{}': {:?}", test_case, e),
+        }
+    }
+
+    #[test]
+    fn parse_single_unary_minus() {
+        let expected = Expression::Negate(Box::new(Expression::Literal(Literal::Decimal(1.5))));
+        match parse("-1.5", Some(DummyNamespaceResolver), true) {
+            Ok(result) => {
+                assert_eq!(result, expected, "{:?} was parsed incorrectly", "-1.5");
+            }
+            Err(e) => panic!("Failed to parse '{}': {:?}", "-1.5", e),
         }
     }
 }
