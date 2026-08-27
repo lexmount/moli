@@ -15,6 +15,20 @@ use crate::{
     PaintDiagnosticSeverity,
 };
 
+pub(crate) struct LayoutPassPhaseMetrics {
+    pub(crate) box_tree_elapsed: std::time::Duration,
+    pub(crate) list_marker_elapsed: std::time::Duration,
+    pub(crate) form_control_elapsed: std::time::Duration,
+    pub(crate) inline_preparation_elapsed: std::time::Duration,
+    pub(crate) numeric_layout_elapsed: std::time::Duration,
+    pub(crate) numeric_first_pass_elapsed: std::time::Duration,
+    pub(crate) numeric_followup_passes_elapsed: std::time::Duration,
+    pub(crate) overflow_detection_elapsed: std::time::Duration,
+    pub(crate) scrollbar_feedback_elapsed: std::time::Duration,
+    pub(crate) embedded_frame_elapsed: std::time::Duration,
+    pub(crate) numeric_layout_pass_count: usize,
+}
+
 pub(crate) fn finish_layout_pass<N>(
     world: &LayoutWorld<N>,
     source_root: N,
@@ -24,10 +38,12 @@ pub(crate) fn finish_layout_pass<N>(
     paint_capture: Option<PaintCaptureRequest>,
     mut embedded_frames: HashMap<LayoutBoxId, (N, crate::EmbeddedFrameSnapshot<N>)>,
     embedded_frames_complete: bool,
+    phase_metrics: LayoutPassPhaseMetrics,
 ) -> Result<LayoutPassResult<N>, LayoutError>
 where
     N: Copy + Debug + Eq + Hash,
 {
+    let projection_started = Instant::now();
     let mut projection = OutputProjection::new(world, viewport);
     projection.build_local_box_geometry();
     projection.resolve_scrollable_overflow();
@@ -73,6 +89,18 @@ where
     let metrics = LayoutPassMetrics {
         reason,
         elapsed: started.elapsed(),
+        box_tree_elapsed: phase_metrics.box_tree_elapsed,
+        list_marker_elapsed: phase_metrics.list_marker_elapsed,
+        form_control_elapsed: phase_metrics.form_control_elapsed,
+        inline_preparation_elapsed: phase_metrics.inline_preparation_elapsed,
+        numeric_layout_elapsed: phase_metrics.numeric_layout_elapsed,
+        numeric_first_pass_elapsed: phase_metrics.numeric_first_pass_elapsed,
+        numeric_followup_passes_elapsed: phase_metrics.numeric_followup_passes_elapsed,
+        overflow_detection_elapsed: phase_metrics.overflow_detection_elapsed,
+        scrollbar_feedback_elapsed: phase_metrics.scrollbar_feedback_elapsed,
+        embedded_frame_elapsed: phase_metrics.embedded_frame_elapsed,
+        projection_elapsed: projection_started.elapsed(),
+        numeric_layout_pass_count: phase_metrics.numeric_layout_pass_count,
         box_count: projection.boxes.len(),
         fragment_count: projection.fragments.len(),
         paint_operation_count: paint_snapshot

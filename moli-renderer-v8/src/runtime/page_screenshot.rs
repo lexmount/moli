@@ -2,11 +2,58 @@ use moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE;
 use moli_layout::{LayoutRect, PaintCaptureRequest, PaintViewport};
 use moli_page_types::LayoutPolicy;
 use std::sync::Arc;
+use std::time::Instant;
 
 use super::{
     PageVm, RendererCaptureScreencastFrameReply, RendererCaptureScreenshotReply,
     RendererCapturedScreencastFrame, RendererCapturedScreenshot, RendererDocumentLifecycleIdentity,
 };
+
+#[derive(Default)]
+struct PaintFragmentProfile {
+    push_layer: usize,
+    push_clip: usize,
+    pop_layer: usize,
+    fill: usize,
+    stroke: usize,
+    border: usize,
+    box_shadow: usize,
+    text_decoration: usize,
+    text_shadow: usize,
+    glyph_run: usize,
+    glyph: usize,
+    image: usize,
+    svg_image: usize,
+}
+
+impl PaintFragmentProfile {
+    fn from_snapshot(snapshot: &moli_layout::PaintSnapshot) -> Self {
+        let mut profile = Self::default();
+        for fragment in &snapshot.fragments {
+            match fragment {
+                moli_layout::PaintFragment::PushLayer { .. } => profile.push_layer += 1,
+                moli_layout::PaintFragment::PushClip { .. } => profile.push_clip += 1,
+                moli_layout::PaintFragment::PopLayer => profile.pop_layer += 1,
+                moli_layout::PaintFragment::Fill { .. } => profile.fill += 1,
+                moli_layout::PaintFragment::Stroke(_) => profile.stroke += 1,
+                moli_layout::PaintFragment::Border { .. } => profile.border += 1,
+                moli_layout::PaintFragment::BoxShadow(_) => profile.box_shadow += 1,
+                moli_layout::PaintFragment::TextDecoration(_) => profile.text_decoration += 1,
+                moli_layout::PaintFragment::TextShadow(shadow) => {
+                    profile.text_shadow += 1;
+                    profile.glyph += shadow.run.glyphs.len();
+                }
+                moli_layout::PaintFragment::GlyphRun(run) => {
+                    profile.glyph_run += 1;
+                    profile.glyph += run.glyphs.len();
+                }
+                moli_layout::PaintFragment::Image(_) => profile.image += 1,
+                moli_layout::PaintFragment::SvgImage(_) => profile.svg_image += 1,
+            }
+        }
+        profile
+    }
+}
 
 /// Opaque identity for the renderer state that can affect one viewport frame.
 ///
@@ -253,6 +300,8 @@ impl PageVm {
         paint_capture: PaintCaptureRequest,
         reason: moli_layout::LayoutFlushReason,
     ) -> anyhow::Result<RendererImageCaptureOutcome> {
+        let profile_enabled = moli_trace::cpu_profile_enabled();
+        let total_started = profile_enabled.then(Instant::now);
         if self.layout_policy == LayoutPolicy::Mock {
             return Ok(RendererImageCaptureOutcome::LayoutDisabled);
         }
@@ -264,14 +313,44 @@ impl PageVm {
             surface.inner_height,
             surface.device_pixel_ratio as f32,
         );
+        let layout_started = profile_enabled.then(Instant::now);
         let Some(snapshot) =
             self.vm_mut()
                 .paint_layout_snapshot_with_capture(viewport, reason, paint_capture)?
         else {
             return Ok(RendererImageCaptureOutcome::NoDocument);
         };
+        let layout_us = layout_started
+            .map(|started| started.elapsed().as_micros())
+            .unwrap_or_default();
 
+        if profile_enabled {
+            let profile = PaintFragmentProfile::from_snapshot(&snapshot);
+            tracing::info!(
+                target: "moli_cpu_profile",
+                stage = "paint_fragment_profile",
+                push_layer = profile.push_layer,
+                push_clip = profile.push_clip,
+                pop_layer = profile.pop_layer,
+                fill = profile.fill,
+                stroke = profile.stroke,
+                border = profile.border,
+                box_shadow = profile.box_shadow,
+                text_decoration = profile.text_decoration,
+                text_shadow = profile.text_shadow,
+                glyph_run = profile.glyph_run,
+                glyph = profile.glyph,
+                image = profile.image,
+                svg_image = profile.svg_image,
+            );
+        }
+
+        let raster_started = profile_enabled.then(Instant::now);
         let raster = moli_paint::raster_snapshot(&snapshot)?;
+        let raster_us = raster_started
+            .map(|started| started.elapsed().as_micros())
+            .unwrap_or_default();
+        let encode_started = profile_enabled.then(Instant::now);
         let (mime_type, width, height, bytes) = match format {
             RendererScreenshotFormat::Png => {
                 let encoded = moli_image::encode_png_with_options(
@@ -285,6 +364,23 @@ impl PageVm {
                 ("image/jpeg", encoded.width, encoded.height, encoded.bytes)
             }
         };
+        let encode_us = encode_started
+            .map(|started| started.elapsed().as_micros())
+            .unwrap_or_default();
+        if let Some(started) = total_started {
+            tracing::info!(
+                target: "moli_cpu_profile",
+                stage = "image_capture",
+                reason = ?reason,
+                width,
+                height,
+                encoded_bytes = bytes.len(),
+                layout_us,
+                raster_us,
+                encode_us,
+                total_us = started.elapsed().as_micros(),
+            );
+        }
         Ok(RendererImageCaptureOutcome::Captured(
             RendererCapturedScreenshot {
                 mime_type: mime_type.to_owned(),

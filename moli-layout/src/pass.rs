@@ -9,7 +9,7 @@ use crate::{
     taffy_tree::compute_world_layout,
 };
 use std::collections::HashMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Owned products for one embedded browsing context in the same synchronous
 /// layout demand as its parent.
@@ -211,7 +211,9 @@ where
     F: EmbeddedFrameRenderer<S::NodeId>,
 {
     let started = Instant::now();
+    let phase_started = Instant::now();
     let mut world = build_layout_world(source, styles)?;
+    let box_tree_elapsed = phase_started.elapsed();
     debug_assert!(
         world
             .viewport_scroll_policy
@@ -219,11 +221,20 @@ where
             .is_none_or(|body| world.box_by_id(body).is_some()),
         "viewport policy must retain only a live pass-local body box identity"
     );
+    let phase_started = Instant::now();
     prepare_list_markers(&mut world)?;
+    let list_marker_elapsed = phase_started.elapsed();
+    let phase_started = Instant::now();
     prepare_form_controls(&mut world)?;
+    let form_control_elapsed = phase_started.elapsed();
+    let phase_started = Instant::now();
     prepare_inline_contexts(&mut world, services);
+    let inline_preparation_elapsed = phase_started.elapsed();
     world.validate_invariants()?;
-    compute_world_layout_with_scrollbars(&mut world, request.viewport);
+    let phase_started = Instant::now();
+    let numeric_metrics = compute_world_layout_with_scrollbars(&mut world, request.viewport);
+    let numeric_layout_elapsed = phase_started.elapsed();
+    let phase_started = Instant::now();
     let mut embedded_frames = HashMap::new();
     if request.requests_embedded_frames() {
         for index in 0..world.boxes.len() {
@@ -262,6 +273,7 @@ where
             }
         }
     }
+    let embedded_frame_elapsed = phase_started.elapsed();
     finish_layout_pass(
         &world,
         source.root(),
@@ -271,6 +283,19 @@ where
         request.paint_capture,
         embedded_frames,
         request.requests_embedded_frames(),
+        crate::projection::LayoutPassPhaseMetrics {
+            box_tree_elapsed,
+            list_marker_elapsed,
+            form_control_elapsed,
+            inline_preparation_elapsed,
+            numeric_layout_elapsed,
+            numeric_first_pass_elapsed: numeric_metrics.first_pass_elapsed,
+            numeric_followup_passes_elapsed: numeric_metrics.followup_passes_elapsed,
+            overflow_detection_elapsed: numeric_metrics.overflow_detection_elapsed,
+            scrollbar_feedback_elapsed: numeric_metrics.scrollbar_feedback_elapsed,
+            embedded_frame_elapsed,
+            numeric_layout_pass_count: numeric_metrics.pass_count,
+        },
     )
 }
 
@@ -278,10 +303,20 @@ where
 /// classic browser scrollbars: lay out without an automatic gutter, reveal
 /// every axis that overflows, then repeat because one gutter can make the
 /// perpendicular axis overflow. Each axis changes at most once.
+#[derive(Default)]
+struct NumericLayoutMetrics {
+    pass_count: usize,
+    first_pass_elapsed: Duration,
+    followup_passes_elapsed: Duration,
+    overflow_detection_elapsed: Duration,
+    scrollbar_feedback_elapsed: Duration,
+}
+
 fn compute_world_layout_with_scrollbars<N>(
     world: &mut crate::LayoutWorld<N>,
     viewport: LayoutViewport,
-) where
+) -> NumericLayoutMetrics
+where
     N: Copy + std::fmt::Debug + Eq + std::hash::Hash,
 {
     let root_id = world.root;
@@ -299,9 +334,21 @@ fn compute_world_layout_with_scrollbars<N>(
         }
     }
 
+    let mut metrics = NumericLayoutMetrics::default();
     loop {
+        metrics.pass_count = metrics.pass_count.saturating_add(1);
+        let phase_started = Instant::now();
         compute_world_layout(world, viewport);
+        let elapsed = phase_started.elapsed();
+        if metrics.pass_count == 1 {
+            metrics.first_pass_elapsed = elapsed;
+        } else {
+            metrics.followup_passes_elapsed += elapsed;
+        }
+        let phase_started = Instant::now();
         let overflow = overflowing_axes(world, viewport);
+        metrics.overflow_detection_elapsed += phase_started.elapsed();
+        let phase_started = Instant::now();
         let (root_overflow_x, root_overflow_y) = overflow[root];
         let mut changed = world
             .viewport_scroll_policy
@@ -327,10 +374,12 @@ fn compute_world_layout_with_scrollbars<N>(
                 overflow_y,
             );
         }
+        metrics.scrollbar_feedback_elapsed += phase_started.elapsed();
         if !changed {
             break;
         }
     }
+    metrics
 }
 
 fn css_viewport_dimension(value: f32) -> u32 {

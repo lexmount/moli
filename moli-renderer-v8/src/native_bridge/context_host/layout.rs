@@ -248,6 +248,31 @@ impl JsContextHost {
                 .get()
                 .saturating_add(pass.metrics.elapsed),
         );
+        if moli_trace::cpu_profile_enabled() {
+            let metrics = pass.metrics;
+            tracing::info!(
+                target: "moli_cpu_profile",
+                stage = "layout_pass",
+                reason = ?metrics.reason,
+                total_us = metrics.elapsed.as_micros(),
+                box_tree_us = metrics.box_tree_elapsed.as_micros(),
+                list_marker_us = metrics.list_marker_elapsed.as_micros(),
+                form_control_us = metrics.form_control_elapsed.as_micros(),
+                inline_preparation_us = metrics.inline_preparation_elapsed.as_micros(),
+                numeric_layout_us = metrics.numeric_layout_elapsed.as_micros(),
+                numeric_first_pass_us = metrics.numeric_first_pass_elapsed.as_micros(),
+                numeric_followup_passes_us = metrics.numeric_followup_passes_elapsed.as_micros(),
+                overflow_detection_us = metrics.overflow_detection_elapsed.as_micros(),
+                scrollbar_feedback_us = metrics.scrollbar_feedback_elapsed.as_micros(),
+                embedded_frame_us = metrics.embedded_frame_elapsed.as_micros(),
+                projection_us = metrics.projection_elapsed.as_micros(),
+                numeric_layout_pass_count = metrics.numeric_layout_pass_count,
+                box_count = metrics.box_count,
+                fragment_count = metrics.fragment_count,
+                paint_operation_count = metrics.paint_operation_count,
+                fallback_count = metrics.fallback_count,
+            );
+        }
         pass.validate_retention_budget()?;
         let consumed = consume(&mut pass)?;
         let metrics = pass.metrics;
