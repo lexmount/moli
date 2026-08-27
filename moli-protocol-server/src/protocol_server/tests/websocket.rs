@@ -20,6 +20,723 @@ fn assert_cdp_event_precedes_response(
     );
 }
 
+#[tokio::test]
+async fn websocket_page_agent_response_precedes_later_runtime_context_replay() {
+    let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
+    let (mut socket, _) = connect_async(format!(
+        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
+    ))
+    .await
+    .expect("connect browser CDP websocket");
+    let browser_context_id = cdp_create_browser_context(&mut socket, 1).await;
+    let target = cdp_create_attached_target(&mut socket, 2, &browser_context_id).await;
+
+    send_cdp_command_without_wait(
+        &mut socket,
+        4,
+        "Page.getFrameTree",
+        Some(&target.session_id),
+        json!({}),
+    )
+    .await;
+    send_cdp_command_without_wait(
+        &mut socket,
+        5,
+        "Runtime.enable",
+        Some(&target.session_id),
+        json!({}),
+    )
+    .await;
+
+    let messages = tokio::time::timeout(Duration::from_secs(10), async {
+        let mut messages = Vec::new();
+        let mut saw_frame_tree_response = false;
+        let mut saw_runtime_response = false;
+        let mut saw_default_context = false;
+        while !(saw_frame_tree_response && saw_runtime_response && saw_default_context) {
+            let message = recv_ws_json(&mut socket).await;
+            saw_frame_tree_response |= message["id"] == json!(4_u64);
+            saw_runtime_response |= message["id"] == json!(5_u64);
+            saw_default_context |= message["sessionId"] == json!(target.session_id.as_str())
+                && message["method"] == json!("Runtime.executionContextCreated")
+                && message["params"]["context"]["auxData"]["isDefault"] == json!(true);
+            messages.push(message);
+        }
+        messages
+    })
+    .await
+    .expect("pipelined Page.getFrameTree and Runtime.enable should settle");
+
+    let frame_tree_index = messages
+        .iter()
+        .position(|message| message["id"] == json!(4_u64))
+        .expect("Page.getFrameTree response");
+    let default_context_index = messages
+        .iter()
+        .position(|message| {
+            message["sessionId"] == json!(target.session_id.as_str())
+                && message["method"] == json!("Runtime.executionContextCreated")
+                && message["params"]["context"]["auxData"]["isDefault"] == json!(true)
+        })
+        .expect("default Runtime execution context");
+    assert!(
+        frame_tree_index < default_context_index,
+        "the synchronous Page agent response must reach the frontend before a later Runtime command publishes its context: {messages:?}"
+    );
+
+    let evaluation = send_cdp_command(
+        &mut socket,
+        6,
+        "Runtime.evaluate",
+        Some(&target.session_id),
+        json!({
+            "expression": "1 + 1",
+            "returnByValue": true,
+        }),
+    )
+    .await;
+    assert_eq!(
+        evaluation
+            .iter()
+            .find(|message| message["id"] == json!(6_u64))
+            .and_then(|message| message["result"]["result"]["value"].as_i64()),
+        Some(2),
+        "the context replayed after Page.getFrameTree must be usable by Runtime.evaluate: {evaluation:?}"
+    );
+
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(protocol_server).await;
+}
+
+#[tokio::test]
+async fn websocket_layout_metrics_response_precedes_later_runtime_context_replay() {
+    let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
+    let (mut socket, _) = connect_async(format!(
+        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
+    ))
+    .await
+    .expect("connect browser CDP websocket");
+    let browser_context_id = cdp_create_browser_context(&mut socket, 1).await;
+    let target = cdp_create_attached_target(&mut socket, 2, &browser_context_id).await;
+
+    send_cdp_command_without_wait(
+        &mut socket,
+        4,
+        "Page.getLayoutMetrics",
+        Some(&target.session_id),
+        json!({}),
+    )
+    .await;
+    send_cdp_command_without_wait(
+        &mut socket,
+        5,
+        "Runtime.enable",
+        Some(&target.session_id),
+        json!({}),
+    )
+    .await;
+
+    let messages = tokio::time::timeout(Duration::from_secs(10), async {
+        let mut messages = Vec::new();
+        let mut saw_layout_metrics_response = false;
+        let mut saw_runtime_response = false;
+        let mut saw_default_context = false;
+        while !(saw_layout_metrics_response && saw_runtime_response && saw_default_context) {
+            let message = recv_ws_json(&mut socket).await;
+            saw_layout_metrics_response |= message["id"] == json!(4_u64);
+            saw_runtime_response |= message["id"] == json!(5_u64);
+            saw_default_context |= message["sessionId"] == json!(target.session_id.as_str())
+                && message["method"] == json!("Runtime.executionContextCreated")
+                && message["params"]["context"]["auxData"]["isDefault"] == json!(true);
+            messages.push(message);
+        }
+        messages
+    })
+    .await
+    .expect("pipelined Page.getLayoutMetrics and Runtime.enable should settle");
+
+    let layout_metrics_response = messages
+        .iter()
+        .position(|message| message["id"] == json!(4_u64))
+        .expect("Page.getLayoutMetrics response");
+    let default_context = messages
+        .iter()
+        .position(|message| {
+            message["sessionId"] == json!(target.session_id.as_str())
+                && message["method"] == json!("Runtime.executionContextCreated")
+                && message["params"]["context"]["auxData"]["isDefault"] == json!(true)
+        })
+        .expect("default Runtime execution context");
+    assert!(
+        layout_metrics_response < default_context,
+        "Chromium's synchronous getLayoutMetrics response must precede output from the later Runtime command: {messages:?}"
+    );
+
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(protocol_server).await;
+}
+
+#[tokio::test]
+async fn websocket_synchronous_main_thread_barriers_apply_across_domains() {
+    let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
+    let (mut socket, _) = connect_async(format!(
+        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
+    ))
+    .await
+    .expect("connect browser CDP websocket");
+    let browser_context_id = cdp_create_browser_context(&mut socket, 1).await;
+
+    for (case_index, (method, params)) in [
+        ("DOM.getDocument", json!({})),
+        ("Emulation.setCPUThrottlingRate", json!({ "rate": 2.0 })),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id_base = 10 + case_index as u64 * 10;
+        let target = cdp_create_attached_target(&mut socket, id_base, &browser_context_id).await;
+        let command_id = id_base + 2;
+        let runtime_enable_id = id_base + 3;
+
+        send_cdp_command_without_wait(
+            &mut socket,
+            command_id,
+            method,
+            Some(&target.session_id),
+            params,
+        )
+        .await;
+        send_cdp_command_without_wait(
+            &mut socket,
+            runtime_enable_id,
+            "Runtime.enable",
+            Some(&target.session_id),
+            json!({}),
+        )
+        .await;
+
+        let messages = tokio::time::timeout(Duration::from_secs(10), async {
+            let mut messages = Vec::new();
+            let mut saw_command_response = false;
+            let mut saw_runtime_response = false;
+            let mut saw_default_context = false;
+            while !(saw_command_response && saw_runtime_response && saw_default_context) {
+                let message = recv_ws_json(&mut socket).await;
+                saw_command_response |= message["id"] == json!(command_id);
+                saw_runtime_response |= message["id"] == json!(runtime_enable_id);
+                saw_default_context |= message["sessionId"] == json!(target.session_id.as_str())
+                    && message["method"] == json!("Runtime.executionContextCreated")
+                    && message["params"]["context"]["auxData"]["isDefault"] == json!(true);
+                messages.push(message);
+            }
+            messages
+        })
+        .await
+        .unwrap_or_else(|_| panic!("pipelined {method} and Runtime.enable should settle"));
+
+        let command_response = messages
+            .iter()
+            .position(|message| message["id"] == json!(command_id))
+            .unwrap_or_else(|| panic!("missing {method} response: {messages:#?}"));
+        let default_context = messages
+            .iter()
+            .position(|message| {
+                message["sessionId"] == json!(target.session_id.as_str())
+                    && message["method"] == json!("Runtime.executionContextCreated")
+                    && message["params"]["context"]["auxData"]["isDefault"] == json!(true)
+            })
+            .unwrap_or_else(|| panic!("missing default Runtime context: {messages:#?}"));
+        assert!(
+            messages[command_response].get("error").is_none(),
+            "{method} should succeed: {messages:#?}"
+        );
+        assert!(
+            command_response < default_context,
+            "Chromium's synchronous {method} response must precede output from the later MainThread command: {messages:#?}"
+        );
+    }
+
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(protocol_server).await;
+}
+
+#[tokio::test]
+async fn websocket_synchronous_runtime_deferred_reply_holds_main_thread_barrier() {
+    let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
+    let (mut socket, _) = connect_async(format!(
+        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
+    ))
+    .await
+    .expect("connect browser CDP websocket");
+    let browser_context_id = cdp_create_browser_context(&mut socket, 1).await;
+    let target = cdp_create_attached_target(&mut socket, 2, &browser_context_id).await;
+
+    let evaluated = send_cdp_command(
+        &mut socket,
+        4,
+        "Runtime.evaluate",
+        Some(&target.session_id),
+        json!({ "expression": "({ answer: 42 })" }),
+    )
+    .await;
+    let object_id = evaluated
+        .iter()
+        .find(|message| message["id"] == json!(4_u64))
+        .and_then(|message| message["result"]["result"]["objectId"].as_str())
+        .unwrap_or_else(|| {
+            panic!("Runtime.evaluate should return an object handle: {evaluated:#?}")
+        })
+        .to_owned();
+
+    send_cdp_command_without_wait(
+        &mut socket,
+        5,
+        "Runtime.getProperties",
+        Some(&target.session_id),
+        json!({ "objectId": object_id, "ownProperties": true }),
+    )
+    .await;
+    send_cdp_command_without_wait(
+        &mut socket,
+        6,
+        "Runtime.enable",
+        Some(&target.session_id),
+        json!({}),
+    )
+    .await;
+
+    let messages = tokio::time::timeout(Duration::from_secs(10), async {
+        let mut messages = Vec::new();
+        let mut saw_properties_response = false;
+        let mut saw_runtime_response = false;
+        let mut saw_default_context = false;
+        while !(saw_properties_response && saw_runtime_response && saw_default_context) {
+            let message = recv_ws_json(&mut socket).await;
+            saw_properties_response |= message["id"] == json!(5_u64);
+            saw_runtime_response |= message["id"] == json!(6_u64);
+            saw_default_context |= message["sessionId"] == json!(target.session_id.as_str())
+                && message["method"] == json!("Runtime.executionContextCreated")
+                && message["params"]["context"]["auxData"]["isDefault"] == json!(true);
+            messages.push(message);
+        }
+        messages
+    })
+    .await
+    .expect("pipelined Runtime.getProperties and Runtime.enable should settle");
+
+    let properties_response = messages
+        .iter()
+        .position(|message| message["id"] == json!(5_u64))
+        .expect("Runtime.getProperties response");
+    let default_context = messages
+        .iter()
+        .position(|message| {
+            message["sessionId"] == json!(target.session_id.as_str())
+                && message["method"] == json!("Runtime.executionContextCreated")
+                && message["params"]["context"]["auxData"]["isDefault"] == json!(true)
+        })
+        .expect("default Runtime context");
+    assert!(
+        messages[properties_response]["result"]["result"]
+            .as_array()
+            .is_some_and(|properties| properties.iter().any(|property| {
+                property["name"] == json!("answer") && property["value"]["value"] == json!(42)
+            })),
+        "Runtime.getProperties should expose the evaluated object: {messages:#?}"
+    );
+    assert!(
+        properties_response < default_context,
+        "a synchronous deferred Runtime reply must retain its MainThread barrier until the response is visible: {messages:#?}"
+    );
+
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(protocol_server).await;
+}
+
+#[tokio::test]
+async fn websocket_page_response_barrier_preserves_same_session_command_fifo() {
+    let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
+    let (mut socket, _) = connect_async(format!(
+        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
+    ))
+    .await
+    .expect("connect browser CDP websocket");
+    let browser_context_id = cdp_create_browser_context(&mut socket, 1).await;
+    let target = cdp_create_attached_target(&mut socket, 2, &browser_context_id).await;
+
+    for id in 4..=6 {
+        send_cdp_command_without_wait(
+            &mut socket,
+            id,
+            "Page.getFrameTree",
+            Some(&target.session_id),
+            json!({}),
+        )
+        .await;
+    }
+
+    let messages = tokio::time::timeout(Duration::from_secs(10), async {
+        let mut messages: Vec<serde_json::Value> = Vec::new();
+        while !(4..=6).all(|id| messages.iter().any(|message| message["id"] == json!(id))) {
+            messages.push(recv_ws_json(&mut socket).await);
+        }
+        messages
+    })
+    .await
+    .expect("three pipelined Page.getFrameTree commands should settle");
+    let response_positions = (4..=6)
+        .map(|id| {
+            messages
+                .iter()
+                .position(|message| message["id"] == json!(id))
+                .unwrap_or_else(|| panic!("missing response {id}: {messages:?}"))
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        response_positions.windows(2).all(|pair| pair[0] < pair[1]),
+        "same-session command responses must preserve frontend FIFO: {messages:?}"
+    );
+
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(protocol_server).await;
+}
+
+#[tokio::test]
+async fn websocket_immediate_errors_keep_router_order_independent_of_page_completion() {
+    let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
+    let (mut socket, _) = connect_async(format!(
+        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
+    ))
+    .await
+    .expect("connect browser CDP websocket");
+    let browser_context_id = cdp_create_browser_context(&mut socket, 1).await;
+    let target = cdp_create_attached_target(&mut socket, 2, &browser_context_id).await;
+
+    send_cdp_command_without_wait(
+        &mut socket,
+        4,
+        "Page.getFrameTree",
+        Some(&target.session_id),
+        json!({}),
+    )
+    .await;
+    socket
+        .send(WsMessage::Text("{".into()))
+        .await
+        .expect("send malformed CDP command");
+    send_cdp_command_without_wait(
+        &mut socket,
+        5,
+        "Runtime.enable",
+        Some("UNKNOWN-SESSION"),
+        json!({}),
+    )
+    .await;
+
+    let messages = tokio::time::timeout(Duration::from_secs(10), async {
+        let mut messages = Vec::new();
+        let mut saw_frame_tree = false;
+        let mut saw_parse_error = false;
+        let mut saw_unknown_session = false;
+        while !(saw_frame_tree && saw_parse_error && saw_unknown_session) {
+            let message = recv_ws_json(&mut socket).await;
+            saw_frame_tree |= message["id"] == json!(4_u64);
+            saw_parse_error |= message["id"].is_null() && message["error"]["code"] == json!(-32700);
+            saw_unknown_session |=
+                message["id"] == json!(5_u64) && message["error"]["code"] == json!(-32001);
+            messages.push(message);
+        }
+        messages
+    })
+    .await
+    .expect("frame-tree response and immediate errors should settle");
+
+    let parse_error_index = messages
+        .iter()
+        .position(|message| message["id"].is_null() && message["error"]["code"] == json!(-32700))
+        .expect("malformed JSON error response");
+    let unknown_session_index = messages
+        .iter()
+        .position(|message| {
+            message["id"] == json!(5_u64) && message["error"]["code"] == json!(-32001)
+        })
+        .expect("unknown session error response");
+    assert!(
+        parse_error_index < unknown_session_index,
+        "router errors must retain their own frontend input order without depending on Page completion: {messages:?}"
+    );
+
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(protocol_server).await;
+}
+
+#[tokio::test]
+async fn websocket_main_thread_barrier_allows_same_session_io_and_router_errors() {
+    let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
+    let (mut socket, _) = connect_async(format!(
+        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
+    ))
+    .await
+    .expect("connect browser CDP websocket");
+    let browser_context_id = cdp_create_browser_context(&mut socket, 1).await;
+    let target = cdp_create_attached_target(&mut socket, 2, &browser_context_id).await;
+    let independent_target = cdp_create_attached_target(&mut socket, 20, &browser_context_id).await;
+
+    for (id, method) in [(4_u64, "Runtime.enable"), (5, "Debugger.enable")] {
+        let enabled =
+            send_cdp_command(&mut socket, id, method, Some(&target.session_id), json!({})).await;
+        assert!(
+            enabled
+                .iter()
+                .any(|message| message["id"] == json!(id) && message.get("error").is_none()),
+            "{method} should succeed before the ordering probe: {enabled:#?}"
+        );
+    }
+
+    let busy_source = "debugger; for (;;) {}";
+    let compiled = send_cdp_command(
+        &mut socket,
+        8,
+        "Runtime.compileScript",
+        Some(&target.session_id),
+        json!({
+            "expression": busy_source,
+            "sourceURL": "response-barrier-terminal-error.js",
+            "persistScript": true,
+        }),
+    )
+    .await;
+    let script_id = compiled
+        .iter()
+        .find(|message| message["id"] == json!(8_u64))
+        .and_then(|message| message["result"]["scriptId"].as_str())
+        .unwrap_or_else(|| panic!("Runtime.compileScript should return scriptId: {compiled:#?}"))
+        .to_owned();
+
+    send_cdp_command_without_wait(
+        &mut socket,
+        9,
+        "Runtime.runScript",
+        Some(&target.session_id),
+        json!({ "scriptId": script_id }),
+    )
+    .await;
+    let mut messages = recv_until_match(&mut socket, |message| {
+        message["sessionId"] == json!(target.session_id.as_str())
+            && message["method"] == json!("Debugger.paused")
+    })
+    .await;
+    messages.extend(
+        send_cdp_command(
+            &mut socket,
+            10,
+            "Debugger.resume",
+            Some(&target.session_id),
+            json!({}),
+        )
+        .await,
+    );
+    if messages.iter().all(|message| {
+        message["sessionId"] != json!(target.session_id.as_str())
+            || message["method"] != json!("Debugger.resumed")
+    }) {
+        messages.extend(
+            recv_until_match(&mut socket, |message| {
+                message["sessionId"] == json!(target.session_id.as_str())
+                    && message["method"] == json!("Debugger.resumed")
+            })
+            .await,
+        );
+    }
+    assert!(
+        messages.iter().all(|message| message["id"] != json!(9_u64)),
+        "the resumed script must still occupy the renderer owner: {messages:#?}"
+    );
+
+    send_cdp_command_without_wait(
+        &mut socket,
+        11,
+        "Page.setDocumentContent",
+        Some(&target.session_id),
+        json!({
+            "frameId": "MISSING-FRAME",
+            "html": "<p>must not be installed</p>",
+        }),
+    )
+    .await;
+    send_cdp_command_without_wait(
+        &mut socket,
+        13,
+        "Runtime.getIsolateId",
+        Some(&target.session_id),
+        json!({}),
+    )
+    .await;
+    socket
+        .send(WsMessage::Text("{".into()))
+        .await
+        .expect("send malformed CDP command behind main-thread barrier");
+    send_cdp_command_without_wait(
+        &mut socket,
+        16,
+        "Runtime.enable",
+        Some("UNKNOWN-SESSION"),
+        json!({}),
+    )
+    .await;
+    send_cdp_command_without_wait(
+        &mut socket,
+        15,
+        "Page.getNavigationHistory",
+        Some(&target.session_id),
+        json!({}),
+    )
+    .await;
+    send_cdp_command_without_wait(
+        &mut socket,
+        17,
+        "Runtime.getIsolateId",
+        Some(&independent_target.session_id),
+        json!({}),
+    )
+    .await;
+
+    let same_session_io_probe = tokio::time::timeout(
+        Duration::from_secs(10),
+        send_cdp_command(
+            &mut socket,
+            12,
+            "Debugger.getScriptSource",
+            Some(&target.session_id),
+            json!({ "scriptId": script_id }),
+        ),
+    )
+    .await
+    .expect("same-session Inspector IO must bypass a pending main-thread response");
+    assert_eq!(
+        same_session_io_probe
+            .iter()
+            .find(|message| message["id"] == json!(12_u64))
+            .expect("same-session source response")["result"]["scriptSource"],
+        json!(busy_source),
+        "the renderer Inspector IO lane must remain live behind a main-thread barrier: {same_session_io_probe:#?}"
+    );
+    assert!(
+        same_session_io_probe
+            .iter()
+            .any(|message| message["id"].is_null() && message["error"]["code"] == json!(-32700)),
+        "parse errors must bypass the child session's main-thread barrier: {same_session_io_probe:#?}"
+    );
+    assert!(
+        same_session_io_probe.iter().any(|message| {
+            message["id"] == json!(16_u64) && message["error"]["code"] == json!(-32001)
+        }),
+        "unknown-session errors must bypass the child session's main-thread barrier: {same_session_io_probe:#?}"
+    );
+    assert!(
+        same_session_io_probe
+            .iter()
+            .all(|message| !matches!(message["id"].as_u64(), Some(11 | 13))),
+        "the Page command and later main-thread follower must remain blocked: {same_session_io_probe:#?}"
+    );
+    messages.extend(same_session_io_probe);
+
+    messages.extend(
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            send_cdp_command(
+                &mut socket,
+                14,
+                "Runtime.terminateExecution",
+                Some(&target.session_id),
+                json!({}),
+            ),
+        )
+        .await
+        .expect("same-session Runtime IO must be able to terminate the busy renderer owner"),
+    );
+
+    let expected_ids = [9_u64, 11, 13, 14, 15, 17];
+    let mut response_ids = messages
+        .iter()
+        .filter_map(|message| message["id"].as_u64())
+        .collect::<std::collections::BTreeSet<_>>();
+    if !expected_ids
+        .iter()
+        .all(|expected_id| response_ids.contains(expected_id))
+    {
+        messages.extend(
+            recv_until_match(&mut socket, |message| {
+                if let Some(id) = message["id"].as_u64() {
+                    response_ids.insert(id);
+                }
+                expected_ids
+                    .iter()
+                    .all(|expected_id| response_ids.contains(expected_id))
+            })
+            .await,
+        );
+    }
+
+    let terminal_error = messages
+        .iter()
+        .find(|message| message["id"] == json!(11_u64))
+        .expect("Page.setDocumentContent terminal response");
+    assert!(
+        terminal_error.get("error").is_some(),
+        "the missing frame must fail in the renderer completion path: {messages:#?}"
+    );
+    let main_thread_follower = messages
+        .iter()
+        .find(|message| message["id"] == json!(13_u64))
+        .expect("same-session main-thread follower response");
+    assert!(
+        main_thread_follower.get("error").is_none(),
+        "the main-thread follower must dispatch after the terminal error releases the barrier: {messages:#?}"
+    );
+    let owner_independent_response = messages
+        .iter()
+        .find(|message| message["id"] == json!(15_u64))
+        .expect("same-session OwnerIndependent response");
+    assert!(
+        owner_independent_response.get("error").is_none(),
+        "the same-session OwnerIndependent command should succeed: {messages:#?}"
+    );
+    let independent_session_response = messages
+        .iter()
+        .find(|message| message["id"] == json!(17_u64))
+        .expect("independent-session MainThread response");
+    assert!(
+        independent_session_response.get("error").is_none(),
+        "the other session's MainThread command should succeed: {messages:#?}"
+    );
+    let response_position = |id| {
+        messages
+            .iter()
+            .position(|message| message["id"] == json!(id))
+            .unwrap_or_else(|| panic!("missing response {id}: {messages:#?}"))
+    };
+    assert!(
+        response_position(12) < response_position(11),
+        "same-session IO must be observable while the Page main-thread command is pending: {messages:#?}"
+    );
+    assert!(
+        response_position(15) < response_position(11),
+        "same-session OwnerIndependent work must bypass the Page main-thread barrier: {messages:#?}"
+    );
+    assert!(
+        response_position(17) < response_position(11),
+        "a different session's MainThread work must bypass the Page main-thread barrier: {messages:#?}"
+    );
+    assert!(
+        response_position(11) < response_position(13),
+        "the terminal Page error must precede its later main-thread follower: {messages:#?}"
+    );
+
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(protocol_server).await;
+}
+
 async fn wait_for_cookie_profile(
     path: &Path,
     predicate: impl Fn(&[StoredCookie]) -> bool,
@@ -2103,6 +2820,19 @@ async fn websocket_cdp_runtime_control_command_waits_for_navigation_attachment_c
     socket
         .send(WsMessage::Text(
             json!({
+                "id": 8_u64,
+                "method": "Emulation.setCPUThrottlingRate",
+                "sessionId": session.session_id,
+                "params": { "rate": 2.0 }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("send second suspended MainThread command");
+    socket
+        .send(WsMessage::Text(
+            json!({
                 "id": 7_u64,
                 "method": "Browser.getVersion",
                 "params": {}
@@ -2121,9 +2851,16 @@ async fn websocket_cdp_runtime_control_command_waits_for_navigation_attachment_c
         "Runtime control command must remain queued while the document attachment is suspended: \
          {before_resume:#?}"
     );
+    assert!(
+        !before_resume
+            .iter()
+            .any(|message| message["id"] == json!(8_u64)),
+        "a later MainThread command must not cross the suspended synchronous Runtime handler: \
+         {before_resume:#?}"
+    );
 
     release_tail.notify_one();
-    let resumed_messages = recv_until_id(&mut socket, 6).await;
+    let resumed_messages = recv_until_id(&mut socket, 8).await;
     assert!(
         before_resume
             .iter()
@@ -2146,6 +2883,19 @@ async fn websocket_cdp_runtime_control_command_waits_for_navigation_attachment_c
     assert_ne!(
         new_isolate_id, old_isolate_id,
         "queued command must bind to the replacement document's renderer attachment"
+    );
+    let isolate_response_position = resumed_messages
+        .iter()
+        .position(|message| message["id"] == json!(6_u64))
+        .expect("resumed Runtime.getIsolateId response position");
+    let emulation_response_position = resumed_messages
+        .iter()
+        .position(|message| message["id"] == json!(8_u64))
+        .expect("resumed Emulation.setCPUThrottlingRate response position");
+    assert!(
+        isolate_response_position < emulation_response_position,
+        "the suspended synchronous MainThread handler must respond before its same-session MainThread follower: \
+         {resumed_messages:#?}"
     );
 
     let _ = socket.close(None).await;

@@ -190,6 +190,30 @@ impl CdpConnection {
             .cloned()
     }
 
+    /// Resolves Chromium's physical renderer lane after the frontend session
+    /// has been routed to its target.
+    ///
+    /// Page targets use the method-level Main/IO split. Chromium creates worker
+    /// DevTools sessions with `use_io_session_`, so every renderer-bound worker
+    /// command uses the IO receiver; browser-owned commands remain independent.
+    pub fn dispatch_lane_for_command(
+        &self,
+        command: &crate::ParsedCdpCommand,
+    ) -> crate::CdpCommandDispatchLane {
+        let lane = command.dispatch_lane();
+        if lane != crate::CdpCommandDispatchLane::MainThread {
+            return lane;
+        }
+        match self.session_route(command.request().session_id()) {
+            Some(
+                CdpSessionRoute::SharedWorkerTarget { .. }
+                | CdpSessionRoute::DedicatedWorkerTarget { .. }
+                | CdpSessionRoute::ServiceWorkerTarget { .. },
+            ) => crate::CdpCommandDispatchLane::Io,
+            _ => lane,
+        }
+    }
+
     pub(crate) fn target_session_route_for_target_id(
         &self,
         target_id: &str,
@@ -341,5 +365,39 @@ mod tests {
         connection.browser_context = Some(browser_context);
 
         assert_eq!(connection.session_route(Some("SID-prepared")), None);
+    }
+
+    #[test]
+    fn worker_sessions_route_renderer_main_commands_over_io() {
+        let mut connection = CdpConnection::new();
+        connection.register_session_route_for_test(
+            "SID-worker",
+            CdpSessionRoute::SharedWorkerTarget {
+                browser_context_id: "BID-route".to_owned(),
+                target_id: "TID-worker".to_owned(),
+            },
+        );
+        let command = crate::ParsedCdpCommand::from_serializable(serde_json::json!({
+            "id": 1,
+            "method": "Runtime.getProperties",
+            "sessionId": "SID-worker",
+            "params": { "objectId": "OBJECT-1" },
+        }))
+        .expect("parse worker Runtime command");
+        assert_eq!(
+            connection.dispatch_lane_for_command(&command),
+            crate::CdpCommandDispatchLane::Io
+        );
+
+        let browser_command = crate::ParsedCdpCommand::from_serializable(serde_json::json!({
+            "id": 2,
+            "method": "Target.getTargetInfo",
+            "sessionId": "SID-worker",
+        }))
+        .expect("parse worker browser-side command");
+        assert_eq!(
+            connection.dispatch_lane_for_command(&browser_command),
+            crate::CdpCommandDispatchLane::OwnerIndependent
+        );
     }
 }
