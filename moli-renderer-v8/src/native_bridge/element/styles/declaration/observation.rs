@@ -4,7 +4,7 @@ use crate::{
     document_runtime::DomHandle,
     style_engine::{
         FullStyleWorldSnapshot, PreparedStyleWorldUpdate, StyleObservationSnapshot, StyleViewport,
-        StyleWorldUpdatePlan, StyloComputedStyleSnapshot,
+        StyleWorldUpdatePlan, StyloComputedStyleSnapshot, StyloStyleEnvironment,
     },
 };
 
@@ -12,7 +12,7 @@ use super::super::super::super::JsContextHost;
 use super::super::style_viewport_for_document;
 use super::style_world::{
     StyleObservationKey, prepare_style_world_update, stylesheet_query_fallback,
-    stylesheet_source_document_for_handle,
+    stylesheet_source_document_for_handle, stylo_style_environment,
 };
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -85,6 +85,10 @@ pub(super) struct StyleObservationInputs<'a> {
     runtime: &'a JsContextHost,
     key: StyleObservationKey,
     context: StyleComputationContext,
+    /// Page-level media inputs are stable for one synchronous observation.
+    /// In particular, discovering `<meta name=color-scheme>` requires a
+    /// document-order query and must not be repeated for every layout node.
+    environment: StyloStyleEnvironment,
     #[cfg(debug_assertions)]
     tracks_persistent_world: bool,
     prepared_update: RefCell<Option<Rc<PreparedStyleWorldUpdate>>>,
@@ -98,10 +102,12 @@ impl<'a> StyleObservationInputs<'a> {
         context: StyleComputationContext,
         _tracks_persistent_world: bool,
     ) -> Self {
+        let environment = stylo_style_environment(runtime, source_document);
         Self {
             runtime,
             key: StyleObservationKey::for_document(runtime, source_document),
             context,
+            environment,
             #[cfg(debug_assertions)]
             tracks_persistent_world: _tracks_persistent_world,
             prepared_update: RefCell::new(None),
@@ -121,11 +127,21 @@ impl<'a> StyleObservationInputs<'a> {
         self.context
     }
 
+    fn environment(&self) -> StyloStyleEnvironment {
+        self.environment
+    }
+
     fn prepared_update(&self, plan: &StyleWorldUpdatePlan) -> Rc<PreparedStyleWorldUpdate> {
         if let Some(update) = self.prepared_update.borrow().as_ref() {
             return Rc::clone(update);
         }
-        let update = prepare_style_world_update(self.runtime, &self.key, self.context, plan);
+        let update = prepare_style_world_update(
+            self.runtime,
+            &self.key,
+            self.context,
+            self.environment,
+            plan,
+        );
         *self.prepared_update.borrow_mut() = Some(Rc::clone(&update));
         update
     }
@@ -140,7 +156,9 @@ impl<'a> StyleObservationInputs<'a> {
                 self.runtime
                     .retained_stylesheet_query_snapshot_for_document(document)
             })
-            .unwrap_or_else(|| stylesheet_query_fallback(self.runtime, &self.key, self.context));
+            .unwrap_or_else(|| {
+                stylesheet_query_fallback(self.runtime, &self.key, self.context, self.environment)
+            });
         *self.stylesheet_query_snapshot.borrow_mut() = Some(Rc::clone(&inputs));
         inputs
     }
@@ -173,6 +191,7 @@ impl RetainedStyleObservation for StyleObservationInputs<'_> {
                 handle,
                 read_document,
                 self.context.viewport,
+                self.environment,
                 self.tree_scope_versions(),
             ) {
             StyleObservationSnapshot::Current(style) => style,
@@ -289,6 +308,7 @@ impl<'a> StyleObservation<'a> {
                 handle,
                 read_document,
                 context.viewport,
+                observation_inputs.environment(),
                 observation_inputs.tree_scope_versions(),
             ) {
             StyleObservationSnapshot::Current(style) => style,

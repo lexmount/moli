@@ -68,6 +68,7 @@ fn build_native_layout_pass_recursive(
         };
         build_layout_pass_with_embedded_frames(&source, &mut styles, services, request, &mut frames)
     };
+    styles.trace_profile(document);
     document_stack.pop();
     result
 }

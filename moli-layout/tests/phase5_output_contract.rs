@@ -7,8 +7,8 @@ use moli_layout::{
     LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutRect, LayoutScrollbarColors,
     LayoutScrollbarGutter, LayoutScrollbarPart, LayoutScrollbarWidth, LayoutSource,
     LayoutSourceKind, LayoutStyleResolver, LayoutTransform2D, LayoutViewport, PaintBrush,
-    PaintCaptureRequest, PaintColor, PaintFragment, PaintShape, ResolvedLayoutStyle,
-    build_layout_pass,
+    PaintCaptureRequest, PaintColor, PaintFragment, PaintShape, ResolvedLayoutElementStyles,
+    ResolvedLayoutStyle, build_layout_pass,
 };
 use style::Atom;
 use taffy::{
@@ -113,16 +113,15 @@ impl LayoutSource for Source {
 struct Styles(HashMap<usize, ResolvedLayoutStyle>);
 
 impl LayoutStyleResolver<usize> for Styles {
-    fn primary_style(&mut self, node: usize) -> Result<Option<ResolvedLayoutStyle>, LayoutError> {
-        Ok(self.0.get(&node).cloned())
-    }
-
-    fn pseudo_style(
+    fn element_styles(
         &mut self,
-        _node: usize,
-        _pseudo: moli_layout::LayoutPseudo,
-    ) -> Result<Option<ResolvedLayoutStyle>, LayoutError> {
-        Ok(None)
+        node: usize,
+    ) -> Result<Option<ResolvedLayoutElementStyles>, LayoutError> {
+        Ok(self
+            .0
+            .get(&node)
+            .cloned()
+            .map(ResolvedLayoutElementStyles::from_primary))
     }
 }
 

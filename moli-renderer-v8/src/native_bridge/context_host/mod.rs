@@ -1089,6 +1089,8 @@ pub(crate) struct JsContextHost {
     style_world_shadow_scope_materializations: Cell<u64>,
     #[cfg(test)]
     stylo_computed_style_property_reads: Cell<u64>,
+    #[cfg(test)]
+    style_observation_environment_resolutions: Cell<u64>,
 }
 
 struct PendingTextControlChangeCommit {

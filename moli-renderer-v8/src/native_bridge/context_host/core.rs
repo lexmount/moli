@@ -470,6 +470,8 @@ impl JsContextHost {
             style_world_shadow_scope_materializations: Cell::new(0),
             #[cfg(test)]
             stylo_computed_style_property_reads: Cell::new(0),
+            #[cfg(test)]
+            style_observation_environment_resolutions: Cell::new(0),
         };
         host.sync_owner_style_sheet_texts_for_document_tree_scopes(host.document_handle());
         host

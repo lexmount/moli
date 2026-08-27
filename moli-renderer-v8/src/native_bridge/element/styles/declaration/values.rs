@@ -228,6 +228,20 @@ impl<'a> ComputedStyleRead<'a> {
             .map(StyloComputedStyleSnapshot::computed_values)
     }
 
+    /// Transfers the observation's owned Stylo handles into box construction.
+    /// The only reference-count increments happened when the canonical
+    /// `ElementStyles` crossed the renderer borrow boundary.
+    pub(crate) fn into_element_computed_values(
+        self,
+    ) -> Option<(
+        ServoArc<ComputedValues>,
+        Option<ServoArc<ComputedValues>>,
+        Option<ServoArc<ComputedValues>>,
+    )> {
+        self.stylo_style
+            .map(StyloComputedStyleSnapshot::into_element_computed_values)
+    }
+
     /// Returns the typed resource manifest published with this read's exact
     /// retained stylesheet world. No CSS text is serialized or reparsed.
     pub(crate) fn stylesheet_resource_snapshot(&self) -> Option<StylesheetResourceSnapshot> {

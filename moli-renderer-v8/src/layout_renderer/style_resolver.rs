@@ -1,7 +1,8 @@
 use moli_layout::{
-    LayoutDisplay, LayoutError, LayoutPseudo, LayoutStyleResolver, LayoutViewport,
-    ResolvedLayoutStyle,
+    LayoutDisplay, LayoutError, LayoutStyleResolver, LayoutViewport, ResolvedLayoutElementStyles,
+    ResolvedLayoutPseudoStyle, ResolvedLayoutStyle,
 };
+use std::time::Instant;
 
 use crate::{
     document_runtime::DomHandle,
@@ -13,6 +14,23 @@ pub(super) struct NativeLayoutStyleResolver<'a> {
     runtime: &'a JsContextHost,
     reads: StyleObservation<'a>,
     scripting_enabled: bool,
+    profile: Option<NativeLayoutStyleResolverProfile>,
+}
+
+#[derive(Default)]
+struct NativeLayoutStyleResolverProfile {
+    primary_count: u64,
+    primary_read_ns: u128,
+    primary_projection_ns: u128,
+    primary_policy_ns: u128,
+    eager_pseudo_count: u64,
+    eager_pseudo_projection_ns: u128,
+    marker_count: u64,
+    marker_read_ns: u128,
+    marker_projection_ns: u128,
+    anonymous_count: u64,
+    anonymous_read_ns: u128,
+    anonymous_projection_ns: u128,
 }
 
 impl<'a> NativeLayoutStyleResolver<'a> {
@@ -28,7 +46,32 @@ impl<'a> NativeLayoutStyleResolver<'a> {
             runtime,
             reads,
             scripting_enabled: runtime.document_scripting_enabled(document),
+            profile: moli_trace::cpu_profile_enabled()
+                .then(NativeLayoutStyleResolverProfile::default),
         }
+    }
+
+    pub(super) fn trace_profile(&self, document: crate::document_runtime::DomHandle) {
+        let Some(profile) = self.profile.as_ref() else {
+            return;
+        };
+        tracing::info!(
+            target: "moli_cpu_profile",
+            stage = "layout_style_resolver",
+            document = document.index_u32(),
+            primary_count = profile.primary_count,
+            primary_read_us = profile.primary_read_ns / 1_000,
+            primary_projection_us = profile.primary_projection_ns / 1_000,
+            primary_policy_us = profile.primary_policy_ns / 1_000,
+            eager_pseudo_count = profile.eager_pseudo_count,
+            eager_pseudo_projection_us = profile.eager_pseudo_projection_ns / 1_000,
+            marker_count = profile.marker_count,
+            marker_read_us = profile.marker_read_ns / 1_000,
+            marker_projection_us = profile.marker_projection_ns / 1_000,
+            anonymous_count = profile.anonymous_count,
+            anonymous_read_us = profile.anonymous_read_ns / 1_000,
+            anonymous_projection_us = profile.anonymous_projection_ns / 1_000,
+        );
     }
 }
 
@@ -58,15 +101,55 @@ fn layout_style_viewport(runtime: &JsContextHost, viewport: LayoutViewport) -> S
 }
 
 impl LayoutStyleResolver<DomHandle> for NativeLayoutStyleResolver<'_> {
-    fn primary_style(
+    fn element_styles(
         &mut self,
         node: DomHandle,
-    ) -> Result<Option<ResolvedLayoutStyle>, LayoutError> {
+    ) -> Result<Option<ResolvedLayoutElementStyles>, LayoutError> {
+        let phase_started = self.profile.as_ref().map(|_| Instant::now());
         let read = self.reads.read(node);
-        let Some(computed) = read.computed_values() else {
+        let Some((computed, before, after)) = read.into_element_computed_values() else {
+            if let Some(profile) = self.profile.as_mut() {
+                profile.primary_count = profile.primary_count.saturating_add(1);
+                profile.primary_read_ns = profile.primary_read_ns.saturating_add(
+                    phase_started
+                        .map(|started| started.elapsed().as_nanos())
+                        .unwrap_or_default(),
+                );
+            }
             return Ok(None);
         };
+        let eager_pseudo_count = u64::from(before.is_some()) + u64::from(after.is_some());
+        if let Some(profile) = self.profile.as_mut() {
+            profile.primary_count = profile.primary_count.saturating_add(1);
+            profile.primary_read_ns = profile.primary_read_ns.saturating_add(
+                phase_started
+                    .map(|started| started.elapsed().as_nanos())
+                    .unwrap_or_default(),
+            );
+        }
+        let phase_started = self.profile.as_ref().map(|_| Instant::now());
         let mut resolved = ResolvedLayoutStyle::from_stylo(computed);
+        if let Some(profile) = self.profile.as_mut() {
+            profile.primary_projection_ns = profile.primary_projection_ns.saturating_add(
+                phase_started
+                    .map(|started| started.elapsed().as_nanos())
+                    .unwrap_or_default(),
+            );
+        }
+        let phase_started = self.profile.as_ref().map(|_| Instant::now());
+        let before = before.map(ResolvedLayoutStyle::from_stylo);
+        let after = after.map(ResolvedLayoutStyle::from_stylo);
+        if let Some(profile) = self.profile.as_mut() {
+            profile.eager_pseudo_count = profile
+                .eager_pseudo_count
+                .saturating_add(eager_pseudo_count);
+            profile.eager_pseudo_projection_ns = profile.eager_pseudo_projection_ns.saturating_add(
+                phase_started
+                    .map(|started| started.elapsed().as_nanos())
+                    .unwrap_or_default(),
+            );
+        }
+        let phase_started = self.profile.as_ref().map(|_| Instant::now());
         if self
             .runtime
             .dom_host()
@@ -87,18 +170,45 @@ impl LayoutStyleResolver<DomHandle> for NativeLayoutStyleResolver<'_> {
             // Document can execute scripts.
             resolved.force_display_none();
         }
-        Ok(Some(resolved))
+        if let Some(profile) = self.profile.as_mut() {
+            profile.primary_policy_ns = profile.primary_policy_ns.saturating_add(
+                phase_started
+                    .map(|started| started.elapsed().as_nanos())
+                    .unwrap_or_default(),
+            );
+        }
+        Ok(Some(ResolvedLayoutElementStyles::new(
+            resolved, before, after,
+        )))
     }
 
-    fn pseudo_style(
+    fn marker_style(
         &mut self,
         node: DomHandle,
-        pseudo: LayoutPseudo,
-    ) -> Result<Option<ResolvedLayoutStyle>, LayoutError> {
-        let pseudo_name = pseudo_style_name(pseudo);
+    ) -> Result<Option<ResolvedLayoutPseudoStyle>, LayoutError> {
+        let phase_started = self.profile.as_ref().map(|_| Instant::now());
         let read = self.reads.read(node);
-        let computed = read.pseudo_computed_values(pseudo_name);
-        Ok(computed.map(ResolvedLayoutStyle::from_stylo))
+        let computed = read.pseudo_computed_values("marker");
+        if let Some(profile) = self.profile.as_mut() {
+            profile.marker_count = profile.marker_count.saturating_add(1);
+            profile.marker_read_ns = profile.marker_read_ns.saturating_add(
+                phase_started
+                    .map(|started| started.elapsed().as_nanos())
+                    .unwrap_or_default(),
+            );
+        }
+        let phase_started = self.profile.as_ref().map(|_| Instant::now());
+        let resolved = computed.map(|computed| {
+            ResolvedLayoutPseudoStyle::new(ResolvedLayoutStyle::from_stylo(computed))
+        });
+        if let Some(profile) = self.profile.as_mut() {
+            profile.marker_projection_ns = profile.marker_projection_ns.saturating_add(
+                phase_started
+                    .map(|started| started.elapsed().as_nanos())
+                    .unwrap_or_default(),
+            );
+        }
+        Ok(resolved)
     }
 
     fn anonymous_style(
@@ -114,6 +224,7 @@ impl LayoutStyleResolver<DomHandle> for NativeLayoutStyleResolver<'_> {
             )
         })?;
         let anonymous_kind = anonymous_box_kind(display);
+        let phase_started = self.profile.as_ref().map(|_| Instant::now());
         let read = self.reads.read(owner);
         let computed = read
             .anonymous_computed_values(parent_computed.as_ref(), anonymous_kind)
@@ -123,8 +234,24 @@ impl LayoutStyleResolver<DomHandle> for NativeLayoutStyleResolver<'_> {
                     format!("Stylo could not resolve {anonymous_kind:?} anonymous style"),
                 )
             })?;
+        if let Some(profile) = self.profile.as_mut() {
+            profile.anonymous_count = profile.anonymous_count.saturating_add(1);
+            profile.anonymous_read_ns = profile.anonymous_read_ns.saturating_add(
+                phase_started
+                    .map(|started| started.elapsed().as_nanos())
+                    .unwrap_or_default(),
+            );
+        }
+        let phase_started = self.profile.as_ref().map(|_| Instant::now());
         let mut resolved = ResolvedLayoutStyle::from_stylo(computed);
         resolved.force_layout_display(display);
+        if let Some(profile) = self.profile.as_mut() {
+            profile.anonymous_projection_ns = profile.anonymous_projection_ns.saturating_add(
+                phase_started
+                    .map(|started| started.elapsed().as_nanos())
+                    .unwrap_or_default(),
+            );
+        }
         Ok(resolved)
     }
 }
@@ -155,26 +282,11 @@ const fn anonymous_box_kind(display: LayoutDisplay) -> StyloAnonymousBoxKind {
     }
 }
 
-const fn pseudo_style_name(pseudo: LayoutPseudo) -> &'static str {
-    match pseudo {
-        LayoutPseudo::Marker => "marker",
-        LayoutPseudo::Before => "before",
-        LayoutPseudo::After => "after",
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{anonymous_box_kind, pseudo_style_name};
+    use super::anonymous_box_kind;
     use crate::style_engine::StyloAnonymousBoxKind;
-    use moli_layout::{LayoutDisplay, LayoutPseudo};
-
-    #[test]
-    fn all_layout_pseudos_map_to_stylo_names() {
-        assert_eq!(pseudo_style_name(LayoutPseudo::Marker), "marker");
-        assert_eq!(pseudo_style_name(LayoutPseudo::Before), "before");
-        assert_eq!(pseudo_style_name(LayoutPseudo::After), "after");
-    }
+    use moli_layout::LayoutDisplay;
 
     #[test]
     fn anonymous_table_roles_use_the_matching_servo_precomputed_pseudo() {

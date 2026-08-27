@@ -6,8 +6,9 @@ use moli_layout::{
     LayoutFormControlKind, LayoutInlineAlignment, LayoutInputControlKind, LayoutListRole,
     LayoutNamespace, LayoutPosition, LayoutPseudo, LayoutReplacedKind, LayoutSource,
     LayoutSourceKind, LayoutStyleResolver, LayoutTableRole, PaintColor, PaintFragment, PaintRect,
-    PaintViewport, ReplacedMetrics, ResolvedLayoutStyle, ScreenshotLayoutRequest,
-    build_layout_world, build_screenshot_snapshot, normalize_layout_source,
+    PaintViewport, ReplacedMetrics, ResolvedLayoutElementStyles, ResolvedLayoutPseudoStyle,
+    ResolvedLayoutStyle, ScreenshotLayoutRequest, build_layout_world, build_screenshot_snapshot,
+    normalize_layout_source,
 };
 use style::Atom;
 use taffy::{Dimension, Display, FlexDirection, Rect, Size, Style, style_helpers::length};
@@ -157,24 +158,37 @@ impl LayoutSource for TestSource {
 struct TestStyles {
     primary: HashMap<usize, ResolvedLayoutStyle>,
     pseudo: HashMap<(usize, LayoutPseudo), ResolvedLayoutStyle>,
-    primary_queries: Vec<usize>,
-    pseudo_queries: Vec<(usize, LayoutPseudo)>,
+    element_queries: Vec<usize>,
+    marker_queries: Vec<usize>,
     anonymous_queries: Vec<(usize, LayoutDisplay)>,
 }
 
 impl LayoutStyleResolver<usize> for TestStyles {
-    fn primary_style(&mut self, node: usize) -> Result<Option<ResolvedLayoutStyle>, LayoutError> {
-        self.primary_queries.push(node);
-        Ok(self.primary.get(&node).cloned())
-    }
-
-    fn pseudo_style(
+    fn element_styles(
         &mut self,
         node: usize,
-        pseudo: LayoutPseudo,
-    ) -> Result<Option<ResolvedLayoutStyle>, LayoutError> {
-        self.pseudo_queries.push((node, pseudo));
-        Ok(self.pseudo.get(&(node, pseudo)).cloned())
+    ) -> Result<Option<ResolvedLayoutElementStyles>, LayoutError> {
+        self.element_queries.push(node);
+        let Some(primary) = self.primary.get(&node).cloned() else {
+            return Ok(None);
+        };
+        Ok(Some(ResolvedLayoutElementStyles::new(
+            primary,
+            self.pseudo.get(&(node, LayoutPseudo::Before)).cloned(),
+            self.pseudo.get(&(node, LayoutPseudo::After)).cloned(),
+        )))
+    }
+
+    fn marker_style(
+        &mut self,
+        node: usize,
+    ) -> Result<Option<ResolvedLayoutPseudoStyle>, LayoutError> {
+        self.marker_queries.push(node);
+        Ok(self
+            .pseudo
+            .get(&(node, LayoutPseudo::Marker))
+            .cloned()
+            .map(ResolvedLayoutPseudoStyle::new))
     }
 
     fn anonymous_style(
@@ -230,7 +244,7 @@ fn simple_block_ignores_comment_and_is_stable() {
 
     let second = build_layout_world(&source, &mut styles).unwrap();
     assert_eq!(first_normalized, second.normalized_tree().to_string());
-    assert_eq!(styles.primary_queries, vec![0, 2, 0, 2]);
+    assert_eq!(styles.element_queries, vec![0, 2, 0, 2]);
 }
 
 #[test]
@@ -252,7 +266,7 @@ fn display_none_prunes_the_whole_subtree() {
     assert_eq!(world.len(), 1);
     assert_eq!(world.source_box(1), None);
     assert_eq!(world.source_box(2), None);
-    assert_eq!(styles.primary_queries, vec![0, 1]);
+    assert_eq!(styles.element_queries, vec![0, 1]);
 }
 
 #[test]
@@ -273,7 +287,7 @@ fn a_missing_non_root_style_prunes_that_source_subtree() {
     assert_eq!(world.len(), 1);
     assert_eq!(world.source_box(1), None);
     assert_eq!(world.source_box(2), None);
-    assert_eq!(styles.primary_queries, vec![0, 1]);
+    assert_eq!(styles.element_queries, vec![0, 1]);
 }
 
 #[test]
@@ -327,7 +341,7 @@ fn display_contents_on_unusual_html_elements_suppresses_the_element_and_subtree(
         assert_eq!(world.len(), 1, "element={local_name}");
         assert_eq!(world.source_box(1), None, "element={local_name}");
         assert_eq!(world.source_box(2), None, "element={local_name}");
-        assert_eq!(styles.primary_queries, vec![0, 1]);
+        assert_eq!(styles.element_queries, vec![0, 1]);
     }
 }
 
@@ -385,7 +399,7 @@ fn hidden_input_never_constructs_a_box_even_when_css_requests_block() {
     assert_eq!(world.len(), 1);
     assert_eq!(world.source_box(1), None);
     assert_eq!(world.source_box(2), None);
-    assert_eq!(styles.primary_queries, vec![0, 1]);
+    assert_eq!(styles.element_queries, vec![0, 1]);
 }
 
 #[test]
@@ -710,14 +724,7 @@ fn list_marker_precedes_before_content_and_keeps_normal_marker_state() {
         world.box_by_id(children[1]).unwrap().pseudo(),
         Some(LayoutPseudo::Before)
     );
-    assert_eq!(
-        styles.pseudo_queries,
-        vec![
-            (0, LayoutPseudo::Marker),
-            (0, LayoutPseudo::Before),
-            (0, LayoutPseudo::After),
-        ]
-    );
+    assert_eq!(styles.marker_queries, vec![0],);
 }
 
 #[test]
@@ -766,10 +773,7 @@ fn list_item_and_marker_construction_follow_computed_display_not_the_html_tag() 
     let li = li_world.box_by_id(li_world.root()).unwrap();
     assert_eq!(li.kind(), LayoutBoxKind::PrincipalBlock);
     assert!(li.children().is_empty());
-    assert_eq!(
-        li_styles.pseudo_queries,
-        vec![(0, LayoutPseudo::Before), (0, LayoutPseudo::After)]
-    );
+    assert_eq!(li_styles.marker_queries, Vec::<usize>::new());
 }
 
 #[test]
@@ -1319,7 +1323,7 @@ fn replaced_and_line_break_boxes_are_leaves_but_object_fallback_content_is_not()
     assert_eq!(object.children(), &[world.source_box(6).unwrap()]);
     assert_eq!(world.source_box(2), None);
     assert_eq!(world.source_box(4), None);
-    assert_eq!(styles.primary_queries, vec![0, 1, 3, 5]);
+    assert_eq!(styles.element_queries, vec![0, 1, 3, 5]);
     assert!(line_break.capability_diagnostics().is_empty());
 }
 

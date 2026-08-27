@@ -15,7 +15,8 @@ use std::{
 use crate::{
     LayoutAnonymousReason, LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic, LayoutDisplay,
     LayoutElementCategory, LayoutElementSemantics, LayoutError, LayoutPseudo, LayoutSource,
-    LayoutSourceKind, LayoutStyleResolver, LayoutWorld, ResolvedLayoutStyle,
+    LayoutSourceKind, LayoutStyleResolver, LayoutWorld, ResolvedLayoutPseudoStyle,
+    ResolvedLayoutStyle,
     form::form_control_context,
     replaced::ReplacedContext,
     style::{InlineWhiteSpaceCollapse, LayoutOverflowMode},
@@ -92,9 +93,10 @@ where
         let root_semantics = self.validated_element_semantics(source_root, source_kind)?;
         self.source_root = Some(source_root);
         self.root_is_html = root_semantics.is_html_element("html");
-        let Some(mut root_style) = self.styles.primary_style(source_root)? else {
+        let Some(root_styles) = self.styles.element_styles(source_root)? else {
             return Err(LayoutError::MissingRootStyle { source_label });
         };
+        let (mut root_style, root_before, root_after) = root_styles.into_parts();
         let root_metrics = self.source.replaced_metrics(source_root);
         if root_semantics.is_hidden_input()
             || (root_style.display() == LayoutDisplay::Contents
@@ -143,7 +145,14 @@ where
             LayoutDisplay::None | LayoutDisplay::Contents
         ) && !is_leaf_element(&root_semantics, root_kind, &root_style)
         {
-            self.populate_root(&mut world, root_box, source_root, &root_style)?;
+            self.populate_root(
+                &mut world,
+                root_box,
+                source_root,
+                &root_style,
+                root_before,
+                root_after,
+            )?;
         }
 
         world.compact_reachable();
@@ -159,6 +168,8 @@ where
         root_box: LayoutBoxId,
         source_node: S::NodeId,
         style: &ResolvedLayoutStyle,
+        before: Option<ResolvedLayoutPseudoStyle>,
+        after: Option<ResolvedLayoutPseudoStyle>,
     ) -> Result<(), LayoutError> {
         if !self.active_sources.insert(source_node) {
             return Err(LayoutError::SourceCycle {
@@ -166,7 +177,8 @@ where
             });
         }
         let result = (|| {
-            let children = self.build_element_child_stream(world, source_node, style)?;
+            let children =
+                self.build_element_child_stream(world, source_node, style, before, after)?;
             let _ = self.attach_children(world, root_box, source_node, style, children, false)?;
             Ok(())
         })();
@@ -225,9 +237,10 @@ where
         let result = (|| {
             let semantics =
                 self.validated_element_semantics(source_node, self.source.node_kind(source_node))?;
-            let Some(mut style) = self.styles.primary_style(source_node)? else {
+            let Some(styles) = self.styles.element_styles(source_node)? else {
                 return Ok(Vec::new());
             };
+            let (mut style, before, after) = styles.into_parts();
             if self.viewport_body_candidate.is_none()
                 && self.root_is_html
                 && self
@@ -261,7 +274,8 @@ where
             match style.display() {
                 LayoutDisplay::None => Ok(Vec::new()),
                 LayoutDisplay::Contents => {
-                    let children = self.build_element_child_stream(world, source_node, &style)?;
+                    let children =
+                        self.build_element_child_stream(world, source_node, &style, before, after)?;
                     world.map_display_contents_source(source_node, &children);
                     Ok(children)
                 }
@@ -282,7 +296,8 @@ where
                         return Ok(vec![id]);
                     }
 
-                    let children = self.build_element_child_stream(world, source_node, &style)?;
+                    let children =
+                        self.build_element_child_stream(world, source_node, &style, before, after)?;
                     self.attach_children(world, id, source_node, &style, children, true)
                 }
             }
@@ -373,16 +388,19 @@ where
         world: &mut LayoutWorld<S::NodeId>,
         source_node: S::NodeId,
         style: &ResolvedLayoutStyle,
+        before: Option<ResolvedLayoutPseudoStyle>,
+        after: Option<ResolvedLayoutPseudoStyle>,
     ) -> Result<Vec<LayoutBoxId>, LayoutError> {
         let mut children = Vec::new();
         if style.display().is_list_item() {
-            children.extend(self.build_pseudo(world, source_node, LayoutPseudo::Marker)?);
+            let marker = self.styles.marker_style(source_node)?;
+            children.extend(self.build_pseudo(world, source_node, LayoutPseudo::Marker, marker)?);
         }
-        children.extend(self.build_pseudo(world, source_node, LayoutPseudo::Before)?);
+        children.extend(self.build_pseudo(world, source_node, LayoutPseudo::Before, before)?);
         for child in self.checked_flat_children(source_node)? {
             children.extend(self.build_source_node(world, child, style)?);
         }
-        children.extend(self.build_pseudo(world, source_node, LayoutPseudo::After)?);
+        children.extend(self.build_pseudo(world, source_node, LayoutPseudo::After, after)?);
         Ok(children)
     }
 
@@ -391,10 +409,12 @@ where
         world: &mut LayoutWorld<S::NodeId>,
         owner: S::NodeId,
         pseudo: LayoutPseudo,
+        style: Option<ResolvedLayoutPseudoStyle>,
     ) -> Result<Vec<LayoutBoxId>, LayoutError> {
-        let Some(style) = self.styles.pseudo_style(owner, pseudo)? else {
+        let Some(style) = style else {
             return Ok(Vec::new());
         };
+        let style = style.into_style();
         let is_marker = pseudo == LayoutPseudo::Marker;
         if style.display() == LayoutDisplay::None || !style.generates_pseudo_box(is_marker) {
             return Ok(Vec::new());

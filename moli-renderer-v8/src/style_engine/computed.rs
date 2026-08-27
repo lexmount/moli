@@ -57,6 +57,8 @@ use super::{
 #[derive(Clone)]
 pub(crate) struct StyloComputedStyleSnapshot {
     primary: ServoArc<ComputedValues>,
+    before: Option<ServoArc<ComputedValues>>,
+    after: Option<ServoArc<ComputedValues>>,
 }
 
 pub(crate) enum StyleObservationSnapshot {
@@ -149,8 +151,34 @@ pub(crate) struct ComputedRenderedStyleFacts {
 }
 
 impl StyloComputedStyleSnapshot {
+    fn from_primary(primary: ServoArc<ComputedValues>) -> Self {
+        Self {
+            primary,
+            before: None,
+            after: None,
+        }
+    }
+
+    fn from_element_styles(styles: &ElementStyles) -> Self {
+        Self {
+            primary: styles.primary().clone(),
+            before: styles.pseudos.get(&PseudoElement::Before).cloned(),
+            after: styles.pseudos.get(&PseudoElement::After).cloned(),
+        }
+    }
+
     pub(crate) fn computed_values(&self) -> ServoArc<ComputedValues> {
         self.primary.clone()
+    }
+
+    pub(crate) fn into_element_computed_values(
+        self,
+    ) -> (
+        ServoArc<ComputedValues>,
+        Option<ServoArc<ComputedValues>>,
+        Option<ServoArc<ComputedValues>>,
+    ) {
+        (self.primary, self.before, self.after)
     }
 
     pub(crate) fn rendered_style_facts(&self) -> ComputedRenderedStyleFacts {
@@ -338,7 +366,7 @@ pub(super) fn computed_style_property_value(
             inputs,
             document_context,
             pseudo_element.as_ref(),
-            |style| serialize_computed_custom_property(style, property),
+            |style, _styles| serialize_computed_custom_property(style, property),
         );
     }
     let property_id = PropertyId::parse_enabled_for_all_content(property).ok()?;
@@ -366,7 +394,7 @@ pub(super) fn computed_style_property_value(
         inputs,
         document_context,
         pseudo_element.as_ref(),
-        |style| serialize_resolved_computed_property(style, property_id),
+        |style, _styles| serialize_resolved_computed_property(style, property_id),
     )
 }
 
@@ -452,11 +480,7 @@ pub(super) fn computed_style_snapshot_from_current_observation(
         &world,
         quirks_mode,
         None,
-        |style| {
-            Some(StyloComputedStyleSnapshot {
-                primary: style.clone(),
-            })
-        },
+        |_style, styles| styles.map(StyloComputedStyleSnapshot::from_element_styles),
     ))
 }
 
@@ -520,11 +544,7 @@ pub(super) fn computed_style_snapshot_after_world_update(
                 &world,
                 update.environment().quirks_mode,
                 None,
-                |style| {
-                    Some(StyloComputedStyleSnapshot {
-                        primary: style.clone(),
-                    })
-                },
+                |_style, styles| styles.map(StyloComputedStyleSnapshot::from_element_styles),
             )
         }
     }
@@ -566,9 +586,9 @@ pub(super) fn computed_pseudo_style_snapshot_from_current_observation(
             quirks_mode,
             &pseudo_element,
             |style| {
-                Some(StyloComputedStyleSnapshot {
-                    primary: ServoArc::new(style.clone()),
-                })
+                Some(StyloComputedStyleSnapshot::from_primary(ServoArc::new(
+                    style.clone(),
+                )))
             },
         );
     }
@@ -580,11 +600,7 @@ pub(super) fn computed_pseudo_style_snapshot_from_current_observation(
         &world,
         quirks_mode,
         Some(&pseudo_element),
-        |style| {
-            Some(StyloComputedStyleSnapshot {
-                primary: style.clone(),
-            })
-        },
+        |style, _styles| Some(StyloComputedStyleSnapshot::from_primary(style.clone())),
     )
 }
 
@@ -636,7 +652,7 @@ fn computed_anonymous_style_snapshot_in_current_world(
                 .stylist
                 .style_for_anonymous::<StyloElement<'_>>(&guards, &pseudo, parent_style)
         });
-        Some(StyloComputedStyleSnapshot { primary: style })
+        Some(StyloComputedStyleSnapshot::from_primary(style))
     })
 }
 
@@ -669,11 +685,7 @@ fn computed_style_snapshot_after_style_update_with_key(
         inputs,
         document_context,
         None,
-        |style| {
-            Some(StyloComputedStyleSnapshot {
-                primary: style.clone(),
-            })
-        },
+        |_style, styles| styles.map(StyloComputedStyleSnapshot::from_element_styles),
     )
 }
 
@@ -699,7 +711,7 @@ fn with_resolved_style<R>(
     inputs: &FullStyleWorldSnapshot,
     document_context: StyleSourceDocumentContext<'_>,
     pseudo_element: Option<&PseudoElement>,
-    callback: impl FnOnce(&ServoArc<ComputedValues>) -> Option<R>,
+    callback: impl FnOnce(&ServoArc<ComputedValues>, Option<&ElementStyles>) -> Option<R>,
 ) -> Option<R> {
     let owner_document = owner_document_for_computed_style_read(host, handle)?;
     let world = engine.world_for_document(owner_document);
@@ -732,7 +744,7 @@ fn with_resolved_style_in_current_world<R>(
     world: &DocumentStyleWorld,
     quirks_mode: QuirksMode,
     pseudo_element: Option<&PseudoElement>,
-    callback: impl FnOnce(&ServoArc<ComputedValues>) -> Option<R>,
+    callback: impl FnOnce(&ServoArc<ComputedValues>, Option<&ElementStyles>) -> Option<R>,
 ) -> Option<R> {
     let computed_cache_generation = world.document_state.computed_cache_generation();
     if let Some(pseudo_element) = pseudo_element {
@@ -742,7 +754,7 @@ fn with_resolved_style_in_current_world<R>(
             pseudo_element: Some(pseudo_element.clone()),
         };
         if let Some(style) = world.computed_style_cache.get_pseudo(&pseudo_key) {
-            return callback(&style);
+            return callback(&style, None);
         }
     }
 
@@ -807,7 +819,7 @@ fn with_resolved_style_in_current_world<R>(
                 });
             canonical_styles.primary().clone()
         };
-        callback(&style)
+        callback(&style, Some(&canonical_styles))
     })
 }
 
@@ -978,7 +990,7 @@ fn with_lazily_resolved_pseudo_style_in_current_world<R>(
         world,
         quirks_mode,
         None,
-        |style| Some(style.clone()),
+        |style, _styles| Some(style.clone()),
     )?;
 
     engine.dom_adapter.with_bound_host(host, |dom_adapter| {

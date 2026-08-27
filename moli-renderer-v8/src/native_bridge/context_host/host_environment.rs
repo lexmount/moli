@@ -1693,23 +1693,16 @@ impl JsContextHost {
         handle: DomHandle,
         read_document: DomHandle,
         viewport: StyleViewport,
+        environment: StyloStyleEnvironment,
         tree_scope_versions: crate::style_engine::StyleTreeScopeVersions,
     ) -> StyleObservationSnapshot {
         let document_context = self.style_source_document_context_for_read_document(read_document);
-        let page_color_schemes = self
-            .dom_host()
-            .owner_document_handle(handle)
-            .map(|document| {
-                crate::document_color_scheme::document_page_color_schemes(self.dom_host(), document)
-            })
-            .unwrap_or_default();
         self.style_engine
             .computed_style_snapshot_from_current_observation(
                 self.dom_host(),
                 self.document_url(),
                 handle,
-                StyloStyleEnvironment::from_emulated_media(self.emulated_media())
-                    .with_page_color_schemes(page_color_schemes),
+                environment,
                 document_context.as_ref(),
                 read_document,
                 viewport,
@@ -1776,6 +1769,20 @@ impl JsContextHost {
     #[cfg(test)]
     pub(crate) fn stylo_computed_style_property_reads_for_test(&self) -> u64 {
         self.stylo_computed_style_property_reads.get()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn note_style_observation_environment_resolution_for_test(&self) {
+        self.style_observation_environment_resolutions.set(
+            self.style_observation_environment_resolutions
+                .get()
+                .saturating_add(1),
+        );
+    }
+
+    #[cfg(test)]
+    pub(crate) fn style_observation_environment_resolutions_for_test(&self) -> u64 {
+        self.style_observation_environment_resolutions.get()
     }
 
     pub(crate) fn set_document_url(&mut self, url: url::Url) -> bool {

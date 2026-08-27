@@ -61,6 +61,56 @@ fn computed_style_is_published_on_canonical_element_data_and_reused() {
 }
 
 #[test]
+fn primary_snapshot_carries_applicable_eager_pseudos_without_forcing_absent_ones() {
+    let mut host = test_host();
+    let document = host.document_handle();
+    let generated = host.create_element("div");
+    let plain = host.create_element("div");
+    assert!(host.set_attribute(generated, "class", "generated"));
+    assert!(host.append_child(document, generated));
+    assert!(host.append_child(document, plain));
+
+    let engine = MoliStyleEngine::new();
+    let document_url = url::Url::parse("https://example.test/").unwrap();
+    let mut inputs = FullStyleWorldSnapshot::default();
+    inputs.document_stylesheet_sources.push(
+        StyloStylesheetSource::new(
+            ".generated::before { content: 'before'; }\n\
+             .generated::after { content: 'after'; }"
+                .into(),
+            document_url.clone(),
+        )
+        .with_source_id(Some(StyleSourceId::document_adopted_style_sheet(
+            document, 1,
+        ))),
+    );
+
+    let before = engine.element_style_resolution_count_for_document_for_test(document);
+    let generated_snapshot =
+        computed_style_snapshot_for_test(&engine, &host, &document_url, generated, &inputs);
+    let (_, generated_before, generated_after) = generated_snapshot.into_element_computed_values();
+    assert!(generated_before.is_some());
+    assert!(generated_after.is_some());
+    assert_eq!(
+        engine.element_style_resolution_count_for_document_for_test(document),
+        before + 1,
+        "the primary resolve already cascades both eager pseudo styles"
+    );
+
+    let before = engine.element_style_resolution_count_for_document_for_test(document);
+    let plain_snapshot =
+        computed_style_snapshot_for_test(&engine, &host, &document_url, plain, &inputs);
+    let (_, plain_before, plain_after) = plain_snapshot.into_element_computed_values();
+    assert!(plain_before.is_none());
+    assert!(plain_after.is_none());
+    assert_eq!(
+        engine.element_style_resolution_count_for_document_for_test(document),
+        before + 1,
+        "observing absent eager pseudos must not force two extra resolutions"
+    );
+}
+
+#[test]
 fn scoped_invalidation_marks_canonical_style_dirty_and_preserves_clean_elements() {
     let mut host = test_host();
     let document = host.document_handle();

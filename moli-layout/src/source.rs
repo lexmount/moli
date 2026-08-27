@@ -524,18 +524,76 @@ pub trait LayoutSource {
     }
 }
 
-/// Renderer-owned access to primary, pseudo, and anonymous computed styles.
+/// One element's primary style and the pseudo styles eagerly cascaded with it.
+///
+/// The bundle is owned by one box-construction stack frame. It lets layout
+/// retain `::after` until after descendant construction without holding a
+/// renderer style-store borrow or introducing a side cache.
+pub struct ResolvedLayoutElementStyles {
+    primary: ResolvedLayoutStyle,
+    before: Option<ResolvedLayoutPseudoStyle>,
+    after: Option<ResolvedLayoutPseudoStyle>,
+}
+
+impl ResolvedLayoutElementStyles {
+    pub fn new(
+        primary: ResolvedLayoutStyle,
+        before: Option<ResolvedLayoutStyle>,
+        after: Option<ResolvedLayoutStyle>,
+    ) -> Self {
+        Self {
+            primary,
+            before: before.map(ResolvedLayoutPseudoStyle::new),
+            after: after.map(ResolvedLayoutPseudoStyle::new),
+        }
+    }
+
+    pub fn from_primary(primary: ResolvedLayoutStyle) -> Self {
+        Self::new(primary, None, None)
+    }
+
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        ResolvedLayoutStyle,
+        Option<ResolvedLayoutPseudoStyle>,
+        Option<ResolvedLayoutPseudoStyle>,
+    ) {
+        (self.primary, self.before, self.after)
+    }
+}
+
+/// Heap-owned pseudo style carried through recursive box construction.
+///
+/// `ResolvedLayoutStyle` is intentionally rich and therefore large. Keeping
+/// absent `::before` and `::after` values inline would reserve room for two
+/// complete styles in every recursive builder frame. This wrapper keeps the
+/// frame representation pointer-sized without introducing shared state.
+pub struct ResolvedLayoutPseudoStyle(Box<ResolvedLayoutStyle>);
+
+impl ResolvedLayoutPseudoStyle {
+    pub fn new(style: ResolvedLayoutStyle) -> Self {
+        Self(Box::new(style))
+    }
+
+    pub(crate) fn into_style(self) -> ResolvedLayoutStyle {
+        *self.0
+    }
+}
+
+/// Renderer-owned access to element, lazy marker, and anonymous styles.
 pub trait LayoutStyleResolver<N>
 where
     N: Copy + Debug + Eq + Hash,
 {
-    fn primary_style(&mut self, node: N) -> Result<Option<ResolvedLayoutStyle>, LayoutError>;
-
-    fn pseudo_style(
+    fn element_styles(
         &mut self,
         node: N,
-        pseudo: LayoutPseudo,
-    ) -> Result<Option<ResolvedLayoutStyle>, LayoutError>;
+    ) -> Result<Option<ResolvedLayoutElementStyles>, LayoutError>;
+
+    fn marker_style(&mut self, _node: N) -> Result<Option<ResolvedLayoutPseudoStyle>, LayoutError> {
+        Ok(None)
+    }
 
     fn anonymous_style(
         &mut self,

@@ -2,10 +2,10 @@ use std::collections::HashMap;
 
 use moli_layout::{
     DocumentLayoutServices, LayoutDisplay, LayoutElementCategory, LayoutElementSemantics,
-    LayoutError, LayoutNamespace, LayoutPosition, LayoutPseudo, LayoutReplacedKind, LayoutSource,
+    LayoutError, LayoutNamespace, LayoutPosition, LayoutReplacedKind, LayoutSource,
     LayoutSourceKind, LayoutStyleResolver, PaintBlendMode, PaintColor, PaintFragment, PaintRect,
-    PaintSnapshot, PaintViewport, ReplacedMetrics, ResolvedLayoutStyle, ScreenshotLayoutRequest,
-    build_screenshot_snapshot,
+    PaintSnapshot, PaintViewport, ReplacedMetrics, ResolvedLayoutElementStyles,
+    ResolvedLayoutStyle, ScreenshotLayoutRequest, build_screenshot_snapshot,
 };
 use style::Atom;
 use taffy::{
@@ -127,16 +127,15 @@ impl LayoutSource for FixtureSource {
 struct FixtureStyles(HashMap<usize, ResolvedLayoutStyle>);
 
 impl LayoutStyleResolver<usize> for FixtureStyles {
-    fn primary_style(&mut self, node: usize) -> Result<Option<ResolvedLayoutStyle>, LayoutError> {
-        Ok(self.0.get(&node).cloned())
-    }
-
-    fn pseudo_style(
+    fn element_styles(
         &mut self,
-        _node: usize,
-        _pseudo: LayoutPseudo,
-    ) -> Result<Option<ResolvedLayoutStyle>, LayoutError> {
-        Ok(None)
+        node: usize,
+    ) -> Result<Option<ResolvedLayoutElementStyles>, LayoutError> {
+        Ok(self
+            .0
+            .get(&node)
+            .cloned()
+            .map(ResolvedLayoutElementStyles::from_primary))
     }
 
     fn anonymous_style(

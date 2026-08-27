@@ -484,6 +484,40 @@ fn style_observation_reuses_current_world_without_materializing_an_update() {
 }
 
 #[test]
+fn style_observation_resolves_page_environment_once_for_all_element_reads() {
+    let mut vm = new_parsed_test_vm(
+        "https://style-observation-page-environment.test/",
+        "<!doctype html><meta name=color-scheme content='dark light'><div id=first></div><div id=second></div>",
+    );
+    vm.eval("getComputedStyle(document.getElementById('first')).color")
+        .expect("initial style should establish the retained world");
+    let first = element_handle_by_id(&vm, "first");
+    let second = element_handle_by_id(&vm, "second");
+    let host = vm._context_host.borrow();
+    let before = host.style_observation_environment_resolutions_for_test();
+
+    {
+        let mut observation = crate::native_bridge::element::StyleObservation::new(&host);
+        assert!(observation.read(first).computed_values().is_some());
+        assert!(observation.read(second).computed_values().is_some());
+        assert!(observation.read(first).computed_values().is_some());
+    }
+    assert_eq!(
+        host.style_observation_environment_resolutions_for_test() - before,
+        1,
+        "one synchronous observation must snapshot page-level media inputs once"
+    );
+
+    let mut next_observation = crate::native_bridge::element::StyleObservation::new(&host);
+    assert!(next_observation.read(first).computed_values().is_some());
+    assert_eq!(
+        host.style_observation_environment_resolutions_for_test() - before,
+        2,
+        "a later observation must take a fresh page-level environment snapshot"
+    );
+}
+
+#[test]
 fn style_observation_refreshes_dirty_element_without_materializing_a_world_update() {
     let mut vm = new_parsed_test_vm(
         "https://style-observation-dirty-element.test/",
@@ -542,6 +576,7 @@ fn style_observation_materializes_dirty_scope_once_without_a_full_snapshot() {
     let full_snapshots = host.style_world_full_snapshots_for_test();
     let document_scopes = host.style_world_document_scope_materializations_for_test();
     let shadow_scopes = host.style_world_shadow_scope_materializations_for_test();
+    let environment_resolutions = host.style_observation_environment_resolutions_for_test();
 
     let mut observation = crate::native_bridge::element::StyleObservation::new(&host);
     let first = observation
@@ -572,6 +607,11 @@ fn style_observation_materializes_dirty_scope_once_without_a_full_snapshot() {
     assert_eq!(
         host.style_world_shadow_scope_materializations_for_test(),
         shadow_scopes
+    );
+    assert_eq!(
+        host.style_observation_environment_resolutions_for_test() - environment_resolutions,
+        1,
+        "a dirty world update must reuse its observation's page-level environment"
     );
 }
 

@@ -8,7 +8,8 @@ use moli_layout::{
     LayoutReplacedKind, LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutTableData,
     LayoutTableRole, LayoutTextSelection, PaintBrush, PaintColor, PaintFragment, PaintRect,
     PaintShape, PaintSnapshot, PaintTransform2D, PaintViewport, ReplacedMetrics,
-    ResolvedLayoutStyle, ScreenshotLayoutRequest, build_screenshot_snapshot,
+    ResolvedLayoutElementStyles, ResolvedLayoutPseudoStyle, ResolvedLayoutStyle,
+    ScreenshotLayoutRequest, build_screenshot_snapshot,
 };
 use style::Atom;
 use taffy::{
@@ -154,16 +155,26 @@ struct Styles {
 }
 
 impl LayoutStyleResolver<usize> for Styles {
-    fn primary_style(&mut self, node: usize) -> Result<Option<ResolvedLayoutStyle>, LayoutError> {
-        Ok(self.primary.get(&node).cloned())
-    }
-
-    fn pseudo_style(
+    fn element_styles(
         &mut self,
         node: usize,
-        pseudo: LayoutPseudo,
-    ) -> Result<Option<ResolvedLayoutStyle>, LayoutError> {
-        Ok(self.pseudo.get(&(node, pseudo)).cloned())
+    ) -> Result<Option<ResolvedLayoutElementStyles>, LayoutError> {
+        Ok(self
+            .primary
+            .get(&node)
+            .cloned()
+            .map(ResolvedLayoutElementStyles::from_primary))
+    }
+
+    fn marker_style(
+        &mut self,
+        node: usize,
+    ) -> Result<Option<ResolvedLayoutPseudoStyle>, LayoutError> {
+        Ok(self
+            .pseudo
+            .get(&(node, LayoutPseudo::Marker))
+            .cloned()
+            .map(ResolvedLayoutPseudoStyle::new))
     }
 }
 
