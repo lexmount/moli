@@ -84,6 +84,7 @@ struct PlannedSourceDependencyInputForTest {
 struct RetainedSourceInputForTest {
     fallback_kind: Option<StyloRetainedSourceStyleInvalidationKind>,
     retained_fallback_kind: Option<Option<StyloRetainedSourceStyleInvalidationKind>>,
+    zero_matched_dependency_result_is_exact: Option<bool>,
 }
 
 impl StyloPlannedFallbackRootInvalidationTargetPartsSink<DomHandle>
@@ -230,12 +231,15 @@ impl<'a> StyloRetainedSourceStyleInvalidationSink<'a, DomHandle, MoliMutationSna
         _cascade_data: Option<&'a ServoArc<CascadeData>>,
         _shadow_root: Option<DomHandle>,
         _queries: &'a indexmap::IndexSet<RetainedStyleInvalidationQuery>,
+        zero_matched_dependency_result_is_exact: bool,
         _reasoned_fallback_roots: &'a indexmap::IndexSet<DomHandle>,
         _exact_safety_fallback_roots: &'a indexmap::IndexSet<DomHandle>,
         _fallback_reasons: &'a indexmap::IndexSet<StyloSourceInvalidationFallbackReason>,
         _mutation_snapshot: &'a MoliMutationSnapshot,
     ) {
         self.retained_fallback_kind = Some(fallback_kind);
+        self.zero_matched_dependency_result_is_exact =
+            Some(zero_matched_dependency_result_is_exact);
     }
 
     fn run_fallback_source_style_invalidation(
@@ -472,6 +476,7 @@ fn collect_source_invalidation_roots_for_test(
                                         .as_ref()
                                         .expect("retained source test input should carry queries"),
                                 ),
+                                false,
                                 &planned.reasoned_fallback_roots,
                                 &planned.exact_safety_fallback_roots,
                                 &planned.fallback_reasons,
@@ -490,6 +495,7 @@ fn collect_source_invalidation_roots_for_test(
                                 None,
                                 None,
                                 None,
+                                false,
                                 &planned.reasoned_fallback_roots,
                                 &planned.exact_safety_fallback_roots,
                                 &planned.fallback_reasons,

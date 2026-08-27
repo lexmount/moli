@@ -3159,6 +3159,88 @@ fn retained_stylo_invalidator_uses_snapshots_for_mixed_attribute_state_batches()
     assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, unrelated));
 }
 #[test]
+fn retained_stylo_invalidator_accepts_inactive_media_dependency_as_exact_empty() {
+    let mut host = test_host();
+    let document = host.document_handle();
+    let source = host.create_element("div");
+    let target = host.create_element("span");
+    let unrelated = host.create_element("aside");
+
+    assert!(host.set_attribute(target, "class", "target"));
+    assert!(host.set_attribute(unrelated, "id", "unrelated"));
+    assert!(host.append_child(document, source));
+    assert!(host.append_child(document, target));
+    assert!(host.append_child(document, unrelated));
+
+    let mut engine = MoliStyleEngine::new();
+    let document_url = url::Url::parse("https://example.test/").unwrap();
+    let stylesheet = StyloStylesheetSource::new(
+        "@media print {
+             .probe + .target { color: red; }
+         }
+         #unrelated { color: rgb(1, 2, 3); }"
+            .into(),
+        document_url.clone(),
+    );
+    engine.set_document_adopted_style_sheet_sources(document, vec![stylesheet.clone()]);
+    let mut inputs = FullStyleWorldSnapshot::default();
+    inputs.document_stylesheet_sources.push(stylesheet);
+
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            target,
+            "color",
+            None,
+            &inputs,
+            None,
+        ),
+        Some("rgb(0, 0, 0)".into())
+    );
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            unrelated,
+            "color",
+            None,
+            &inputs,
+            None,
+        ),
+        Some("rgb(1, 2, 3)".into())
+    );
+
+    assert!(host.set_attribute(source, "class", "probe"));
+    engine.invalidate_for_mutations(
+        &host,
+        &[StyleMutationEffect::Attribute {
+            element: source,
+            name: "class".into(),
+            old_value: None,
+            new_value: Some("probe".into()),
+        }],
+        &crate::protocol_types::EmulatedMediaOverrides::default(),
+    );
+    engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
+
+    assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, target));
+    assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, unrelated));
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            target,
+            "color",
+            None,
+            &inputs,
+            None,
+        ),
+        Some("rgb(0, 0, 0)".into())
+    );
+}
+
+#[test]
 fn retained_stylo_invalidator_narrows_target_sibling_cache_invalidation() {
     let mut host = test_host();
     let document = host.document_handle();

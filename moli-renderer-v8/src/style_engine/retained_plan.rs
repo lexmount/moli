@@ -191,6 +191,13 @@ impl RetainedBaseQueryPlan {
             cause_fallback,
             &mut target_queries,
         );
+        let zero_matched_dependency_result_is_exact =
+            request_context.zero_matched_dependency_result_is_exact();
+        for target_query in &mut target_queries {
+            target_query.set_zero_matched_dependency_result_is_exact(
+                zero_matched_dependency_result_is_exact,
+            );
+        }
         target_queries
     }
 

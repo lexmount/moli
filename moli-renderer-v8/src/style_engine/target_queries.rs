@@ -33,6 +33,7 @@ pub(super) struct PendingRetainedSourceStyleInvalidationInput<'a> {
     kind: StyloRetainedSourceStyleInvalidationKind,
     fallback_kind: Option<StyloRetainedSourceStyleInvalidationKind>,
     retained_queries: Option<&'a IndexSet<RetainedStyleInvalidationQuery>>,
+    zero_matched_dependency_result_is_exact: bool,
     reasoned_fallback_roots: &'a IndexSet<DomHandle>,
     exact_safety_fallback_roots: &'a IndexSet<DomHandle>,
     fallback_reasons: &'a IndexSet<StyloSourceInvalidationFallbackReason>,
@@ -80,6 +81,7 @@ struct PendingStyleInvalidationTargetPayload {
     retained_source_kind: StyloRetainedSourceStyleInvalidationKind,
     fallback_kind: Option<StyloRetainedSourceStyleInvalidationKind>,
     retained_queries: Option<IndexSet<RetainedStyleInvalidationQuery>>,
+    zero_matched_dependency_result_is_exact: bool,
     fallback_root_buckets: PendingStyleInvalidationFallbackRootBuckets,
 }
 
@@ -327,6 +329,18 @@ impl PendingStyleInvalidationTargetQueries {
         self.context.set_mutation_snapshot(snapshot);
     }
 
+    pub(super) fn set_zero_matched_dependency_result_is_exact(&mut self, is_exact: bool) {
+        // A light-tree keyed mutation can affect a shadow stylesheet through
+        // :host, :host-context, ::slotted, or a relative selector even when
+        // that source's local cascade reports no direct dependency match.
+        // Keep cross-tree sources conservative until Stylo exposes a stronger
+        // per-source proof for those relationships.
+        let source_scope_is_document =
+            matches!(self.context.target.scope_id(), StyleScopeId::Document(_));
+        self.payload
+            .set_zero_matched_dependency_result_is_exact(is_exact && source_scope_is_document);
+    }
+
     pub(super) fn extend_structural_boundary_cleanup_roots(
         &mut self,
         roots: impl IntoIterator<Item = DomHandle>,
@@ -365,6 +379,9 @@ impl PendingStyleInvalidationTargetQueries {
             kind: self.retained_source_invalidation_kind(),
             fallback_kind: self.payload.fallback_kind(),
             retained_queries: self.retained_queries(),
+            zero_matched_dependency_result_is_exact: self
+                .payload
+                .zero_matched_dependency_result_is_exact(),
             reasoned_fallback_roots: self.reasoned_fallback_root_set(),
             exact_safety_fallback_roots: self.exact_safety_fallback_root_set(),
             fallback_reasons: self.fallback_reasons(),
@@ -715,6 +732,7 @@ impl<'a> PendingRetainedSourceStyleInvalidationInput<'a> {
             cascade_data,
             self.shadow_root(),
             self.retained_queries,
+            self.zero_matched_dependency_result_is_exact,
             self.reasoned_fallback_roots,
             self.exact_safety_fallback_roots,
             self.fallback_reasons,
@@ -779,6 +797,7 @@ impl PendingStyleInvalidationTargetPayload {
             retained_source_kind: StyloRetainedSourceStyleInvalidationKind::RetainedQueries,
             fallback_kind: None,
             retained_queries: Some(queries),
+            zero_matched_dependency_result_is_exact: false,
             fallback_root_buckets: PendingStyleInvalidationFallbackRootBuckets::default(),
         }
     }
@@ -795,6 +814,7 @@ impl PendingStyleInvalidationTargetPayload {
             retained_source_kind,
             fallback_kind: Some(retained_source_kind),
             retained_queries: None,
+            zero_matched_dependency_result_is_exact: false,
             fallback_root_buckets: PendingStyleInvalidationFallbackRootBuckets::with_reasoned(
                 roots,
             ),
@@ -806,6 +826,7 @@ impl PendingStyleInvalidationTargetPayload {
             retained_source_kind: StyloRetainedSourceStyleInvalidationKind::MissingFallbackRoots,
             fallback_kind: Some(StyloRetainedSourceStyleInvalidationKind::MissingFallbackRoots),
             retained_queries: None,
+            zero_matched_dependency_result_is_exact: false,
             fallback_root_buckets: PendingStyleInvalidationFallbackRootBuckets::default(),
         }
     }
@@ -820,6 +841,10 @@ impl PendingStyleInvalidationTargetPayload {
 
     fn retained_queries(&self) -> Option<&IndexSet<RetainedStyleInvalidationQuery>> {
         self.retained_queries.as_ref()
+    }
+
+    fn zero_matched_dependency_result_is_exact(&self) -> bool {
+        self.zero_matched_dependency_result_is_exact && self.fallback_kind.is_none()
     }
 
     fn reasoned_fallback_roots(&self) -> &IndexSet<DomHandle> {
@@ -852,7 +877,13 @@ impl PendingStyleInvalidationTargetPayload {
         );
     }
 
+    fn set_zero_matched_dependency_result_is_exact(&mut self, is_exact: bool) {
+        self.zero_matched_dependency_result_is_exact = is_exact && self.retained_queries.is_some();
+    }
+
     fn merge_from(&mut self, incoming: Self) {
+        self.zero_matched_dependency_result_is_exact &=
+            incoming.zero_matched_dependency_result_is_exact;
         if let Some(incoming_queries) = incoming.retained_queries {
             self.retained_queries
                 .get_or_insert_with(IndexSet::new)

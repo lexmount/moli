@@ -75,6 +75,72 @@ fn pending_target_query_merge_preserves_all_fallback_reasons() {
             .contains(&StyloSourceInvalidationFallbackReason::UnsupportedStateDependency)
     );
 }
+
+#[test]
+fn zero_matched_dependency_exactness_requires_document_scope_and_survives_only_safe_merges() {
+    let mut host = test_host();
+    let document = host.document_handle();
+    let shadow_host = host.create_element("section");
+    assert!(host.append_child(document, shadow_host));
+    let shadow_root = host
+        .attach_shadow_root(shadow_host, "open")
+        .expect("test host should accept a shadow root");
+    let query = RetainedStyleInvalidationQuery::class(document, "inactive".into());
+
+    let document_source = StyleSourceId::document_adopted_style_sheet(document, 1);
+    let mut document_target = PendingStyleInvalidationTargetQueries::retained_source(
+        document_source.clone(),
+        indexmap::IndexSet::from([query.clone()]),
+    );
+    document_target.set_zero_matched_dependency_result_is_exact(true);
+    let document_input = retained_source_input_for_test(
+        document_target
+            .retained_source_invalidation_input()
+            .into_stylo_input(None),
+    );
+    assert_eq!(
+        document_input.zero_matched_dependency_result_is_exact,
+        Some(true)
+    );
+
+    let shadow_source = StyleSourceId::shadow_root_adopted_style_sheet(shadow_root, 2);
+    let mut shadow_target = PendingStyleInvalidationTargetQueries::retained_source(
+        shadow_source,
+        indexmap::IndexSet::from([query.clone()]),
+    );
+    shadow_target.set_zero_matched_dependency_result_is_exact(true);
+    let shadow_input = retained_source_input_for_test(
+        shadow_target
+            .retained_source_invalidation_input()
+            .into_stylo_input(None),
+    );
+    assert_eq!(
+        shadow_input.zero_matched_dependency_result_is_exact,
+        Some(false)
+    );
+
+    let mut safe_target = PendingStyleInvalidationTargetQueries::retained_source(
+        document_source.clone(),
+        indexmap::IndexSet::from([query.clone()]),
+    );
+    safe_target.set_zero_matched_dependency_result_is_exact(true);
+    let mut unsafe_target = PendingStyleInvalidationTargetQueries::retained_source(
+        document_source,
+        indexmap::IndexSet::from([query]),
+    );
+    unsafe_target.set_zero_matched_dependency_result_is_exact(false);
+    let mut merged = vec![safe_target];
+    super::target_queries::merge_pending_target_queries(&mut merged, vec![unsafe_target]);
+    let merged_input = retained_source_input_for_test(
+        merged[0]
+            .retained_source_invalidation_input()
+            .into_stylo_input(None),
+    );
+    assert_eq!(
+        merged_input.zero_matched_dependency_result_is_exact,
+        Some(false)
+    );
+}
 #[test]
 fn missing_source_roots_fallback_preserves_dependency_reason_and_missing_roots() {
     let host = test_host();

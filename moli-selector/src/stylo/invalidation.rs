@@ -768,8 +768,8 @@ pub fn stylo_source_invalidation_fallback_reason_plan(
         StyloSourceInvalidationFallbackReason::InexactEmptyResult => {
             StyloSourceInvalidationFallbackReasonPlan {
                 owner: "Stylo source query result exactness",
-                missing_fact: "proof that an empty source query result is an exact no-op",
-                next_work_item: "mark exact empty results separately from inexact zero-root results",
+                missing_fact: "complete verification for a matched dependency branch that returned no affected roots",
+                next_work_item: "extend snapshot and relative-dependency verification; direct keyed document-scope zero matches are already exact",
             }
         }
         StyloSourceInvalidationFallbackReason::MissingFallbackRoots => {
@@ -1801,6 +1801,7 @@ impl StyleDomHostBinding<'_> {
         stylist: &Stylist,
         queries: &IndexSet<StyloRetainedStyleInvalidationQuery>,
         exact_safety_fallback_roots: &IndexSet<NodeId>,
+        zero_matched_dependency_result_is_exact: bool,
         snapshots: &[StyloStyleInvalidationSnapshot],
     ) -> StyloSourceStyleInvalidationResult {
         let mut accumulated = StyloSourceStyleInvalidationResultAccumulator::new();
@@ -1819,7 +1820,10 @@ impl StyleDomHostBinding<'_> {
                 );
             accumulated.merge_invalidation_query_result(result);
         }
-        accumulated.into_source_result(exact_safety_fallback_roots)
+        accumulated.into_source_result_with_zero_matched_dependency_exactness(
+            exact_safety_fallback_roots,
+            zero_matched_dependency_result_is_exact,
+        )
     }
 
     /// Collect roots for a retained source-aware invalidation batch.
@@ -1885,6 +1889,7 @@ impl<'a, 'binding, 'dom_binding, 'host, 'stylist, 'result>
         cascade_data: Option<&'a ServoArc<CascadeData>>,
         shadow_root: Option<NodeId>,
         queries: &'a IndexSet<StyloRetainedStyleInvalidationQuery>,
+        zero_matched_dependency_result_is_exact: bool,
         reasoned_fallback_roots: &'a IndexSet<NodeId>,
         exact_safety_fallback_roots: &'a IndexSet<NodeId>,
         fallback_reasons: &'a IndexSet<StyloSourceInvalidationFallbackReason>,
@@ -1923,6 +1928,7 @@ impl<'a, 'binding, 'dom_binding, 'host, 'stylist, 'result>
                 stylist,
                 queries,
                 exact_safety_fallback_roots,
+                zero_matched_dependency_result_is_exact,
                 &snapshots,
             );
         self.result.push_source_result_from_planned_fallback(
@@ -2228,6 +2234,7 @@ mod tests {
     struct RetainedSourceInputPartsForTest {
         retained_fallback_kind: Option<Option<StyloRetainedSourceStyleInvalidationKind>>,
         retained_query_count: usize,
+        retained_zero_matched_dependency_result_is_exact: Option<bool>,
         retained_reasoned_fallback_roots: Vec<NodeId>,
         retained_exact_safety_fallback_roots: Vec<NodeId>,
         retained_fallback_reasons: Vec<StyloSourceInvalidationFallbackReason>,
@@ -2245,6 +2252,7 @@ mod tests {
             _cascade_data: Option<&'a ServoArc<CascadeData>>,
             _shadow_root: Option<NodeId>,
             queries: &'a IndexSet<StyloRetainedStyleInvalidationQuery>,
+            zero_matched_dependency_result_is_exact: bool,
             reasoned_fallback_roots: &'a IndexSet<NodeId>,
             exact_safety_fallback_roots: &'a IndexSet<NodeId>,
             fallback_reasons: &'a IndexSet<StyloSourceInvalidationFallbackReason>,
@@ -2252,6 +2260,8 @@ mod tests {
         ) {
             self.retained_fallback_kind = Some(fallback_kind);
             self.retained_query_count = queries.len();
+            self.retained_zero_matched_dependency_result_is_exact =
+                Some(zero_matched_dependency_result_is_exact);
             self.retained_reasoned_fallback_roots
                 .extend(reasoned_fallback_roots.iter().copied());
             self.retained_exact_safety_fallback_roots
@@ -3423,6 +3433,7 @@ mod tests {
             None,
             None,
             Some(&queries),
+            true,
             &reasoned_fallback_roots,
             &exact_safety_fallback_roots,
             &fallback_reasons,
@@ -3436,6 +3447,10 @@ mod tests {
             ))
         );
         assert_eq!(retained.retained_query_count, 1);
+        assert_eq!(
+            retained.retained_zero_matched_dependency_result_is_exact,
+            Some(true)
+        );
         assert_eq!(retained.retained_reasoned_fallback_roots, vec![root]);
         assert!(retained.retained_exact_safety_fallback_roots.is_empty());
         assert_eq!(
@@ -3449,6 +3464,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             &reasoned_fallback_roots,
             &exact_safety_fallback_roots,
             &fallback_reasons,
@@ -3629,6 +3645,7 @@ mod tests {
                     None,
                     None,
                     None,
+                    false,
                     &first_fallback_roots,
                     &exact_safety_fallback_roots,
                     &first_fallback_reasons,
@@ -3640,6 +3657,7 @@ mod tests {
                     None,
                     None,
                     None,
+                    false,
                     &second_fallback_roots,
                     &exact_safety_fallback_roots,
                     &second_fallback_reasons,

@@ -110,6 +110,17 @@ impl RetainedSourceDependencyRequestPlan {
 }
 
 impl RetainedSourceDependencyRequestContext<'_> {
+    /// Whether an active source reporting zero matching dependencies proves
+    /// that this request has no style effect.
+    ///
+    /// Direct keyed attribute/class/id mutations have enough source-local
+    /// dependency information for that proof. Structural, relative, state,
+    /// and slot requests keep their safety roots because a zero match can also
+    /// mean that the retained query did not cover the mutation boundary.
+    pub(super) fn zero_matched_dependency_result_is_exact(&self) -> bool {
+        matches!(self, Self::Attribute)
+    }
+
     fn dependency_fallback_context(
         &self,
         query: &RetainedStyleInvalidationQuery,
