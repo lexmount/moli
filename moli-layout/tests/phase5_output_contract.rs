@@ -903,6 +903,88 @@ fn scrollbar_hit_test_honors_the_same_ancestor_clip_as_paint() {
 }
 
 #[test]
+fn adjacent_paint_units_share_their_common_overflow_clip_chain() {
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("clipper", vec![2, 3]),
+        Node::element("first", Vec::new()),
+        Node::element("second", Vec::new()),
+    ]);
+    let mut styles = Styles::default();
+    styles
+        .0
+        .insert(0, fixed_size(LayoutDisplay::Block, 320.0, 240.0));
+    styles.0.insert(
+        1,
+        resolved(
+            LayoutDisplay::Block,
+            Style {
+                size: Size {
+                    width: length(200.0),
+                    height: length(100.0),
+                },
+                overflow: Point {
+                    x: Overflow::Hidden,
+                    y: Overflow::Hidden,
+                },
+                ..Style::default()
+            },
+        ),
+    );
+    for (node, color) in [
+        (2, PaintColor::new(1.0, 0.0, 0.0, 1.0)),
+        (3, PaintColor::new(0.0, 0.0, 1.0, 1.0)),
+    ] {
+        styles.0.insert(
+            node,
+            ResolvedLayoutStyle::synthetic(
+                LayoutDisplay::Block,
+                Style {
+                    size: Size {
+                        width: length(200.0),
+                        height: length(40.0),
+                    },
+                    ..Style::default()
+                },
+                color,
+            ),
+        );
+    }
+
+    let output = build_with_request(
+        &source,
+        &mut styles,
+        LayoutPassRequest::with_paint(LayoutViewport::new(320, 240, 1.0), LayoutFlushReason::Test),
+    );
+    let snapshot = output.paint_snapshot().expect("paint snapshot");
+    let push_clip_count = snapshot
+        .fragments
+        .iter()
+        .filter(|fragment| matches!(fragment, PaintFragment::PushClip { .. }))
+        .count();
+    let pop_count = snapshot
+        .fragments
+        .iter()
+        .filter(|fragment| matches!(fragment, PaintFragment::PopLayer))
+        .count();
+
+    assert_eq!(push_clip_count, 2);
+    assert_eq!(pop_count, 2);
+    assert_eq!(
+        snapshot
+            .fragments
+            .iter()
+            .filter_map(PaintFragment::solid_fill)
+            .map(|(_, color, _)| color)
+            .collect::<Vec<_>>(),
+        vec![
+            PaintColor::new(1.0, 0.0, 0.0, 1.0),
+            PaintColor::new(0.0, 0.0, 1.0, 1.0),
+        ]
+    );
+}
+
+#[test]
 fn non_invertible_descendant_does_not_hide_a_valid_root_scrollbar_hit() {
     let source = Source(vec![
         Node::element("root", vec![1, 3]),

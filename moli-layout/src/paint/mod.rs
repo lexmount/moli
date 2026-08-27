@@ -41,6 +41,50 @@ struct ContextPaintState {
     clip_path_layer: bool,
 }
 
+/// Paint-property-tree cursor for ordinary overflow clips.
+///
+/// `OutputProjection` already interns every clip as a stable chain node. Keep
+/// the common prefix active across adjacent paint-order events instead of
+/// serializing the complete ancestor chain around every box fragment. The
+/// cursor is cleared at stacking-context boundaries so effect/mask layers keep
+/// their original nesting contract.
+#[derive(Default)]
+struct ActivePaintClipChain {
+    nodes: Vec<LayoutClipChainId>,
+}
+
+impl ActivePaintClipChain {
+    fn transition_to<N>(
+        &mut self,
+        projection: &OutputProjection<'_, N>,
+        clip: Option<LayoutClipChainId>,
+        snapshot: &mut PaintSnapshot,
+    ) where
+        N: Copy + Debug + Eq + Hash,
+    {
+        let next = owned_clip_chain(projection, clip);
+        let common_prefix = self
+            .nodes
+            .iter()
+            .zip(&next)
+            .take_while(|(current, next)| current == next)
+            .count();
+        for _ in common_prefix..self.nodes.len() {
+            snapshot.push_fragment(PaintFragment::PopLayer);
+        }
+        self.nodes.truncate(common_prefix);
+        for id in next.into_iter().skip(common_prefix) {
+            push_clip_node(projection, id, snapshot);
+            self.nodes.push(id);
+        }
+    }
+
+    fn clear(&mut self, snapshot: &mut PaintSnapshot) {
+        pop_clips(self.nodes.len(), snapshot);
+        self.nodes.clear();
+    }
+}
+
 impl PaintSpace {
     /// Pixel-snap canonical CSS box geometry after ordinary layout offsets
     /// and before property transforms.
@@ -109,18 +153,19 @@ where
     }
 
     let mut context_layers = Vec::new();
+    let mut active_clips = ActivePaintClipChain::default();
     for event in &projection.paint_events {
         match *event {
             PaintOrderEvent::BoxOutsetShadow(id) => {
-                let clip_count = push_clip_chain(
+                active_clips.transition_to(
                     projection,
                     projection.background_clips[id.index()],
                     &mut snapshot,
                 );
                 project_outset_box_shadows(projection, id, &mut snapshot);
-                pop_clips(clip_count, &mut snapshot);
             }
             PaintOrderEvent::PushStackingContext(id) => {
+                active_clips.clear(&mut snapshot);
                 let layout_box = &projection.world.boxes[id.index()];
                 let style = &layout_box.style;
                 let geometry = &projection.boxes[id.index()];
@@ -260,7 +305,7 @@ where
                 });
             }
             PaintOrderEvent::BoxBackground(id) => {
-                let clip_count = push_clip_chain(
+                active_clips.transition_to(
                     projection,
                     projection.background_clips[id.index()],
                     &mut snapshot,
@@ -273,10 +318,9 @@ where
                     capture.include_backgrounds,
                     &mut snapshot,
                 );
-                pop_clips(clip_count, &mut snapshot);
             }
             PaintOrderEvent::BoxContents(id) => {
-                let clip_count = push_clip_chain(
+                active_clips.transition_to(
                     projection,
                     projection.content_clips[id.index()],
                     &mut snapshot,
@@ -288,35 +332,32 @@ where
                     capture.include_backgrounds,
                     &mut snapshot,
                 );
-                pop_clips(clip_count, &mut snapshot);
             }
             PaintOrderEvent::TableCollapsedBorders(id) => {
-                let clip_count = push_clip_chain(
+                active_clips.transition_to(
                     projection,
                     projection.background_clips[id.index()],
                     &mut snapshot,
                 );
                 project_collapsed_table_borders(projection, id, &mut snapshot);
-                pop_clips(clip_count, &mut snapshot);
             }
             PaintOrderEvent::BoxOutline(id) => {
                 if id != projection.world.root || capture.paint_root_scrollbars {
                     let scrollbar_clip = (id != projection.world.root)
                         .then_some(projection.background_clips[id.index()])
                         .flatten();
-                    let clip_count = push_clip_chain(projection, scrollbar_clip, &mut snapshot);
+                    active_clips.transition_to(projection, scrollbar_clip, &mut snapshot);
                     project_scrollbars(projection, id, &mut snapshot);
-                    pop_clips(clip_count, &mut snapshot);
                 }
-                let clip_count = push_clip_chain(
+                active_clips.transition_to(
                     projection,
                     projection.background_clips[id.index()],
                     &mut snapshot,
                 );
                 project_box_outline(projection, id, &mut snapshot);
-                pop_clips(clip_count, &mut snapshot);
             }
             PaintOrderEvent::PopStackingContext(id) => {
+                active_clips.clear(&mut snapshot);
                 let state = context_layers
                     .pop()
                     .expect("stacking events are structurally balanced");
@@ -361,8 +402,64 @@ where
             }
         }
     }
+    active_clips.clear(&mut snapshot);
     debug_assert!(context_layers.is_empty());
     snapshot
+}
+
+fn owned_clip_chain<N>(
+    projection: &OutputProjection<'_, N>,
+    clip: Option<LayoutClipChainId>,
+) -> Vec<LayoutClipChainId>
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    let mut chain = Vec::new();
+    let mut current = clip;
+    while let Some(id) = current {
+        let node = &projection.clip_chain[id.index()];
+        if node.owner.is_some() {
+            chain.push(id);
+        }
+        current = node.parent;
+    }
+    chain.reverse();
+    chain
+}
+
+fn push_clip_node<N>(
+    projection: &OutputProjection<'_, N>,
+    id: LayoutClipChainId,
+    snapshot: &mut PaintSnapshot,
+) where
+    N: Copy + Debug + Eq + Hash,
+{
+    let node = &projection.clip_chain[id.index()];
+    let transform = snapshot.viewport_to_surface.concatenate(
+        projection.coordinate_spaces[node.coordinate_space.index()]
+            .paint
+            .local_transform(),
+    );
+    let shape = node.owner.map_or(PaintShape::Rect(node.rect), |owner| {
+        let layout_box = &projection.world.boxes[owner.index()];
+        let border_radii = layout_box.style.border_radii(
+            layout_box.final_layout.size.width,
+            layout_box.final_layout.size.height,
+        );
+        canonical_shape(
+            node.rect,
+            inset_radii(
+                border_radii,
+                PaintEdgeSizes::new(
+                    layout_box.final_layout.border.top,
+                    layout_box.final_layout.border.right,
+                    layout_box.final_layout.border.bottom,
+                    layout_box.final_layout.border.left,
+                ),
+            ),
+        )
+    });
+    snapshot.push_fragment(PaintFragment::PushClip { shape, transform });
 }
 
 fn push_clip_chain<N>(
@@ -373,41 +470,9 @@ fn push_clip_chain<N>(
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let mut chain = Vec::new();
-    let mut current = clip;
-    while let Some(id) = current {
-        let node = &projection.clip_chain[id.index()];
-        chain.push(node);
-        current = node.parent;
-    }
-    chain.reverse();
-    chain.retain(|node| node.owner.is_some());
-    for node in &chain {
-        let transform = snapshot.viewport_to_surface.concatenate(
-            projection.coordinate_spaces[node.coordinate_space.index()]
-                .paint
-                .local_transform(),
-        );
-        let shape = node.owner.map_or(PaintShape::Rect(node.rect), |owner| {
-            let layout_box = &projection.world.boxes[owner.index()];
-            let border_radii = layout_box.style.border_radii(
-                layout_box.final_layout.size.width,
-                layout_box.final_layout.size.height,
-            );
-            canonical_shape(
-                node.rect,
-                inset_radii(
-                    border_radii,
-                    PaintEdgeSizes::new(
-                        layout_box.final_layout.border.top,
-                        layout_box.final_layout.border.right,
-                        layout_box.final_layout.border.bottom,
-                        layout_box.final_layout.border.left,
-                    ),
-                ),
-            )
-        });
-        snapshot.push_fragment(PaintFragment::PushClip { shape, transform });
+    let chain = owned_clip_chain(projection, clip);
+    for id in &chain {
+        push_clip_node(projection, *id, snapshot);
     }
     chain.len()
 }
