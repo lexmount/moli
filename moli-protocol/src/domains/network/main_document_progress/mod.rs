@@ -1444,7 +1444,7 @@ pub(crate) fn start_observed_main_document_navigation_progress_background_events
 ) -> MainDocumentBodyProgressSource {
     let session_ids = main_document_network_event_session_ids(conn, state.session_id.as_deref());
     record_pending_main_document_response_body(conn, state, &session_ids);
-    record_main_document_request_body(conn, state, &session_ids);
+    record_main_document_request_body(conn, state);
     if let Some(sender) = conn.background_event_sender()
         && let Some(live_source) =
             MainDocumentLiveNetworkProgressSource::from_navigation_dispatch_state(
@@ -2196,10 +2196,9 @@ fn record_pending_main_document_response_body(
     }
 }
 
-fn record_main_document_request_body(
+pub(crate) fn record_main_document_request_body(
     conn: &mut CdpConnection,
     state: &NavigationDispatchState,
-    session_ids: &[Option<String>],
 ) {
     if !main_document_network_observed(conn, state.session_id.as_deref()) {
         return;
@@ -2207,27 +2206,37 @@ fn record_main_document_request_body(
     let Some(request_id) = state.request_id.clone() else {
         return;
     };
-    let Some(request_body) = state.clone_request_body_bytes() else {
+    let Some(transport_bytes) = state.clone_request_body_bytes() else {
         return;
     };
+    let session_ids = main_document_network_event_session_ids(conn, state.session_id.as_deref());
     let data_type = crate::devtools_runtime::DevToolsNetworkDataType::Request;
     let collector_ids = conn.network_data_collector_ids_for_session_owner_body(
         state.session_id.as_deref(),
         data_type,
-        request_body.len(),
+        transport_bytes.len(),
     );
     let collection_was_gated = conn.network_data_collection_is_gated_for_body(data_type);
+    // The BiDi network data collector keeps the raw transport bytes, including
+    // multipart file payloads.
     conn.record_collected_network_data_body(
         request_id.clone(),
         data_type,
-        crate::conn::CapturedBody::from_bytes(request_body.clone()),
+        crate::conn::CapturedBody::from_bytes(transport_bytes.clone()),
         collector_ids.iter().cloned(),
         collection_was_gated,
     );
     if let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut(state.session_id.as_deref()) {
+        // CDP getRequestPostData uses the text projection that request events
+        // and Fetch interception expose, which omits multipart file contents.
+        // Never surface raw transport bytes through the CDP captured store.
+        let cdp_request_body = state
+            .request_body
+            .clone()
+            .unwrap_or_else(|| String::from_utf8_lossy(&transport_bytes).into_owned());
         runtime_slot.record_captured_request_body_with_collector_scope(
             request_id,
-            request_body,
+            cdp_request_body.into_bytes(),
             session_ids.iter().cloned(),
             collector_ids,
             collection_was_gated,

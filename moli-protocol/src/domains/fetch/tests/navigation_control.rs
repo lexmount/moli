@@ -649,6 +649,155 @@ async fn continue_request_with_post_data_marks_network_request_as_having_post_da
         Some("<!doctype html><html><body><main>payload</main></body></html>".to_owned())
     );
 
+    ctx.process_async(json!({
+        "id": 343,
+        "method": "Network.getRequestPostData",
+        "sessionId": "SID-1",
+        "params": { "requestId": LOADER_ID }
+    }))
+    .await;
+    ctx.expect_result(
+        343,
+        json!({ "postData": "payload", "base64Encoded": false }),
+        Some("SID-1"),
+    );
+
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn intercepted_form_post_navigation_body_is_available_by_network_request_id() {
+    async fn page() -> impl IntoResponse {
+        (
+            [(CONTENT_TYPE.as_str(), "text/html")],
+            r#"<!doctype html><form id="f" method="POST" action="/post"><input name="username" value="alice"><input name="pw" value="s3cret"></form>"#,
+        )
+    }
+
+    async fn post_body(body: String) -> impl IntoResponse {
+        (
+            [(CONTENT_TYPE.as_str(), "text/html")],
+            format!("<!doctype html><html><body><main>{body}</main></body></html>"),
+        )
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new()
+                .route("/page", get(page))
+                .route("/post", axum::routing::post(post_body)),
+        )
+        .await
+        .unwrap();
+    });
+
+    let page_url = format!("http://{addr}/page");
+    let post_url = format!("http://{addr}/post");
+    let mut ctx = TestContext::new();
+    ctx.conn.browser_context = Some(attached_browser_context());
+    ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-1"))
+        .await;
+    {
+        let bc = ctx.conn.browser_context.as_mut().expect("browser context");
+        bc.active_target
+            .runtime_slot
+            .enable_primary_network_events();
+    }
+    ctx.sent.clear();
+
+    ctx.process_async(json!({
+        "id": 420,
+        "method": "Fetch.enable",
+        "sessionId": "SID-1",
+        "params": {
+            "patterns": [{ "urlPattern": "*/post", "requestStage": "Request", "resourceType": "Document" }]
+        }
+    }))
+    .await;
+    ctx.expect_result(420, json!({}), Some("SID-1"));
+    ctx.sent.clear();
+
+    ctx.process_async(json!({
+        "id": 421,
+        "method": "Runtime.evaluate",
+        "sessionId": "SID-1",
+        "params": {
+            "expression": "document.getElementById('f').submit(); 'scheduled'"
+        }
+    }))
+    .await;
+    let _ = take_response_by_id(&mut ctx, 421);
+
+    wait_until_scheduler_message(
+        &mut ctx,
+        "intercepted form POST Fetch.requestPaused",
+        |message| {
+            message["method"] == json!("Fetch.requestPaused")
+                && message["params"]["resourceType"] == json!("Document")
+                && message["params"]["request"]["url"] == json!(post_url)
+        },
+    )
+    .await;
+    let paused = ctx
+        .sent
+        .iter()
+        .find(|message| {
+            message["method"] == json!("Fetch.requestPaused")
+                && message["params"]["resourceType"] == json!("Document")
+                && message["params"]["request"]["url"] == json!(post_url)
+        })
+        .cloned()
+        .expect("intercepted form POST pause");
+    assert_eq!(paused["params"]["request"]["method"], json!("POST"));
+    assert_eq!(
+        paused["params"]["request"]["postData"],
+        json!("username=alice&pw=s3cret"),
+        "the paused form POST must carry its original body"
+    );
+    let fetch_request_id = paused["params"]["requestId"]
+        .as_str()
+        .expect("fetch request id")
+        .to_owned();
+    let network_request_id = paused["params"]["networkId"]
+        .as_str()
+        .expect("network request id")
+        .to_owned();
+
+    ctx.process_async(json!({
+        "id": 422,
+        "method": "Fetch.continueRequest",
+        "sessionId": "SID-1",
+        "params": { "requestId": fetch_request_id }
+    }))
+    .await;
+    ctx.expect_result(422, json!({}), Some("SID-1"));
+
+    wait_until_scheduler_message(
+        &mut ctx,
+        "intercepted form POST responseReceived",
+        |message| {
+            message["method"] == json!("Network.responseReceived")
+                && message["params"]["requestId"] == json!(network_request_id)
+        },
+    )
+    .await;
+
+    ctx.process_async(json!({
+        "id": 423,
+        "method": "Network.getRequestPostData",
+        "sessionId": "SID-1",
+        "params": { "requestId": network_request_id }
+    }))
+    .await;
+    ctx.expect_result(
+        423,
+        json!({ "postData": "username=alice&pw=s3cret", "base64Encoded": false }),
+        Some("SID-1"),
+    );
+
     server.abort();
 }
 

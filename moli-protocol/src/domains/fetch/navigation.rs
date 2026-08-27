@@ -65,6 +65,7 @@ pub(crate) async fn load_or_pause_navigation_for_auth_into_buffer_async(
     prior_network_observation_journal: Option<NetworkObservationJournal>,
 ) {
     let navigate_session_id = pending.navigation.navigate_session_id.clone();
+    network::record_main_document_request_body(conn, &pending.navigation);
     let should_handle_auth = conn.target_fetch_matches_auth_required_for_session_owner(
         navigate_session_id.as_deref(),
         &pending.navigation.requested_url,

@@ -546,6 +546,111 @@ async fn get_request_post_data_returns_main_document_navigation_post_body() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn get_request_post_data_uses_text_projection_while_bidi_collector_keeps_transport_bytes() {
+    let mut ctx = TestContext::new();
+    let mut bc = BrowserContext::new("BID-1".into());
+    bc.set_active_target_id("TID-1".to_owned());
+    bc.attach_active_session("SID-1".to_owned());
+    bc.active_target
+        .runtime_slot
+        .enable_primary_network_events();
+    ctx.conn.browser_context = Some(bc);
+
+    let (result, _) = ctx
+        .conn
+        .execute_devtools_command(
+            crate::devtools_runtime::DevToolsCommand::AddNetworkDataCollector(
+                crate::devtools_runtime::DevToolsAddNetworkDataCollectorCommand {
+                    context: crate::devtools_runtime::DevToolsCommandContext {
+                        protocol: crate::devtools_runtime::DevToolsProtocol::WebDriverBidi,
+                        session_id: Some(crate::devtools_runtime::DevToolsSessionId::from("SID-1")),
+                        target_id: None,
+                        browser_context_id: None,
+                    },
+                    collector_id: crate::devtools_runtime::DevToolsNetworkDataCollectorId::from(
+                        "collector-multipart-request-bytes",
+                    ),
+                    data_types: vec![crate::devtools_runtime::DevToolsNetworkDataType::Request],
+                    max_encoded_data_size: 1000,
+                    target_ids: Vec::new(),
+                    browser_context_ids: Vec::new(),
+                },
+            ),
+        )
+        .await
+        .into_parts();
+    assert!(matches!(
+        result,
+        Ok(crate::devtools_runtime::DevToolsCommandResult::AddNetworkDataCollector(_))
+    ));
+
+    let multipart_text = "----MoliFormDataBoundary0000\r\nContent-Disposition: form-data; name=\"field\"\r\n\r\nvalue\r\n----MoliFormDataBoundary0000\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.bin\"\r\nContent-Type: application/octet-stream\r\n\r\n";
+    let file_bytes: Vec<u8> = vec![0x00, 0xff, 0x01, 0xfe, b'a', b'b'];
+    let mut transport_bytes = multipart_text.as_bytes().to_vec();
+    transport_bytes.extend_from_slice(&file_bytes);
+    transport_bytes.extend_from_slice(b"\r\n----MoliFormDataBoundary0000--\r\n");
+
+    let requested_url = Url::parse("http://127.0.0.1:1/upload").unwrap();
+    let navigation_state = NavigationDispatchState {
+        navigate_id: Some(1),
+        navigate_session_id: Some("SID-1".to_owned()),
+        result_projection: crate::conn::NavigationResultProjection::Cdp(
+            json!({"frameId": "TID-1", "loaderId": LOADER_ID}),
+        ),
+        frame_id: "TID-1".to_owned(),
+        session_id: Some("SID-1".to_owned()),
+        request_id: Some("REQ-multipart".to_owned()),
+        loader_id: LOADER_ID.to_owned(),
+        request_announced: false,
+        requested_url,
+        request_method: "POST".to_owned(),
+        request_body: Some(multipart_text.to_owned()),
+        request_body_bytes: Some(transport_bytes.clone()),
+        request_headers: Vec::new(),
+        request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
+        timestamp: 0.0,
+        source_document_security: Default::default(),
+    };
+
+    let mut events = Vec::new();
+    start_observed_main_document_navigation_progress_background_events(
+        &mut ctx.conn,
+        &mut events,
+        &navigation_state,
+        None,
+    );
+
+    ctx.process_async(json!({
+        "id": 7_291,
+        "method": "Network.getRequestPostData",
+        "sessionId": "SID-1",
+        "params": { "requestId": "REQ-multipart" }
+    }))
+    .await;
+    ctx.expect_result(
+        7_291,
+        json!({ "postData": multipart_text, "base64Encoded": false }),
+        Some("SID-1"),
+    );
+
+    let collected = ctx
+        .conn
+        .network_data_collectors
+        .collected_body(
+            "REQ-multipart",
+            crate::devtools_runtime::DevToolsNetworkDataType::Request,
+        )
+        .expect("BiDi collector should retain the request body");
+    assert_eq!(
+        collected
+            .body_bytes_limited(usize::MAX)
+            .expect("collected body"),
+        transport_bytes,
+        "the BiDi collector must keep the raw transport bytes including file payload"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn get_network_data_returns_bidi_response_body_bytes() {
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-1".into());
