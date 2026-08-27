@@ -3,7 +3,9 @@ use anyhow::Result;
 use moli_test_support::FixtureServer;
 use std::{
     ffi::{OsStr, OsString},
+    io::Write,
     path::Path,
+    process::{Command, Stdio},
 };
 
 fn run_eval(url: &str, expression: &str, extra_args: &[&str]) -> Result<super::Output> {
@@ -12,6 +14,32 @@ fn run_eval(url: &str, expression: &str, extra_args: &[&str]) -> Result<super::O
 
 fn run_eval_file(url: &str, path: &Path, extra_args: &[&str]) -> Result<super::Output> {
     run_eval_source(url, "--eval-file", path.as_os_str(), extra_args)
+}
+
+fn run_eval_stdin(url: &str, script: &[u8]) -> Result<std::process::Output> {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_moli"))
+        .args([
+            "fetch",
+            "--log-level",
+            "error",
+            "--http-no-proxy",
+            "*",
+            "--wait-until",
+            "load",
+            "--eval-file",
+            "-",
+            url,
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    child
+        .stdin
+        .take()
+        .expect("piped stdin must be available")
+        .write_all(script)?;
+    Ok(child.wait_with_output()?)
 }
 
 fn run_eval_source(
@@ -139,6 +167,57 @@ fn eval_file_executes_large_multiline_scripts() -> Result<()> {
     assert_eq!(
         value,
         serde_json::json!({ "tag": "main", "text": "fixture static" })
+    );
+    Ok(())
+}
+
+#[test]
+fn eval_file_dash_executes_large_multiline_scripts_from_stdin() -> Result<()> {
+    let script = format!(
+        "/*{}*/\n\
+         const main = document.querySelector('main');\n\
+         const source = 'stdin';\n\
+         Promise.resolve({{ source, text: main.textContent.trim() }})",
+        "padding".repeat(24 * 1024),
+    );
+    assert!(script.len() > 128 * 1024);
+
+    let output = run_eval_stdin(
+        "data:text/html,<main>fixture%20stdin</main>",
+        script.as_bytes(),
+    )?;
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        clean_output(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(
+        value,
+        serde_json::json!({ "source": "stdin", "text": "fixture stdin" })
+    );
+    Ok(())
+}
+
+#[test]
+fn eval_file_dash_rejects_invalid_utf8_before_fetching() -> Result<()> {
+    let output = run_eval_stdin(
+        "https://eval-file-stdin-must-not-fetch.invalid/",
+        b"document.title\xff",
+    )?;
+
+    let stdout = clean_output(&output.stdout);
+    let stderr = clean_output(&output.stderr);
+    assert!(!output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stdout.is_empty(), "stdout={stdout}");
+    assert!(
+        stderr.contains("failed to read --eval-file `-` from stdin"),
+        "stderr={stderr}"
+    );
+    assert!(
+        !stderr.contains("failed to fetch"),
+        "stdin must be read before starting a fetch: stderr={stderr}"
     );
     Ok(())
 }

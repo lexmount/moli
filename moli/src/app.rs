@@ -3,7 +3,12 @@
 mod readiness;
 mod redirect_navigation;
 
-use std::{fmt, io::Write, sync::Arc};
+use std::{
+    fmt,
+    io::{Read, Write},
+    path::Path,
+    sync::Arc,
+};
 
 use crate::{
     cli::{Cli, Commands, normalize_args_for_compat},
@@ -42,14 +47,21 @@ pub async fn run_cli_with_config<W: Write>(
 ) -> Result<()> {
     match cli.command {
         Commands::Fetch(mut args) => {
-            let eval_expression =
-                if let Some(path) = args.eval_file.as_deref() {
+            let eval_expression = if let Some(path) = args.eval_file.as_deref() {
+                if path == Path::new("-") {
+                    let mut expression = String::new();
+                    std::io::stdin()
+                        .read_to_string(&mut expression)
+                        .context("failed to read --eval-file `-` from stdin")?;
+                    Some(expression)
+                } else {
                     Some(std::fs::read_to_string(path).with_context(|| {
                         format!("failed to read --eval-file `{}`", path.display())
                     })?)
-                } else {
-                    args.eval.take()
-                };
+                }
+            } else {
+                args.eval.take()
+            };
             let request = build_fetch_request(&args.url, &config)?;
             if config.browser.fetch().obey_robots() {
                 // Checked before the browser starts so a refused fetch costs

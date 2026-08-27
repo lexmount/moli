@@ -60,8 +60,9 @@ pub struct FetchArgs {
     )]
     pub eval: Option<String>,
 
-    /// Read the JavaScript expression from a UTF-8 file. This avoids command-line
-    /// argument length limits for large or multiline scripts. Promises are awaited.
+    /// Read the JavaScript expression from a UTF-8 file, or from stdin when PATH
+    /// is `-`. This avoids command-line argument length limits for large or
+    /// multiline scripts. Promises are awaited.
     #[arg(
         long,
         value_name = "PATH",

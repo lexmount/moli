@@ -937,6 +937,24 @@ fn parses_fetch_eval_file() {
 }
 
 #[test]
+fn parses_fetch_eval_file_from_stdin() {
+    let cli = Cli::try_parse_from(normalize_args_for_compat([
+        "moli",
+        "fetch",
+        "--eval-file",
+        "-",
+        "https://example.com",
+    ]))
+    .unwrap();
+
+    let Commands::Fetch(args) = cli.command else {
+        panic!("expected fetch command");
+    };
+    assert!(args.eval.is_none());
+    assert_eq!(args.eval_file.as_deref(), Some(std::path::Path::new("-")));
+}
+
+#[test]
 fn fetch_eval_sources_are_mutually_exclusive() {
     let error = Cli::try_parse_from(normalize_args_for_compat([
         "moli",
