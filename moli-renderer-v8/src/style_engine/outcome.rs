@@ -19,10 +19,11 @@ use super::{
     target_result::{
         StyleInvalidationCleanupClassConstraint, StyleInvalidationDiagnosticTargetResult,
         StyleInvalidationDiagnosticTargetResultSummaryTraceCountsSink,
-        StyleInvalidationRetainedCleanupPlanSink, StyleInvalidationRetainedCleanupRoots,
-        StyleInvalidationRetainedCleanupRootsSink, StyleInvalidationRetainedCleanupSink,
-        StyleInvalidationRetainedTargetResults, StyleInvalidationRetainedTargetResultsSink,
-        StyleInvalidationRetainedTargetResultsTrace, retained_target_results_for_source_results,
+        StyleInvalidationFallbackTelemetry, StyleInvalidationRetainedCleanupPlanSink,
+        StyleInvalidationRetainedCleanupRoots, StyleInvalidationRetainedCleanupRootsSink,
+        StyleInvalidationRetainedCleanupSink, StyleInvalidationRetainedTargetResults,
+        StyleInvalidationRetainedTargetResultsSink, StyleInvalidationRetainedTargetResultsTrace,
+        retained_target_results_for_source_results,
     },
 };
 
@@ -389,6 +390,11 @@ impl FinalizedStyleInvalidationResult {
     ) -> &StyleInvalidationDiagnosticTargetResultSummary {
         self.cleanup.trace.diagnostic_target_result_summary()
     }
+
+    #[cfg(test)]
+    pub(super) fn fallback_telemetry(&self) -> StyleInvalidationFallbackTelemetry {
+        self.cleanup.trace.fallback_telemetry()
+    }
 }
 
 impl StyleInvalidationFinalCleanup {
@@ -564,6 +570,7 @@ impl StyleInvalidationFinalCleanup {
     fn trace_drain_attempt(&self, summary: &StyleInvalidationDrainSummary) {
         let mut drain_fields = StyleInvalidationDrainTraceFields::default();
         summary.record_trace_fields_into(&mut drain_fields);
+        let fallback_telemetry = self.trace.fallback_telemetry();
         let mut diagnostic_target_result_counts =
             StyleInvalidationDrainDiagnosticTargetResultCounts::default();
         self.trace
@@ -591,6 +598,14 @@ impl StyleInvalidationFinalCleanup {
             source_scope_fallback_roots = ?drain_fields.source_scope_fallback_roots,
             clear_shadow_cascade_data_for_cleanup_target =
                 self.effects.clears_shadow_cascade_data_for_cleanup_target(),
+            exact_target_result_count = fallback_telemetry.exact_target_result_count(),
+            inexact_target_result_count = fallback_telemetry.inexact_target_result_count(),
+            fallback_target_result_count =
+                fallback_telemetry.fallback_target_result_count(),
+            fallback_reason_hit_count = fallback_telemetry.fallback_reason_hit_count(),
+            fallback_reason_target_counts = ?fallback_telemetry.fallback_reason_target_counts(),
+            source_result_affected_root_count =
+                fallback_telemetry.source_result_affected_root_count(),
             retained_source_unavailable_target_count =
                 diagnostic_target_result_counts.retained_source_unavailable_target_count,
             missing_fallback_roots_target_count =
@@ -691,6 +706,10 @@ impl StyleInvalidationCleanupTrace {
 
     pub(super) fn diagnostic_target_results(&self) -> &[StyleInvalidationDiagnosticTargetResult] {
         self.retained_target_results.diagnostic_target_results()
+    }
+
+    fn fallback_telemetry(&self) -> StyleInvalidationFallbackTelemetry {
+        self.retained_target_results.fallback_telemetry()
     }
 
     fn record_diagnostic_target_result_counts_into(

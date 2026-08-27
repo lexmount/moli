@@ -700,6 +700,17 @@ fn finalized_cleanup_preserves_mixed_subtree_sources() {
         StyleInvalidationCleanupClass::UnknownOrFallback
     );
     assert_eq!(application.affected_root_count(), 3);
+    let telemetry = application.fallback_telemetry();
+    assert_eq!(telemetry.exact_target_result_count(), 2);
+    assert_eq!(telemetry.inexact_target_result_count(), 1);
+    assert_eq!(telemetry.fallback_target_result_count(), 1);
+    assert_eq!(telemetry.source_result_affected_root_count(), 2);
+    assert_eq!(
+        telemetry.fallback_reason_target_count(
+            StyloSourceInvalidationFallbackReason::UnsupportedDependency,
+        ),
+        1
+    );
     assert!(matches!(
         application.cleanup_target(),
         StyleInvalidationCleanupTarget::MixedSubtreeRoots(groups)
@@ -1411,6 +1422,27 @@ fn fallback_only_source_emits_each_target_result_fallback_reason() {
         application.diagnostic_target_results()[0]
             .fallback_reasons()
             .contains(&StyloSourceInvalidationFallbackReason::UnsupportedStateDependency)
+    );
+    let telemetry = application.fallback_telemetry();
+    assert_eq!(telemetry.exact_target_result_count(), 0);
+    assert_eq!(telemetry.inexact_target_result_count(), 1);
+    assert_eq!(telemetry.fallback_target_result_count(), 1);
+    assert_eq!(telemetry.source_result_affected_root_count(), 1);
+    assert_eq!(
+        telemetry.fallback_reason_target_count(
+            StyloSourceInvalidationFallbackReason::UnsupportedDependency,
+        ),
+        1
+    );
+    assert_eq!(
+        telemetry.fallback_reason_target_count(
+            StyloSourceInvalidationFallbackReason::UnsupportedStateDependency,
+        ),
+        1
+    );
+    assert_eq!(
+        telemetry.fallback_reason_target_count(StyloSourceInvalidationFallbackReason::FullSelector),
+        0
     );
 }
 #[test]

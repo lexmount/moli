@@ -1,4 +1,4 @@
-use indexmap::IndexSet;
+use indexmap::{IndexMap, IndexSet};
 use moli_selector::{
     MoliInvalidationResult, MoliInvalidationSourceResultsSink, StyloSourceAffectedRootsCleanup,
     StyloSourceAffectedRootsCleanupSink,
@@ -100,6 +100,20 @@ pub(super) struct StyleInvalidationDiagnosticTargetResult {
     mutation_snapshot_count: usize,
     structural_boundary_cleanup_root_count: usize,
     affected_root_count: usize,
+}
+
+/// Aggregate fallback telemetry for one invalidation drain.
+///
+/// This is derived from retained diagnostic target results only when style
+/// invalidation tracing is enabled (and in tests). Normal rendering does not
+/// retain the target results or maintain counters alongside mutations.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct StyleInvalidationFallbackTelemetry {
+    exact_target_result_count: usize,
+    inexact_target_result_count: usize,
+    fallback_target_result_count: usize,
+    source_result_affected_root_count: usize,
+    fallback_reason_target_counts: IndexMap<StyloSourceInvalidationFallbackReason, usize>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -302,6 +316,70 @@ impl StyleInvalidationDiagnosticTargetResult {
     }
 }
 
+impl StyleInvalidationFallbackTelemetry {
+    fn from_target_results(results: &[StyleInvalidationDiagnosticTargetResult]) -> Self {
+        let mut telemetry = Self::default();
+        for result in results {
+            if result.exact {
+                telemetry.exact_target_result_count += 1;
+            } else {
+                telemetry.inexact_target_result_count += 1;
+            }
+            if !result.fallback_reasons.is_empty() {
+                telemetry.fallback_target_result_count += 1;
+            }
+            telemetry.source_result_affected_root_count += result.affected_root_count;
+            // A source result stores reasons in an IndexSet, so each reason is
+            // counted at most once per source target. Selector duplication
+            // therefore cannot inflate the fallback hit rate.
+            for reason in &result.fallback_reasons {
+                *telemetry
+                    .fallback_reason_target_counts
+                    .entry(*reason)
+                    .or_default() += 1;
+            }
+        }
+        telemetry
+    }
+
+    pub(super) fn exact_target_result_count(&self) -> usize {
+        self.exact_target_result_count
+    }
+
+    pub(super) fn inexact_target_result_count(&self) -> usize {
+        self.inexact_target_result_count
+    }
+
+    pub(super) fn fallback_target_result_count(&self) -> usize {
+        self.fallback_target_result_count
+    }
+
+    pub(super) fn source_result_affected_root_count(&self) -> usize {
+        self.source_result_affected_root_count
+    }
+
+    pub(super) fn fallback_reason_hit_count(&self) -> usize {
+        self.fallback_reason_target_counts.values().sum()
+    }
+
+    pub(super) fn fallback_reason_target_counts(
+        &self,
+    ) -> &IndexMap<StyloSourceInvalidationFallbackReason, usize> {
+        &self.fallback_reason_target_counts
+    }
+
+    #[cfg(test)]
+    pub(super) fn fallback_reason_target_count(
+        &self,
+        reason: StyloSourceInvalidationFallbackReason,
+    ) -> usize {
+        self.fallback_reason_target_counts
+            .get(&reason)
+            .copied()
+            .unwrap_or_default()
+    }
+}
+
 impl StyleDiagnosticSourceTargetAvailability {
     fn with_fallback_roots(fallback_roots: Option<StyleSourceFallbackRootAvailability>) -> Self {
         Self {
@@ -379,6 +457,10 @@ impl StyleInvalidationRetainedTargetResultsTrace {
 
     pub(super) fn diagnostic_target_results(&self) -> &[StyleInvalidationDiagnosticTargetResult] {
         &self.diagnostic_target_results
+    }
+
+    pub(super) fn fallback_telemetry(&self) -> StyleInvalidationFallbackTelemetry {
+        StyleInvalidationFallbackTelemetry::from_target_results(&self.diagnostic_target_results)
     }
 
     pub(super) fn record_diagnostic_target_result_counts_into(
