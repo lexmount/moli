@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from . import SmokeState
@@ -657,12 +658,32 @@ async def run_dom_whitespace_group(state: SmokeState) -> None:
             "fragment creation stack URL",
         )
 
-        await default_session.send(
-            "Runtime.evaluate",
-            {
-                "expression": "document.open();document.write('<!doctype html><html><body></body></html>');document.close();function stackAfterOpen(){const node=document.createElement('article');node.id='stack-after-open';document.body.append(node)}stackAfterOpen()\n//# sourceURL=dom-stack-open-smoke.js"
-            },
-        )
+        document_updated = asyncio.Event()
+
+        def on_document_updated(_: dict[str, Any]) -> None:
+            document_updated.set()
+
+        # Runtime.evaluate may resolve before the replacement Document reaches
+        # the Inspector DOM binding. Listen first so an early event is retained,
+        # then refresh frontend node ids only after the invalidation barrier.
+        default_session.on("DOM.documentUpdated", on_document_updated)
+        try:
+            await default_session.send(
+                "Runtime.evaluate",
+                {
+                    "expression": "document.open();document.write('<!doctype html><html><body></body></html>');document.close();function stackAfterOpen(){const node=document.createElement('article');node.id='stack-after-open';document.body.append(node)}stackAfterOpen()\n//# sourceURL=dom-stack-open-smoke.js"
+                },
+            )
+            try:
+                await asyncio.wait_for(document_updated.wait(), timeout=10)
+            except TimeoutError as error:
+                raise SmokeError(
+                    "document.open did not publish DOM.documentUpdated"
+                ) from error
+        finally:
+            default_session.remove_listener(
+                "DOM.documentUpdated", on_document_updated
+            )
         await default_session.send("DOM.getDocument", {"depth": 1})
         open_count, open_node_ids = await _search(
             default_session, "#stack-after-open"

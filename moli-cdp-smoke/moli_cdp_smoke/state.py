@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -24,3 +25,8 @@ class SmokeState:
 
     def record(self, name: str, data: dict[str, Any] | None = None) -> None:
         record(self.results, name, data)
+        print(
+            f"[moli-cdp-smoke] PASS scenario/{name}",
+            file=sys.stderr,
+            flush=True,
+        )
