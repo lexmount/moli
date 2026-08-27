@@ -259,6 +259,7 @@ jobs:
         with:
           name: moli-release-head
           path: target/moli-release-head.tar.gz
+          compression-level: 0
           if-no-files-found: error
           retention-days: 3
 
@@ -297,6 +298,7 @@ jobs:
         with:
           name: moli-release-base
           path: target/moli-release-base.tar.gz
+          compression-level: 0
           if-no-files-found: error
           retention-days: 3
 
@@ -416,8 +418,6 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24.15.0
-          cache: npm
-          cache-dependency-path: moli-frontend-smoke/package-lock.json
       - name: Install dependencies and build fixtures
         run: |
           uv sync --project moli-frontend-smoke --locked
@@ -660,8 +660,6 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24.15.0
-          cache: npm
-          cache-dependency-path: moli-benchmark/browser-spider-local/package-lock.json
       - run: npm ci --prefix moli-benchmark/browser-spider-local
       - name: Require exact fixture contract
         run: >-
@@ -712,8 +710,6 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24.15.0
-          cache: npm
-          cache-dependency-path: moli-benchmark/browser-spider-local/package-lock.json
       - run: npm ci --prefix moli-benchmark/browser-spider-local
       - name: Run deterministic and public-web A/B
         run: >-
