@@ -1141,6 +1141,279 @@ fn retained_stylo_invalidator_accepts_empty_scope_sibling_result() {
     );
     assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, target));
 }
+
+#[test]
+fn retained_stylo_invalidator_narrows_at_scope_dependency_to_affected_target() {
+    let mut host = test_host();
+    let document = host.document_handle();
+    let scope = host.create_element("section");
+    let marker = host.create_element("div");
+    let target = host.create_element("p");
+    let unrelated = host.create_element("p");
+    assert!(host.set_attribute(scope, "class", "scope"));
+    assert!(host.set_attribute(target, "class", "target"));
+    assert!(host.set_attribute(unrelated, "class", "target"));
+    assert!(host.append_child(document, scope));
+    assert!(host.append_child(scope, marker));
+    assert!(host.append_child(scope, target));
+    assert!(host.append_child(document, unrelated));
+
+    let mut engine = MoliStyleEngine::new();
+    let document_url = url::Url::parse("https://example.test/").unwrap();
+    let source = StyloStylesheetSource::new(
+        ".target { color: rgb(0, 0, 255); }
+         @scope (.scope) {
+             .marker + .target { color: rgb(255, 0, 0); }
+         }"
+        .into(),
+        document_url.clone(),
+    )
+    .with_source_id(Some(StyleSourceId::document_adopted_style_sheet(
+        document, 0,
+    )));
+    engine.set_document_adopted_style_sheet_sources(document, vec![source.clone()]);
+    let mut inputs = FullStyleWorldSnapshot::default();
+    inputs.document_stylesheet_sources.push(source);
+
+    for handle in [target, unrelated] {
+        assert_eq!(
+            engine.computed_style_property_value(
+                &host,
+                &document_url,
+                handle,
+                "color",
+                None,
+                &inputs,
+                None,
+            ),
+            Some("rgb(0, 0, 255)".into())
+        );
+    }
+    assert_eq!(
+        engine.computed_style_cache_entry_count_for_document_for_test(document),
+        2
+    );
+
+    assert!(host.set_attribute(marker, "class", "marker"));
+    let effects = [StyleMutationEffect::Attribute {
+        element: marker,
+        name: "class".into(),
+        old_value: None,
+        new_value: Some("marker".into()),
+    }];
+    let media = crate::protocol_types::EmulatedMediaOverrides::default();
+    let source_scope = source_scope_for_mutations(&host, &effects).expect("source scope");
+    let target_queries = {
+        let world = engine.world_for_document(document);
+        let linked_sources = world.linked_stylesheet_sources.borrow();
+        let document_adopted_sources = world.adopted_style_sheet_sources.borrow();
+        super::planner::target_queries_for_pending_cause_with_document_adopted_sources(
+            &host,
+            &linked_sources,
+            &document_adopted_sources,
+            &engine.dom_adapter,
+            &media,
+            StyleViewport::default(),
+            document,
+            &PendingStyleInvalidationCause::Mutation(effects.to_vec()),
+            &source_scope,
+        )
+    };
+    assert_eq!(target_queries.len(), 1, "{target_queries:#?}");
+    assert_eq!(
+        target_queries[0].kind(),
+        StyloRetainedSourceStyleInvalidationKind::RetainedQueries,
+        "{target_queries:#?}"
+    );
+    let application = engine
+        .with_retained_style_system_for_document_for_test(document, |retained| {
+            retained_source_invalidation_outcome_for_document_for_test(
+                &engine,
+                &host,
+                document,
+                StyleSourceDocumentContext::for_root_document(document),
+                Some(retained),
+                &target_queries,
+                false,
+            )
+        })
+        .finalize(&host);
+    assert_eq!(
+        application.cleanup_target_kind(),
+        StyleInvalidationCleanupTargetKind::ExactAffectedSubtreeRoots
+    );
+    assert!(matches!(
+        application.cleanup_target(),
+        StyleInvalidationCleanupTarget::ExactAffectedSubtreeRoots(roots)
+            if roots.contains(&target)
+                && !roots.contains(&scope)
+                && !roots.contains(&unrelated)
+                && !roots.contains(&document)
+    ));
+    assert_eq!(application.diagnostic_target_results().len(), 1);
+    assert!(application.diagnostic_target_results()[0].exact());
+    assert!(
+        application.diagnostic_target_results()[0]
+            .fallback_reasons()
+            .is_empty()
+    );
+
+    engine.invalidate_for_mutations(&host, &effects, &media);
+    engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
+
+    assert!(!engine.computed_style_cache_contains_handle_for_document_for_test(document, target));
+    assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, unrelated));
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            target,
+            "color",
+            None,
+            &inputs,
+            None,
+        ),
+        Some("rgb(255, 0, 0)".into())
+    );
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            unrelated,
+            "color",
+            None,
+            &inputs,
+            None,
+        ),
+        Some("rgb(0, 0, 255)".into())
+    );
+}
+
+#[test]
+fn retained_stylo_invalidator_accepts_exact_empty_at_scope_dependency_result() {
+    let mut host = test_host();
+    let document = host.document_handle();
+    let scope = host.create_element("section");
+    let marker = host.create_element("div");
+    let spacer = host.create_element("span");
+    let target = host.create_element("p");
+    let unrelated = host.create_element("p");
+    assert!(host.set_attribute(scope, "class", "scope"));
+    assert!(host.set_attribute(target, "class", "target"));
+    assert!(host.set_attribute(unrelated, "class", "target"));
+    assert!(host.append_child(document, scope));
+    assert!(host.append_child(scope, marker));
+    assert!(host.append_child(scope, spacer));
+    assert!(host.append_child(scope, target));
+    assert!(host.append_child(document, unrelated));
+
+    let mut engine = MoliStyleEngine::new();
+    let document_url = url::Url::parse("https://example.test/").unwrap();
+    let source = StyloStylesheetSource::new(
+        ".target { color: rgb(0, 0, 255); }
+         @scope (.scope) {
+             .marker + .target { color: rgb(255, 0, 0); }
+         }"
+        .into(),
+        document_url.clone(),
+    )
+    .with_source_id(Some(StyleSourceId::document_adopted_style_sheet(
+        document, 0,
+    )));
+    engine.set_document_adopted_style_sheet_sources(document, vec![source.clone()]);
+    let mut inputs = FullStyleWorldSnapshot::default();
+    inputs.document_stylesheet_sources.push(source);
+
+    for handle in [target, unrelated] {
+        assert_eq!(
+            engine.computed_style_property_value(
+                &host,
+                &document_url,
+                handle,
+                "color",
+                None,
+                &inputs,
+                None,
+            ),
+            Some("rgb(0, 0, 255)".into())
+        );
+    }
+    assert_eq!(
+        engine.computed_style_cache_entry_count_for_document_for_test(document),
+        2
+    );
+
+    assert!(host.set_attribute(marker, "class", "marker"));
+    let effects = [StyleMutationEffect::Attribute {
+        element: marker,
+        name: "class".into(),
+        old_value: None,
+        new_value: Some("marker".into()),
+    }];
+    let media = crate::protocol_types::EmulatedMediaOverrides::default();
+    let source_scope = source_scope_for_mutations(&host, &effects).expect("source scope");
+    let target_queries = {
+        let world = engine.world_for_document(document);
+        let linked_sources = world.linked_stylesheet_sources.borrow();
+        let document_adopted_sources = world.adopted_style_sheet_sources.borrow();
+        super::planner::target_queries_for_pending_cause_with_document_adopted_sources(
+            &host,
+            &linked_sources,
+            &document_adopted_sources,
+            &engine.dom_adapter,
+            &media,
+            StyleViewport::default(),
+            document,
+            &PendingStyleInvalidationCause::Mutation(effects.to_vec()),
+            &source_scope,
+        )
+    };
+    assert_eq!(target_queries.len(), 1, "{target_queries:#?}");
+    assert_eq!(
+        target_queries[0].kind(),
+        StyloRetainedSourceStyleInvalidationKind::RetainedQueries,
+        "{target_queries:#?}"
+    );
+    let application = engine
+        .with_retained_style_system_for_document_for_test(document, |retained| {
+            retained_source_invalidation_outcome_for_document_for_test(
+                &engine,
+                &host,
+                document,
+                StyleSourceDocumentContext::for_root_document(document),
+                Some(retained),
+                &target_queries,
+                false,
+            )
+        })
+        .finalize(&host);
+    assert_eq!(
+        application.cleanup_target_kind(),
+        StyleInvalidationCleanupTargetKind::Noop
+    );
+    assert_eq!(
+        application.cleanup_class(),
+        StyleInvalidationCleanupClass::Noop
+    );
+    assert_eq!(application.diagnostic_target_results().len(), 1);
+    assert!(application.diagnostic_target_results()[0].exact());
+    assert!(
+        application.diagnostic_target_results()[0]
+            .fallback_reasons()
+            .is_empty()
+    );
+
+    engine.invalidate_for_mutations(&host, &effects, &media);
+    engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
+
+    assert_eq!(
+        engine.computed_style_cache_entry_count_for_document_for_test(document),
+        2
+    );
+    assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, target));
+    assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, unrelated));
+}
+
 #[test]
 fn retained_stylo_invalidator_keeps_self_dependency_inheritance_safe() {
     let mut host = test_host();
