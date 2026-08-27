@@ -753,9 +753,9 @@ pub fn stylo_source_invalidation_fallback_reason_plan(
         }
         StyloSourceInvalidationFallbackReason::NthOfDependency => {
             StyloSourceInvalidationFallbackReasonPlan {
-                owner: "Stylo nth-of dependency planner",
-                missing_fact: "sibling/selector-list roots for :nth-child(... of ...)",
-                next_work_item: "return exact sibling traversal roots for nth-of dependencies",
+                owner: "Moli mutation-context capture",
+                missing_fact: "mutation-time sibling context for an nth-of query that reached the planner without it",
+                next_work_item: "attach sibling context to the remaining context-free nth-of invalidation entry points",
             }
         }
         StyloSourceInvalidationFallbackReason::NestedRelativeSelectorDependency => {

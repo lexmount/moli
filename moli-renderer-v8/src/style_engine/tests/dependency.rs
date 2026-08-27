@@ -673,7 +673,7 @@ fn pending_cause_default_roots_do_not_get_source_scope_reason() {
     assert!(target_query.fallback_reasons_for_test().is_empty());
 }
 #[test]
-fn source_dependency_plan_translation_preserves_exact_queries_fallback_roots_and_reason() {
+fn source_dependency_plan_translation_preserves_exact_queries_and_nth_structural_roots() {
     let mut host = test_host();
     let root = host.document_handle();
     let parent = host.create_element("section");
@@ -734,18 +734,24 @@ fn source_dependency_plan_translation_preserves_exact_queries_fallback_roots_and
     assert!(
         target_query
             .retained_queries_for_test()
-            .is_some_and(|queries| queries.contains(&exact_query))
+            .is_some_and(|queries| queries.contains(&exact_query) && queries.contains(&nth_query))
     );
     assert!(
         target_query
-            .reasoned_fallback_root_set_for_test()
+            .structural_boundary_cleanup_roots_for_test()
             .contains(&nth_root)
     );
     assert!(
         target_query
-            .fallback_reasons_for_test()
-            .contains(&StyloSourceInvalidationFallbackReason::NthOfDependency)
+            .structural_boundary_cleanup_roots_for_test()
+            .contains(&later)
     );
+    assert!(
+        target_query
+            .reasoned_fallback_root_set_for_test()
+            .is_empty()
+    );
+    assert!(target_query.fallback_reasons_for_test().is_empty());
 }
 #[test]
 fn source_dependency_plan_translation_preserves_required_source_fallback_reason() {
@@ -1142,7 +1148,7 @@ fn source_dependency_request_translation_prefers_cause_fallback_roots() {
 }
 
 #[test]
-fn source_dependency_request_translation_uses_context_roots_for_nth_of_dependency() {
+fn source_dependency_request_translation_uses_exact_structural_roots_for_nth_of_dependency() {
     let mut host = test_host();
     let document = host.document_handle();
     let parent = host.create_element("section");
@@ -1188,31 +1194,37 @@ fn source_dependency_request_translation_uses_context_roots_for_nth_of_dependenc
     assert_eq!(target_queries.len(), 1);
     assert_eq!(
         target_queries[0].kind(),
-        StyloRetainedSourceStyleInvalidationKind::ContextFallback
+        StyloRetainedSourceStyleInvalidationKind::RetainedQueries
     );
     assert!(
         target_queries[0]
-            .fallback_reasons_for_test()
-            .contains(&StyloSourceInvalidationFallbackReason::NthOfDependency)
+            .retained_queries_for_test()
+            .is_some_and(|queries| queries.contains(&query))
     );
+    assert!(target_queries[0].fallback_reasons_for_test().is_empty());
     assert!(
         target_queries[0]
             .reasoned_fallback_root_set_for_test()
+            .is_empty()
+    );
+    assert!(
+        target_queries[0]
+            .structural_boundary_cleanup_roots_for_test()
             .contains(&middle)
     );
     assert!(
         target_queries[0]
-            .reasoned_fallback_root_set_for_test()
+            .structural_boundary_cleanup_roots_for_test()
             .contains(&target)
     );
     assert!(
         !target_queries[0]
-            .reasoned_fallback_root_set_for_test()
+            .structural_boundary_cleanup_roots_for_test()
             .contains(&first)
     );
     assert!(
         !target_queries[0]
-            .reasoned_fallback_root_set_for_test()
+            .structural_boundary_cleanup_roots_for_test()
             .contains(&document)
     );
 }
@@ -1296,7 +1308,7 @@ fn source_dependency_request_translation_tries_nested_relative_with_context_safe
 }
 
 #[test]
-fn source_dependency_request_translation_keeps_nth_fallback_while_trying_nested_relative_exactly() {
+fn source_dependency_request_translation_keeps_nth_and_nested_relative_queries_exact() {
     let mut host = test_host();
     let document = host.document_handle();
     let parent = host.create_element("section");
@@ -1348,10 +1360,10 @@ fn source_dependency_request_translation_keeps_nth_fallback_while_trying_nested_
     assert!(
         target_queries[0]
             .retained_queries_for_test()
-            .is_some_and(|queries| !queries.contains(&nth_query) && queries.contains(&nested_query))
+            .is_some_and(|queries| queries.contains(&nth_query) && queries.contains(&nested_query))
     );
     let reasons = target_queries[0].fallback_reasons_for_test();
-    assert!(reasons.contains(&StyloSourceInvalidationFallbackReason::NthOfDependency));
+    assert!(!reasons.contains(&StyloSourceInvalidationFallbackReason::NthOfDependency));
     assert!(
         !reasons.contains(&StyloSourceInvalidationFallbackReason::NestedRelativeSelectorDependency)
     );
@@ -1361,6 +1373,16 @@ fn source_dependency_request_translation_keeps_nth_fallback_while_trying_nested_
             .contains(&document)
     );
     assert!(
+        target_queries[0]
+            .structural_boundary_cleanup_roots_for_test()
+            .contains(&middle)
+    );
+    assert!(
+        target_queries[0]
+            .structural_boundary_cleanup_roots_for_test()
+            .contains(&target)
+    );
+    assert!(
         !target_queries[0]
             .exact_safety_fallback_root_set_for_test()
             .contains(&document)
@@ -1368,7 +1390,7 @@ fn source_dependency_request_translation_keeps_nth_fallback_while_trying_nested_
 }
 
 #[test]
-fn source_dependency_request_translation_preserves_context_fallback_kind_with_retained_queries() {
+fn source_dependency_request_translation_combines_exact_and_nth_structural_roots() {
     let mut host = test_host();
     let document = host.document_handle();
     let parent = host.create_element("section");
@@ -1434,23 +1456,24 @@ fn source_dependency_request_translation_preserves_context_fallback_kind_with_re
         target_queries[0].kind(),
         StyloRetainedSourceStyleInvalidationKind::RetainedQueries
     );
-    assert_eq!(target_queries[0].retained_query_count(), 1);
+    assert_eq!(target_queries[0].retained_query_count(), 2);
+    assert!(target_queries[0].fallback_reasons_for_test().is_empty());
     assert!(
         target_queries[0]
-            .fallback_reasons_for_test()
-            .contains(&StyloSourceInvalidationFallbackReason::NthOfDependency)
+            .structural_boundary_cleanup_roots_for_test()
+            .contains(&middle)
+    );
+    assert!(
+        target_queries[0]
+            .structural_boundary_cleanup_roots_for_test()
+            .contains(&target)
     );
     let retained_source_input = retained_source_input_for_test(
         target_queries[0]
             .retained_source_invalidation_input()
             .into_stylo_input(None),
     );
-    assert_eq!(
-        retained_source_input.retained_fallback_kind,
-        Some(Some(
-            StyloRetainedSourceStyleInvalidationKind::ContextFallback
-        ))
-    );
+    assert_eq!(retained_source_input.retained_fallback_kind, Some(None));
 
     let mut engine = MoliStyleEngine::new();
     let source = StyloStylesheetSource::new(style_text.into(), base_url.clone())
@@ -1477,13 +1500,13 @@ fn source_dependency_request_translation_preserves_context_fallback_kind_with_re
     assert_eq!(application.diagnostic_target_results().len(), 1);
     assert_eq!(
         application.diagnostic_target_results()[0].kind(),
-        StyleInvalidationDiagnosticTargetResultKind::ContextFallback
+        StyleInvalidationDiagnosticTargetResultKind::Exact
     );
     assert_eq!(
         application
             .diagnostic_target_result_summary()
             .context_fallback_target_count(),
-        1
+        0
     );
     assert_eq!(
         application
@@ -1494,8 +1517,7 @@ fn source_dependency_request_translation_preserves_context_fallback_kind_with_re
 }
 
 #[test]
-fn source_dependency_request_translation_does_not_merge_exact_context_roots_into_context_fallback()
-{
+fn source_dependency_request_translation_separates_query_safety_from_nth_structural_roots() {
     let mut host = test_host();
     let document = host.document_handle();
     let parent = host.create_element("section");
@@ -1577,18 +1599,24 @@ fn source_dependency_request_translation_does_not_merge_exact_context_roots_into
     assert!(
         target_query
             .retained_queries_for_test()
-            .is_some_and(|queries| queries.contains(&exact_query))
+            .is_some_and(|queries| queries.contains(&exact_query) && queries.contains(&nth_query))
+    );
+    assert!(target_query.fallback_reasons_for_test().is_empty());
+    assert!(
+        !target_query
+            .structural_boundary_cleanup_roots_for_test()
+            .contains(&exact_context_only),
+        "ordinary query safety roots must not become unconditional structural cleanup roots"
     );
     assert!(
         target_query
-            .fallback_reasons_for_test()
-            .contains(&StyloSourceInvalidationFallbackReason::NthOfDependency)
+            .structural_boundary_cleanup_roots_for_test()
+            .contains(&nth_subject)
     );
     assert!(
-        !target_query
-            .reasoned_fallback_root_set_for_test()
-            .contains(&exact_context_only),
-        "exact sibling query fallback roots must not be merged into the context fallback roots for another request"
+        target_query
+            .structural_boundary_cleanup_roots_for_test()
+            .contains(&nth_later)
     );
     assert!(
         target_query
@@ -1599,7 +1627,7 @@ fn source_dependency_request_translation_does_not_merge_exact_context_roots_into
 }
 
 #[test]
-fn retained_unavailable_uses_exact_safety_roots_without_broadening_context_fallback() {
+fn retained_unavailable_uses_exact_safety_roots_without_broadening_nth_structural_cleanup() {
     let mut host = test_host();
     let document = host.document_handle();
     let parent = host.create_element("section");
@@ -1694,14 +1722,18 @@ fn retained_unavailable_uses_exact_safety_roots_without_broadening_context_fallb
             .contains(&StyloSourceInvalidationFallbackReason::MissingRetainedStyleSystem)
     );
     assert!(
-        target_result
+        !target_result
             .fallback_reasons()
             .contains(&StyloSourceInvalidationFallbackReason::NthOfDependency)
     );
     assert!(matches!(
         application.cleanup_target(),
-        StyleInvalidationCleanupTarget::SourceFallbackSubtreeRoots(roots)
-            if roots.contains(&exact_context_only) && !roots.contains(&document)
+        StyleInvalidationCleanupTarget::MixedSubtreeRoots(groups)
+            if groups.source_fallback_roots().contains(&exact_context_only)
+                && groups.structural_boundary_roots().contains(&nth_subject)
+                && groups.structural_boundary_roots().contains(&nth_later)
+                && !groups.source_fallback_roots().contains(&document)
+                && !groups.structural_boundary_roots().contains(&document)
     ));
 }
 
@@ -2213,7 +2245,7 @@ fn custom_state_source_dependency_request_stays_exact_without_unsupported_fallba
 }
 
 #[test]
-fn custom_state_nth_of_source_dependency_request_uses_context_fallback_roots() {
+fn custom_state_nth_of_source_dependency_request_uses_exact_structural_roots() {
     let mut host = test_host();
     let document = host.document_handle();
     let parent = host.create_element("section");
@@ -2270,36 +2302,46 @@ fn custom_state_nth_of_source_dependency_request_uses_context_fallback_roots() {
     let target_query = &target_queries[0];
     assert_eq!(
         target_query.kind(),
-        StyloRetainedSourceStyleInvalidationKind::ContextFallback
+        StyloRetainedSourceStyleInvalidationKind::RetainedQueries
     );
     assert!(
         target_query
-            .reasoned_fallback_root_set_for_test()
+            .retained_queries_for_test()
+            .is_some_and(|queries| queries.contains(&custom_state_query)),
+        "{target_query:?}"
+    );
+    assert!(
+        target_query
+            .structural_boundary_cleanup_roots_for_test()
+            .contains(&root),
+        "{target_query:?}"
+    );
+    assert!(
+        target_query
+            .structural_boundary_cleanup_roots_for_test()
             .contains(&adjacent),
         "{target_query:?}"
     );
     assert!(
         target_query
-            .reasoned_fallback_root_set_for_test()
+            .structural_boundary_cleanup_roots_for_test()
             .contains(&later),
         "{target_query:?}"
     );
     assert!(
         target_query
-            .reasoned_fallback_root_set_for_test()
+            .structural_boundary_cleanup_roots_for_test()
             .contains(&later_adjacent),
         "{target_query:?}"
     );
     assert!(
         !target_query
-            .reasoned_fallback_root_set_for_test()
+            .structural_boundary_cleanup_roots_for_test()
             .contains(&document),
         "{target_query:?}"
     );
     assert!(
-        target_query
-            .fallback_reasons_for_test()
-            .contains(&StyloSourceInvalidationFallbackReason::NthOfDependency),
+        target_query.fallback_reasons_for_test().is_empty(),
         "{target_query:?}"
     );
 }

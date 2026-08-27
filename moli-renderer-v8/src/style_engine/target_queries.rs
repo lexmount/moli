@@ -465,6 +465,11 @@ impl PendingStyleInvalidationTargetQueries {
         self.structural_boundary_cleanup_roots().len()
     }
 
+    #[cfg(test)]
+    pub(super) fn structural_boundary_cleanup_roots_for_test(&self) -> &IndexSet<DomHandle> {
+        &self.structural_boundary_cleanup_roots().roots
+    }
+
     fn fallback_reasons(&self) -> &IndexSet<StyloSourceInvalidationFallbackReason> {
         &self.context.fallback_reasons
     }

@@ -3519,6 +3519,242 @@ fn retained_stylo_invalidator_uses_snapshots_for_mixed_attribute_target_batches(
     );
 }
 #[test]
+fn nth_of_child_list_insertion_invalidates_only_changed_and_following_sibling_subtrees() {
+    let mut host = test_host();
+    let document = host.document_handle();
+    let container = host.create_element("section");
+    let first = host.create_element("div");
+    let inserted = host.create_element("div");
+    let target = host.create_element("div");
+    let later = host.create_element("div");
+    let unrelated = host.create_element("aside");
+
+    for handle in [first, inserted, target, later] {
+        assert!(host.set_attribute(handle, "class", "active"));
+    }
+    assert!(host.set_attribute(unrelated, "id", "unrelated"));
+    assert!(host.append_child(document, container));
+    assert!(host.append_child(container, first));
+    assert!(host.append_child(container, target));
+    assert!(host.append_child(container, later));
+    assert!(host.append_child(document, unrelated));
+
+    let mut engine = MoliStyleEngine::new();
+    let document_url = url::Url::parse("https://example.test/").unwrap();
+    let source = StyloStylesheetSource::new(
+        "section > div:nth-child(odd of .active) {
+             background-color: rgb(192, 192, 192);
+         }
+         #unrelated { color: rgb(1, 2, 3); }"
+            .into(),
+        document_url.clone(),
+    );
+    engine.set_document_adopted_style_sheet_sources(document, vec![source.clone()]);
+    let mut inputs = FullStyleWorldSnapshot::default();
+    inputs.document_stylesheet_sources.push(source);
+
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            target,
+            "background-color",
+            None,
+            &inputs,
+            None,
+        ),
+        Some("rgba(0, 0, 0, 0)".into())
+    );
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            later,
+            "background-color",
+            None,
+            &inputs,
+            None,
+        ),
+        Some("rgb(192, 192, 192)".into())
+    );
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            unrelated,
+            "color",
+            None,
+            &inputs,
+            None,
+        ),
+        Some("rgb(1, 2, 3)".into())
+    );
+
+    assert!(host.insert_before(container, inserted, Some(target)));
+    let media = crate::protocol_types::EmulatedMediaOverrides::default();
+    engine.invalidate_for_mutations(
+        &host,
+        &[StyleMutationEffect::ChildList {
+            parent: container,
+            added_nodes: vec![inserted],
+            removed_nodes: Vec::new(),
+            removed_element_snapshots: Vec::new(),
+            previous_sibling: Some(first),
+            next_sibling: Some(target),
+        }],
+        &media,
+    );
+    engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
+
+    assert!(!engine.computed_style_cache_contains_handle_for_document_for_test(document, target));
+    assert!(!engine.computed_style_cache_contains_handle_for_document_for_test(document, later));
+    assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, unrelated));
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            target,
+            "background-color",
+            None,
+            &inputs,
+            None,
+        ),
+        Some("rgb(192, 192, 192)".into())
+    );
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            later,
+            "background-color",
+            None,
+            &inputs,
+            None,
+        ),
+        Some("rgba(0, 0, 0, 0)".into())
+    );
+}
+
+#[test]
+fn nth_of_child_list_removal_invalidates_only_following_sibling_subtrees() {
+    let mut host = test_host();
+    let document = host.document_handle();
+    let container = host.create_element("section");
+    let first = host.create_element("div");
+    let removed = host.create_element("div");
+    let target = host.create_element("div");
+    let later = host.create_element("div");
+    let unrelated = host.create_element("aside");
+
+    for handle in [first, removed, target, later] {
+        assert!(host.set_attribute(handle, "class", "active"));
+    }
+    assert!(host.set_attribute(unrelated, "id", "unrelated"));
+    assert!(host.append_child(document, container));
+    assert!(host.append_child(container, first));
+    assert!(host.append_child(container, removed));
+    assert!(host.append_child(container, target));
+    assert!(host.append_child(container, later));
+    assert!(host.append_child(document, unrelated));
+
+    let mut engine = MoliStyleEngine::new();
+    let document_url = url::Url::parse("https://example.test/").unwrap();
+    let source = StyloStylesheetSource::new(
+        "section > div:nth-child(odd of .active) {
+             background-color: rgb(192, 192, 192);
+         }
+         #unrelated { color: rgb(1, 2, 3); }"
+            .into(),
+        document_url.clone(),
+    );
+    engine.set_document_adopted_style_sheet_sources(document, vec![source.clone()]);
+    let mut inputs = FullStyleWorldSnapshot::default();
+    inputs.document_stylesheet_sources.push(source);
+
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            target,
+            "background-color",
+            None,
+            &inputs,
+            None,
+        ),
+        Some("rgb(192, 192, 192)".into())
+    );
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            later,
+            "background-color",
+            None,
+            &inputs,
+            None,
+        ),
+        Some("rgba(0, 0, 0, 0)".into())
+    );
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            unrelated,
+            "color",
+            None,
+            &inputs,
+            None,
+        ),
+        Some("rgb(1, 2, 3)".into())
+    );
+
+    let removed_snapshots = removed_element_dependency_snapshots(&host, &[removed]);
+    assert!(host.remove_child(container, removed));
+    let media = crate::protocol_types::EmulatedMediaOverrides::default();
+    engine.invalidate_for_mutations(
+        &host,
+        &[StyleMutationEffect::ChildList {
+            parent: container,
+            added_nodes: Vec::new(),
+            removed_nodes: vec![removed],
+            removed_element_snapshots: removed_snapshots,
+            previous_sibling: Some(first),
+            next_sibling: Some(target),
+        }],
+        &media,
+    );
+    engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
+
+    assert!(!engine.computed_style_cache_contains_handle_for_document_for_test(document, target));
+    assert!(!engine.computed_style_cache_contains_handle_for_document_for_test(document, later));
+    assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, unrelated));
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            target,
+            "background-color",
+            None,
+            &inputs,
+            None,
+        ),
+        Some("rgba(0, 0, 0, 0)".into())
+    );
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            later,
+            "background-color",
+            None,
+            &inputs,
+            None,
+        ),
+        Some("rgb(192, 192, 192)".into())
+    );
+}
+
+#[test]
 fn retained_stylo_invalidator_narrows_child_list_inserted_sibling_invalidation() {
     let mut host = test_host();
     let document = host.document_handle();
@@ -4929,7 +5165,7 @@ fn retained_stylo_invalidator_refreshes_nth_child_of_selector_list_on_class_chan
 }
 
 #[test]
-fn retained_stylo_invalidator_refreshes_nth_child_of_custom_state_with_context_fallback() {
+fn retained_stylo_invalidator_refreshes_nth_child_of_custom_state_with_structural_roots() {
     let mut host = test_host();
     let document = host.document_handle();
     let body = host.create_element("body");
@@ -5019,8 +5255,23 @@ fn retained_stylo_invalidator_refreshes_nth_child_of_custom_state_with_context_f
     assert_eq!(target_queries.len(), 1, "{target_queries:#?}");
     assert_eq!(
         target_queries[0].kind(),
-        StyloRetainedSourceStyleInvalidationKind::ContextFallback,
+        StyloRetainedSourceStyleInvalidationKind::RetainedQueries,
         "{target_queries:#?}"
+    );
+    assert!(
+        target_queries[0]
+            .structural_boundary_cleanup_roots_for_test()
+            .contains(&middle)
+    );
+    assert!(
+        target_queries[0]
+            .structural_boundary_cleanup_roots_for_test()
+            .contains(&target)
+    );
+    assert!(
+        !target_queries[0]
+            .structural_boundary_cleanup_roots_for_test()
+            .contains(&unrelated)
     );
     let application = engine
         .with_retained_style_system_for_document_for_test(document, |retained| {
@@ -5037,19 +5288,29 @@ fn retained_stylo_invalidator_refreshes_nth_child_of_custom_state_with_context_f
         .finalize(&host);
     assert_eq!(
         application.cleanup_target_kind(),
-        StyleInvalidationCleanupTargetKind::SourceFallbackSubtreeRoots
+        StyleInvalidationCleanupTargetKind::MixedSubtreeRoots
     );
     assert!(matches!(
         application.cleanup_target(),
-        StyleInvalidationCleanupTarget::SourceFallbackSubtreeRoots(roots)
-            if roots.contains(&target) && !roots.contains(&unrelated)
+        StyleInvalidationCleanupTarget::MixedSubtreeRoots(groups)
+            if groups.structural_boundary_roots().contains(&target)
+                && !groups.structural_boundary_roots().contains(&unrelated)
+                && !groups.exact_affected_roots().contains(&unrelated)
     ));
     assert_eq!(application.diagnostic_target_results().len(), 1);
-    assert!(!application.diagnostic_target_results()[0].exact());
+    assert!(application.diagnostic_target_results()[0].exact());
     assert!(
-        application.diagnostic_target_results()[0]
+        !application.diagnostic_target_results()[0]
             .fallback_reasons()
             .contains(&StyloSourceInvalidationFallbackReason::NthOfDependency)
+    );
+    let telemetry = application.fallback_telemetry();
+    assert_eq!(telemetry.exact_target_result_count(), 1);
+    assert_eq!(telemetry.fallback_target_result_count(), 0);
+    assert_eq!(
+        telemetry
+            .fallback_reason_target_count(StyloSourceInvalidationFallbackReason::NthOfDependency,),
+        0
     );
 
     engine.invalidate_for_custom_state_change(
