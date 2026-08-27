@@ -1218,7 +1218,7 @@ fn source_dependency_request_translation_uses_context_roots_for_nth_of_dependenc
 }
 
 #[test]
-fn source_dependency_request_translation_uses_context_roots_for_nested_relative_dependency() {
+fn source_dependency_request_translation_tries_nested_relative_with_context_safety_roots() {
     let mut host = test_host();
     let document = host.document_handle();
     let parent = host.create_element("section");
@@ -1270,27 +1270,33 @@ fn source_dependency_request_translation_uses_context_roots_for_nested_relative_
     assert_eq!(target_queries.len(), 1);
     assert_eq!(
         target_queries[0].kind(),
-        StyloRetainedSourceStyleInvalidationKind::ContextFallback
+        StyloRetainedSourceStyleInvalidationKind::RetainedQueries
     );
     assert!(
         target_queries[0]
-            .fallback_reasons_for_test()
-            .contains(&StyloSourceInvalidationFallbackReason::NestedRelativeSelectorDependency)
+            .retained_queries_for_test()
+            .is_some_and(|queries| queries.contains(&query))
     );
+    assert!(target_queries[0].fallback_reasons_for_test().is_empty());
     assert!(
         target_queries[0]
             .reasoned_fallback_root_set_for_test()
+            .is_empty()
+    );
+    assert!(
+        target_queries[0]
+            .exact_safety_fallback_root_set_for_test()
             .contains(&target)
     );
     assert!(
         !target_queries[0]
-            .reasoned_fallback_root_set_for_test()
+            .exact_safety_fallback_root_set_for_test()
             .contains(&document)
     );
 }
 
 #[test]
-fn source_dependency_request_translation_preserves_multiple_context_fallback_reasons() {
+fn source_dependency_request_translation_keeps_nth_fallback_while_trying_nested_relative_exactly() {
     let mut host = test_host();
     let document = host.document_handle();
     let parent = host.create_element("section");
@@ -1337,16 +1343,26 @@ fn source_dependency_request_translation_preserves_multiple_context_fallback_rea
     assert_eq!(target_queries.len(), 1);
     assert_eq!(
         target_queries[0].kind(),
-        StyloRetainedSourceStyleInvalidationKind::ContextFallback
+        StyloRetainedSourceStyleInvalidationKind::RetainedQueries
+    );
+    assert!(
+        target_queries[0]
+            .retained_queries_for_test()
+            .is_some_and(|queries| !queries.contains(&nth_query) && queries.contains(&nested_query))
     );
     let reasons = target_queries[0].fallback_reasons_for_test();
     assert!(reasons.contains(&StyloSourceInvalidationFallbackReason::NthOfDependency));
     assert!(
-        reasons.contains(&StyloSourceInvalidationFallbackReason::NestedRelativeSelectorDependency)
+        !reasons.contains(&StyloSourceInvalidationFallbackReason::NestedRelativeSelectorDependency)
     );
     assert!(
         !target_queries[0]
             .reasoned_fallback_root_set_for_test()
+            .contains(&document)
+    );
+    assert!(
+        !target_queries[0]
+            .exact_safety_fallback_root_set_for_test()
             .contains(&document)
     );
 }

@@ -4929,6 +4929,155 @@ fn retained_stylo_invalidator_refreshes_nth_child_of_selector_list_on_class_chan
 }
 
 #[test]
+fn retained_stylo_invalidator_refreshes_nth_child_of_custom_state_with_context_fallback() {
+    let mut host = test_host();
+    let document = host.document_handle();
+    let body = host.create_element("body");
+    let container = host.create_element("section");
+    let first = host.create_element("x-stateful");
+    let middle = host.create_element("x-stateful");
+    let target = host.create_element("x-stateful");
+    let unrelated = host.create_element("aside");
+
+    assert!(host.set_attribute(unrelated, "id", "unrelated"));
+    assert!(host.insert_custom_state(first, "--active"));
+    assert!(host.insert_custom_state(target, "--active"));
+    assert!(host.append_child(document, body));
+    assert!(host.append_child(body, container));
+    assert!(host.append_child(container, first));
+    assert!(host.append_child(container, middle));
+    assert!(host.append_child(container, target));
+    assert!(host.append_child(body, unrelated));
+
+    let mut engine = MoliStyleEngine::new();
+    let style_text = "section > x-stateful:nth-child(odd of :state(--active)) {
+             background-color: rgb(192, 192, 192);
+         }
+         #unrelated { color: rgb(1, 2, 3); }";
+    let document_url = url::Url::parse("https://example.test/").unwrap();
+    let source = StyloStylesheetSource::new(style_text.into(), document_url.clone())
+        .with_source_id(Some(StyleSourceId::document_adopted_style_sheet(
+            document, 0,
+        )));
+    engine.set_document_adopted_style_sheet_sources(document, vec![source.clone()]);
+    let mut inputs = FullStyleWorldSnapshot::default();
+    inputs.document_stylesheet_sources.push(source);
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            target,
+            "background-color",
+            None,
+            &inputs,
+            None,
+        ),
+        Some("rgba(0, 0, 0, 0)".into())
+    );
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            unrelated,
+            "color",
+            None,
+            &inputs,
+            None,
+        ),
+        Some("rgb(1, 2, 3)".into())
+    );
+
+    let media = crate::protocol_types::EmulatedMediaOverrides::default();
+    let old_custom_states = host.custom_state_names(middle);
+    assert!(host.insert_custom_state(middle, "--active"));
+    let source_scope = crate::style_engine::scope::source_scope_for_custom_state_change(
+        &host,
+        middle,
+        &["--active".to_owned()],
+    )
+    .expect("custom state scope");
+    let target_queries = {
+        let world = engine.world_for_document(document);
+        let linked_sources = world.linked_stylesheet_sources.borrow();
+        let document_adopted_sources = world.adopted_style_sheet_sources.borrow();
+        super::planner::target_queries_for_pending_cause_with_document_adopted_sources(
+            &host,
+            &linked_sources,
+            &document_adopted_sources,
+            &engine.dom_adapter,
+            &media,
+            StyleViewport::default(),
+            document,
+            &PendingStyleInvalidationCause::CustomStateChange {
+                element: middle,
+                state_names: vec!["--active".to_owned()],
+                old_custom_states: old_custom_states.clone(),
+            },
+            &source_scope,
+        )
+    };
+    assert_eq!(target_queries.len(), 1, "{target_queries:#?}");
+    assert_eq!(
+        target_queries[0].kind(),
+        StyloRetainedSourceStyleInvalidationKind::ContextFallback,
+        "{target_queries:#?}"
+    );
+    let application = engine
+        .with_retained_style_system_for_document_for_test(document, |retained| {
+            retained_source_invalidation_outcome_for_document_for_test(
+                &engine,
+                &host,
+                document,
+                StyleSourceDocumentContext::for_root_document(document),
+                Some(retained),
+                &target_queries,
+                false,
+            )
+        })
+        .finalize(&host);
+    assert_eq!(
+        application.cleanup_target_kind(),
+        StyleInvalidationCleanupTargetKind::SourceFallbackSubtreeRoots
+    );
+    assert!(matches!(
+        application.cleanup_target(),
+        StyleInvalidationCleanupTarget::SourceFallbackSubtreeRoots(roots)
+            if roots.contains(&target) && !roots.contains(&unrelated)
+    ));
+    assert_eq!(application.diagnostic_target_results().len(), 1);
+    assert!(!application.diagnostic_target_results()[0].exact());
+    assert!(
+        application.diagnostic_target_results()[0]
+            .fallback_reasons()
+            .contains(&StyloSourceInvalidationFallbackReason::NthOfDependency)
+    );
+
+    engine.invalidate_for_custom_state_change(
+        &host,
+        middle,
+        vec!["--active".to_owned()],
+        old_custom_states,
+        &media,
+    );
+    engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
+
+    assert!(!engine.computed_style_cache_contains_handle_for_document_for_test(document, target));
+    assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, unrelated));
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            target,
+            "background-color",
+            None,
+            &inputs,
+            None,
+        ),
+        Some("rgb(192, 192, 192)".into())
+    );
+}
+
+#[test]
 fn retained_stylo_invalidator_custom_state_snapshot_avoids_source_fallback() {
     let mut host = test_host();
     let document = host.document_handle();
@@ -5217,8 +5366,10 @@ fn retained_stylo_invalidator_refreshes_nested_is_sibling_has_on_child_removal()
     let first_child = host.create_element("span");
     let second_child = host.create_element("span");
     let third_child = host.create_element("span");
+    let unrelated = host.create_element("aside");
 
     assert!(host.set_attribute(target, "id", "target"));
+    assert!(host.set_attribute(unrelated, "id", "unrelated"));
     for item in [first_item, second_item, third_item] {
         assert!(host.set_attribute(item, "class", "item"));
     }
@@ -5233,12 +5384,14 @@ fn retained_stylo_invalidator_refreshes_nested_is_sibling_has_on_child_removal()
     assert!(host.append_child(third_item, first_child));
     assert!(host.append_child(third_item, second_child));
     assert!(host.append_child(third_item, third_child));
+    assert!(host.append_child(document, unrelated));
 
     let mut engine = MoliStyleEngine::new();
     let style_text = "#target { color: rgb(0, 128, 0); }
          #target:has(:is(.item + .item + .item > .child + .child + .child)) {
              color: rgb(192, 192, 192);
-         }";
+         }
+         #unrelated { color: rgb(1, 2, 3); }";
     let document_url = url::Url::parse("https://example.test/").unwrap();
     let metadata = stylo_source_metadata_for_css_text(style_text, &document_url);
     assert!(
@@ -5267,8 +5420,20 @@ fn retained_stylo_invalidator_refreshes_nested_is_sibling_has_on_child_removal()
         Some("rgb(192, 192, 192)".into())
     );
     assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            unrelated,
+            "color",
+            None,
+            &inputs,
+            None,
+        ),
+        Some("rgb(1, 2, 3)".into())
+    );
+    assert_eq!(
         engine.computed_style_cache_entry_count_for_document_for_test(document),
-        1
+        2
     );
 
     let removed_snapshots = removed_element_dependency_snapshots(&host, &[first_item]);
@@ -5289,6 +5454,7 @@ fn retained_stylo_invalidator_refreshes_nested_is_sibling_has_on_child_removal()
     engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
 
     assert!(!engine.computed_style_cache_contains_handle_for_document_for_test(document, target));
+    assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, unrelated));
     assert_eq!(
         engine.computed_style_property_value(
             &host,
@@ -5315,6 +5481,7 @@ fn retained_stylo_invalidator_refreshes_nested_is_sibling_has_on_middle_insertio
     let target = host.create_element("section");
     let child = host.create_element("div");
     let descendant = host.create_element("div");
+    let unrelated = host.create_element("aside");
 
     assert!(host.set_attribute(first, "class", "p"));
     assert!(host.set_attribute(previous, "id", "parent_previous"));
@@ -5325,6 +5492,7 @@ fn retained_stylo_invalidator_refreshes_nested_is_sibling_has_on_middle_insertio
     assert!(host.set_attribute(child, "class", "d"));
     assert!(host.set_attribute(descendant, "id", "descendant"));
     assert!(host.set_attribute(descendant, "class", "e"));
+    assert!(host.set_attribute(unrelated, "id", "unrelated"));
     assert!(host.append_child(document, body));
     assert!(host.append_child(body, outer));
     assert!(host.append_child(outer, first));
@@ -5333,12 +5501,14 @@ fn retained_stylo_invalidator_refreshes_nested_is_sibling_has_on_middle_insertio
     assert!(host.append_child(parent, target));
     assert!(host.append_child(target, child));
     assert!(host.append_child(child, descendant));
+    assert!(host.append_child(body, unrelated));
 
     let mut engine = MoliStyleEngine::new();
     let style_text = "#has_scope { color: rgb(128, 128, 128); }
          .green:has(#descendant:is(.p + .c_has_scope ~ .d .e)) {
              color: rgb(0, 128, 0);
-         }";
+         }
+         #unrelated { color: rgb(1, 2, 3); }";
     let document_url = url::Url::parse("https://example.test/").unwrap();
     let metadata = stylo_source_metadata_for_css_text(style_text, &document_url);
     assert!(
@@ -5367,8 +5537,20 @@ fn retained_stylo_invalidator_refreshes_nested_is_sibling_has_on_middle_insertio
         Some("rgb(0, 128, 0)".into())
     );
     assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            unrelated,
+            "color",
+            None,
+            &inputs,
+            None,
+        ),
+        Some("rgb(1, 2, 3)".into())
+    );
+    assert_eq!(
         engine.computed_style_cache_entry_count_for_document_for_test(document),
-        1
+        2
     );
 
     let inserted = host.create_element("div");
@@ -5390,6 +5572,7 @@ fn retained_stylo_invalidator_refreshes_nested_is_sibling_has_on_middle_insertio
     engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
 
     assert!(!engine.computed_style_cache_contains_handle_for_document_for_test(document, target));
+    assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, unrelated));
     assert_eq!(
         engine.computed_style_property_value(
             &host,
