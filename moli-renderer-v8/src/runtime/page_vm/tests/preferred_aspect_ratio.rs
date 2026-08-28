@@ -89,3 +89,68 @@ document.body.innerHTML = `
     .await
     .expect("preferred aspect-ratio fixture should run");
 }
+
+/// Regression for WPT css/css-sizing/aspect-ratio/table-element-001.html.
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_keeps_preferred_ratios_out_of_internal_table_box_sizing() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/internal-table-box-aspect-ratio.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;background:white}
+table{border-collapse:collapse}
+th,td{padding:0}
+</style>`;
+document.body.innerHTML = `
+<table id=internal>
+  <tr id=row>
+    <th id=cell style="background:green;width:100px;aspect-ratio:1/1"></th>
+    <td id=empty-a style="background:red;height:50px;aspect-ratio:4/1"></td>
+    <td id=empty-b style="background:red;height:50px;min-width:min-content;aspect-ratio:4/1"></td>
+  </tr>
+</table>
+<table id=wrapper style="background:green;width:100px;aspect-ratio:2/1"></table>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        let snapshot = page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(220, 120, 1.0))?
+            .expect("internal-table-box aspect-ratio fixture must retain a layout root");
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries(['internal','row','cell','empty-a','empty-b','wrapper'].map(id=>{const element=document.getElementById(id);const rect=element.getBoundingClientRect();return [id,{rect:[rect.x,rect.y,rect.width,rect.height],ratio:getComputedStyle(element).aspectRatio}]})))"#,
+        )?;
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&geometry)?,
+            serde_json::json!({
+                "internal": {"rect": [0, 0, 100, 50], "ratio": "auto"},
+                "row": {"rect": [0, 0, 100, 50], "ratio": "auto"},
+                "cell": {"rect": [0, 0, 100, 50], "ratio": "1 / 1"},
+                "empty-a": {"rect": [100, 0, 0, 50], "ratio": "4 / 1"},
+                "empty-b": {"rect": [100, 0, 0, 50], "ratio": "4 / 1"},
+                "wrapper": {"rect": [0, 50, 100, 50], "ratio": "2 / 1"},
+            }),
+            "internal table boxes must retain computed ratios without consuming them as used sizes, while the table wrapper still consumes its ratio",
+        );
+
+        let raster = moli_paint::raster_snapshot(&snapshot)?;
+        let pixel = |x: u32, y: u32| -> [u8; 4] {
+            let offset = ((y * raster.width + x) * 4) as usize;
+            raster.rgba[offset..offset + 4].try_into().unwrap()
+        };
+        assert_eq!(pixel(99, 99), [0, 128, 0, 255]);
+        assert_eq!(pixel(100, 99), [255, 255, 255, 255]);
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("internal-table-box aspect-ratio fixture should run");
+}
