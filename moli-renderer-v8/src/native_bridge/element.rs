@@ -168,8 +168,8 @@ pub(super) use content::{
     node_inner_html_setter_function, node_inner_text_getter_function,
     node_inner_text_setter_function, node_outer_html_getter_function,
     node_outer_html_setter_function, node_outer_text_getter_function,
-    node_outer_text_setter_function, node_set_html_unsafe_callback, title_text_getter_function,
-    title_text_setter_function,
+    node_outer_text_setter_function, node_set_html_unsafe_callback,
+    set_inner_text_in_reaction_scope, title_text_getter_function, title_text_setter_function,
 };
 pub(super) use dataset::{build_dom_string_map_wrapper_template, node_dataset_getter_function};
 use details_dialog::{
@@ -2836,7 +2836,11 @@ fn script_source_setter_function<'s>(
     let _ = unsafe { &mut *runtime_ptr }
         .dom_host_mut()
         .set_script_text_internal_slot(handle, &text);
-    let _ = set_text_content_in_reaction_scope(scope, runtime_ptr, handle, &text);
+    if sink == TrustedScriptElementSink::InnerText {
+        let _ = set_inner_text_in_reaction_scope(scope, runtime_ptr, handle, &text);
+    } else {
+        let _ = set_text_content_in_reaction_scope(scope, runtime_ptr, handle, &text);
+    }
     rv.set_undefined();
 }
 

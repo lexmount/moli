@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 
 use crate::{
-    custom_elements,
+    context_bootstrap, custom_elements,
     document_runtime::DomHandle,
-    dom::native::{Element, Node},
+    dom::native::{Element, Node, NodeType},
     style_engine::{ComputedDisplayKind, ComputedTextWrapModeKind, ComputedWhiteSpaceCollapseKind},
     util::v8_string,
 };
@@ -1104,6 +1104,122 @@ pub(in crate::native_bridge) fn node_inner_text_getter_function<'s>(
     rv.set(value.into());
 }
 
+fn rendered_text_setter_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+    member: &'static str,
+) -> Option<String> {
+    let options = crate::webidl::StringOptions {
+        treat_null_as_empty_string: true,
+    };
+    match crate::webidl::convert_with_options::<crate::webidl::DomString>(
+        scope,
+        value,
+        crate::webidl::Context::member("HTMLElement", member),
+        &options,
+    ) {
+        Ok(value) => Some(value.0),
+        Err(error) => {
+            crate::webidl::throw_error(scope, &error);
+            None
+        }
+    }
+}
+
+fn append_rendered_text_node(
+    runtime: &mut JsContextHost,
+    document: DomHandle,
+    fragment: DomHandle,
+    value: &str,
+) -> bool {
+    let text = runtime.create_text_node_for_document(document, value);
+    runtime
+        .dom_host_mut()
+        .append_child_without_mutation_effects(fragment, text)
+}
+
+fn append_rendered_break_node(
+    runtime: &mut JsContextHost,
+    document: DomHandle,
+    fragment: DomHandle,
+) -> bool {
+    let line_break = runtime.create_element("br");
+    if runtime.dom_host().owner_document_handle(line_break) != Some(document)
+        && runtime
+            .initialize_new_native_node_owner_document(document, line_break)
+            .is_none()
+    {
+        return false;
+    }
+    runtime
+        .dom_host_mut()
+        .append_child_without_mutation_effects(fragment, line_break)
+}
+
+fn rendered_text_fragment(
+    runtime: &mut JsContextHost,
+    document: DomHandle,
+    value: &str,
+) -> Option<DomHandle> {
+    let fragment = runtime.create_document_fragment_for_document(document);
+    let mut text_start = 0;
+    let mut characters = value.char_indices().peekable();
+    while let Some((position, character)) = characters.next() {
+        if !matches!(character, '\r' | '\n') {
+            continue;
+        }
+        if text_start < position
+            && !append_rendered_text_node(runtime, document, fragment, &value[text_start..position])
+        {
+            return None;
+        }
+        if character == '\r'
+            && characters
+                .peek()
+                .is_some_and(|(_, character)| *character == '\n')
+        {
+            let (line_feed_position, _) = characters.next()?;
+            text_start = line_feed_position + '\n'.len_utf8();
+        } else {
+            text_start = position + character.len_utf8();
+        }
+        if !append_rendered_break_node(runtime, document, fragment) {
+            return None;
+        }
+    }
+    if text_start < value.len()
+        && !append_rendered_text_node(runtime, document, fragment, &value[text_start..])
+    {
+        return None;
+    }
+    Some(fragment)
+}
+
+pub(in crate::native_bridge) fn set_inner_text_in_reaction_scope(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+    value: &str,
+) -> bool {
+    custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
+        let runtime = unsafe { &mut *runtime_ptr };
+        let Some(document) = runtime.dom_host().owner_document_handle(handle) else {
+            return false;
+        };
+        let existing_children = runtime.dom_host().child_handles(handle).collect::<Vec<_>>();
+        let Some(fragment) = rendered_text_fragment(runtime, document, value) else {
+            return false;
+        };
+        runtime.replace_all_children_with_fragment_appending_to_current_reaction_queue(
+            scope,
+            runtime_ptr,
+            handle,
+            fragment,
+            &existing_children,
+        )
+    })
+}
+
 pub(in crate::native_bridge) fn node_inner_text_setter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -1114,10 +1230,10 @@ pub(in crate::native_bridge) fn node_inner_text_setter_function<'s>(
     else {
         return;
     };
-    let Some(value) = property_string_value(scope, args.get(0)) else {
+    let Some(value) = rendered_text_setter_value(scope, args.get(0), "innerText") else {
         return;
     };
-    let _ = set_text_content_in_reaction_scope(scope, runtime_ptr, handle, &value);
+    let _ = set_inner_text_in_reaction_scope(scope, runtime_ptr, handle, &value);
     rv.set_undefined();
 }
 
@@ -1170,6 +1286,51 @@ pub(in crate::native_bridge) fn node_outer_text_getter_function<'s>(
     node_inner_text_getter_function(scope, args, rv);
 }
 
+fn is_text_node(runtime: &JsContextHost, handle: DomHandle) -> bool {
+    runtime
+        .dom_host()
+        .node(handle)
+        .is_some_and(|node| node.node_type() == NodeType::Text)
+}
+
+fn merge_with_next_text_node(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime: &mut JsContextHost,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+) {
+    let Some(next) = runtime
+        .dom_host()
+        .node(handle)
+        .and_then(Node::next_sibling)
+        .filter(|next| is_text_node(runtime, *next))
+    else {
+        return;
+    };
+    let Some(parent) = runtime.dom_host().node(handle).and_then(Node::parent_node) else {
+        return;
+    };
+    let Some(mut value) = runtime.character_data_utf16_units(handle) else {
+        return;
+    };
+    let Some(next_value) = runtime.character_data_utf16_units(next) else {
+        return;
+    };
+    let insertion_offset = value.len() as u32;
+    let inserted_count = next_value.len() as u32;
+    value.extend_from_slice(&next_value);
+    let _ = runtime.set_character_data_utf16_units_for_edit(scope, runtime_ptr, handle, &value);
+    context_bootstrap::live_ranges_character_data_edit(
+        scope,
+        handle,
+        insertion_offset,
+        0,
+        inserted_count,
+    );
+    let _ =
+        runtime.remove_child_appending_to_current_reaction_queue(scope, runtime_ptr, parent, next);
+}
+
 pub(in crate::native_bridge) fn node_outer_text_setter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -1180,14 +1341,11 @@ pub(in crate::native_bridge) fn node_outer_text_setter_function<'s>(
     else {
         return;
     };
-    let Some(value) = property_string_value(scope, args.get(0)) else {
+    let Some(value) = rendered_text_setter_value(scope, args.get(0), "outerText") else {
         return;
     };
-    let Some(parent) = unsafe { &*runtime_ptr }
-        .dom_host()
-        .node(handle)
-        .and_then(Node::parent_node)
-    else {
+    let runtime = unsafe { &*runtime_ptr };
+    let Some(parent) = runtime.dom_host().node(handle).and_then(Node::parent_node) else {
         throw_dom_exception(
             scope,
             "NoModificationAllowedError",
@@ -1196,28 +1354,42 @@ pub(in crate::native_bridge) fn node_outer_text_setter_function<'s>(
         );
         return;
     };
+    let previous = runtime.dom_host().node(handle).and_then(Node::prev_sibling);
+    let next = runtime.dom_host().node(handle).and_then(Node::next_sibling);
     custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
         let runtime = unsafe { &mut *runtime_ptr };
-        if value.is_empty() {
-            let _ = runtime.remove_child_appending_to_current_reaction_queue(
-                scope,
-                runtime_ptr,
-                parent,
-                handle,
-            );
+        let Some(document) = runtime.dom_host().owner_document_handle(handle) else {
+            return;
+        };
+        let Some(fragment) = rendered_text_fragment(runtime, document, &value) else {
+            return;
+        };
+        if runtime.dom_host().child_handles(fragment).next().is_none()
+            && !append_rendered_text_node(runtime, document, fragment, "")
+        {
             return;
         }
-        let text = match runtime.dom_host().owner_document_handle(parent) {
-            Some(document_handle) => runtime.create_text_node_for_document(document_handle, &value),
-            None => runtime.create_text_node(&value),
-        };
-        let _ = runtime.replace_child_appending_to_current_reaction_queue(
+        if !runtime.replace_child_appending_to_current_reaction_queue(
             scope,
             runtime_ptr,
             parent,
-            text,
+            fragment,
             handle,
-        );
+        ) {
+            return;
+        }
+        if let Some(next) = next
+            && let Some(previous_to_next) = runtime
+                .dom_host()
+                .node(next)
+                .and_then(Node::prev_sibling)
+                .filter(|previous| is_text_node(runtime, *previous))
+        {
+            merge_with_next_text_node(scope, runtime, runtime_ptr, previous_to_next);
+        }
+        if let Some(previous) = previous.filter(|previous| is_text_node(runtime, *previous)) {
+            merge_with_next_text_node(scope, runtime, runtime_ptr, previous);
+        }
     });
     rv.set_undefined();
 }

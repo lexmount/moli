@@ -5192,7 +5192,9 @@ html/dom/elements/global-attributes/translate-inherit-no-parent-element.html
 html/dom/elements/global-attributes/translate-non-html-translation-mode.html
 html/dom/elements/name-content-attribute-and-property.html
 html/dom/elements/the-innertext-and-outertext-properties/getter-first-letter-marker-multicol.html
+html/dom/elements/the-innertext-and-outertext-properties/innertext-setter.html
 html/dom/elements/the-innertext-and-outertext-properties/innertext-whitespace-pre-line.html
+html/dom/elements/the-innertext-and-outertext-properties/outertext-setter.html
 html/dom/partial-updates/tentative/template-for-innerHTML-outside.html
 html/dom/partial-updates/tentative/template-for-invalid.html
 html/dom/partial-updates/tentative/template-for-only-html-001.html

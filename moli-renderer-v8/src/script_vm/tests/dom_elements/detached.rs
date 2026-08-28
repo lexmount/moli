@@ -845,7 +845,9 @@ fn detached_inner_outer_text_use_html_element_prototype_accessors() {
   assert(inner.get.call(read) === "Alpha Beta", "innerText getter");
   assert(outer.get.call(replace) === "Old", "outerText getter");
   inner.set.call(read, "Line one\nLine two");
-  assert(read.textContent === "Line one\nLine two", "innerText setter");
+  assert(read.innerHTML === "Line one<br>Line two", "innerText setter fragment");
+  assert(read.textContent === "Line oneLine two", "innerText setter text content");
+  assert(read.querySelector("br").ownerDocument === doc, "innerText setter owner document");
   outer.set.call(replace, "Done");
   assert(doc.querySelector("#replace").textContent === "Done", "outerText setter");
   assert(!own(read, "innerText"), "innerText should not be own after set");

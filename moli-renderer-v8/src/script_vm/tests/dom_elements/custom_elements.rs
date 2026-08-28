@@ -5505,7 +5505,7 @@ fn custom_element_inner_and_outer_text_replacements_enqueue_disconnected_callbac
 
     assert_eq!(
         result,
-        "0||0||inner:connected|inner:disconnected|outer:connected|outer:disconnected"
+        "0||1||inner:connected|inner:disconnected|outer:connected|outer:disconnected"
     );
 }
 

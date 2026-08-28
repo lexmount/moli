@@ -806,6 +806,81 @@ fn htmlelement_standard_accessors_live_on_owner_prototypes() {
 }
 
 #[test]
+fn inner_and_outer_text_setters_build_rendered_fragments_and_merge_text_endpoints() {
+    let mut vm = new_parsed_test_vm(
+        "https://rendered-text-setters.test/",
+        "<!doctype html><html><head></head><body></body></html>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const assert = (condition, message) => {
+                if (!condition) throw new Error(message);
+              };
+
+              const inner = document.createElement("div");
+              const oldChild = inner.appendChild(document.createElement("span"));
+              const observer = new MutationObserver(() => {});
+              observer.observe(inner, { childList: true });
+              inner.innerText = "alpha\r\nbeta\n\r";
+              assert(inner.innerHTML === "alpha<br>beta<br><br>", "innerText rendered fragment");
+              assert(inner.childNodes.length === 5, "innerText child count");
+              assert(inner.firstChild !== oldChild, "innerText replaces the old child");
+              assert(Array.from(inner.childNodes).every(node => node.ownerDocument === document), "innerText owner document");
+              const records = observer.takeRecords();
+              assert(records.length === 1, "innerText replacement mutation count");
+              assert(records[0].addedNodes.length === 5, "innerText replacement added nodes");
+              assert(records[0].removedNodes.length === 1 && records[0].removedNodes[0] === oldChild, "innerText replacement removed node");
+
+              inner.innerText = null;
+              assert(inner.childNodes.length === 0, "innerText null is empty");
+              inner.innerText = undefined;
+              assert(inner.textContent === "undefined", "innerText undefined stringifies");
+
+              const detachedDocument = document.implementation.createHTMLDocument("");
+              const detached = detachedDocument.createElement("div");
+              detached.innerText = "left\nright";
+              assert(detached.innerHTML === "left<br>right", "detached innerText rendered fragment");
+              assert(detached.querySelector("br").ownerDocument === detachedDocument, "detached break owner document");
+
+              const parent = document.createElement("div");
+              const first = parent.appendChild(document.createTextNode("A"));
+              const previous = parent.appendChild(document.createTextNode("B"));
+              const replaced = parent.appendChild(document.createElement("span"));
+              const next = parent.appendChild(document.createTextNode("D"));
+              const last = parent.appendChild(document.createTextNode("E"));
+              replaced.outerText = "Replaced";
+              assert(parent.childNodes.length === 3, "outerText only merges endpoints");
+              assert(parent.childNodes[0] === first && parent.childNodes[2] === last, "outerText keeps distant text nodes separate");
+              assert(parent.childNodes[1] === previous && previous.data === "BReplacedD", "outerText merges adjacent text nodes");
+              assert(replaced.parentNode === null && next.parentNode === null, "outerText detaches replaced nodes");
+
+              const emptyParent = document.createElement("div");
+              const emptyTarget = emptyParent.appendChild(document.createElement("span"));
+              emptyTarget.outerText = null;
+              assert(emptyParent.childNodes.length === 1, "outerText empty child count");
+              assert(emptyParent.firstChild.nodeType === Node.TEXT_NODE && emptyParent.firstChild.data === "", "outerText keeps an empty Text node");
+
+              const breaksParent = document.createElement("div");
+              const breaksTarget = breaksParent.appendChild(document.createElement("span"));
+              breaksTarget.outerText = "\n\r\n\r";
+              assert(breaksParent.innerHTML === "<br><br><br>", "outerText newline conversion");
+
+              const script = document.createElement("script");
+              script.innerText = "one\ntwo";
+              assert(script.innerHTML === "one<br>two", "HTMLScriptElement innerText rendered fragment");
+              return "ok";
+            })()
+            "#,
+        )
+        .expect("rendered text setter probe should evaluate");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn document_state_and_collection_accessors_live_on_document_prototype() {
     let mut vm = new_parsed_test_vm(
         "https://example.com/path/page.html",
