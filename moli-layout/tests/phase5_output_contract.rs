@@ -172,6 +172,78 @@ fn assert_rect(actual: LayoutRect, expected: LayoutRect) {
     assert_close(actual.height, expected.height);
 }
 
+fn assert_balanced_paint_stack(fragments: &[PaintFragment]) {
+    let mut depth = 0usize;
+    for (index, fragment) in fragments.iter().enumerate() {
+        match fragment {
+            PaintFragment::PushLayer { .. } | PaintFragment::PushClip { .. } => depth += 1,
+            PaintFragment::PopLayer => {
+                assert!(depth > 0, "paint stack underflow at fragment {index}");
+                depth -= 1;
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(depth, 0, "paint stream left layers or clips open");
+}
+
+fn solid_fill_index(fragments: &[PaintFragment], expected: PaintColor) -> usize {
+    fragments
+        .iter()
+        .position(|fragment| {
+            fragment
+                .solid_fill()
+                .is_some_and(|(_, color, _)| color == expected)
+        })
+        .unwrap_or_else(|| panic!("missing solid fill {expected:?}"))
+}
+
+fn matching_paint_stack_pop(fragments: &[PaintFragment], push_index: usize) -> usize {
+    assert!(matches!(
+        fragments.get(push_index),
+        Some(PaintFragment::PushLayer { .. } | PaintFragment::PushClip { .. })
+    ));
+    let mut depth = 0usize;
+    for (index, fragment) in fragments.iter().enumerate().skip(push_index) {
+        match fragment {
+            PaintFragment::PushLayer { .. } | PaintFragment::PushClip { .. } => depth += 1,
+            PaintFragment::PopLayer => {
+                depth -= 1;
+                if depth == 0 {
+                    return index;
+                }
+            }
+            _ => {}
+        }
+    }
+    panic!("push at fragment {push_index} has no matching pop")
+}
+
+fn innermost_active_clip_at(
+    fragments: &[PaintFragment],
+    fragment_index: usize,
+) -> (PaintShape, LayoutTransform2D) {
+    let mut stack = Vec::new();
+    for fragment in &fragments[..=fragment_index] {
+        match fragment {
+            PaintFragment::PushLayer { .. } => stack.push(None),
+            PaintFragment::PushClip { shape, transform } => {
+                stack.push(Some((shape.clone(), *transform)));
+            }
+            PaintFragment::PopLayer => {
+                stack.pop().expect("paint stack must remain balanced");
+            }
+            _ => {}
+        }
+    }
+    stack
+        .into_iter()
+        .rev()
+        .flatten()
+        .next()
+        .expect("painted fragment must have an active clip")
+}
+
 #[test]
 fn classic_scrollbars_share_layout_paint_and_hit_test_geometry() {
     let source = Source(vec![
@@ -981,6 +1053,356 @@ fn adjacent_paint_units_share_their_common_overflow_clip_chain() {
             PaintColor::new(1.0, 0.0, 0.0, 1.0),
             PaintColor::new(0.0, 0.0, 1.0, 1.0),
         ]
+    );
+}
+
+#[test]
+fn equal_sibling_clips_replace_only_the_divergent_stack_suffix() {
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("outer-clip", vec![2, 4]),
+        Node::element("first-clip", vec![3]),
+        Node::element("red-content", Vec::new()),
+        Node::element("second-clip", vec![5]),
+        Node::element("blue-content", Vec::new()),
+    ]);
+    let mut styles = Styles::default();
+    styles
+        .0
+        .insert(0, fixed_size(LayoutDisplay::Block, 320.0, 240.0));
+    styles.0.insert(
+        1,
+        resolved(
+            LayoutDisplay::Block,
+            Style {
+                size: Size {
+                    width: length(200.0),
+                    height: length(120.0),
+                },
+                overflow: Point {
+                    x: Overflow::Hidden,
+                    y: Overflow::Hidden,
+                },
+                ..Style::default()
+            },
+        )
+        .with_position(LayoutPosition::Relative),
+    );
+    let overlapping_clip = || {
+        resolved(
+            LayoutDisplay::Block,
+            Style {
+                position: Position::Absolute,
+                inset: Rect {
+                    left: length(20.0),
+                    right: LengthPercentageAuto::auto(),
+                    top: length(20.0),
+                    bottom: LengthPercentageAuto::auto(),
+                },
+                size: Size {
+                    width: length(80.0),
+                    height: length(60.0),
+                },
+                overflow: Point {
+                    x: Overflow::Hidden,
+                    y: Overflow::Hidden,
+                },
+                ..Style::default()
+            },
+        )
+        .with_position(LayoutPosition::Absolute)
+    };
+    styles.0.insert(2, overlapping_clip());
+    styles.0.insert(4, overlapping_clip());
+    let red = PaintColor::new(1.0, 0.0, 0.0, 1.0);
+    let blue = PaintColor::new(0.0, 0.0, 1.0, 1.0);
+    for (node, color) in [(3, red), (5, blue)] {
+        styles.0.insert(
+            node,
+            ResolvedLayoutStyle::synthetic(
+                LayoutDisplay::Block,
+                Style {
+                    size: Size {
+                        width: length(140.0),
+                        height: length(90.0),
+                    },
+                    ..Style::default()
+                },
+                color,
+            ),
+        );
+    }
+
+    let output = build_with_request(
+        &source,
+        &mut styles,
+        LayoutPassRequest::with_paint(LayoutViewport::new(320, 240, 1.0), LayoutFlushReason::Test),
+    );
+    let snapshot = output.paint_snapshot().expect("paint snapshot");
+    assert_balanced_paint_stack(&snapshot.fragments);
+    let red = solid_fill_index(&snapshot.fragments, red);
+    let blue = solid_fill_index(&snapshot.fragments, blue);
+    assert!(red < blue, "DOM-order siblings must retain paint order");
+
+    let mut clip_depth = snapshot.fragments[..=red]
+        .iter()
+        .fold(0usize, |depth, fragment| match fragment {
+            PaintFragment::PushClip { .. } => depth + 1,
+            PaintFragment::PopLayer => depth - 1,
+            _ => depth,
+        });
+    assert_eq!(clip_depth, 2, "red uses the outer and first sibling clips");
+    let mut minimum_depth = clip_depth;
+    let mut replacement_pushes = 0usize;
+    for fragment in &snapshot.fragments[red + 1..blue] {
+        match fragment {
+            PaintFragment::PushClip { .. } => {
+                clip_depth += 1;
+                replacement_pushes += 1;
+            }
+            PaintFragment::PopLayer => {
+                clip_depth -= 1;
+                minimum_depth = minimum_depth.min(clip_depth);
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(minimum_depth, 1, "the common outer clip must stay active");
+    assert_eq!(replacement_pushes, 1, "only the sibling clip is replaced");
+    assert_eq!(
+        clip_depth, 2,
+        "blue uses the outer and second sibling clips"
+    );
+}
+
+#[test]
+fn stacking_context_effects_bracket_the_active_overflow_clip_stack() {
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("clipper", vec![2, 3, 4, 5]),
+        Node::element("negative-blue", Vec::new()),
+        Node::element("red", Vec::new()),
+        Node::element("green", Vec::new()),
+        Node::element("positive-yellow", Vec::new()),
+    ]);
+    let mut styles = Styles::default();
+    styles
+        .0
+        .insert(0, fixed_size(LayoutDisplay::Block, 320.0, 240.0));
+    styles.0.insert(
+        1,
+        resolved(
+            LayoutDisplay::Block,
+            Style {
+                size: Size {
+                    width: length(200.0),
+                    height: length(120.0),
+                },
+                overflow: Point {
+                    x: Overflow::Hidden,
+                    y: Overflow::Hidden,
+                },
+                ..Style::default()
+            },
+        )
+        .with_position(LayoutPosition::Relative),
+    );
+    let red = PaintColor::new(1.0, 0.0, 0.0, 1.0);
+    let blue = PaintColor::new(0.0, 0.0, 1.0, 1.0);
+    let green = PaintColor::new(0.0, 1.0, 0.0, 1.0);
+    let yellow = PaintColor::new(1.0, 1.0, 0.0, 1.0);
+    for (node, color) in [(2, blue), (3, red), (4, green), (5, yellow)] {
+        let style = ResolvedLayoutStyle::synthetic(
+            LayoutDisplay::Block,
+            Style {
+                size: Size {
+                    width: length(200.0),
+                    height: length(40.0),
+                },
+                ..Style::default()
+            },
+            color,
+        );
+        let style = match node {
+            2 => style
+                .with_position(LayoutPosition::Absolute)
+                .with_z_index(-1)
+                .with_opacity(0.4),
+            5 => style
+                .with_position(LayoutPosition::Absolute)
+                .with_z_index(1)
+                .with_opacity(0.6),
+            _ => style,
+        };
+        styles.0.insert(node, style);
+    }
+
+    let output = build_with_request(
+        &source,
+        &mut styles,
+        LayoutPassRequest::with_paint(LayoutViewport::new(320, 240, 1.0), LayoutFlushReason::Test),
+    );
+    let snapshot = output.paint_snapshot().expect("paint snapshot");
+    assert_balanced_paint_stack(&snapshot.fragments);
+    let red = solid_fill_index(&snapshot.fragments, red);
+    let blue = solid_fill_index(&snapshot.fragments, blue);
+    let green = solid_fill_index(&snapshot.fragments, green);
+    let yellow = solid_fill_index(&snapshot.fragments, yellow);
+    let negative_effect_push = snapshot
+        .fragments
+        .iter()
+        .position(|fragment| {
+            matches!(
+                fragment,
+                PaintFragment::PushLayer { opacity, .. }
+                    if (*opacity - 0.4).abs() < f32::EPSILON
+            )
+        })
+        .expect("negative opacity stacking-context layer");
+    let negative_effect_pop = matching_paint_stack_pop(&snapshot.fragments, negative_effect_push);
+    let positive_effect_push = snapshot
+        .fragments
+        .iter()
+        .position(|fragment| {
+            matches!(
+                fragment,
+                PaintFragment::PushLayer { opacity, .. }
+                    if (*opacity - 0.6).abs() < f32::EPSILON
+            )
+        })
+        .expect("positive opacity stacking-context layer");
+    let positive_effect_pop = matching_paint_stack_pop(&snapshot.fragments, positive_effect_push);
+
+    assert!(
+        negative_effect_push < blue
+            && blue < negative_effect_pop
+            && negative_effect_pop < red
+            && red < green
+            && green < positive_effect_push
+            && positive_effect_push < yellow
+            && yellow < positive_effect_pop,
+        "negative, in-flow, and positive stacking levels must retain CSS paint order"
+    );
+    assert!(
+        snapshot.fragments[negative_effect_push + 1..blue]
+            .iter()
+            .any(|fragment| matches!(fragment, PaintFragment::PushClip { .. })),
+        "the overflow clip must open inside the negative effect layer"
+    );
+    assert!(
+        snapshot.fragments[negative_effect_pop + 1..red]
+            .iter()
+            .any(|fragment| matches!(fragment, PaintFragment::PushClip { .. })),
+        "the overflow clip must reopen after the negative effect layer"
+    );
+    assert!(
+        snapshot.fragments[green + 1..positive_effect_push]
+            .iter()
+            .any(|fragment| matches!(fragment, PaintFragment::PopLayer)),
+        "the overflow clip must close before the positive effect layer"
+    );
+    assert!(
+        snapshot.fragments[positive_effect_push + 1..yellow]
+            .iter()
+            .any(|fragment| matches!(fragment, PaintFragment::PushClip { .. })),
+        "the overflow clip must reopen inside the positive effect layer"
+    );
+}
+
+#[test]
+fn equal_local_clips_in_distinct_transform_spaces_are_not_reused() {
+    let source = Source(vec![
+        Node::element("root", vec![1, 3]),
+        Node::element("first-transformed-clip", vec![2]),
+        Node::element("red", Vec::new()),
+        Node::element("second-transformed-clip", vec![4]),
+        Node::element("blue", Vec::new()),
+    ]);
+    let mut styles = Styles::default();
+    styles.0.insert(
+        0,
+        fixed_size(LayoutDisplay::Block, 320.0, 240.0).with_position(LayoutPosition::Relative),
+    );
+    let transformed_clip = |transform| {
+        resolved(
+            LayoutDisplay::Block,
+            Style {
+                position: Position::Absolute,
+                inset: Rect {
+                    left: length(20.0),
+                    right: LengthPercentageAuto::auto(),
+                    top: length(20.0),
+                    bottom: LengthPercentageAuto::auto(),
+                },
+                size: Size {
+                    width: length(80.0),
+                    height: length(60.0),
+                },
+                overflow: Point {
+                    x: Overflow::Hidden,
+                    y: Overflow::Hidden,
+                },
+                ..Style::default()
+            },
+        )
+        .with_position(LayoutPosition::Absolute)
+        .with_2d_transform(transform)
+    };
+    styles.0.insert(
+        1,
+        transformed_clip(LayoutTransform2D::translation(10.0, 5.0)),
+    );
+    styles.0.insert(
+        3,
+        transformed_clip(LayoutTransform2D::translation(70.0, 15.0)),
+    );
+    let red = PaintColor::new(1.0, 0.0, 0.0, 1.0);
+    let blue = PaintColor::new(0.0, 0.0, 1.0, 1.0);
+    for (node, color) in [(2, red), (4, blue)] {
+        styles.0.insert(
+            node,
+            ResolvedLayoutStyle::synthetic(
+                LayoutDisplay::Block,
+                Style {
+                    size: Size {
+                        width: length(140.0),
+                        height: length(90.0),
+                    },
+                    ..Style::default()
+                },
+                color,
+            ),
+        );
+    }
+
+    let output = build_with_request(
+        &source,
+        &mut styles,
+        LayoutPassRequest::with_paint(LayoutViewport::new(320, 240, 1.0), LayoutFlushReason::Test),
+    );
+    let snapshot = output.paint_snapshot().expect("paint snapshot");
+    assert_balanced_paint_stack(&snapshot.fragments);
+    let red_clip = innermost_active_clip_at(
+        &snapshot.fragments,
+        solid_fill_index(&snapshot.fragments, red),
+    );
+    let blue_clip = innermost_active_clip_at(
+        &snapshot.fragments,
+        solid_fill_index(&snapshot.fragments, blue),
+    );
+
+    assert_eq!(
+        red_clip.0, blue_clip.0,
+        "the fixture deliberately gives both clips identical local geometry"
+    );
+    assert_ne!(
+        red_clip.1, blue_clip.1,
+        "equal local shapes in different coordinate spaces need distinct clip commands"
+    );
+    assert_ne!(
+        red_clip.1.map_rect(red_clip.0.bounds()).bounding_rect(),
+        blue_clip.1.map_rect(blue_clip.0.bounds()).bounding_rect(),
+        "the two clips must land at their own transformed surface positions"
     );
 }
 
